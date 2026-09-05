@@ -2950,7 +2950,7 @@ impl CPlayer {
     /// `AddGameSaveToByteArray`: тот же persisted layout без organization
     /// snapshot (World обновляет его самостоятельно перед следующим handoff).
     pub(crate) fn encode_game_save(
-        &self,
+        &mut self,
         destination: &mut Vec<u8>,
         goods_factory: &CGoodsFactory,
         now_ms: u32,
@@ -2986,7 +2986,7 @@ impl CPlayer {
         }
         let ex_states = self
             .move_shape
-            .serialized_ex_states(now_ms, timed_state_now_milliseconds);
+            .serialize_ex_states_for_save(now_ms, timed_state_now_milliseconds);
         append_player_game_save_count(destination, "m_vExStates length", ex_states.len())?;
         destination.extend_from_slice(&ex_states);
         append_player_game_save_count(destination, "m_listFriend", self.friends.len())?;

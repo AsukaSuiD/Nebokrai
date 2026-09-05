@@ -6516,12 +6516,10 @@ impl CGame {
         )
     }
 
-    pub(crate) fn encode_player_game_save<Context: GameClockContext>(
+    fn player_game_save_companions(
         &self,
         player: &CPlayer,
-        destination: &mut Vec<u8>,
-        context: &mut Context,
-    ) -> bool {
+    ) -> (Vec<PlayerUncreatedPet>, PlayerUncreatedCarriage, bool) {
         let (loaded_carriage, recreate_carriage) = player.login_carriage();
         let carriage = player
                 .server_region_id()
@@ -6566,6 +6564,16 @@ impl CGame {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        (pets, carriage, recreate_carriage)
+    }
+
+    pub(crate) fn encode_player_game_save<Context: GameClockContext>(
+        &self,
+        player: &mut CPlayer,
+        destination: &mut Vec<u8>,
+        context: &mut Context,
+    ) -> bool {
+        let (pets, carriage, recreate_carriage) = self.player_game_save_companions(player);
         let now_ms = context.now_milliseconds();
         player
             .encode_game_save(
@@ -6581,16 +6589,38 @@ impl CGame {
             .unwrap_or(false)
     }
 
+    pub(crate) fn encode_registered_player_game_save<Context: GameClockContext>(
+        &mut self,
+        player_id: i32,
+        destination: &mut Vec<u8>,
+        context: &mut Context,
+    ) -> bool {
+        let Some(player) = self.find_player(player_id) else { return false };
+        let (pets, carriage, recreate_carriage) = self.player_game_save_companions(player);
+        let now_ms = context.now_milliseconds();
+        let player = self.players.get_mut(&player_id).expect("игрок проверен до подготовки снимка");
+        player.encode_game_save(
+            destination,
+            &self.goods_factory,
+            now_ms,
+            || context.now_milliseconds(),
+            self.globe_setup.one_pk_count_time_ms(),
+            &pets,
+            &carriage,
+            recreate_carriage,
+        ).unwrap_or(false)
+    }
+
     /// Exact `CPlayer::AddByteGS2WS`: player id предшествует полному
     /// persisted GameSave snapshot, после чего кадр `0x6080E` уходит World.
     pub(crate) fn send_player_snapshot_update<Context: GameClockContext>(
-        &self,
+        &mut self,
         player_id: i32,
         context: &mut Context,
     ) -> Option<Result<i32, SendMessageError>> {
-        let player = self.find_player(player_id)?;
+        self.find_player(player_id)?;
         let mut snapshot = Vec::new();
-        if !self.encode_player_game_save(player, &mut snapshot, context) {
+        if !self.encode_registered_player_game_save(player_id, &mut snapshot, context) {
             return None;
         }
         let mut update = CMessage::new(GAME_PLAYER_SNAPSHOT_UPDATE_MESSAGE);
@@ -16417,12 +16447,12 @@ impl CGame {
         if faction_name.is_empty() || faction_name.len() > 20 || faction_name.contains(&0) {
             return false;
         }
-        let Some(player) = self.find_player(player_id) else {
+        if self.find_player(player_id).is_none() {
             self.pending_faction_creations.remove(&session_id);
             return false;
-        };
+        }
         let mut snapshot = Vec::new();
-        if !self.encode_player_game_save(player, &mut snapshot, context) {
+        if !self.encode_registered_player_game_save(player_id, &mut snapshot, context) {
             return false;
         }
         let mut request = CMessage::new(0x0006_0103);
@@ -16711,7 +16741,7 @@ impl CGame {
             return false;
         }
         let mut snapshot = Vec::new();
-        if !self.encode_player_game_save(player, &mut snapshot, context) {
+        if !self.encode_registered_player_game_save(player_id, &mut snapshot, context) {
             return false;
         }
         let mut request = CMessage::new(0x0006_011f);
@@ -18159,7 +18189,7 @@ impl CGame {
             carriage_distance,
         );
         let mut snapshot = Vec::new();
-        if self.encode_player_game_save(&player, &mut snapshot, context) {
+        if self.encode_player_game_save(&mut player, &mut snapshot, context) {
             let mut request = CMessage::new(0x0005_fa02);
             request.add_long(player_id);
             request.add_long(target_region_id);
@@ -19078,9 +19108,7 @@ impl CGame {
         let mut world_delivery = None;
         if !changing_server {
             let mut snapshot = Vec::new();
-            if self
-                .find_player(player_id)
-                .is_some_and(|player| self.encode_player_game_save(player, &mut snapshot, runtime))
+            if self.encode_registered_player_game_save(player_id, &mut snapshot, runtime)
             {
                 let mut save = CMessage::new(0x0005_fb02);
                 save.add_long(player_id);
@@ -29535,8 +29563,9 @@ impl CGame {
                 failed_players = failed_players.wrapping_add(1);
                 continue;
             };
+            let region_id = player.server_region_id().unwrap_or_default();
             let mut snapshot = Vec::new();
-            if !self.encode_player_game_save(player, &mut snapshot, context) {
+            if !self.encode_registered_player_game_save(player_id, &mut snapshot, context) {
                 registration.add_long(0);
                 failed_players = failed_players.wrapping_add(1);
                 continue;
@@ -29544,7 +29573,7 @@ impl CGame {
             registration.add_long(1);
             registration.add_long(player_id);
             registration.base_mut().add(&snapshot);
-            registration.add_long(player.server_region_id().unwrap_or_default());
+            registration.add_long(region_id);
             registration.base_mut().update();
             encoded_players = encoded_players.wrapping_add(1);
         }
@@ -29788,10 +29817,7 @@ impl CGame {
         let total_players = player_ids.len();
         for (index, player_id) in player_ids.into_iter().enumerate() {
             let mut snapshot = Vec::new();
-            let encoded = self
-                .players
-                .get(&player_id)
-                .is_some_and(|player| self.encode_player_game_save(player, &mut snapshot, runtime));
+            let encoded = self.encode_registered_player_game_save(player_id, &mut snapshot, runtime);
             let delivery = encoded.then(|| {
                 let mut save = CMessage::new(GAME_RELEASE_PLAYER_SAVE_MESSAGE);
                 save.add_long(player_id);

@@ -10,6 +10,12 @@
 //! ненулевого срока, а `CExStateNew` возвращает `0`.
 //! Сырой псевдокод ниже остаётся локальным provenance реализованного owner-а.
 //! Little-endian поля читает и пишет общий legacy codec поверх `bytes`.
+//! AI обоих вариантов сравнивает абсолютный wrapping DWORD deadline строго
+//! с текущим tick (`0x005d94e0/0x005d9fb0`); тот же порядок сохраняется для
+//! periodic item consumption. Elapsed-сравнение меняло бы переход через ноль.
+//! Persisted Serialize (`0x005d9510/0x005d9bb0`) заменяет keeptime остатком
+//! прямо в живом объекте, не перезапуская started_ms. Клиентская проекция
+//! только читает остаток; эти два пути нельзя объединять по побочным эффектам.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -189,7 +195,7 @@ impl ExtendedState {
     }
 
     pub(crate) fn expired(&self, now_ms: u32) -> bool {
-        self.keep_time_ms != 0 && self.keep_time_ms < now_ms.wrapping_sub(self.started_ms)
+        self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
@@ -219,12 +225,15 @@ impl ExtendedState {
         }
     }
 
-    pub(crate) fn item_due(&self, now_ms: u32) -> bool {
+    pub(crate) fn item_due(&mut self, now_ms: u32) -> bool {
+        if self.kind == ExtendedStateKind::New && self.last_item_tick_ms == 0 {
+            self.last_item_tick_ms = self.started_ms;
+        }
         self.kind == ExtendedStateKind::New
             && self.frequency_ms != 0
             && self.item_index != 0
             && self.item_amount != 0
-            && self.frequency_ms < now_ms.wrapping_sub(self.last_item_tick_ms)
+            && self.last_item_tick_ms.wrapping_add(self.frequency_ms) < now_ms
     }
 
     pub(crate) fn restart_item_clock(&mut self, now_ms: u32) {
@@ -269,6 +278,10 @@ impl ExtendedState {
         if offset + 4 + self.kind.parameter_bytes() <= payload.len() {
             write_u32(payload, offset + 12, self.remaining_time_ms(now_ms));
         }
+    }
+
+    pub(crate) fn commit_saved_time(&mut self, now_ms: u32) {
+        self.keep_time_ms = self.remaining_time_ms(now_ms);
     }
 
     pub(crate) fn remove_serialized(&self, payload: &mut Vec<u8>) {

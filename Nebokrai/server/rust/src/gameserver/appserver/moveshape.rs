@@ -1221,6 +1221,18 @@ impl CMoveShape {
         &self.undead_states
     }
 
+    pub(crate) fn serialize_ex_states_for_save(
+        &mut self,
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Vec<u8> {
+        let payload = self.serialized_ex_states(now_ms, timed_state_now_milliseconds);
+        for state in &mut self.extended_states {
+            state.commit_saved_time(now_ms);
+        }
+        payload
+    }
+
     pub(crate) fn serialized_ex_states(
         &self,
         now_ms: u32,

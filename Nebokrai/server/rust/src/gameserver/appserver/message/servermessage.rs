@@ -697,11 +697,11 @@ where
         let id_index = game.id_index();
         let advertised_players = game.player_count();
         for player_id in game.ordered_player_ids() {
-            let Some(player) = game.find_player(player_id) else {
+            if game.find_player(player_id).is_none() {
                 continue;
-            };
+            }
             let mut snapshot = Vec::new();
-            let encoded = game.encode_player_game_save(player, &mut snapshot, script_context);
+            let encoded = game.encode_registered_player_game_save(player_id, &mut snapshot, script_context);
             let snapshot_bytes = snapshot.len();
 
             let mut frame = CMessage::new(WORLD_PLAYER_SAVE_RESPONSE);
@@ -1070,9 +1070,9 @@ where
             let Some(player) = game.find_player(player_id) else {
                 continue;
             };
-            let mut snapshot = Vec::new();
-            let encoded = game.encode_player_game_save(player, &mut snapshot, script_context);
             let client_ip = player.client_ip();
+            let mut snapshot = Vec::new();
+            let encoded = game.encode_registered_player_game_save(player_id, &mut snapshot, script_context);
             let snapshot_bytes = snapshot.len();
 
             let mut frame = CMessage::new(WORLD_PLAYER_DATA_RESPONSE);
