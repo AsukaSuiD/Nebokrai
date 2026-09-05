@@ -53,10 +53,14 @@
 //! Четырёхаргументный `MoveTo` теперь использует каноническую очередь
 //! `CBaseAI`: свободная соседняя клетка проверяется до `0xBF605`, а задержка
 //! шага сохраняет скорость игрока, диагональный множитель и исходный нулевой
-//! остановочный кадр. Пустой основной проход `CPlayerAI::Run` теперь замыкает
-//! подтверждённый `CBaseAI::OnIdle`: только при отсутствии исполненного
-//! player-действия, target-а и primary FIFO ставится `ASA_STAND` на 1000 мс.
-//! Общий passive-проход теперь также предшествует movement/skill/destination:
+//! остановочный кадр. Слот +0x48 таблицы CPlayerAI указывает на пустой RET
+//! (0x00485540), поэтому idle игрока не ставит базовый Stand на 1000 мс.
+//! CBaseAI::Run (0x004C7D10) вызывает OnSchedule, затем background, passive и
+//! active; только AES_HUNG_UP запрещает следующую основную фазу. WarSoul
+//! обрабатывается после них независимо от результата passive. В Rust фон
+//! уже предшествует passive; разделение расписания и исполнения остальных
+//! concrete owner-ов и точный результат passive ещё требуют замыкания.
+//! В достигнутом passive-проходе
 //! `Defense` занимает отдельный такт, `Stiffen` прерывает materialized skill и
 //! удерживает расписание до deadline, не останавливая собственный auto-inc
 //! хвост `CPlayerAI::Run`. Достигнутые reciprocal/death `OnLoseTarget` всегда
@@ -78,7 +82,9 @@
 //! Допуск OnSchedule не повторяется внутри Attack, а завершивший AI не
 //! получает лишний Reject от общего координатора. Используется существующая
 //! FIFO CBaseAI, включая её очистку Defense/Stiffen и отдельный такт смены.
-//! Ещё остаются разделение Begin/первого AI в concrete адаптерах и переход
+//! Базовые атака, стрельба и магия возвращают Begun до первого AI: Attack
+//! исполняет его в том же Run, без искусственного дополнительного такта.
+//! Ещё остаются разделение Begin/первого AI в остальных адаптерах и переход
 //! prepared-навыка в фон до его End; эти ветви нельзя подменять ended-состоянием.
 //! В активном коде Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam.
 //! Однако старый закомментированный WhenAddBackStageSkill в AI/BaseAI.cpp
@@ -526,17 +532,6 @@ impl CPlayerAI {
 
     pub(crate) const fn is_hibernated(&self) -> bool {
         self.base_ai.is_hibernated()
-    }
-
-    /// Завершает достигнутый основной `CBaseAI::Run` после typed расписания.
-    /// Caller сообщает, было ли в этом такте исполнено обычное player-действие;
-    /// независимая очередь боевой феи не входит в исходный результат до
-    /// `OnIdle` и поэтому не запрещает фоновый stand.
-    pub(crate) fn finish_base_run(&mut self, player_action_executed: bool, now_ms: u32) -> bool {
-        if player_action_executed {
-            return false;
-        }
-        self.base_ai.begin_idle_stand(now_ms)
     }
 
     pub(crate) fn has_queued_player_skill(&self) -> bool {

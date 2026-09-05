@@ -4,7 +4,8 @@
 //! Begin 0x005B3DC0 завершается после CheckCastCondition 0x005B4700.
 //! Поворот, стартовый пакет и последующий запрет движения выполняет отдельный
 //! первый AI 0x005B4330. Его срок — unsigned now >= wrapping(start + delay),
-//! а не elapsed; даже delay=0 не объединяет Begin с первым Attack-тактом.
+//! а не elapsed. Результат Begun отделяет Begin от AI, но не добавляет новый
+//! такт: CBaseAI::Run вызывает ProcessActiveAction после OnSchedule.
 //! Все отказные ветви AI заканчиваются End(0) через общий 0x005AE7A0:
 //! движение возвращается без износа оружия и без нового cooldown.
 //! Luvinia CNewSkill/BaseModule не соответствует этому lifecycle CSkill.
@@ -258,7 +259,10 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(BASE_MAGIC_SKILL_ID));
         }
-        return pending();
+        return QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Begun,
+            ..pending()
+        };
     }
     let Some(execution) = player_ai.base_magic() else {
         return rejected();

@@ -2,7 +2,7 @@
 //! Задержка уже первого AI считается от CState::Begin до OnBeginSkill,
 //! переданного общим расписанием, а не от поздних проверок оружия и пути.
 //! Begin 0x005B1E00 вызывает CheckCastCondition 0x005B2770 и возвращает
-//! управление расписанию с kernel в Begin. Только следующий Attack вызывает
+//! управление расписанию с kernel в Begin. Обработчик Attack в том же Run вызывает
 //! AI 0x005B2370: проверяет смерть/самоцель, поворачивает источник, публикует
 //! начало и затем запрещает движение. Срок сравнивается как unsigned
 //! now >= wrapping(start + delay), в том числе при нулевой задержке.
@@ -534,7 +534,10 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
         }
-        return pending();
+        return QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Begun,
+            ..pending()
+        };
     }
     let Some(execution) = player_ai.archery() else {
         return rejected();

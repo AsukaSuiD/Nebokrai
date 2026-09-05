@@ -2211,6 +2211,8 @@ pub(crate) fn game_wall_time_seconds() -> u64 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedSkillExecutionState {
+    /// Begin завершён; ProcessActiveAction ещё должен вызвать первый AI.
+    Begun,
     Pending,
     Completed,
     Rejected,
@@ -41395,7 +41397,15 @@ impl CGame {
                 self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
             };
             player_ai.set_scheduled_skill_begin(None);
+            let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
+            let outcome = if begin_completed {
+                player_ai.begin_player_fighting(runtime.now_milliseconds());
+                self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
+            } else {
+                outcome
+            };
             let begin_rejected = !schedule_rejected
+                && !begin_completed
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected
                 && Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
@@ -41428,7 +41438,7 @@ impl CGame {
                 .killing_blow
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
-                QueuedSkillExecutionState::Pending => false,
+                QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
                 QueuedSkillExecutionState::Completed =>
                     player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Completed),
                 QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
@@ -41646,7 +41656,7 @@ impl CGame {
                 .killing_blow
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
-                QueuedSkillExecutionState::Pending => false,
+                QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
                 QueuedSkillExecutionState::Completed => player_ai.finish_battle_fairy_skill(
                     dispatch,
                     SkillTermination::Completed,
@@ -47063,13 +47073,20 @@ impl CGame {
                                     "обновлено преступное состояние движения игрока"
                                 );
                             }
+                            let ai_hibernated = self.find_player(player_id)
+                                .is_none_or(|player| player.player_ai().is_hibernated());
+                            let back_stage_skills = if ai_hibernated {
+                                0
+                            } else {
+                                self.execute_player_back_stage_skills(player_id, runtime)
+                            };
                             let mut player_ai = self
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
-                            let defense_processed =
-                                player_ai.process_reached_defense_actions() != 0;
-                            let passive_stiffen = if defense_processed {
+                            let defense_processed = !ai_hibernated
+                                && player_ai.process_reached_defense_actions() != 0;
+                            let passive_stiffen = if ai_hibernated || defense_processed {
                                 PassiveStiffenAction::None
                             } else {
                                 player_ai.process_reached_stiffen_action(
@@ -47089,7 +47106,6 @@ impl CGame {
                                     .and_then(CPlayer::current_skill_id)
                             })
                             .flatten();
-                            let ai_hibernated = player_ai.is_hibernated();
                             let can_schedule_skill = self
                                 .find_player(player_id)
                                 .is_some_and(|player| !player.is_dead());
@@ -47138,11 +47154,6 @@ impl CGame {
                                 || active_stand_handled
                                 || change_skill_handled
                                 || ended_attack_handled;
-                            let back_stage_skills = if ai_hibernated || passive_action_handled {
-                                0
-                            } else {
-                                self.execute_player_back_stage_skills(player_id, runtime)
-                            };
                             let (executed_skills, executed_player_skills) = if ai_hibernated
                                 || passive_action_handled
                             {
@@ -47157,7 +47168,7 @@ impl CGame {
                                 )
                             };
                             player_skill_executions += back_stage_skills + executed_skills;
-                            let destination_handled = active_action_handled
+                            let _destination_handled = active_action_handled
                                 || (!ai_hibernated
                                     && !passive_action_handled
                                     && executed_player_skills == 0
@@ -47167,18 +47178,6 @@ impl CGame {
                                         &mut player_ai,
                                         runtime,
                                     ));
-                            if self.find_player(player_id).is_some()
-                                && !ai_hibernated
-                                && !passive_action_handled
-                            {
-                                let player_action_executed = active_action_handled
-                                    || executed_player_skills != 0
-                                    || destination_handled;
-                                let _ = player_ai.finish_base_run(
-                                    player_action_executed,
-                                    runtime.now_milliseconds(),
-                                );
-                            }
                             let progress_setup = (
                                 self.globe_setup.auto_inc_time_ms(),
                                 self.globe_setup.auto_inc_exp_1(),

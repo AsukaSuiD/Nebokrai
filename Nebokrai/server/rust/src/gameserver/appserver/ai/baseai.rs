@@ -22,8 +22,9 @@
 //! Достигнутый `Stand` из `ProcessActiveAction` удерживает расписание до
 //! исходного срока и сохраняет отдельный первый такт обработки. `OnIdle` точно
 //! ставит следующий `Stand` на 1000 мс только при пустом результате основного
-//! прохода и отсутствии цели; `CPlayerAI` применяет эту границу после своих
-//! typed очередей. Общий runtime не вызывает очереди и `OnSchedule`, пока этот
+//! прохода и отсутствии цели. Это базовый обработчик, не поведение игрока:
+//! слот +0x48 CPlayerAI указывает на пустой RET 0x00485540. Общий runtime
+//! не вызывает очереди и `OnSchedule`, пока этот
 //! владелец спит. Достигнутая object-target часть `SetTarget`, `GetTarget`,
 //! `HasTarget` и `OnLoseTarget` также принадлежит этому owner-у. City/country
 //! guard refresh достигает `Clear` обычных active/passive очередей,
@@ -625,8 +626,10 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CGame` проверяет `CBaseAI::is_hibernated` до обработки
 // очередей и конкретного `OnSchedule`; достигнутая `Stand`-ветвь исполняется
-// через `CBaseAI::advance_active_stand`, а пустой player-проход завершает
-// точный `CBaseAI::begin_idle_stand`.
+// через `CBaseAI::advance_active_stand`. Пустой OnIdle игрока не добавляет
+// Stand. Слоты +0x40/+8/+0/+4 задают OnSchedule/background/passive/active;
+// +0x44/+0xC — отдельный хвост WarSoul даже после AES_HUNG_UP passive.
+// В player runtime ещё не разделены все Begin и AI по этим фазам.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:472

@@ -22,7 +22,7 @@
 //! Проверка погибшей цели предшествует этой задержке на каждом AI и вызывает
 //! End(1) сразу; ожидание конца каста не должно откладывать отказ и cooldown.
 //! Begin 0x005B3040 возвращает управление до проверок первого AI 0x005B39B0:
-//! kernel остаётся в Begin, а общий AI ставит Attack для следующего такта.
+//! kernel остаётся в Begin, а общий AI ставит Attack для обработки в том же Run.
 //! На первом AI не повторяются ride/level/DoesTargetEffective-гейты расписания.
 //! При исчезнувшем object-target исходные нулевые point-поля участвуют в
 //! дальности/повороте; отсутствующая форма не подменяется самим источником.
@@ -92,7 +92,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(BASE_ATTACK_SKILL_ID));
         }
         return QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Pending,
+            state: QueuedSkillExecutionState::Begun,
             first_contact: false,
             killing_blow: None,
         };
