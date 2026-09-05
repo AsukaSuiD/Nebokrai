@@ -41147,7 +41147,7 @@ impl CGame {
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
             if !schedule_rejected {
-                self.begin_player_skill_schedule(player_id, dispatch, player_ai);
+                self.begin_player_skill_schedule(player_id, dispatch, player_ai, runtime);
             }
             let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
@@ -41386,6 +41386,7 @@ impl CGame {
                     killing_blow: None,
                 }
             };
+            player_ai.set_scheduled_skill_begin(None);
             let begin_rejected = !schedule_rejected
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected

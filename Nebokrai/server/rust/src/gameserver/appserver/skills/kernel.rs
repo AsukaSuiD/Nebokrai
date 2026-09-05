@@ -22,6 +22,12 @@
 //! Все достигнутые monster-skill reuse-gate вызывают общий `IsRestored` ниже,
 //! включая исходный нулевой timestamp до первого применения; stage, missile
 //! и periodic duration продолжают использовать elapsed-часы.
+//! CState::Begin (0x005DBD70/0x005DBDD0) читает часы до OnBeginSkill.
+//! При установке нового kernel расписание может передать этот ранний отсчёт,
+//! чтобы проверки ресурсов не сдвигали начало каста. Вызов ограничен
+//! установщиками нового исполнения в AI и привязан к dispatch. Некоторые
+//! владельцы до установки уже выполняют первый переход в Check; это не
+//! основание терять исходный отсчёт. Активный AI сюда повторно не входит.
 
 pub(crate) fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
     (f64::from(cost) * 0.0001_f64).trunc() as i64 as u32
@@ -79,6 +85,15 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
 
     pub(crate) const fn started_at_ms(self) -> u32 {
         self.started_at_ms
+    }
+
+    pub(crate) fn inherit_scheduled_begin(&mut self, begin: Option<(Dispatch, u32)>) {
+        if self.termination.is_none()
+            && let Some((dispatch, started_at_ms)) = begin
+            && dispatch == self.dispatch
+        {
+            self.started_at_ms = started_at_ms;
+        }
     }
 
     pub(crate) const fn stage(self) -> SkillStage {

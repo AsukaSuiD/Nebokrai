@@ -87,11 +87,12 @@ impl CGame {
         }
     }
 
-    pub(super) fn begin_player_skill_schedule(
+    pub(super) fn begin_player_skill_schedule<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         dispatch: PlayerSkillDispatch,
-        ai: &CPlayerAI,
+        ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
     ) {
         let skill_id = dispatch.skill_id();
         let inherited_begin = matches!(skill_id,
@@ -133,6 +134,7 @@ impl CGame {
         let needs_begin = (inherited_begin || is_non_fun_skill(skill_id))
             && Self::player_skill_begin_pending(ai, skill_id);
         if needs_begin {
+            ai.set_scheduled_skill_begin(Some((dispatch, runtime.now_milliseconds())));
             self.enter_player_combat_state(player_id);
         }
     }

@@ -1,4 +1,6 @@
 //! Базовая стрельба GameServer (`SKILL_BASE_ARCHERY`, ID `2`).
+//! Задержка уже первого AI считается от CState::Begin до OnBeginSkill,
+//! переданного общим расписанием, а не от поздних проверок оружия и пути.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/archery.cpp`. Навык исполняется из обычной очереди
@@ -546,7 +548,9 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
             .advance(SkillStage::Begin, SkillStage::Check);
         player_ai.begin_archery(execution);
         let first_ai_now_ms = runtime.now_milliseconds();
-        if !time_reached(first_ai_now_ms, now_ms, delay_ms) {
+        let started_at_ms = player_ai.archery()
+            .map_or(now_ms, |state| state.kernel().started_at_ms());
+        if !time_reached(first_ai_now_ms, started_at_ms, delay_ms) {
             return pending();
         }
     } else if player_ai

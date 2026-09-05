@@ -1,4 +1,6 @@
 //! Базовая магическая атака GameServer (`SKILL_BASE_MAGIC == 3`).
+//! Задержка уже первого AI использует сохранённый расписанием отсчёт
+//! CState::Begin до OnBeginSkill, включая время проверок цели и пути.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/basemagic.cpp`. `SkillExecutionKernel` сохраняет применение
@@ -266,7 +268,9 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
         execution.mark_condition_checked();
         player_ai.begin_base_magic(execution);
         let first_ai_now_ms = runtime.now_milliseconds();
-        if !time_reached(first_ai_now_ms, now_ms, delay_ms) {
+        let started_at_ms = player_ai.base_magic()
+            .map_or(now_ms, |state| state.kernel().started_at_ms());
+        if !time_reached(first_ai_now_ms, started_at_ms, delay_ms) {
             return pending();
         }
     } else if player_ai
