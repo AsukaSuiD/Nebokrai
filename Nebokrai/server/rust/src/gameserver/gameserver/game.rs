@@ -41145,6 +41145,9 @@ impl CGame {
                 | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == GIBE_SKILL_ID,
             };
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
+            if !schedule_rejected {
+                self.begin_player_skill_schedule(player_id, dispatch, player_ai);
+            }
             let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,

@@ -41,6 +41,12 @@
 //! собственный порядок отказа этого входа.
 //! Хранение очереди и kernel
 //! остаётся у CPlayerAI, боевые правила — у существующих владельцев целей.
+//! Стрелковые Begin Archery, HeartLessArrow/2/3, LightingArrow и RainArrow
+//! сначала проходят CStateSkill::Begin (0x00601A50/0x005DFC00), затем
+//! CSkill::Begin и CPlayer::OnBeginSkill (0x0042CC90). Переход в бой здесь
+//! предшествует конкретным проверкам оружия, MP и reuse, но не допуску цели.
+//! Luvinia Server/GameServer/Application/MoveShape.cpp использует одноимённый
+//! OnBeginSkill для CNewSkill/пассивных модулей: этот новый контракт не перенесён.
 
 use super::*;
 use crate::gameserver::appserver::skills::machineshield::MACHINE_SHIELD_SKILL_ID;
@@ -56,6 +62,22 @@ enum TargetRule {
 }
 
 impl CGame {
+    pub(super) fn begin_player_skill_schedule(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        ai: &CPlayerAI,
+    ) {
+        let skill_id = dispatch.skill_id();
+        let inherited_begin = matches!(skill_id,
+            ARCHERY_SKILL_ID | HEARTLESS_ARROW_SKILL_ID | HEARTLESS_ARROW_2_SKILL_ID
+                | HEARTLESS_ARROW_3_SKILL_ID | LIGHTING_ARROW_SKILL_ID | RAIN_ARROW_SKILL_ID
+        );
+        if inherited_begin && Self::materialized_player_skill_active(ai, skill_id) == Some(false) {
+            self.enter_player_combat_state(player_id);
+        }
+    }
+
     pub(super) fn reject_battle_fairy_skill_schedule(
         &mut self,
         player_id: i32,
