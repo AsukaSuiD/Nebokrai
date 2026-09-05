@@ -11,6 +11,12 @@
 //! Восстановление использует абсолютный срок `CSkill::IsRestored`, а ожидание
 //! стадии сохраняет elapsed-семантику.
 
+//! OnScheduleAboutWarSoul (0x00509861) вызывает объектный Begin даже для
+//! координатного запроса, передавая null. CheckCastCondition (0x00521330,
+//! для Leiming2 — 0x0051ff90) отклоняет null до проверки reuse и MP.
+//! End(0) (0x005222a0) отправляет завершение эффекта; затем расписание
+//! отправляет общий отказ. Область по переданным координатам не создаётся.
+
 use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -84,19 +90,26 @@ pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecution
 pub(super) fn dispatch_position(
     game: &CGame,
     region_id: i32,
-    player_id: i32,
     dispatch: BattleFairySkillDispatch,
 ) -> Option<(i32, i32, Option<ShapeIdentity>)> {
     match dispatch {
-        BattleFairySkillDispatch::SelfTarget { .. } => game
-            .find_player(player_id)
-            .and_then(CPlayer::shape_view)
-            .map(|shape| (shape.tile_x, shape.tile_y, None)),
-        BattleFairySkillDispatch::Point { x, y, .. } => Some((x, y, None)),
+        BattleFairySkillDispatch::SelfTarget { .. }
+        | BattleFairySkillDispatch::Point { .. } => None,
         BattleFairySkillDispatch::Object { target, .. } => game
             .base_magic_target_view(region_id, target)
             .map(|shape| (shape.tile_x, shape.tile_y, Some(target))),
     }
+}
+
+pub(super) fn reject_thunder_null_target(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    skill_level: i32,
+) -> QueuedSkillExecutionOutcome {
+    send_thunder_family_cast(game, player_id, skill_id, skill_level, 3, None);
+    game.send_battle_fairy_skill_failure(player_id, 2);
+    terminal(QueuedSkillExecutionState::Rejected)
 }
 
 pub(super) fn send_thunder_family_cast(
@@ -179,6 +192,9 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
+    if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
+        return reject_thunder_null_target(game, player_id, THUNDER_SKILL_ID, skill_level);
+    }
     let Some(properties) = game.skill_base_properties(THUNDER_SKILL_ID, skill_level) else {
         return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
     };
@@ -213,7 +229,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =
-            dispatch_position(game, region_id, player_id, dispatch)
+            dispatch_position(game, region_id, dispatch)
         else {
             return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
         };
@@ -296,7 +312,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some((target_x, target_y, target)) =
-        dispatch_position(game, region_id, player_id, dispatch)
+        dispatch_position(game, region_id, dispatch)
     else {
         return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
     };

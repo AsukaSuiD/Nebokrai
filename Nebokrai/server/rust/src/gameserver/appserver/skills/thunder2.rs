@@ -23,7 +23,7 @@ use super::kernel::{
     battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
 };
 use super::thunder::{
-    dispatch_position, master_info, reject_thunder_family, scaled_battle_fairy_sprite,
+    dispatch_position, master_info, reject_thunder_family, reject_thunder_null_target, scaled_battle_fairy_sprite,
     send_thunder_family_cast, terminal, thunder_element_modifier,
 };
 use super::thunder2phalanx::CLeimingPhalanx2;
@@ -83,6 +83,9 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
+    if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
+        return reject_thunder_null_target(game, player_id, LEIMING2_SKILL_ID, skill_level);
+    }
     let Some(properties) = game.skill_base_properties(LEIMING2_SKILL_ID, skill_level) else {
         return reject(game, player_id, skill_level, 2, b"");
     };
@@ -115,7 +118,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =
-            dispatch_position(game, region_id, player_id, dispatch)
+            dispatch_position(game, region_id, dispatch)
         else {
             return reject(game, player_id, skill_level, 10, b"ZHGS0050");
         };
@@ -212,7 +215,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some((target_x, target_y, target)) =
-        dispatch_position(game, region_id, player_id, dispatch)
+        dispatch_position(game, region_id, dispatch)
     else {
         return reject(game, player_id, skill_level, 10, b"ZHGS0050");
     };

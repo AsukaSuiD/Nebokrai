@@ -2408,8 +2408,8 @@ impl CPlayerAI {
             || self.battle_fairy_attribute.is_some()
     }
 
-    /// Общая запись `CSkill::End(true)` после оружейного эффекта и
-    /// `UpdateProperty`. Диапазон `0x212..=0x224` полностью материализован
+    /// Общая запись `CSkill::End(true)` после оружейного эффекта.
+    /// Диапазон `0x212..=0x224` полностью материализован
     /// типизированными владельцами, поэтому неизвестный ID остаётся без часов.
     pub(crate) fn mark_battle_fairy_skill_used(
         &mut self,
@@ -2456,7 +2456,7 @@ impl CPlayerAI {
 
     /// Точный последний side effect `OnChangeSkillWithWarSoul` и
     /// `OnLoseTargetWarSoul`: ID `0x224` назначается только после полного
-    /// concrete `End(1)`, включая свойства и cooldown.
+    /// concrete `End(1)`, включая оружейный эффект и cooldown.
     pub(crate) const fn restore_battle_fairy_base_attack_after_end(&mut self) {
         self.selected_battle_fairy_skill_id = 0;
     }

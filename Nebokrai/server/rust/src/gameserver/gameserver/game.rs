@@ -41421,13 +41421,7 @@ impl CGame {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
             } else if is_fatal_blow_dispatch(dispatch) {
                 execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::Object {
-                    skill_id: TIANHUO_SKILL_ID,
-                    ..
-                }
-            ) {
+            } else if dispatch.skill_id() == TIANHUO_SKILL_ID {
                 execute_battle_fairy_tianhuo(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,

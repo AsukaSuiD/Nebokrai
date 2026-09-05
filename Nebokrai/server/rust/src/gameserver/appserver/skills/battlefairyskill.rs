@@ -4,8 +4,11 @@
 //! используются несколькими конкретными владельцами навыков. Точные общие
 //! тела `End` по адресам `0x0051A700`, `0x0051BE50`, `0x0051E370`,
 //! `0x005222A0` и `0x005246C0` делегируют в `CStateSkill::End` либо
-//! `CSummonSkill::End`: успешный хвост изнашивает оружие, любой реально
-//! начатый `End` обновляет свойства, а cooldown фиксируется последним.
+//! `CSummonSkill::End`: успешный хвост изнашивает оружие, а cooldown
+//! фиксируется последним. Источник — gameserver.exe + GameServer.pdb,
+//! appserver/states/skill.cpp: CSkill::End (0x004d84c0) вызывает virtual
+//! +0x158 источника, который у CPlayer пуст. Дополнительного пересчёта
+//! свойств здесь нет; изменения состояний обрабатывают конкретные владельцы.
 //! Здесь остаётся общий терминальный хвост и состав packet-ов; проверки и
 //! формулы принадлежат соответствующим модулям-владельцам.
 
@@ -33,9 +36,8 @@ impl CGame {
             (materialized, dispatch)
         };
         let dispatch = dispatch?;
-        self.send_battle_fairy_skill_end(player_id, dispatch);
         if materialized {
-            let _ = self.update_player_properties(player_id);
+            self.send_battle_fairy_skill_end(player_id, dispatch);
         }
         Some(dispatch)
     }
@@ -52,7 +54,6 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         self.damage_player_weapon(player_id, runtime);
-        let _ = self.update_player_properties(player_id);
         let _ = player_ai.mark_battle_fairy_skill_used(
             dispatch.skill_id(),
             runtime.now_milliseconds(),

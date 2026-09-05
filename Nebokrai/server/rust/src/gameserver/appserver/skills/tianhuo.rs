@@ -2,8 +2,11 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/tianhuo.cpp`. Конкретный `CheckCastCondition` требует
-//! объектную `CMoveShape`-цель; унаследованные координатные перегрузки не
-//! образуют отдельного исполняемого пути. Здесь находятся проверки состояния и
+//! объектную `CMoveShape`-цель. OnScheduleAboutWarSoul даже для координатного
+//! запроса вызывает объектный Begin (0x005222f0) с null. Проверка
+//! (0x005228d0) отказывает до reuse и MP; End(0) (0x005222a0) отправляет
+//! action 3, затем расписание отправляет общий отказ 4, 2. Координатные
+//! перегрузки не образуют отдельного исполняемого пути. Здесь находятся проверки состояния и
 //! длины пути, задержка повторного использования, необратимый расход MP,
 //! повторная проверка пути после расхода, поворот игрока, стадии
 //! `SkillExecutionKernel`, точные визуальные пакеты и построение
@@ -103,15 +106,6 @@ fn reject(
     terminal(QueuedSkillExecutionState::Rejected)
 }
 
-fn positioned_target(
-    game: &CGame,
-    region_id: i32,
-    player_id: i32,
-    dispatch: BattleFairySkillDispatch,
-) -> Option<(i32, i32, Option<ShapeIdentity>)> {
-    dispatch_position(game, region_id, player_id, dispatch)
-}
-
 pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -124,9 +118,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         | BattleFairySkillDispatch::Point { skill_id, skill_level, .. }
         | BattleFairySkillDispatch::Object { skill_id, skill_level, .. } => (skill_level, skill_id),
     };
-    if skill_id != TIANHUO_SKILL_ID
-        || !matches!(dispatch, BattleFairySkillDispatch::Object { .. })
-    {
+    if skill_id != TIANHUO_SKILL_ID {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some(player) = game.find_player(player_id) else {
@@ -135,6 +127,11 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
+    if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
+        send_visual(game, player_id, skill_level, 3, None);
+        game.send_battle_fairy_skill_failure(player_id, 2);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
     let Some(properties) = game.skill_base_properties(TIANHUO_SKILL_ID, skill_level) else {
         return reject(game, player_id, skill_level, 2, b"");
     };
@@ -169,7 +166,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         ) {
             return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
         }
-        let Some((target_x, target_y, _)) = positioned_target(game, region_id, player_id, dispatch)
+        let Some((target_x, target_y, _)) = dispatch_position(game, region_id, dispatch)
         else {
             return reject(game, player_id, skill_level, 10, b"");
         };
@@ -238,7 +235,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             message.base_mut().add(&update.old_client_payload);
             let _ = message.send_to_player(game.net_server(), player_id);
         }
-        let Some((target_x, target_y, _)) = positioned_target(game, region_id, player_id, dispatch)
+        let Some((target_x, target_y, _)) = dispatch_position(game, region_id, dispatch)
         else {
             return reject(game, player_id, skill_level, 10, b"");
         };
@@ -279,7 +276,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
-    let Some((target_x, target_y, target)) = positioned_target(game, region_id, player_id, dispatch)
+    let Some((target_x, target_y, target)) = dispatch_position(game, region_id, dispatch)
     else {
         return reject(game, player_id, skill_level, 10, b"");
     };
