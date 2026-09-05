@@ -178,7 +178,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         } if skill_id == kind.skill_id() => skill_level,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let starting = player_ai.battle_fairy_transfer().is_none();
+    let starting = player_ai.battle_fairy_execution(kind.skill_id()).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
         if starting { send_failure(game, player_id, 2); }
@@ -193,14 +193,14 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.battle_fairy_transfer().is_none() {
+    if player_ai.battle_fairy_execution(kind.skill_id()).is_none() {
         let Some(player) = game.find_player(player_id) else {
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.battle_fairy_transfer_last_used_ms(kind),
+            player_ai.battle_fairy_skill_last_used_ms(kind.skill_id()),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -217,12 +217,12 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info_with_unsigned(player_id, string_id, value);
             return reject_before_ai(game);
         }
-        player_ai.begin_battle_fairy_transfer(SkillExecutionKernel::begin(
+        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(
             dispatch,
             started_at_ms,
         ));
     } else if player_ai
-        .battle_fairy_transfer()
+        .battle_fairy_execution(kind.skill_id())
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -237,7 +237,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
     }
 
     if player_ai
-        .battle_fairy_transfer()
+        .battle_fairy_execution(kind.skill_id())
         .is_some_and(|state| state.stage() == SkillStage::Begin)
     {
         let Some(player) = game.find_player(player_id) else {
@@ -258,13 +258,13 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.publish_player_states(player_id);
         send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 1);
-        if let Some(state) = player_ai.battle_fairy_transfer_mut() {
+        if let Some(state) = player_ai.battle_fairy_execution_mut(kind.skill_id()) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .battle_fairy_transfer()
+        .battle_fairy_execution(kind.skill_id())
         .map(SkillExecutionKernel::started_at_ms)
         .expect("исполнение передачи ресурса создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -293,7 +293,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
     } else {
         tracing::warn!(player_id, skill_id = kind.skill_id(), "не удалось сериализовать боевой дух после передачи ресурса");
     }
-    if let Some(state) = player_ai.battle_fairy_transfer_mut() {
+    if let Some(state) = player_ai.battle_fairy_execution_mut(kind.skill_id()) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

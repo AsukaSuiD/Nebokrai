@@ -88,7 +88,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
         return reject_thunder_null_target(game, player_id, LEIMING2_SKILL_ID, skill_level);
     }
-    let starting = player_ai.leiming2().is_none();
+    let starting = player_ai.battle_fairy_execution(LEIMING2_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
@@ -109,7 +109,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     let em_modifier = properties.query_property(SKILL_USAGE_EM_MODIFIER);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.leiming2().is_none() {
+    if player_ai.battle_fairy_execution(LEIMING2_SKILL_ID).is_none() {
         if let BattleFairySkillDispatch::Object { target, .. } = dispatch {
             if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
                 || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C)
@@ -124,7 +124,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.leiming2_last_used_ms(), cooldown_ms, cooldown_now_ms) {
+        if !skill_is_restored(player_ai.battle_fairy_skill_last_used_ms(LEIMING2_SKILL_ID), cooldown_ms, cooldown_now_ms) {
             return reject_before_ai(game, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =
@@ -166,16 +166,16 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             );
             return reject_before_ai(game, 2, b"");
         }
-        player_ai.begin_leiming2(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
-        .leiming2()
+        .battle_fairy_execution(LEIMING2_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if player_ai
-        .leiming2()
+        .battle_fairy_execution(LEIMING2_SKILL_ID)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         if let BattleFairySkillDispatch::Object { target, .. } = dispatch
@@ -206,13 +206,13 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         send_thunder_family_cast(
             game, player_id, LEIMING2_SKILL_ID, skill_level, 1, None,
         );
-        if let Some(execution) = player_ai.leiming2_mut() {
+        if let Some(execution) = player_ai.battle_fairy_execution_mut(LEIMING2_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .leiming2()
+        .battle_fairy_execution(LEIMING2_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение отложенного грома создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -276,7 +276,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     if summoned {
         let _ = game.send_leiming2_phalanx_entry(region_id, summon_id, runtime);
     }
-    if let Some(execution) = player_ai.leiming2_mut() {
+    if let Some(execution) = player_ai.battle_fairy_execution_mut(LEIMING2_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

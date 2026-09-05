@@ -134,7 +134,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         game.send_battle_fairy_skill_failure(player_id, 2);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let starting = player_ai.tianhuo().is_none();
+    let starting = player_ai.battle_fairy_execution(TIANHUO_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
@@ -154,7 +154,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
     let element_modifier = properties.query_property(SKILL_USAGE_EM_MODIFIER) as i32;
 
-    if player_ai.tianhuo().is_none() {
+    if player_ai.battle_fairy_execution(TIANHUO_SKILL_ID).is_none() {
         if let BattleFairySkillDispatch::Object { target, .. } = dispatch {
             if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
                 || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C)
@@ -170,7 +170,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.tianhuo_last_used_ms(),
+            player_ai.battle_fairy_skill_last_used_ms(TIANHUO_SKILL_ID),
             cooldown_ms,
             cooldown_now_ms,
         ) {
@@ -209,16 +209,16 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             );
             return reject_before_ai(game, 2, b"");
         }
-        player_ai.begin_tianhuo(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
-        .tianhuo()
+        .battle_fairy_execution(TIANHUO_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if player_ai
-        .tianhuo()
+        .battle_fairy_execution(TIANHUO_SKILL_ID)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         if mp_loss != 0 {
@@ -273,13 +273,13 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
         }
         send_visual(game, player_id, skill_level, 1, None);
-        if let Some(execution) = player_ai.tianhuo_mut() {
+        if let Some(execution) = player_ai.battle_fairy_execution_mut(TIANHUO_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .tianhuo()
+        .battle_fairy_execution(TIANHUO_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение небесного огня создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -337,7 +337,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     if summoned {
         let _ = game.send_tianhuo_phalanx_entry(region_id, summon_id);
     }
-    if let Some(execution) = player_ai.tianhuo_mut() {
+    if let Some(execution) = player_ai.battle_fairy_execution_mut(TIANHUO_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

@@ -137,7 +137,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let starting = player_ai.blood_loss().is_none();
+    let starting = player_ai.battle_fairy_execution(BLOOD_LOSS_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame| {
         if starting { send_failure(game, player_id, 2); }
         send_cast(game, player_id, skill_level, 3, None);
@@ -166,7 +166,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     let skill_name = properties.skill_name().to_vec();
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.blood_loss().is_none() {
+    if player_ai.battle_fairy_execution(BLOOD_LOSS_SKILL_ID).is_none() {
         if target.id == player_id && target.object_type == PLAYER_TYPE {
             send_failure(game, player_id, 10);
             game.send_skill_system_info(player_id, b"ZHGS0045");
@@ -185,7 +185,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.blood_loss_last_used_ms(),
+            player_ai.battle_fairy_skill_last_used_ms(BLOOD_LOSS_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -240,16 +240,16 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
                 return reject_before_ai(game);
             }
         }
-        player_ai.begin_blood_loss(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
-        .blood_loss()
+        .battle_fairy_execution(BLOOD_LOSS_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if player_ai
-        .blood_loss()
+        .battle_fairy_execution(BLOOD_LOSS_SKILL_ID)
         .is_some_and(|state| state.stage() == SkillStage::Begin)
     {
         let target_alive = game
@@ -279,13 +279,13 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
             send_goods_update(game, &update);
         }
         send_cast(game, player_id, skill_level, 1, None);
-        if let Some(state) = player_ai.blood_loss_mut() {
+        if let Some(state) = player_ai.battle_fairy_execution_mut(BLOOD_LOSS_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .blood_loss()
+        .battle_fairy_execution(BLOOD_LOSS_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение потери крови создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -372,7 +372,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
             let _ = game.publish_player_states(target.id);
         }
     }
-    if let Some(execution) = player_ai.blood_loss_mut() {
+    if let Some(execution) = player_ai.battle_fairy_execution_mut(BLOOD_LOSS_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

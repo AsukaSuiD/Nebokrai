@@ -195,7 +195,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         }
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.battle_fairy_base_magic_last_used_ms(),
+            player_ai.battle_fairy_skill_last_used_ms(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -390,15 +390,12 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой атаки боевой феи");
     }
 
-    if let Some(state) = player_ai.battle_fairy_base_magic_mut() {
+    if let Some(state) = player_ai.battle_fairy_execution_mut(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
         let _ = state
-            .kernel_mut()
             .advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state
-            .kernel_mut()
             .advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state
-            .kernel_mut()
             .advance(SkillStage::Attack, SkillStage::Apply);
     }
     send_end(game, player_id, skill_level);

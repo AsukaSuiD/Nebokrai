@@ -155,7 +155,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     }) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let starting = player_ai.battle_fairy_attribute().is_none();
+    let starting = player_ai.battle_fairy_execution(skill_id).is_none();
     let reject_before_ai = |game: &mut CGame, target: ShapeIdentity| {
         send_cast(game, player_id, target, skill_id, skill_level, 3);
         if starting {
@@ -183,10 +183,10 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     let value = properties.query_property(definition.value_usage) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.battle_fairy_attribute().is_none() {
+    if player_ai.battle_fairy_execution(skill_id).is_none() {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.battle_fairy_attribute_last_used_ms(skill_id),
+            player_ai.battle_fairy_skill_last_used_ms(skill_id),
             delay_ms,
             now_ms,
         ) {
@@ -208,8 +208,8 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             );
             return reject_before_ai(game, target);
         }
-        player_ai.begin_battle_fairy_attribute(SkillExecutionKernel::begin(dispatch, now_ms));
-    } else if player_ai.battle_fairy_attribute().is_none_or(|state| state.dispatch() != dispatch) {
+        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, now_ms));
+    } else if player_ai.battle_fairy_execution(skill_id).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -230,7 +230,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         });
     }
 
-    if player_ai.battle_fairy_attribute().is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if player_ai.battle_fairy_execution(skill_id).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let Some(current) = game.find_player(player_id).and_then(|player| player.equipped_battle_fairy_mana(game.goods_factory())) else {
             return terminal(QueuedSkillExecutionState::Pending);
         };
@@ -261,7 +261,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             if let Some(update) = update.as_ref() { send_goods_update(game, update); }
         }
         send_cast(game, player_id, target, skill_id, skill_level, 1);
-        if let Some(state) = player_ai.battle_fairy_attribute_mut() {
+        if let Some(state) = player_ai.battle_fairy_execution_mut(skill_id) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
         if !goods_before_visual {
@@ -269,7 +269,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    let started_at_ms = player_ai.battle_fairy_attribute().map(SkillExecutionKernel::started_at_ms)
+    let started_at_ms = player_ai.battle_fairy_execution(skill_id).map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение атрибутного навыка создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
@@ -292,7 +292,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     if target.object_type == PLAYER_TYPE {
         let _ = game.update_player_properties(target.id);
     }
-    if let Some(execution) = player_ai.battle_fairy_attribute_mut() {
+    if let Some(execution) = player_ai.battle_fairy_execution_mut(skill_id) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

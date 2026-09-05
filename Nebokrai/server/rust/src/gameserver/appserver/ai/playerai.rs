@@ -5,8 +5,14 @@
 //! execution срок не удаляет. Коллекция не определяет порядок исполнения.
 //! У подключённых семейств каждый вариант сохраняет собственный срок.
 //! Индексы семейств не участвуют в хранении сроков; состояния исполнения
-//! остаются независимыми от cooldown. Сроки WarSoul пока хранятся отдельно:
+//! остаются независимыми от cooldown. Сроки WarSoul хранятся отдельно:
 //! их владелец не подменяется основным навыком игрока.
+//! Исполнения WarSoul также адресуются исходным ID в отдельной BTreeMap.
+//! Общие Begin, доступ к kernel и cleanup не перечисляют concrete навыки;
+//! базовая атака сохраняет свою дополнительную цель в типизированном варианте.
+//! End снимает только совпавший dispatch, не чужой ID и не ожидающую команду.
+//! FIFO и фазы Run остаются у AI, обход коллекции их не заменяет. Источник
+//! границы очистки — CSkill::End (0x004D84C0), очищающий свой экземпляр.
 //! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
 //! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
 //! установке, до первого AI. После вызова владельца контекст очищается даже
@@ -132,8 +138,10 @@ use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
 use crate::gameserver::appserver::skills::lordfastattack::LordFastAttackExecutionState;
 use crate::gameserver::appserver::skills::seal::SealExecutionState;
-use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
-use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
+use crate::gameserver::appserver::skills::battlefairybasemagic::{
+    BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, BattleFairyBaseMagicExecutionState,
+};
+use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
@@ -173,6 +181,28 @@ use crate::gameserver::appserver::skills::kernel::{
 };
 use crate::gameserver::appserver::skills::rage::RageExecutionState;
 use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BattleFairyExecution {
+    State(SkillExecutionKernel<BattleFairySkillDispatch>),
+    BaseMagic(BattleFairyBaseMagicExecutionState),
+}
+
+impl BattleFairyExecution {
+    fn kernel(&self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
+        match self {
+            Self::State(state) => *state,
+            Self::BaseMagic(state) => state.kernel(),
+        }
+    }
+
+    fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
+        match self {
+            Self::State(state) => state,
+            Self::BaseMagic(state) => state.kernel_mut(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -283,28 +313,8 @@ pub(crate) struct CPlayerAI {
     god_thunder_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     soul_collect: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     soul_mirror: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
-    battle_fairy_base_magic_last_used_ms: u32,
-    life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    life_shield_last_used_ms: u32,
-    battle_fairy_transfer: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    battle_fairy_transfer_last_used_ms: [u32; 2],
-    wangsheng: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    wangsheng_last_used_ms: u32,
-    poison_arrow: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    poison_arrow_last_used_ms: u32,
-    blood_loss: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    blood_loss_last_used_ms: u32,
-    fatal_blow: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    fatal_blow_last_used_ms: u32,
-    thunder: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    thunder_last_used_ms: u32,
-    leiming2: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    leiming2_last_used_ms: u32,
-    tianhuo: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    tianhuo_last_used_ms: u32,
-    battle_fairy_attribute: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    battle_fairy_attribute_last_used_ms: [u32; 8],
+    battle_fairy_executions: BTreeMap<u32, BattleFairyExecution>,
+    battle_fairy_last_used_ms: BTreeMap<u32, u32>,
     callosity: Option<CallosityExecutionState>,
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -2034,45 +2044,10 @@ impl CPlayerAI {
     /// Возвращает часы конкретного выбранного навыка боевого духа. Все ID
     /// диапазона `0x212..0x224` уже имеют отдельное типизированное состояние
     /// исполнения и одну временную отметку.
-    pub(crate) const fn selected_battle_fairy_skill_last_used_ms(&self) -> Option<u32> {
+    pub(crate) fn selected_battle_fairy_skill_last_used_ms(&self) -> Option<u32> {
         let skill_id = self.selected_battle_fairy_skill_id();
-        match skill_id {
-            0x212..=0x219 => Some(self.battle_fairy_attribute_last_used_ms(skill_id)),
-            crate::gameserver::appserver::skills::tianhuo::TIANHUO_SKILL_ID => {
-                Some(self.tianhuo_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::thunder2::LEIMING2_SKILL_ID => {
-                Some(self.leiming2_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::fatalblow::FATAL_BLOW_SKILL_ID => {
-                Some(self.fatal_blow_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::bloodloss::BLOOD_LOSS_SKILL_ID => {
-                Some(self.blood_loss_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::poisonarrow::POISON_ARROW_SKILL_ID => {
-                Some(self.poison_arrow_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::thunder::THUNDER_SKILL_ID => {
-                Some(self.thunder_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::lifeshield::LIFE_SHIELD_SKILL_ID => {
-                Some(self.life_shield_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::wangsheng::WANGSHENG_SKILL_ID => {
-                Some(self.wangsheng_last_used_ms)
-            }
-            crate::gameserver::appserver::skills::huoxieshu::HUOXIESHU_SKILL_ID => Some(
-                self.battle_fairy_transfer_last_used_ms(BattleFairyTransferKind::Health),
-            ),
-            crate::gameserver::appserver::skills::lingzhishu::LINGZHISHU_SKILL_ID => Some(
-                self.battle_fairy_transfer_last_used_ms(BattleFairyTransferKind::Mana),
-            ),
-            crate::gameserver::appserver::skills::battlefairybasemagic::BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => {
-                Some(self.battle_fairy_base_magic_last_used_ms)
-            }
-            _ => None,
-        }
+        CSkillFactory::is_war_soul_skill(skill_id)
+            .then(|| self.battle_fairy_skill_last_used_ms(skill_id))
     }
 
     pub(crate) fn finish_battle_fairy_skill(
@@ -2084,51 +2059,13 @@ impl CPlayerAI {
             return false;
         }
         self.current_battle_fairy_skill = None;
-        if let Some(mut execution) = self.battle_fairy_base_magic.take() {
-            let _ = execution
-                .kernel_mut()
-                .terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой атаки боевой феи завершено");
-        }
-        if let Some(mut execution) = self.life_shield.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение щита жизни завершено");
-        }
-        if let Some(mut execution) = self.battle_fairy_transfer.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение переноса здоровья боевому духу завершено");
-        }
-        if let Some(mut execution) = self.wangsheng.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение восстановления здоровья игрока завершено");
-        }
-        if let Some(mut execution) = self.poison_arrow.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитой стрелы завершено");
-        }
-        if let Some(mut execution) = self.blood_loss.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение потери крови завершено");
-        }
-        if let Some(mut execution) = self.fatal_blow.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение смертельного удара завершено");
-        }
-        if let Some(mut execution) = self.thunder.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение грома завершено");
-        }
-        if let Some(mut execution) = self.leiming2.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение отложенного грома завершено");
-        }
-        if let Some(mut execution) = self.tianhuo.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение небесного огня завершено");
-        }
-        if let Some(mut execution) = self.battle_fairy_attribute.take() {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение атрибутного навыка боевого духа завершено");
+        let skill_id = expected.skill_id();
+        if self.battle_fairy_execution(skill_id).is_some_and(|state| state.dispatch() == expected)
+            && let Some(mut execution) = self.battle_fairy_executions.remove(&skill_id)
+        {
+            let kernel = execution.kernel_mut();
+            let _ = kernel.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение навыка боевой феи завершено");
         }
         true
     }
@@ -2136,18 +2073,11 @@ impl CPlayerAI {
     /// `true` означает, что выбранная war-soul команда уже прошла concrete
     /// `Begin` и её терминальный путь обязан выполнить унаследованный `End`.
     /// Одна только извлечённая команда не эквивалентна native skill execution.
-    pub(crate) const fn battle_fairy_skill_execution_is_materialized(&self) -> bool {
-        self.battle_fairy_base_magic.is_some()
-            || self.life_shield.is_some()
-            || self.battle_fairy_transfer.is_some()
-            || self.wangsheng.is_some()
-            || self.poison_arrow.is_some()
-            || self.blood_loss.is_some()
-            || self.fatal_blow.is_some()
-            || self.thunder.is_some()
-            || self.leiming2.is_some()
-            || self.tianhuo.is_some()
-            || self.battle_fairy_attribute.is_some()
+    pub(crate) fn battle_fairy_skill_execution_is_materialized(&self) -> bool {
+        self.current_battle_fairy_skill.is_some_and(|dispatch| {
+            self.battle_fairy_execution(dispatch.skill_id())
+                .is_some_and(|execution| execution.dispatch() == dispatch)
+        })
     }
 
     /// Общая запись `CSkill::End(true)` после оружейного эффекта.
@@ -2158,42 +2088,53 @@ impl CPlayerAI {
         skill_id: u32,
         now_ms: u32,
     ) -> bool {
-        match skill_id {
-            0x212..=0x219 => self.mark_battle_fairy_attribute_used(skill_id, now_ms),
-            crate::gameserver::appserver::skills::tianhuo::TIANHUO_SKILL_ID => {
-                self.mark_tianhuo_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::thunder2::LEIMING2_SKILL_ID => {
-                self.mark_leiming2_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::fatalblow::FATAL_BLOW_SKILL_ID => {
-                self.mark_fatal_blow_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::bloodloss::BLOOD_LOSS_SKILL_ID => {
-                self.mark_blood_loss_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::poisonarrow::POISON_ARROW_SKILL_ID => {
-                self.mark_poison_arrow_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::thunder::THUNDER_SKILL_ID => {
-                self.mark_thunder_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::lifeshield::LIFE_SHIELD_SKILL_ID => {
-                self.mark_life_shield_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::wangsheng::WANGSHENG_SKILL_ID => {
-                self.mark_wangsheng_used(now_ms)
-            }
-            crate::gameserver::appserver::skills::huoxieshu::HUOXIESHU_SKILL_ID => self
-                .mark_battle_fairy_transfer_used(BattleFairyTransferKind::Health, now_ms),
-            crate::gameserver::appserver::skills::lingzhishu::LINGZHISHU_SKILL_ID => self
-                .mark_battle_fairy_transfer_used(BattleFairyTransferKind::Mana, now_ms),
-            crate::gameserver::appserver::skills::battlefairybasemagic::BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => {
-                self.mark_battle_fairy_base_magic_used(now_ms)
-            }
-            _ => return false,
+        if !CSkillFactory::is_war_soul_skill(skill_id) {
+            return false;
+        }
+        if now_ms == 0 {
+            self.battle_fairy_last_used_ms.remove(&skill_id);
+        } else {
+            self.battle_fairy_last_used_ms.insert(skill_id, now_ms);
         }
         true
+    }
+
+    pub(crate) fn battle_fairy_skill_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.battle_fairy_last_used_ms.get(&skill_id).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn battle_fairy_execution(
+        &self,
+        skill_id: u32,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.battle_fairy_executions.get(&skill_id).map(BattleFairyExecution::kernel)
+    }
+
+    pub(crate) fn battle_fairy_execution_mut(
+        &mut self,
+        skill_id: u32,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.battle_fairy_executions.get_mut(&skill_id).map(BattleFairyExecution::kernel_mut)
+    }
+
+    fn insert_battle_fairy_execution(&mut self, mut execution: BattleFairyExecution) {
+        execution.kernel_mut().inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
+        self.battle_fairy_executions.insert(execution.kernel().dispatch().skill_id(), execution);
+    }
+
+    pub(crate) fn begin_battle_fairy_state(&mut self, state: SkillExecutionKernel<BattleFairySkillDispatch>) {
+        self.insert_battle_fairy_execution(BattleFairyExecution::State(state));
+    }
+
+    pub(crate) fn begin_battle_fairy_base_magic(&mut self, state: BattleFairyBaseMagicExecutionState) {
+        self.insert_battle_fairy_execution(BattleFairyExecution::BaseMagic(state));
+    }
+
+    pub(crate) fn battle_fairy_base_magic(&self) -> Option<BattleFairyBaseMagicExecutionState> {
+        match self.battle_fairy_executions.get(&BATTLE_FAIRY_BASE_MAGIC_SKILL_ID)? {
+            BattleFairyExecution::BaseMagic(state) => Some(*state),
+            BattleFairyExecution::State(_) => None,
+        }
     }
 
     /// Точный последний side effect `OnChangeSkillWithWarSoul` и
@@ -2216,336 +2157,6 @@ impl CPlayerAI {
         let dispatch = self.current_battle_fairy_skill?;
         self.finish_battle_fairy_skill(dispatch, SkillTermination::Cancelled)
             .then_some(dispatch)
-    }
-
-    pub(crate) const fn battle_fairy_base_magic(
-        &self,
-    ) -> Option<BattleFairyBaseMagicExecutionState> {
-        self.battle_fairy_base_magic
-    }
-
-    pub(crate) const fn battle_fairy_attribute(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.battle_fairy_attribute
-    }
-
-    pub(crate) fn begin_battle_fairy_attribute(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.battle_fairy_attribute = Some(state);
-    }
-
-    pub(crate) fn battle_fairy_attribute_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.battle_fairy_attribute.as_mut()
-    }
-
-    const fn battle_fairy_attribute_index(skill_id: u32) -> usize {
-        match skill_id {
-            0x212..=0x219 => (skill_id - 0x212) as usize,
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) const fn battle_fairy_attribute_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.battle_fairy_attribute_last_used_ms[Self::battle_fairy_attribute_index(skill_id)]
-    }
-
-    pub(crate) fn mark_battle_fairy_attribute_used(&mut self, skill_id: u32, now_ms: u32) {
-        let index = Self::battle_fairy_attribute_index(skill_id);
-        self.battle_fairy_attribute_last_used_ms[index] = now_ms;
-    }
-
-    pub(crate) fn begin_battle_fairy_base_magic(
-        &mut self,
-        mut state: BattleFairyBaseMagicExecutionState,
-    ) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.battle_fairy_base_magic = Some(state);
-    }
-
-    pub(crate) fn battle_fairy_base_magic_mut(
-        &mut self,
-    ) -> Option<&mut BattleFairyBaseMagicExecutionState> {
-        self.battle_fairy_base_magic.as_mut()
-    }
-
-    pub(crate) const fn battle_fairy_base_magic_last_used_ms(&self) -> u32 {
-        self.battle_fairy_base_magic_last_used_ms
-    }
-
-    pub(crate) const fn mark_battle_fairy_base_magic_used(&mut self, now_ms: u32) {
-        self.battle_fairy_base_magic_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn life_shield(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.life_shield
-    }
-
-    pub(crate) fn begin_life_shield(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.life_shield = Some(state);
-    }
-
-    pub(crate) fn life_shield_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.life_shield.as_mut()
-    }
-
-    pub(crate) const fn life_shield_last_used_ms(&self) -> u32 {
-        self.life_shield_last_used_ms
-    }
-
-    pub(crate) const fn mark_life_shield_used(&mut self, now_ms: u32) {
-        self.life_shield_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn battle_fairy_transfer(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.battle_fairy_transfer
-    }
-
-    pub(crate) fn begin_battle_fairy_transfer(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.battle_fairy_transfer = Some(state);
-    }
-
-    pub(crate) fn battle_fairy_transfer_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.battle_fairy_transfer.as_mut()
-    }
-
-    const fn battle_fairy_transfer_index(kind: BattleFairyTransferKind) -> usize {
-        match kind {
-            BattleFairyTransferKind::Health => 0,
-            BattleFairyTransferKind::Mana => 1,
-        }
-    }
-
-    pub(crate) const fn battle_fairy_transfer_last_used_ms(
-        &self,
-        kind: BattleFairyTransferKind,
-    ) -> u32 {
-        self.battle_fairy_transfer_last_used_ms[Self::battle_fairy_transfer_index(kind)]
-    }
-
-    pub(crate) fn mark_battle_fairy_transfer_used(
-        &mut self,
-        kind: BattleFairyTransferKind,
-        now_ms: u32,
-    ) {
-        self.battle_fairy_transfer_last_used_ms[Self::battle_fairy_transfer_index(kind)] = now_ms;
-    }
-
-    pub(crate) const fn wangsheng(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.wangsheng
-    }
-
-    pub(crate) fn begin_wangsheng(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.wangsheng = Some(state);
-    }
-
-    pub(crate) fn wangsheng_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.wangsheng.as_mut()
-    }
-
-    pub(crate) const fn wangsheng_last_used_ms(&self) -> u32 {
-        self.wangsheng_last_used_ms
-    }
-
-    pub(crate) const fn mark_wangsheng_used(&mut self, now_ms: u32) {
-        self.wangsheng_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn poison_arrow(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.poison_arrow
-    }
-
-    pub(crate) fn begin_poison_arrow(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.poison_arrow = Some(state);
-    }
-
-    pub(crate) fn poison_arrow_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.poison_arrow.as_mut()
-    }
-
-    pub(crate) const fn poison_arrow_last_used_ms(&self) -> u32 {
-        self.poison_arrow_last_used_ms
-    }
-
-    pub(crate) const fn mark_poison_arrow_used(&mut self, now_ms: u32) {
-        self.poison_arrow_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn blood_loss(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.blood_loss
-    }
-
-    pub(crate) fn begin_blood_loss(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.blood_loss = Some(state);
-    }
-
-    pub(crate) fn blood_loss_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.blood_loss.as_mut()
-    }
-
-    pub(crate) const fn blood_loss_last_used_ms(&self) -> u32 {
-        self.blood_loss_last_used_ms
-    }
-
-    pub(crate) const fn mark_blood_loss_used(&mut self, now_ms: u32) {
-        self.blood_loss_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn fatal_blow(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.fatal_blow
-    }
-
-    pub(crate) fn begin_fatal_blow(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.fatal_blow = Some(state);
-    }
-
-    pub(crate) fn fatal_blow_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.fatal_blow.as_mut()
-    }
-
-    pub(crate) const fn fatal_blow_last_used_ms(&self) -> u32 {
-        self.fatal_blow_last_used_ms
-    }
-
-    pub(crate) const fn mark_fatal_blow_used(&mut self, now_ms: u32) {
-        self.fatal_blow_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn thunder(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.thunder
-    }
-
-    pub(crate) fn begin_thunder(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.thunder = Some(state);
-    }
-
-    pub(crate) fn thunder_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.thunder.as_mut()
-    }
-
-    pub(crate) const fn thunder_last_used_ms(&self) -> u32 {
-        self.thunder_last_used_ms
-    }
-
-    pub(crate) const fn mark_thunder_used(&mut self, now_ms: u32) {
-        self.thunder_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn leiming2(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.leiming2
-    }
-
-    pub(crate) fn begin_leiming2(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.leiming2 = Some(state);
-    }
-
-    pub(crate) fn leiming2_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.leiming2.as_mut()
-    }
-
-    pub(crate) const fn leiming2_last_used_ms(&self) -> u32 {
-        self.leiming2_last_used_ms
-    }
-
-    pub(crate) const fn mark_leiming2_used(&mut self, now_ms: u32) {
-        self.leiming2_last_used_ms = now_ms;
-    }
-
-    pub(crate) const fn tianhuo(
-        &self,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.tianhuo
-    }
-
-    pub(crate) fn begin_tianhuo(
-        &mut self,
-        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.tianhuo = Some(state);
-    }
-
-    pub(crate) fn tianhuo_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.tianhuo.as_mut()
-    }
-
-    pub(crate) const fn tianhuo_last_used_ms(&self) -> u32 {
-        self.tianhuo_last_used_ms
-    }
-
-    pub(crate) const fn mark_tianhuo_used(&mut self, now_ms: u32) {
-        self.tianhuo_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]
