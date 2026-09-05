@@ -1236,7 +1236,7 @@ use crate::gameserver::appserver::skills::callosity::{
     cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
     CALLOSITY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::callositystate::send_callosity_state_begin;
+use crate::gameserver::appserver::skills::callositystate::{expire_player_callosity_state, send_callosity_state_begin};
 use crate::gameserver::appserver::skills::curestate::{
     expire_monster_cure_state, send_cure_state_visual,
 };
@@ -28925,6 +28925,7 @@ impl CGame {
         let script_move_states_ended =
             self.update_player_script_move_states(player_id, now_ms);
         let _ = expire_player_pillar_state(self, player_id, now_ms);
+        let _ = expire_player_callosity_state(self, player_id, now_ms);
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
         let _ = expire_player_blind_states(self, player_id, now_ms);

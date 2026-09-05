@@ -21,7 +21,7 @@ use super::baseattack::time_reached;
 use super::callosity2::create_callosity_2_state;
 pub(crate) use super::callosity2::CALLOSITY_2_SKILL_ID;
 use super::callositystate::{
-    send_callosity_state_begin, CallosityFamilyState, CallosityState,
+    end_player_callosity_state, send_callosity_state_begin, CallosityFamilyState, CallosityState,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -229,14 +229,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     }
 
     game.send_self_state_skill_cast(CALLOSITY_EFFECT_MESSAGE, player_id, skill_id, skill_level, 2);
-    let removed = game.find_player_mut(player_id).and_then(|player| {
-        player
-            .take_callosity_state(CALLOSITY_SKILL_ID)
-            .or_else(|| player.take_callosity_state(CALLOSITY_2_SKILL_ID))
-    });
-    if removed.is_some() {
-        let _ = game.publish_player_states(player_id);
-    }
+    let _ = end_player_callosity_state(game, player_id);
     let state_started_at_ms = runtime.now_milliseconds();
     let state = if skill_id == CALLOSITY_2_SKILL_ID {
         CallosityFamilyState::Callosity2(create_callosity_2_state(

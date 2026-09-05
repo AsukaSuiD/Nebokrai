@@ -4,8 +4,10 @@
 //! `appserver/skills/callositystate.cpp` и `callositystate2.cpp`. Конкретное
 //! второе состояние реализовано в `callositystate2.rs`; enum семейства не даёт
 //! двум взаимно исключающим состояниям образовать параллельные источники истины.
-//! Подтверждённая
-//! странность сохранена: `time_to_keep` не обслуживается отдельным `AI`.
+//! Vtable первой/второй закалки `0x006607d4/0x006603bc`, слот +0x0c,
+//! направляет AI на `0x005d60b0`: строгий абсолютный wrapping deadline.
+//! Общий End `0x005fd420` отправляет `0xBFE04` до RemoveState, который
+//! вызывает CPlayer::UpdateProperty (`vtable +0x9c`, `0x004593e0`).
 //! Exact vtable обеих закалок направляет `GetRemainedTime` на `0x005D5F30`;
 //! additional-data остаётся базовым нулём.
 //! Общая exact-пара `Serialize/Unserialize` `0x005F1050/0x005F48E0` сохраняет
@@ -88,6 +90,14 @@ pub(crate) enum CallosityFamilyState {
 }
 
 impl CallosityFamilyState {
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        let (started, keep) = match self {
+            Self::Callosity(state) => (state.started_at_ms, state.time_to_keep),
+            Self::Callosity2(state) => (state.started_at_ms(), state.time_to_keep()),
+        };
+        started.wrapping_add(keep as u32) < now_ms
+    }
+
     pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
@@ -169,6 +179,30 @@ impl CallosityFamilyState {
             Self::Callosity2(state) => state.apply_to_player(properties),
         }
     }
+}
+
+pub(crate) fn end_player_callosity_state(game: &mut CGame, player_id: i32) -> bool {
+    let Some((state, identity)) = game.find_player(player_id).and_then(|player| {
+        Some((player.callosity_state()?, player.shape().identity()))
+    }) else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.take_callosity_state(state.skill_id());
+    }
+    let _ = game.update_player_properties(player_id);
+    true
+}
+
+pub(crate) fn expire_player_callosity_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    if !game.find_player(player_id).and_then(|player| player.callosity_state())
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
+    }
+    end_player_callosity_state(game, player_id)
 }
 
 pub(crate) fn send_callosity_state_begin(

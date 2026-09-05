@@ -1,4 +1,6 @@
 //! Каноническое состояние стойки `CPillarState` (`0x74`).
+//! AI из vtable `0x00660834 +0x0c` (`0x005d60b0`) сравнивает абсолютный
+//! wrapping deadline строго с now, без особого исключения для нулевого срока.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/pillarstate.cpp`. Состояние хранит коэффициент поздней
@@ -44,7 +46,7 @@ impl PillarState {
     }
     pub(crate) const fn skill_id(self) -> u32 { PILLAR_STATE_ID }
     pub(crate) const fn damage_factor(self) -> f32 { f32::from_bits(self.damage_factor_bits) }
-    pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
 }
 
