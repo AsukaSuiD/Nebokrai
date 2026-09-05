@@ -46,6 +46,18 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
     real_distance_between_points(source_x, source_y, target_x, target_y)
 }
 
+/// End(0) не вызывает AfterUseSkill. Projectile-варианты (0x005AE7A0)
+/// возвращают движение до CSummonSkill::End; CBaseAttack (0x005B3010) — нет.
+/// Освобождение kernel выполняет общий хвост очереди после возврата результата.
+pub(crate) fn finish_failed_base_attack(game: &mut CGame, player_id: i32, restore_movement: bool) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        if restore_movement {
+            player.set_skill_moveable(true);
+        }
+        player.set_current_skill_id(None);
+    }
+}
+
 /// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
 /// `CArchery::End`: износ оружия
 /// предшествует фиксации времени восстановления и очистке текущего навыка;

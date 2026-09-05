@@ -1,10 +1,17 @@
 //! Базовая магическая атака GameServer (`SKILL_BASE_MAGIC == 3`).
 //! Задержка уже первого AI использует сохранённый расписанием отсчёт
 //! CState::Begin до OnBeginSkill, включая время проверок цели и пути.
+//! Begin 0x005B3DC0 завершается после CheckCastCondition 0x005B4700.
+//! Поворот, стартовый пакет и последующий запрет движения выполняет отдельный
+//! первый AI 0x005B4330. Его срок — unsigned now >= wrapping(start + delay),
+//! а не elapsed; даже delay=0 не объединяет Begin с первым Attack-тактом.
+//! Все отказные ветви AI заканчиваются End(0) через общий 0x005AE7A0:
+//! движение возвращается без износа оружия и без нового cooldown.
+//! Luvinia CNewSkill/BaseModule не соответствует этому lifecycle CSkill.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/basemagic.cpp`. `SkillExecutionKernel` сохраняет применение
-//! между тактами: первый такт проверяет цель, поворачивает игрока, отправляет
+//! между тактами: первый AI проверяет цель, поворачивает игрока, отправляет
 //! начало эффекта и запрещает движение; по истечении задержки движение
 //! разрешается до повторной проверки цели и отправки пакета выстрела. Сам урон
 //! намеренно не выполняется здесь: выстрел создаёт принадлежащий региону
@@ -14,8 +21,8 @@
 //! player-map, поэтому такой снаряд остаётся визуальным без выдуманного урона.
 //! Это сохраняет исходные моменты действий, двух владельцев жизненного
 //! цикла и порядок пакетов. Обычное, отказное и клиентское завершение после
-//! `Begin` используют один хвост `End(1)` с износом оружия и временем
-//! восстановления; входной reuse-gate вызывает exact `CSkill::IsRestored`.
+//! `Begin` различают успешный/клиентский End(1) с износом и временем
+//! восстановления и отказный End(0); reuse-gate вызывает `CSkill::IsRestored`.
 //! Все
 //! достигнутые перегрузки, проверки и визуальные пакеты реализованы этим
 //! владельцем; `CGame` оставляет только доступ к региону, владельцам целей и
@@ -25,7 +32,7 @@
 //! combat lifecycle. Значение `100` относится к другой legacy enum и не
 //! является `CShape::GetType`.
 
-use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
+use super::baseattack::{finish_delayed_base_attack, real_distance};
 use super::basemagicphalanx::CBaseMagicPhalanx;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -148,6 +155,20 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    let outcome = execute_player_base_magic_stage(game, player_id, dispatch, player_ai, runtime);
+    if outcome.state == QueuedSkillExecutionState::Rejected {
+        super::baseattack::finish_failed_base_attack(game, player_id, true);
+    }
+    outcome
+}
+
+fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
     let rejected = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Rejected,
         first_contact: false,
@@ -233,6 +254,33 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0290");
             return rejected();
         }
+        player_ai.begin_base_magic(BaseMagicExecutionState::begin(dispatch, target, now_ms));
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(BASE_MAGIC_SKILL_ID));
+        }
+        return pending();
+    }
+    let Some(execution) = player_ai.base_magic() else {
+        return rejected();
+    };
+    if execution.kernel().dispatch() != dispatch {
+        return rejected();
+    }
+    if game.base_magic_target_view(region_id, target).is_none() {
+        game.send_base_magic_failure(player_id, 10);
+        return rejected();
+    }
+    if execution.kernel().stage() == SkillStage::Begin {
+        let Some(source_view) = player.shape_view() else {
+            return rejected();
+        };
+        let (source_x, source_y) = (source_view.tile_x, source_view.tile_y);
+        let Some((target_x, target_y)) =
+            game.base_magic_target_point(region_id, source_x, source_y, target)
+        else {
+            game.send_base_magic_failure(player_id, 10);
+            return rejected();
+        };
         let target_dead = game.base_magic_target_dead(region_id, target);
         if target_dead {
             game.send_base_magic_failure(player_id, 10);
@@ -246,7 +294,6 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
                 target_x,
                 target_y,
             ));
-            player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BASE_MAGIC_SKILL_ID));
         }
         let direction = game
@@ -261,30 +308,16 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
         start.add_long(player_id);
         start.add_long(direction);
         let _ = game.send_player_shape_around(player_id, None, &start);
-        let mut execution = BaseMagicExecutionState::begin(dispatch, target, now_ms);
-        let _ = execution
-            .kernel_mut()
-            .advance(SkillStage::Begin, SkillStage::Check);
-        execution.mark_condition_checked();
-        player_ai.begin_base_magic(execution);
-        let first_ai_now_ms = runtime.now_milliseconds();
-        let started_at_ms = player_ai.base_magic()
-            .map_or(now_ms, |state| state.kernel().started_at_ms());
-        if !time_reached(first_ai_now_ms, started_at_ms, delay_ms) {
-            return pending();
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
         }
-    } else if player_ai
-        .base_magic()
-        .is_none_or(|state| state.kernel().dispatch() != dispatch)
-    {
-        return rejected();
-    } else if !time_reached(
-        now_ms,
-        player_ai
-            .base_magic()
-            .map_or(now_ms, |state| state.kernel().started_at_ms()),
-        delay_ms,
-    ) {
+        if let Some(execution) = player_ai.base_magic_mut() {
+            let _ = execution.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+            execution.mark_condition_checked();
+        }
+    }
+    let started_at_ms = execution.kernel().started_at_ms();
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return pending();
     }
 
@@ -293,7 +326,6 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
     }
     let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
         game.send_base_magic_failure(player_id, 10);
-        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     };
     let target_dead = game.base_magic_target_dead(region_id, target);
@@ -301,11 +333,9 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
         game.send_base_magic_failure(player_id, 10);
-        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     }
     let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
-        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     };
     let Some((target_x, target_y)) = game.base_magic_target_point(
@@ -314,7 +344,6 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
         source_view.tile_y,
         target,
     ) else {
-        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     };
     let attack_time = real_distance(

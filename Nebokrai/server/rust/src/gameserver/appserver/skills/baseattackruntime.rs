@@ -21,6 +21,12 @@
 //! (0x005B3B0E..0x005B3B19), а не с elapsed и не с нулевым интервалом.
 //! Проверка погибшей цели предшествует этой задержке на каждом AI и вызывает
 //! End(1) сразу; ожидание конца каста не должно откладывать отказ и cooldown.
+//! Begin 0x005B3040 возвращает управление до проверок первого AI 0x005B39B0:
+//! kernel остаётся в Begin, а общий AI ставит Attack для следующего такта.
+//! На первом AI не повторяются ride/level/DoesTargetEffective-гейты расписания.
+//! При исчезнувшем object-target исходные нулевые point-поля участвуют в
+//! дальности/повороте; отсутствующая форма не подменяется самим источником.
+//! Отказный End(0) очищает active ID без износа оружия и нового cooldown.
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
@@ -40,6 +46,20 @@ use super::{
 use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 
 pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let outcome = execute_player_base_attack_stage(game, player_id, dispatch, player_ai, runtime);
+    if outcome.state == QueuedSkillExecutionState::Rejected {
+        crate::gameserver::appserver::skills::baseattack::finish_failed_base_attack(game, player_id, false);
+    }
+    outcome
+}
+
+fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
@@ -66,6 +86,17 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let now_ms = runtime.now_milliseconds();
     let region_id = player.server_region_id();
+    if player_ai.base_attack().is_none() {
+        player_ai.begin_base_attack(BaseAttackExecutionState::begin(dispatch, now_ms));
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(BASE_ATTACK_SKILL_ID));
+        }
+        return QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Pending,
+            first_contact: false,
+            killing_blow: None,
+        };
+    }
     let requested_target = match dispatch {
         PlayerSkillDispatch::Object { target, .. } => Some(target),
         PlayerSkillDispatch::Point { x, y, .. } => {
@@ -96,44 +127,26 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         _ => None,
     };
 
-    if player_ai.base_attack().is_none() {
-        player_ai.begin_base_attack(BaseAttackExecutionState::begin(dispatch, now_ms));
-        if matches!(dispatch, PlayerSkillDispatch::Object { .. } | PlayerSkillDispatch::Point { .. })
-            && target.is_none()
-        {
-            let _ = game.send_base_attack_failure(player_id, 2);
-            return rejected();
+    let Some(execution) = player_ai.base_attack() else {
+        return rejected();
+    };
+    if execution.dispatch() != dispatch {
+        return rejected();
+    }
+    let target_dead = target.is_some_and(|(identity, _)| {
+        if identity.object_type == PLAYER_TYPE {
+            game.find_player(identity.id).is_some_and(CPlayer::is_dead)
+        } else {
+            region_id.is_some_and(|region_id| game.base_magic_target_dead(region_id, identity))
         }
-        if player.is_rider() || !player.can_fight() {
-            let _ = game.send_base_attack_failure(player_id, 2);
-            return rejected();
-        }
-        if let Some((target_identity, _)) = target
-            && target_identity.object_type == PLAYER_TYPE
-            && game
-                .find_player(target_identity.id)
-                .is_some_and(CPlayer::is_dead)
-        {
-            let _ = game.send_base_attack_failure(player_id, 2);
-            finish_player_base_attack(game, player_id, player_ai, runtime);
-            return rejected();
-        }
-        if let Some((target_identity, _)) = target
-            && target_identity.object_type == PLAYER_TYPE
-            && let Some((string_id, limit)) =
-                game.player_base_attack_level_block(player_id, target_identity.id)
-        {
-            game.send_base_attack_level_block(player_id, string_id, limit);
-            let _ = game.send_base_attack_failure(player_id, 2);
-            return rejected();
-        }
-        if let Some((target_identity, _)) = target
-            && target_identity.object_type == PLAYER_TYPE
-            && !game.player_base_attackable(player_id, target_identity.id)
-        {
-            let _ = game.send_base_attack_failure(player_id, 2);
-            return rejected();
-        }
+    });
+    if target_dead {
+        let _ = game.send_base_attack_failure(player_id, 2);
+        finish_player_base_attack(game, player_id, player_ai, runtime);
+        return rejected();
+    }
+
+    if execution.stage() == SkillStage::Begin {
         let Some(source_view) = player.shape_view() else {
             return rejected();
         };
@@ -141,13 +154,13 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         let (target_x, target_y) = match (dispatch, target) {
             (_, Some((_, view))) => (view.tile_x, view.tile_y),
             (PlayerSkillDispatch::Point { x, y, .. }, None) => (x, y),
-            _ => (source_x, source_y),
+            _ => (0, 0),
         };
         let target_distance = target.map_or_else(
             || real_distance(source_x, source_y, target_x, target_y),
             |(_, target_view)| source_view.real_distance(Some(target_view)),
         );
-        if maximum_distance != 0 && (maximum_distance as i32) < target_distance {
+        if maximum_distance != 0 && maximum_distance < target_distance as u32 {
             let _ = game.send_base_attack_failure(player_id, 0x0b);
             return rejected();
         }
@@ -170,37 +183,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         start.add_long(direction);
         let _ = game.send_player_shape_around(player_id, None, &start);
         let _ = player_ai.advance_base_attack(SkillStage::Begin, SkillStage::Check);
-    } else if player_ai
-        .base_attack()
-        .is_none_or(|state| state.dispatch() != dispatch)
-    {
-        return rejected();
-    }
-
-    if let Some((target_identity, _)) = target
-        && target_identity.object_type == PLAYER_TYPE
-        && game
-            .find_player(target_identity.id)
-            .is_some_and(CPlayer::is_dead)
-    {
-        let _ = game.send_base_attack_failure(player_id, 2);
-        finish_player_base_attack(game, player_id, player_ai, runtime);
-        return rejected();
-    }
-    if let Some((target_identity, _)) = target
-        && target_identity.object_type == MONSTER_TYPE
-    {
-        let monster_unavailable = game
-            .find_player(player_id)
-            .and_then(CPlayer::server_region_id)
-            .and_then(|region_id| game.find_region(region_id))
-            .and_then(|owner| owner.base().find_monster_by_id(target_identity.id))
-            .is_none_or(|monster| monster.hit_points() == 0 || monster.move_shape().is_god());
-        if monster_unavailable {
-            let _ = game.send_base_attack_failure(player_id, 2);
-            finish_player_base_attack(game, player_id, player_ai, runtime);
-            return rejected();
-        }
     }
     let started_at_ms = player_ai.base_attack()
         .map_or(now_ms, BaseAttackExecutionState::started_at_ms);

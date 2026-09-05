@@ -1,6 +1,14 @@
 //! Базовая стрельба GameServer (`SKILL_BASE_ARCHERY`, ID `2`).
 //! Задержка уже первого AI считается от CState::Begin до OnBeginSkill,
 //! переданного общим расписанием, а не от поздних проверок оружия и пути.
+//! Begin 0x005B1E00 вызывает CheckCastCondition 0x005B2770 и возвращает
+//! управление расписанию с kernel в Begin. Только следующий Attack вызывает
+//! AI 0x005B2370: проверяет смерть/самоцель, поворачивает источник, публикует
+//! начало и затем запрещает движение. Срок сравнивается как unsigned
+//! now >= wrapping(start + delay), в том числе при нулевой задержке.
+//! Отказные AI-ветви вызывают End(0), общий 0x005AE7A0 возвращает движение,
+//! но не вызывает AfterUseSkill и не меняет время восстановления.
+//! Luvinia CNewSkill/BaseModule не соответствует этому lifecycle CSkill.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/archery.cpp`. Навык исполняется из обычной очереди
@@ -12,7 +20,7 @@
 //! урон. Rust сохраняет этот наблюдаемый legacy-контракт без зависимости от
 //! случайного совпадения player/monster ID. Формулы и порядок RNG применяются только
 //! при достижении цели снарядом. Обычное, отказное и клиентское завершение
-//! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост, а reuse
+//! после `Begin` различают End(1) и отказный End(0), а reuse
 //! проверяется exact `CSkill::IsRestored`. Как и
 //! исходный `CState::GetSufferer`, owner принимает player/NPC/monster/build/gate;
 //! NPC отклоняется как мёртвый, а постройки проходят region-owned defence.
@@ -407,6 +415,20 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    let outcome = execute_player_archery_stage(game, player_id, dispatch, player_ai, runtime);
+    if outcome.state == QueuedSkillExecutionState::Rejected {
+        super::baseattack::finish_failed_base_attack(game, player_id, true);
+    }
+    outcome
+}
+
+fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
     let rejected = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Rejected,
         first_contact: false,
@@ -508,6 +530,33 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
                 return rejected();
             }
         }
+        player_ai.begin_archery(ArcheryExecutionState::begin(dispatch, target, now_ms));
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
+        }
+        return pending();
+    }
+    let Some(execution) = player_ai.archery() else {
+        return rejected();
+    };
+    if execution.kernel().dispatch() != dispatch {
+        return rejected();
+    }
+    if game.base_magic_target_view(region_id, target).is_none() {
+        game.send_base_magic_failure(player_id, 10);
+        return rejected();
+    }
+    if execution.kernel().stage() == SkillStage::Begin {
+        let Some(source_view) = player.shape_view() else {
+            return rejected();
+        };
+        let (source_x, source_y) = (source_view.tile_x, source_view.tile_y);
+        let Some((target_x, target_y)) =
+            game.base_magic_target_point(region_id, source_x, source_y, target)
+        else {
+            game.send_base_magic_failure(player_id, 10);
+            return rejected();
+        };
         let target_dead = game.base_magic_target_dead(region_id, target);
         if target_dead {
             game.send_base_magic_failure(player_id, 10);
@@ -527,7 +576,6 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
                 target_x,
                 target_y,
             ));
-            player.set_skill_moveable(false);
             player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
         }
         let direction = game
@@ -542,29 +590,15 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         start.add_long(player_id);
         start.add_long(direction);
         let _ = game.send_player_shape_around(player_id, None, &start);
-        let mut execution = ArcheryExecutionState::begin(dispatch, target, now_ms);
-        let _ = execution
-            .kernel_mut()
-            .advance(SkillStage::Begin, SkillStage::Check);
-        player_ai.begin_archery(execution);
-        let first_ai_now_ms = runtime.now_milliseconds();
-        let started_at_ms = player_ai.archery()
-            .map_or(now_ms, |state| state.kernel().started_at_ms());
-        if !time_reached(first_ai_now_ms, started_at_ms, delay_ms) {
-            return pending();
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
         }
-    } else if player_ai
-        .archery()
-        .is_none_or(|state| state.kernel().dispatch() != dispatch)
-    {
-        return rejected();
-    } else if !time_reached(
-        now_ms,
-        player_ai
-            .archery()
-            .map_or(now_ms, |state| state.kernel().started_at_ms()),
-        delay_ms,
-    ) {
+        if let Some(execution) = player_ai.archery_mut() {
+            let _ = execution.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let started_at_ms = execution.kernel().started_at_ms();
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return pending();
     }
 
@@ -573,7 +607,6 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
     }
     let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
         game.send_base_magic_failure(player_id, 10);
-        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
     let target_dead = game.base_magic_target_dead(region_id, target);
@@ -581,11 +614,9 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
         game.send_base_magic_failure(player_id, 10);
-        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     }
     let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
-        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
     let Some((target_x, target_y)) = game.base_magic_target_point(
@@ -594,7 +625,6 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         source_view.tile_y,
         target,
     ) else {
-        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
     let attack_time = real_distance(
