@@ -862,8 +862,8 @@ use crate::gameserver::appserver::skills::baseattack::{
     abort_player_base_attack_on_region_change, cancel_player_base_attack,
     finish_player_base_attack, BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
     SKILL_USAGE_DELAY_TIME,
-    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
-    real_distance, time_reached,
+    SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
+    real_distance,
 };
 use crate::gameserver::appserver::skills::agility::{
     cancel_player_agility_family, execute_player_agility_family, AGILITY_2_SKILL_ID,

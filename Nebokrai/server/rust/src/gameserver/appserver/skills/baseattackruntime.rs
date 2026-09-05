@@ -13,8 +13,14 @@
 //! monster и stationary build-ветви используют один и тот же контракт.
 //! Maximum-distance gate использует `RealDistance(CShape*)` для разрешённой
 //! объектной цели и координатный overload только для point-target без формы.
-//! Reuse проверяется общим absolute DWORD deadline `CSkill::IsRestored`, тогда
-//! как задержки стадий ниже остаются elapsed-интервалами.
+//! CheckCastCondition (0x005B2E40) требует только источник и свойства,
+//! без дополнительного reuse-gate. Kernel материализуется до проверок AI:
+//! отказ дальности — End(0), не false из Begin. OnBeginSkill и ранний отсчёт
+//! поступают из общего расписания. После начальной визуализации AI читает
+//! часы заново и сравнивает unsigned now с wrapping(start + delay)
+//! (0x005B3B0E..0x005B3B19), а не с elapsed и не с нулевым интервалом.
+//! Проверка погибшей цели предшествует этой задержке на каждом AI и вызывает
+//! End(1) сразу; ожидание конца каста не должно откладывать отказ и cooldown.
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
@@ -23,12 +29,12 @@ use super::{
     GameMainLoopRuntime, MONSTER_TYPE,
     MonsterKillingAttack, PLAYER_TYPE, PlayerKillingBlow, PlayerSkillDispatch,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
-    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
+    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     SKILL_USAGE_USER_HIT_MODIFIER, ShapeIdentity, SkillStage,
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
     finish_blind_states_on_defense, finish_player_base_attack,
     finish_player_blind_states_on_defense, game_legacy_random, get_line_direction, real_distance,
-    retarget_jiumai_after_hurt, time_reached,
+    retarget_jiumai_after_hurt,
     truncate_original,
 };
 use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
@@ -56,7 +62,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         return rejected();
     };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let now_ms = runtime.now_milliseconds();
@@ -92,6 +97,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
     };
 
     if player_ai.base_attack().is_none() {
+        player_ai.begin_base_attack(BaseAttackExecutionState::begin(dispatch, now_ms));
         if matches!(dispatch, PlayerSkillDispatch::Object { .. } | PlayerSkillDispatch::Point { .. })
             && target.is_none()
         {
@@ -102,15 +108,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             let _ = game.send_base_attack_failure(player_id, 2);
             return rejected();
         }
-        let last_used_ms = player_ai.base_attack_last_used_ms();
-        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
-            last_used_ms,
-            reuse_delay_ms,
-            now_ms,
-        ) {
-            let _ = game.send_base_attack_failure(player_id, 2);
-            return rejected();
-        }
         if let Some((target_identity, _)) = target
             && target_identity.object_type == PLAYER_TYPE
             && game
@@ -118,6 +115,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 .is_some_and(CPlayer::is_dead)
         {
             let _ = game.send_base_attack_failure(player_id, 2);
+            finish_player_base_attack(game, player_id, player_ai, runtime);
             return rejected();
         }
         if let Some((target_identity, _)) = target
@@ -126,7 +124,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 game.player_base_attack_level_block(player_id, target_identity.id)
         {
             game.send_base_attack_level_block(player_id, string_id, limit);
-            game.enter_player_combat_state(player_id);
             let _ = game.send_base_attack_failure(player_id, 2);
             return rejected();
         }
@@ -134,7 +131,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             && target_identity.object_type == PLAYER_TYPE
             && !game.player_base_attackable(player_id, target_identity.id)
         {
-            game.enter_player_combat_state(player_id);
             let _ = game.send_base_attack_failure(player_id, 2);
             return rejected();
         }
@@ -161,7 +157,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
             player.set_current_skill_id(Some(BASE_ATTACK_SKILL_ID));
         }
-        game.enter_player_combat_state(player_id);
         let direction = game
             .find_player(player_id)
             .map(|player| player.shape().get_direction())
@@ -174,33 +169,12 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         start.add_long(player_id);
         start.add_long(direction);
         let _ = game.send_player_shape_around(player_id, None, &start);
-        let mut execution = BaseAttackExecutionState::begin(dispatch, now_ms);
-        let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
-        player_ai.begin_base_attack(execution);
-        if !time_reached(now_ms, now_ms, delay_ms) {
-            return QueuedSkillExecutionOutcome {
-                state: QueuedSkillExecutionState::Pending,
-                first_contact: false,
-                killing_blow: None,
-            };
-        }
+        let _ = player_ai.advance_base_attack(SkillStage::Begin, SkillStage::Check);
     } else if player_ai
         .base_attack()
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return rejected();
-    } else if !time_reached(
-        now_ms,
-        player_ai
-            .base_attack()
-            .map_or(now_ms, BaseAttackExecutionState::started_at_ms),
-        delay_ms,
-    ) {
-        return QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Pending,
-            first_contact: false,
-            killing_blow: None,
-        };
     }
 
     if let Some((target_identity, _)) = target
@@ -227,6 +201,15 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             finish_player_base_attack(game, player_id, player_ai, runtime);
             return rejected();
         }
+    }
+    let started_at_ms = player_ai.base_attack()
+        .map_or(now_ms, BaseAttackExecutionState::started_at_ms);
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
+        return QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Pending,
+            first_contact: false,
+            killing_blow: None,
+        };
     }
     if let Some((target_identity, _)) = target
         && (target_identity.object_type == BUILD_OBJECT_TYPE as i32
