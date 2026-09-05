@@ -1,4 +1,7 @@
 //! Каноническое состояние печати `CSealState` (`0x138`).
+//! Vtable 0x006615f4, слот +0x0c: CBlindState::AI (0x005d5ba0).
+//! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
+//! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/sealstate.cpp`. Достигнутая объектная перегрузка запрещает
@@ -64,7 +67,7 @@ impl SealState {
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {

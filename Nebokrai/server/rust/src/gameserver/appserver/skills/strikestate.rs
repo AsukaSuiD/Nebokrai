@@ -1,4 +1,7 @@
 //! Состояние полной блокировки `CStrikeState` (`0xDD`).
+//! Vtable 0x00662154, слот +0x0c: CBlindState::AI (0x005d5ba0).
+//! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
+//! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/strikestate.cpp`. Достигнутый путь загрузки сохраняет
@@ -42,7 +45,7 @@ impl StrikeState {
         STRIKE_STATE_ID
     }
     pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
-    pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) }
 }
 

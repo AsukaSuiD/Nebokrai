@@ -1,4 +1,7 @@
 //! Каноническое состояние паутины `CSpiderWebState` (`0x199`).
+//! Vtable 0x0065fbcc, слот +0x0c: CBlindState::AI (0x005d5ba0).
+//! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
+//! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spiderwebstate.cpp`. Состояние сохраняет wrapping-время,
@@ -53,7 +56,7 @@ impl SpiderWebState {
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; SPIDER_WEB_STATE_BYTES] {

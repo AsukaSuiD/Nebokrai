@@ -1,4 +1,6 @@
 //! Каноническое состояние оглушения `CKnockOutState` (`0x192`).
+//! Общий CBlindState::AI (0x005d5ba0) сравнивает абсолютный wrapping deadline
+//! строго с now, в том числе при нулевом сроке; elapsed здесь неэквивалентен.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/knockoutstate.cpp`. Таблица виртуальных методов EXE
@@ -48,7 +50,7 @@ impl KnockOutState {
     }
     pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
     pub(crate) const fn skill_id(self) -> u32 { KNOCK_OUT_STATE_ID }
-    pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn encoded_for_install(self) -> [u8; KNOCK_OUT_STATE_BYTES] {
         let mut bytes = [0; KNOCK_OUT_STATE_BYTES];
         bytes[..4].copy_from_slice(&KNOCK_OUT_STATE_ID.to_le_bytes());
