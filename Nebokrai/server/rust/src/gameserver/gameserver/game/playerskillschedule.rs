@@ -22,6 +22,11 @@
 //! или завершённым по одному current_skill_id.
 //! NonFun наследует тот же допуск, но его мгновенное исполнение хранится
 //! отдельно от владельцев с внешним End.
+//! Допуск, определение первого Begin и End используют единый запрос наличия
+//! исполнения. Выбор TargetRule хранит только игровое различие целей, не
+//! второй перечень полей CPlayerAI. Общий запрос учитывает также NonFun,
+//! Swordship и немедленные состояния; поддержка внешнего End проверяется
+//! отдельно его dispatcher-ом.
 //! Cure (0x005ad590) допускает цель того же типа, что источник, либо монстра-
 //! повозку: вызов 0x004e6d30 — CMonster::IsCarriage, не IsTamed. Promotion
 //! (0x00568680) требует только ненулевые источник/цель; Seal (0x005a9b00)
@@ -86,11 +91,7 @@ enum TargetRule {
 
 impl CGame {
     pub(super) fn player_skill_begin_pending(ai: &CPlayerAI, skill_id: u32) -> bool {
-        if is_non_fun_skill(skill_id) {
-            ai.non_fun().is_none()
-        } else {
-            Self::materialized_player_skill_active(ai, skill_id) == Some(false)
-        }
+        Self::materialized_player_skill_active(ai, skill_id) == Some(false)
     }
 
     pub(super) fn begin_player_skill_schedule<Runtime: GameMainLoopRuntime>(
@@ -308,6 +309,9 @@ impl CGame {
             MONSTER_TAMING_SKILL_ID => player_ai.monster_taming().is_some(),
             KNOCK_OUT_SKILL_ID => player_ai.knock_out().is_some(),
             GIBE_SKILL_ID => player_ai.gibe().is_some(),
+            _ if is_swordship_skill(skill_id) => player_ai.swordship().is_some(),
+            _ if is_immediate_state_skill(skill_id) => player_ai.immediate_state().is_some(),
+            _ if is_non_fun_skill(skill_id) => player_ai.non_fun().is_some(),
             _ if is_heal_skill(skill_id) => (0..4).any(|index| player_ai.heal_family(index).is_some()),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(player_ai, skill_id)
@@ -322,40 +326,24 @@ impl CGame {
         dispatch: PlayerSkillDispatch,
         ai: &CPlayerAI,
     ) -> bool {
-        let (started, rule) = match dispatch.skill_id() {
-            MONSTER_BASE_ATTACK_SKILL_ID => (ai.monster_base_attack().is_some(), TargetRule::Attackable),
-            MONSTER_RANGE_ATTACK_SKILL_ID => (ai.monster_range_attack().is_some(), TargetRule::Attackable),
-            MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID => (ai.lord_fast_attack().is_some(), TargetRule::Attackable),
-            MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => (ai.wide_arc_attack().is_some(), TargetRule::Attackable),
-            CURE_SKILL_ID => (ai.cure().is_some(), TargetRule::Cure),
-            PROMOTION_SKILL_ID => (ai.promotion().is_some(), TargetRule::Any),
-            SEAL_SKILL_ID => (ai.seal().is_some(), TargetRule::Monster),
-            AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => (ai.agility_family().is_some(), TargetRule::Any),
-            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => (ai.callosity().is_some(), TargetRule::Any),
-            BOSS_BLUE_FURY_SKILL_ID => (ai.boss_blue_fury().is_some(), TargetRule::Any),
-            DAUB_POISON_SKILL_ID => (ai.daub_poison().is_some(), TargetRule::Any),
-            ENERGY_HOLDING_SKILL_ID => (ai.energy_holding().is_some(), TargetRule::Any),
-            FURY_SKILL_ID => (ai.fury().is_some(), TargetRule::Any),
-            GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => (ai.god_bless().is_some(), TargetRule::Any),
-            HEARTEN_SKILL_ID => (ai.hearten().is_some(), TargetRule::Any),
-            METEOR_ARROW_MASS_SKILL_ID => (ai.meteor_arrow_mass().is_some(), TargetRule::Any),
-            PILLAR_SKILL_ID => (ai.pillar().is_some(), TargetRule::Any),
-            RAGE_SKILL_ID => (ai.rage().is_some(), TargetRule::Any),
-            RAGE_BREAK_SKILL_ID => (ai.rage_break().is_some(), TargetRule::Any),
-            ROAR_SKILL_ID => (ai.roar().is_some(), TargetRule::Any),
-            SOUL_COLLECT_SKILL_ID => (ai.soul_collect().is_some(), TargetRule::Any),
-            MACHINE_SHIELD_SKILL_ID => (ai.machine_shield().is_some(), TargetRule::Any),
-            MANA_SHIELD_SKILL_ID => (ai.mana_shield().is_some(), TargetRule::Any),
-            id if is_heal_skill(id) => ((0..4).any(|index| ai.heal_family(index).is_some()), TargetRule::Any),
-            id if is_swordship_skill(id) => (ai.swordship().is_some(), TargetRule::Never),
-            id if is_immediate_state_skill(id) => (ai.immediate_state().is_some(), TargetRule::Never),
-            id if is_non_fun_skill(id) => (ai.non_fun().is_some(), TargetRule::Attackable),
-            id => match Self::materialized_player_skill_active(ai, id) {
-                Some(started) => (started, TargetRule::Attackable),
-                None => return false,
-            },
+        let skill_id = dispatch.skill_id();
+        if Self::materialized_player_skill_active(ai, skill_id) != Some(false) {
+            return false;
+        }
+        let rule = match skill_id {
+            CURE_SKILL_ID => TargetRule::Cure,
+            SEAL_SKILL_ID => TargetRule::Monster,
+            PROMOTION_SKILL_ID | AGILITY_SKILL_ID | AGILITY_2_SKILL_ID
+            | NATURAL_SKILL_ID | RAPTURE_SKILL_ID | CALLOSITY_SKILL_ID
+            | CALLOSITY_2_SKILL_ID | BOSS_BLUE_FURY_SKILL_ID | DAUB_POISON_SKILL_ID
+            | ENERGY_HOLDING_SKILL_ID | FURY_SKILL_ID | GOD_BLESS_SKILL_ID
+            | GOD_BLESS_2_SKILL_ID | HEARTEN_SKILL_ID | METEOR_ARROW_MASS_SKILL_ID
+            | PILLAR_SKILL_ID | RAGE_SKILL_ID | RAGE_BREAK_SKILL_ID | ROAR_SKILL_ID
+            | SOUL_COLLECT_SKILL_ID | MACHINE_SHIELD_SKILL_ID | MANA_SHIELD_SKILL_ID => TargetRule::Any,
+            id if is_heal_skill(id) => TargetRule::Any,
+            id if is_swordship_skill(id) || is_immediate_state_skill(id) => TargetRule::Never,
+            _ => TargetRule::Attackable,
         };
-        if started { return false; }
         let enter_combat = match dispatch {
             PlayerSkillDispatch::Point { .. } => return false,
             PlayerSkillDispatch::SelfTarget { .. } => false,
