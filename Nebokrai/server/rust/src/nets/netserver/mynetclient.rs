@@ -29,6 +29,11 @@
 //! `SetSendRevBuf` RVA `0x0001A650` передавал Windows `SO_SNDBUF=0`; Linux
 //! backpressure-эквивалент не доказан, поэтому эта socket-option остаётся
 //! локальным `BLOCKED_MISSING_FACT`, а не получает фиктивный вызов.
+//! Завершение GameServer дописывает исходящую очередь до закрытия сокета:
+//! CClient::Close (0x004191b0) ждёт ExitSocketThread, чей send-loop
+//! (0x0041a171..0x0041a19d) проверяет очередь и живое соединение.
+//! Ожидание writable выполняет Tokio, частичный хвост хранит ClientSendQueue.
+//! Успех означает только передачу байтов TCP, не подтверждение World/БД.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -214,6 +219,31 @@ impl CMyNetClient {
         self.connection
             .as_ref()
             .map(|stream| self.send_queue.try_flush(stream))
+    }
+
+    pub(crate) async fn flush_outgoing_before_close(
+        &self,
+    ) -> Option<Result<FlushOutcome, ClientSendError>> {
+        if !self.control_send {
+            return None;
+        }
+        let stream = self.connection.as_ref()?;
+        let mut total_sent = 0u64;
+        while self.send_queue.pending() > 0 {
+            match self.send_queue.try_flush(stream) {
+                Ok(FlushOutcome::Drained { bytes_sent }) => {
+                    total_sent = total_sent.wrapping_add(bytes_sent);
+                }
+                Ok(FlushOutcome::WouldBlock { bytes_sent }) => {
+                    total_sent = total_sent.wrapping_add(bytes_sent);
+                    if let Err(source) = stream.writable().await {
+                        return Some(Err(ClientSendError::Io { source, bytes_sent: total_sent }));
+                    }
+                }
+                Err(error) => return Some(Err(error)),
+            }
+        }
+        Some(Ok(FlushOutcome::Drained { bytes_sent: total_sent }))
     }
 
     /// Ждёт один read либо send-readiness и выполняет один transport-шаг.

@@ -3,6 +3,9 @@
 //! при наличии региона живая auxiliary-повозка проверяется раньше сохранённой.
 //! Fallback по m_bReCreateCarriage допустим лишь при отсутствии monster/AI;
 //! чужой хозяин или отсутствующие свойства дают пустую запись без fallback.
+//! Release перед закрытием World/Billing дописывает их исходящие очереди:
+//! исходный CClient::Close ждёт send-thread (0x004191b0/0x0041a171), тогда
+//! как Rust обслуживает upstream в main loop, уже остановленном к Release.
 //!
 //! PDB подтверждает nullable `s_pNetClientOfWS +0x8`,
 //! `s_pNetClientOfBS +0xC`, `s_pNetServer +0x10`, ordered
@@ -29865,11 +29868,21 @@ impl CGame {
 
         let world_client_present = self.world_client.is_some();
         if let Some(client) = self.world_client.as_mut() {
+            let delivery = client.flush_outgoing_before_close().await;
+            if client.send_queue().pending() != 0 {
+                tracing::warn!(?delivery, pending = client.send_queue().pending(),
+                    "исходящая очередь World не отправлена полностью при завершении GameServer");
+            }
             client.disable_control_send();
             let _legacy_result = client.close();
         }
         let billing_client_present = self.billing_client.is_some();
         if let Some(client) = self.billing_client.as_mut() {
+            let delivery = client.flush_outgoing_before_close().await;
+            if client.send_queue().pending() != 0 {
+                tracing::warn!(?delivery, pending = client.send_queue().pending(),
+                    "исходящая очередь Billing не отправлена полностью при завершении GameServer");
+            }
             client.disable_control_send();
             let _legacy_result = client.close();
         }
