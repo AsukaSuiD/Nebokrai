@@ -4,9 +4,14 @@
 //! двойная проверка MP, время восстановления, стадии каста, клиентская отмена
 //! и точный порядок полей пакета. Конкретный набор параметров и создание
 //! канонического состояния остаются у владельца навыка. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`; стадии каста остаются elapsed.
+//! использует абсолютный срок `CSkill::IsRestored`. Источник: gameserver.exe
+//! + GameServer.pdb, `CMachineShield::AI` (0x005671C0) и `CManaShield::AI`
+//! (0x00569DF0). Каст ждёт unsigned now >= wrapping(start + delay).
+//! После расхода MP вызывается OnChangeStates; прежний щит полностью
+//! завершается до Begin нового, а после установки вызывается UpdateProperty.
+//! Проверка MP внутри AI использует знак 32-битной разности (`sub/js`),
+//! а не беззнаковое сравнение исходных значений.
 
-use super::baseattack::time_reached;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
 use super::manashield::{MANA_SHIELD_SKILL_ID, ManaShieldOwner};
@@ -14,7 +19,7 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -244,19 +249,17 @@ where
 
     if Owner::execution(player_ai).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if current_mana < mp_loss {
+        let remaining_mana = current_mana.wrapping_sub(mp_loss);
+        if (remaining_mana as i32) < 0 {
             game.send_self_state_skill_failure(Owner::EFFECT_MESSAGE, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
             game.finish_self_shield_movement(player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(current_mana.wrapping_sub(mp_loss));
+            player.set_mana(remaining_mana);
         }
-        let _ = game.update_player_current_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-        );
+        let _ = game.publish_player_states(player_id);
         send_cast::<Owner>(game, player_id, skill_level, 1);
         if let Some(state) = Owner::execution_mut(player_ai) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
@@ -266,11 +269,14 @@ where
     let started_at_ms = Owner::execution(player_ai)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение щита создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
 
     send_cast::<Owner>(game, player_id, skill_level, 2);
+    let _ = super::shieldstate::end_player_defense_shield(
+        game, player_id, Owner::SKILL_ID, runtime.now_milliseconds(),
+    );
     let state = Owner::create_state(
         runtime.now_milliseconds(),
         keep_time_ms,
@@ -279,17 +285,11 @@ where
         mp_factor,
         extra,
     );
-    let removed = game
+    Owner::send_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
+    let _ = game
         .find_player_mut(player_id)
         .and_then(|player| Owner::replace_state(player, state));
-    if let Some(removed) = removed {
-        Owner::send_state_visual(game, player_id, removed, false, || 0);
-    }
-    Owner::send_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
-    let _ = game.update_player_current_state(
-        player_id,
-        GamePlayerFightStatePhase::MoveShapeAi,
-    );
+    let _ = game.update_player_properties(player_id);
     if let Some(state) = Owner::execution_mut(player_ai) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
