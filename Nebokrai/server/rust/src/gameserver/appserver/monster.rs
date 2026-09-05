@@ -1349,8 +1349,14 @@ impl CMonster {
     ) -> PassiveStiffenAction {
         let action = self.base_ai.process_reached_stiffen_action(now_ms);
         if action.interrupts_attack() {
-            self.cancel_base_attack_cast();
-            self.base_ai.lose_target();
+            while self.base_ai.stiffen_attack_pending() {
+                let release_target = self.base_ai.stiffen_attack_needs_end()
+                    && self.base_attack_cast().is_some();
+                if release_target {
+                    self.cancel_base_attack_cast();
+                }
+                self.base_ai.finish_stiffen_attack(release_target);
+            }
         }
         action
     }

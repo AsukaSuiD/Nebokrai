@@ -47107,26 +47107,30 @@ impl CGame {
                                 )
                             };
                             let passive_action_hung_up = passive_stiffen.blocks_active();
-                            let interrupt_current_skill = matches!(
-                                passive_stiffen,
-                                PassiveStiffenAction::InterruptAttack
-                                    | PassiveStiffenAction::InterruptAttackFinished
-                                    | PassiveStiffenAction::StartedWaiting
-                                    | PassiveStiffenAction::StartedFinished
-                            )
-                            .then(|| {
-                                self.find_player(player_id)
-                                    .and_then(CPlayer::current_skill_id)
-                            })
-                            .flatten();
-                            if let Some(skill_id) = interrupt_current_skill {
-                                let _ = self.end_detached_player_skill(
-                                    player_id,
-                                    skill_id,
-                                    MaterializedSkillEndCause::Interruption,
-                                    &mut player_ai,
-                                    runtime,
-                                );
+                            if passive_stiffen.interrupts_attack() {
+                                while player_ai.stiffen_attack_pending() {
+                                    let current_skill = self.find_player(player_id)
+                                        .and_then(CPlayer::current_skill_id);
+                                    let release_target = player_ai.stiffen_attack_needs_end()
+                                        && current_skill.is_some();
+                                    if release_target {
+                                        let skill_id = current_skill.expect("проверен текущий навык");
+                                        let _ = self.end_detached_player_skill(
+                                            player_id,
+                                            skill_id,
+                                            MaterializedSkillEndCause::Interruption,
+                                            &mut player_ai,
+                                            runtime,
+                                        );
+                                        if Self::materialized_player_skill_active(&player_ai, skill_id)
+                                            != Some(false)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    player_ai.finish_stiffen_attack(release_target);
+                                    self.restore_player_default_attack_after_skill_end(player_id);
+                                }
                             }
                             let can_schedule_skill = self
                                 .find_player(player_id)

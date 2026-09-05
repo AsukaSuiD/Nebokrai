@@ -60,8 +60,10 @@
 //! обрабатывается после них независимо от результата passive. В Rust фон
 //! уже предшествует passive, а WarSoul вызывается отдельным хвостом даже
 //! при Defense/Stiffen. Прерывание concrete навыка завершается до этого
-//! хвоста. Разделение расписания и исполнения остальных concrete owner-ов
-//! и условное снятие Attack после End(4) ещё требуют замыкания.
+//! хвоста. Attack снимается лишь после подтверждённого завершения concrete
+//! навыка; неоконченный End(4) сохраняет событие. До Move очистка доходит без
+//! прерывания навыка. Разделение расписания/исполнения остальных owner-ов и
+//! точная передача причины End(4) всем производным ещё требуют замыкания.
 //! Обработанный Defense разрешает active в том же Run; Stiffen запрещает
 //! active лишь до deadline. Его прерывание при уже истёкшем сроке сохраняется
 //! отдельно от ожидания, не останавливая собственный auto-inc
@@ -469,6 +471,18 @@ impl CPlayerAI {
         now_ms: u32,
     ) -> PassiveStiffenAction {
         self.base_ai.process_reached_stiffen_action(now_ms)
+    }
+
+    pub(crate) fn stiffen_attack_needs_end(&self) -> bool {
+        self.base_ai.stiffen_attack_needs_end()
+    }
+
+    pub(crate) fn stiffen_attack_pending(&self) -> bool {
+        self.base_ai.stiffen_attack_pending()
+    }
+
+    pub(crate) fn finish_stiffen_attack(&mut self, release_target: bool) {
+        self.base_ai.finish_stiffen_attack(release_target);
     }
 
     pub(crate) fn queue_client_destination(&mut self, direction: i32, is_run: bool) {

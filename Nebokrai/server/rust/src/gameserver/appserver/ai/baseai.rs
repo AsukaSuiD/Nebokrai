@@ -39,6 +39,10 @@
 //! при уже достигнутом сроке не задерживает active. Обработанный Defense
 //! возвращает AES_EXEC, поэтому также не запрещает active игрока/монстра.
 //! Фоновая фаза обоих владельцев предшествует passive и не зависит от stun.
+//! OnStiffen 0x004C87D9/0x004C87E0 сначала вызывает End(4), затем IsEnded:
+//! Attack остаётся в FIFO, пока concrete владелец не подтвердит завершение.
+//! Для handling != 0 или отсутствующего навыка End не вызывается. Очистка
+//! префикса останавливается на Move и не снимает его.
 //! Указатель владельца и
 //! остальные обработчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Публичный `MoveTo`
 //! сохраняет исходный промежуточный `float` времени шага и усекает сумму со
@@ -236,8 +240,8 @@ impl CBaseAI {
 
     /// Материализует exact `ASA_STIFFEN -> OnStiffen` и deadline-часть
     /// `ProcessPassiveAction`. До первой атаки/движения active-префикс
-    /// отбрасывается; движение сохраняется, атака снимается и возвращается
-    /// concrete owner-у для `CSkill::End(4)`/`OnLoseTarget` эквивалента.
+    /// отбрасывается; движение сохраняется, атака остаётся в FIFO до ответа
+    /// concrete owner-а на `CSkill::End(4)` и проверку `IsEnded`.
     pub(crate) fn process_reached_stiffen_action(
         &mut self,
         now_ms: u32,
@@ -263,7 +267,6 @@ impl CBaseAI {
                 .front()
                 .is_some_and(|event| event.action == AiShapeAction::Attack)
             {
-                self.active_actions.pop_front();
                 interrupt_attack = true;
             }
             self.passive_actions
@@ -292,6 +295,33 @@ impl CBaseAI {
             PassiveStiffenAction::StartedFinished
         } else {
             PassiveStiffenAction::Finished
+        }
+    }
+
+    /// OnStiffen (0x004C87C0) вызывает End(4) только для Attack с handling=0.
+    pub(crate) fn stiffen_attack_pending(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| event.action == AiShapeAction::Attack)
+    }
+
+    pub(crate) fn stiffen_attack_needs_end(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::Attack && event.handling == 0
+        })
+    }
+
+    /// Вызывается после подтверждённого IsEnded либо при отсутствии навыка.
+    /// Нельзя снимать Attack до End: производный навык может остаться активным.
+    pub(crate) fn finish_stiffen_attack(&mut self, release_target: bool) {
+        if self.active_actions.front().is_some_and(|event| event.action == AiShapeAction::Attack) {
+            self.active_actions.pop_front();
+            if release_target {
+                self.lose_target();
+            }
+            while self.active_actions.front().is_some_and(|event| {
+                !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
+            }) {
+                self.active_actions.pop_front();
+            }
         }
     }
 
