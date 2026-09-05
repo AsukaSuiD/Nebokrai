@@ -8,13 +8,26 @@
 //! после которого каждый компонент урона усекается к нулю;
 //! путь монстра использует тот же узкий двухударный механизм с отдельной формулой.
 //! `CGame` только разрешает владельцев, применяет рассчитанную атаку и доставляет
-//! пакеты. Координатный и пустой `Begin` при null target тихо делают `End(0)`
-//! до properties/cooldown и не отправляют failure-пакет.
+//! пакеты. Координатный `Begin` выбирает первый `CMoveShape` клетки через
+//! общий `CState::GetSufferer` (VA `0x005dbfd0`); пустая клетка и пустой
+//! `Begin` делают `End(0)` до properties/cooldown без failure-пакета.
 //! Player `End` сбрасывает execution-флаги, возвращает движение и завершает
 //! `CAttackSkill::End(1)` после второго удара с единичным оружейным
 //! `AfterUseSkill`; сами два `Attack` оружие не изнашивают. Отмена использует
 //! `End(0)` без износа, обновления свойств и cooldown. Player и monster ветви
 //! используют абсолютный срок `CSkill::IsRestored`; сроки двух ударов остаются elapsed.
+//! Player-вариант `CMonsterFastAttack` (`0x2d1`, owner `monsterfastattack.cpp`)
+//! использует тот же execution-slot и отдельный cooldown: ненулевой MP-cost
+//! проверяется в `CheckCastCondition` (VA `0x005133c2`), списывается перед
+//! направлением/визуализацией в AI; нулевой cost означает отказ. Его сроки
+//! абсолютные, разброс `max(max-min, 0)+1`, критический множитель принадлежит
+//! игроку. Ошибки reuse/MP дополнены `GS1143/GS1144`; `Begin` не добавляет
+//! failure 2. Общий kernel и существующие владельцы MP/урона заменяют только
+//! техническое хранение и доставку, не порядок игровых эффектов.
+//! `End` (Monster VA `0x00512b50`) вызывает общий `CAttackSkill::End`:
+//! только успешный исход изнашивает оружие; player virtual `+0x158` пуст,
+//! поэтому здесь нет дополнительного пересчёта свойств. MP virtual `+0x164`
+//! — `CPlayer::OnChangeStates` (VA `0x00433080`), а не combat tick.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -23,7 +36,7 @@ use super::baseattack::{
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::monsterfastattack::{SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME};
+use super::monsterfastattack::{MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -31,7 +44,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -44,6 +57,7 @@ const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
 const BLOCK_UNFLY: u8 = 2;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LordFastAttackExecutionState {
@@ -84,7 +98,7 @@ fn send_failure(game: &CGame, player_id: i32, action: u8) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
 }
 
-fn send_start(game: &mut CGame, player_id: i32, level: i32) {
+fn send_start(game: &mut CGame, player_id: i32, skill_id: u32, level: i32) {
     let Some(direction) = game
         .find_player(player_id)
         .map(|player| player.shape().get_direction())
@@ -93,7 +107,7 @@ fn send_start(game: &mut CGame, player_id: i32, level: i32) {
     };
     let mut message = CMessage::new(EFFECT_MESSAGE);
     message.add_byte(1);
-    message.add_long(LORD_FAST_ATTACK_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(level as i16);
     message.add_long(PLAYER_TYPE);
     message.add_long(player_id);
@@ -104,13 +118,14 @@ fn send_start(game: &mut CGame, player_id: i32, level: i32) {
 fn send_fire(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     level: i32,
     target_x: i32,
     target_y: i32,
 ) {
     let mut message = CMessage::new(EFFECT_MESSAGE);
     message.add_byte(2);
-    message.add_long(LORD_FAST_ATTACK_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(level as i16);
     message.add_long(PLAYER_TYPE);
     message.add_long(player_id);
@@ -127,19 +142,22 @@ fn finish_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
+    let Some(skill_id) = player_ai.lord_fast_attack().map(|state| state.kernel().dispatch().skill_id()) else { return };
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_lord_fast_attack_used(now_ms);
-    });
+    game.damage_player_weapon(player_id, runtime);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    player_ai.mark_fast_attack_used(skill_id, runtime.now_milliseconds());
 }
 
 fn abort_player_lord_fast_attack(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
     }
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn complete_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
@@ -199,6 +217,7 @@ fn master_info(player: &CPlayer) -> MasterInfo {
 fn calculate_attack(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     level: i32,
     hit_modifier: i32,
 ) -> Option<(MasterInfo, AttackInformation)> {
@@ -207,15 +226,17 @@ fn calculate_attack(
         .map(|player| (player.combat_properties(), master_info(player)))?;
     let minimum = combat.minimum_attack as i32;
     let maximum = combat.maximum_attack as i32;
-    let span = maximum
-        .wrapping_sub(minimum)
-        .unsigned_abs()
-        .wrapping_add(1) as i32;
+    let difference = maximum.wrapping_sub(minimum);
+    let span = if skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
+        difference.max(0).wrapping_add(1)
+    } else {
+        difference.unsigned_abs().wrapping_add(1) as i32
+    };
     let physical = minimum
         .wrapping_add(game.skill_random_below(span))
         .max(0);
     let mut attack = AttackInformation {
-        skill_id: LORD_FAST_ATTACK_SKILL_ID,
+        skill_id,
         skill_level: level as u8,
         attacker_type: PLAYER_TYPE,
         attacker_id: player_id,
@@ -248,7 +269,11 @@ fn calculate_attack(
     };
     if game.skill_random_below(100) < i32::from(combat.cch) {
         attack.critical = true;
-        let critical_rate = game.globe_setup().critical_rate();
+        let critical_rate = if skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
+            combat.critical_rate()
+        } else {
+            game.globe_setup().critical_rate()
+        };
         for power in &mut attack.damages {
             power.hp_damage = truncate_original(
                 f64::from(power.hp_damage) * f64::from(critical_rate),
@@ -261,13 +286,14 @@ fn calculate_attack(
 fn apply_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     region_id: i32,
     target: ShapeIdentity,
     level: i32,
     hit_modifier: i32,
     runtime: &mut Runtime,
 ) {
-    let Some((master, attack)) = calculate_attack(game, player_id, level, hit_modifier) else {
+    let Some((master, attack)) = calculate_attack(game, player_id, skill_id, level, hit_modifier) else {
         return;
     };
     match target.object_type {
@@ -293,13 +319,13 @@ pub(crate) const fn is_lord_fast_attack_dispatch(dispatch: PlayerSkillDispatch) 
     matches!(
         dispatch,
         PlayerSkillDispatch::SelfTarget {
-            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             ..
         } | PlayerSkillDispatch::Point {
-            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             ..
         } | PlayerSkillDispatch::Object {
-            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             target: ShapeIdentity {
                 object_type: PLAYER_TYPE | MONSTER_TYPE,
                 ..
@@ -315,16 +341,39 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    let skill_id = dispatch.skill_id();
+    let monster_variant = skill_id == MONSTER_FAST_ATTACK_SKILL_ID;
+    let begin_failed = |game: &mut CGame| {
+        if monster_variant {
+            abort_player_lord_fast_attack(game, player_id);
+        } else {
+            send_failure(game, player_id, 2);
+        }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
     let target = match dispatch {
         PlayerSkillDispatch::SelfTarget {
-            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             ..
-        } | PlayerSkillDispatch::Point {
-            skill_id: LORD_FAST_ATTACK_SKILL_ID,
-            ..
-        } => return terminal(QueuedSkillExecutionState::Rejected),
+        } => {
+            abort_player_lord_fast_attack(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        PlayerSkillDispatch::Point {
+            skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
+            x, y,
+        } => {
+            let target = game.find_player(player_id)
+                .and_then(CPlayer::server_region_id)
+                .and_then(|region_id| resolve_coordinate_sufferer(game, region_id, x, y));
+            let Some(target) = target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)) else {
+                abort_player_lord_fast_attack(game, player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            target
+        }
         PlayerSkillDispatch::Object {
-            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             target,
         } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
@@ -332,14 +381,14 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(LORD_FAST_ATTACK_SKILL_ID),
+            player.learned_skill_level(skill_id),
             player.shape_view()?,
         ))
     }) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let Some(properties) = game.skill_base_properties(LORD_FAST_ATTACK_SKILL_ID, level) else {
-        if player_ai.lord_fast_attack().is_some() {
+    let Some(properties) = game.skill_base_properties(skill_id, level) else {
+        if monster_variant || player_ai.lord_fast_attack().is_some() {
             abort_player_lord_fast_attack(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -351,28 +400,29 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     let second_time_ms = properties.query_property(SKILL_USAGE_SECOND_TIME);
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
 
     if player_ai.lord_fast_attack().is_none() {
         let now_ms = runtime.now_milliseconds();
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            send_failure(game, player_id, 2);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return begin_failed(game);
         };
         if !skill_is_restored(
-            player_ai.lord_fast_attack_last_used_ms(),
+            player_ai.fast_attack_last_used_ms(skill_id),
             reuse_delay_ms,
             now_ms,
         ) {
             send_failure(game, player_id, 0x0d);
-            send_failure(game, player_id, 2);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            if monster_variant {
+                game.send_skill_system_info(player_id, b"GS1143");
+            }
+            return begin_failed(game);
         }
         if maximum_distance != 0
             && source_view.real_distance(Some(target_view)) > maximum_distance as i32
         {
             send_failure(game, player_id, 0x0b);
-            send_failure(game, player_id, 2);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return begin_failed(game);
         }
         let path = game.base_magic_path(
             region_id,
@@ -384,12 +434,22 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         );
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             send_failure(game, player_id, 0x0f);
-            send_failure(game, player_id, 2);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return begin_failed(game);
+        }
+        if monster_variant {
+            if mp_loss == 0 {
+                return begin_failed(game);
+            }
+            let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+            if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+                send_failure(game, player_id, 7);
+                game.send_skill_system_info_with_unsigned(player_id, b"GS1144", mp_loss);
+                return begin_failed(game);
+            }
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(LORD_FAST_ATTACK_SKILL_ID));
+            player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_lord_fast_attack(LordFastAttackExecutionState::begin(dispatch, now_ms));
     } else if player_ai
@@ -400,7 +460,9 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     }
 
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-        send_failure(game, player_id, 10);
+        if !monster_variant {
+            send_failure(game, player_id, 10);
+        }
         abort_player_lord_fast_attack(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -415,6 +477,20 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         .lord_fast_attack()
         .is_some_and(|state| !state.condition_checked)
     {
+        if monster_variant {
+            let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+            let remaining = mana.wrapping_sub(mp_loss);
+            if (remaining as i32) < 0 {
+                send_failure(game, player_id, 7);
+                game.send_skill_system_info_with_unsigned(player_id, b"GS1144", mp_loss);
+                abort_player_lord_fast_attack(game, player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if let Some(player) = game.find_player_mut(player_id) {
+                player.set_mana(remaining);
+            }
+            let _ = game.publish_player_states(player_id);
+        }
         let Some(source_view) = game
             .find_player(player_id)
             .and_then(|player| player.shape_view())
@@ -430,7 +506,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
                 target_view.tile_y,
             ));
         }
-        send_start(game, player_id, level);
+        send_start(game, player_id, skill_id, level);
         if let Some(state) = player_ai.lord_fast_attack_mut() {
             state.condition_checked = true;
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
@@ -441,16 +517,24 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         .lord_fast_attack()
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение быстрой атаки владыки хранит время начала");
+    let reached = |now, delay| {
+        if monster_variant {
+            skill_is_restored(started_at_ms, delay, now)
+        } else {
+            time_reached(now, started_at_ms, delay)
+        }
+    };
     if player_ai
         .lord_fast_attack()
         .is_some_and(|state| !state.fire_started)
     {
-        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        if !reached(runtime.now_milliseconds(), delay_ms) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
         send_fire(
             game,
             player_id,
+            skill_id,
             level,
             target_view.tile_x,
             target_view.tile_y,
@@ -465,9 +549,8 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         .lord_fast_attack()
         .is_some_and(|state| !state.first_attack_done)
     {
-        if !time_reached(
+        if !reached(
             runtime.now_milliseconds(),
-            started_at_ms,
             delay_ms.wrapping_add(first_time_ms),
         ) {
             return terminal(QueuedSkillExecutionState::Pending);
@@ -475,6 +558,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         apply_attack(
             game,
             player_id,
+            skill_id,
             region_id,
             target,
             level,
@@ -487,9 +571,8 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    if !time_reached(
+    if !reached(
         runtime.now_milliseconds(),
-        started_at_ms,
         delay_ms
             .wrapping_add(first_time_ms)
             .wrapping_add(second_time_ms),
@@ -499,6 +582,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     apply_attack(
         game,
         player_id,
+        skill_id,
         region_id,
         target,
         level,

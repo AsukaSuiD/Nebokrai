@@ -1,111 +1,30 @@
-//! Двухударная быстрая атака (`CMonsterFastAttack`, ID `0x2d1`) и совпадающий
-//! путь `CLordFastAttack` (`0x1f5`).
+//! Двухударная быстрая атака `CMonsterFastAttack` (ID `0x2d1`).
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
-//! `appserver/skills/monsterfastattack.cpp`. Достигнутый вызов монстра хранит
-//! визуальную фазу, первый удар и сроки `delay → first_time → second_time` в
-//! этом модуле; общий проход ближней атаки сохраняет выбор цели, RNG, защиту, урон и
-//! последствия смерти. Значения свойств `15001/15002` подтверждены прямыми
-//! аргументами `QueryProperty` в RVA `0x00113810`; отдельный ID владыки
-//! передаётся этому же узкому семейному механизму без изменения формул.
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/skills/monsterfastattack.cpp`. Монстр проходит через
+//! `monsterbaseattack`; player-dispatch, отмена и завершение используют общий
+//! двухударный owner `lordfastattack` с отдельными формулой, MP и cooldown.
+//! Состояние ниже хранит визуальную фазу и первый удар; свойства `15001/15002`
+//! задают две последовательные границы после начальной задержки.
 //!
-//! Ниже сохранены RAW только для недостигнутых координатных `Begin` и
-//! ветвей с источником-игроком в `CheckCastCondition`, `CalculateAttackPower`,
-//! `UpdateVisualEffect` и `AI`; их нельзя удалить до появления реального
-//! вызывающего пути игрока.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.h
-
-// ============================================================================
-// FUNCTION: CMonsterFastAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp:152
-// RVA: 0x001129A0
-// ADDRESS: 005129a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterFastAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp:171
-// RVA: 0x00112A70
-// ADDRESS: 00512a70
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterFastAttackEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp:445
-// RVA: 0x00112C70
-// ADDRESS: 00512c70
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterFastAttack::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp:37
-// RVA: 0x001131D0
-// ADDRESS: 005131d0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterFastAttack::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp:371
-// RVA: 0x00113490
-// ADDRESS: 00513490
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterFastAttack::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterfastattack.cpp:206
-// RVA: 0x00113810
-// ADDRESS: 00513810
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
+//! Player `CheckCastCondition` (VA `0x005131d0`) проверяет reuse, расстояние,
+//! путь и ненулевую стоимость MP; нулевой cost возвращает отказ (VA
+//! `0x005133cf`). AI (VA `0x00513810`) повторно проверяет и списывает MP,
+//! публикует `OnChangeStates`, поворачивает источник, отправляет начало и огонь,
+//! затем наносит два удара по абсолютным wrapping-срокам. Для каждого удара
+//! физический разброс — `max(max-min, 0)+1`; только player-источник выполняет
+//! критический RNG и использует свой множитель. У монстра этот cast отсутствует.
+//! Исходное разыменование null player в MP-проверке не воспроизводится.
+//!
+//! `0xbfe01` сохраняет start/fire и адресные failure-коды; reuse/MP игрока
+//! дополняются строками `GS1143/GS1144`. Координатная цель повторно разрешается
+//! общим `CState::GetSufferer`; пустая клетка/пустой Begin отклоняются,
+//! исчезнувшая цель в AI завершает навык без failure 10, мёртвая/самоцель — с ним.
+//! End возвращает движение; только успех изнашивает оружие и ставит cooldown.
+//! Общий kernel, типизированные owners и существующая доставка заменяют
+//! указатели/STL, не игровые сроки и порядок побочных эффектов.
+//! Урон и player-dispatch сейчас поддерживают цели `400/600`; боевые контракты
+//! остальных разновидностей `CMoveShape` этим адаптером не подменяются.
 
 use crate::nets::netserver::message::CMessage;
 

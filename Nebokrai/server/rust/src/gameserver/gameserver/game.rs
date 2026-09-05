@@ -1124,6 +1124,7 @@ use crate::gameserver::appserver::skills::lordfastattack::{
     cancel_player_lord_fast_attack, complete_player_lord_fast_attack,
     execute_player_lord_fast_attack, is_lord_fast_attack_dispatch, LORD_FAST_ATTACK_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID;
 use crate::gameserver::appserver::skills::chaossphere::{
     cancel_player_chaos_sphere, complete_player_chaos_sphere,
     execute_player_chaos_sphere, is_chaos_sphere_dispatch, CHAOS_SPHERE_SKILL_ID,
@@ -39813,6 +39814,7 @@ impl CGame {
                 | MACHINERY_STOMP_SKILL_ID
                 | LORD_WIDERANGING_ATTACK_SKILL_ID
                 | LORD_FAST_ATTACK_SKILL_ID
+                | MONSTER_FAST_ATTACK_SKILL_ID
                 | CHAOS_SPHERE_SKILL_ID
                 | LIGHTNING_SKILL_ID
                 | SEAL_SKILL_ID
@@ -39946,7 +39948,7 @@ impl CGame {
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 player_ai.wide_arc_attack().is_some()
             }
-            LORD_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
+            LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
             CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
             LIGHTNING_SKILL_ID => player_ai.lightning().is_some(),
             SEAL_SKILL_ID => player_ai.seal().is_some(),
@@ -40194,7 +40196,7 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                LORD_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
+                LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
                     self,
                     player_id,
                     &mut player_ai,
@@ -40410,7 +40412,7 @@ impl CGame {
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 cancel_player_wide_arc_attack(self, player_id, &mut player_ai, runtime)
             }
-            LORD_FAST_ATTACK_SKILL_ID => {
+            LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => {
                 cancel_player_lord_fast_attack(self, player_id, &mut player_ai, runtime)
             }
             CHAOS_SPHERE_SKILL_ID => {

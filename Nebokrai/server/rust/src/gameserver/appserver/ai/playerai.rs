@@ -302,6 +302,7 @@ pub(crate) struct CPlayerAI {
     wide_arc_attack_last_used_ms: [u32; 2],
     lord_fast_attack: Option<LordFastAttackExecutionState>,
     lord_fast_attack_last_used_ms: u32,
+    monster_fast_attack_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -1725,12 +1726,20 @@ impl CPlayerAI {
         self.lord_fast_attack.as_mut()
     }
 
-    pub(crate) const fn lord_fast_attack_last_used_ms(&self) -> u32 {
-        self.lord_fast_attack_last_used_ms
+    pub(crate) const fn fast_attack_last_used_ms(&self, skill_id: u32) -> u32 {
+        if skill_id == super::super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID {
+            self.monster_fast_attack_last_used_ms
+        } else {
+            self.lord_fast_attack_last_used_ms
+        }
     }
 
-    pub(crate) const fn mark_lord_fast_attack_used(&mut self, now_ms: u32) {
-        self.lord_fast_attack_last_used_ms = now_ms;
+    pub(crate) const fn mark_fast_attack_used(&mut self, skill_id: u32, now_ms: u32) {
+        if skill_id == super::super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID {
+            self.monster_fast_attack_last_used_ms = now_ms;
+        } else {
+            self.lord_fast_attack_last_used_ms = now_ms;
+        }
     }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {
