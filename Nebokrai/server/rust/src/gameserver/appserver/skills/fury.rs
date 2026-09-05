@@ -15,6 +15,8 @@
 //! lifecycle остаётся отдельным и не использует этот хвост. Обе ветви
 //! используют абсолютные сроки `CSkill::IsRestored` и задержки каста
 //! (unsigned cmp/jb по 0x00536A9C).
+//! Cure добавляется без поиска и замены предыдущей записи: Begin по
+//! 0x00536D26, затем push_back по 0x00536D38. Накопление сохраняется в DB и AI.
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_in_region};
@@ -279,13 +281,10 @@ pub(crate) fn execute_owned_fury(
     remove_reached_conflict_states(game, region, monster_id);
 
     let cure = CureState::new(identity, identity).begin_now();
-    let previous_cure = region
-        .find_monster_by_id_mut(monster_id)
-        .and_then(|monster| monster.move_shape_mut().replace_cure_state(cure));
-    if let Some(previous) = previous_cure {
-        send_cure_state_visual_in_region(game, region, &source, previous, false);
-    }
     send_cure_state_visual_in_region(game, region, &source, cure, true);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.move_shape_mut().push_cure_state(cure);
+    }
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
@@ -480,13 +479,10 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     }
 
     let cure = CureState::new(identity, identity).begin_now();
-    let previous_cure = game
-        .find_player_mut(player_id)
-        .and_then(|player| player.replace_cure_state(cure));
-    if let Some(previous) = previous_cure {
-        super::curestate::send_cure_state_visual(game, player_id, previous, false);
-    }
     super::curestate::send_cure_state_visual(game, player_id, cure, true);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.push_cure_state(cure);
+    }
     let _ = game.update_player_properties(player_id);
     let _ = game.publish_player_states(player_id);
 

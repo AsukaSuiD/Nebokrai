@@ -28963,15 +28963,9 @@ impl CGame {
         let weak_ended = finish_player_weak_outside(self, player_id, runtime);
         let god_bless_ended = finish_player_god_bless(self, player_id, now_ms, runtime);
         let roar_ended = finish_player_roar(self, player_id, now_ms, runtime);
-        let expired_cure = self
-            .find_player(player_id)
-            .and_then(|player| player.cure_state())
-            .filter(|state| state.expired(now_ms));
-        if expired_cure.is_some() {
-            let _ = crate::gameserver::appserver::skills::curestate::end_player_cure_state(
-                self, player_id,
-            );
-        }
+        let expired_cure = crate::gameserver::appserver::skills::curestate::expire_player_cure_states(
+            self, player_id, now_ms,
+        );
         let periodic_state_ids = self
             .find_player(player_id)
             .map(CPlayer::periodic_attack_state_ids)
@@ -29039,7 +29033,7 @@ impl CGame {
             strike_states_ended,
             agility_state_2_ended,
             hearten_ended,
-            cure_ended = expired_cure.is_some(),
+            cure_ended = expired_cure,
             periodic_attacks_updated,
             defense_shields_ended,
             battle_fairy_attribute_states_ended,
@@ -30799,11 +30793,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_knight_cut_state(login_tick_ms);
-        let loaded_cure_state = self
+        let loaded_cure_states = self
             .players
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
-            .activate_loaded_cure_state(login_tick_ms);
+            .activate_loaded_cure_states(login_tick_ms);
         let loaded_heal_states = self
             .players
             .get_mut(&expected_player_id)
@@ -31200,7 +31194,7 @@ impl CGame {
                 || login_tick_ms,
             );
         }
-        if let Some(state) = loaded_cure_state {
+        for state in loaded_cure_states {
             send_cure_state_visual(self, expected_player_id, state, true);
         }
         let loaded_heal_position = self.find_player(expected_player_id).and_then(|player| {

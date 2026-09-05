@@ -627,7 +627,7 @@ pub(crate) struct CanonicalStateStorage {
     rage_break_state: Option<RageBreakState>,
     boss_blue_fury_state: Option<BossBlueFuryState>,
     boss_blue_quake_state: Option<BossBlueQuakeState>,
-    cure_state: Option<CureState>,
+    cure_states: Vec<CureState>,
     daub_poison_state: Option<DaubPoisonState>,
     seal_state: Option<SealState>,
     curable_state_order: IndexSet<u32>,
@@ -1775,11 +1775,12 @@ impl CMoveShape {
             .filter(|offset| read_u32(&states, *offset) == Some(FURY_STATE_SKILL_ID))
             .filter_map(|offset| FuryState::decode(&states, offset).ok())
             .collect();
-        self.cure_state = known_offsets
+        self.cure_states = known_offsets
             .iter()
             .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(CURE_STATE_SKILL_ID))
-            .and_then(|offset| CureState::decode(&states, offset).ok());
+            .filter(|offset| read_u32(&states, *offset) == Some(CURE_STATE_SKILL_ID))
+            .filter_map(|offset| CureState::decode(&states, offset).ok())
+            .collect();
         self.enlarge_full_miss_state = known_offsets
             .iter()
             .copied()
@@ -1912,7 +1913,7 @@ impl CMoveShape {
         self.rage_break_state = None;
         self.boss_blue_fury_state = None;
         self.boss_blue_quake_state = None;
-        self.cure_state = None;
+        self.cure_states.clear();
         self.seal_state = None;
         self.curable_state_order.clear();
         self.poison_arrow_state = None;
@@ -2004,7 +2005,7 @@ impl CMoveShape {
             || self.state_storage.rage_break_state.is_some()
             || self.state_storage.boss_blue_fury_state.is_some()
             || self.state_storage.boss_blue_quake_state.is_some()
-            || self.state_storage.cure_state.is_some()
+            || !self.state_storage.cure_states.is_empty()
             || self.state_storage.daub_poison_state.is_some()
             || self.state_storage.seal_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
@@ -2370,10 +2371,8 @@ impl CMoveShape {
             self.boss_blue_quake_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
-        let cure = usize::from(
-            self.cure_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
+        let cure = self.cure_states.iter()
+            .filter(|state| state.skill_id() as i32 == state_id).count();
         let daub_poison = usize::from(
             self.daub_poison_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -2596,8 +2595,8 @@ impl CMoveShape {
                 .boss_blue_quake_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
-                .cure_state
-                .is_some_and(|state| state.skill_id() == state_id)
+                .cure_states.iter()
+                .any(|state| state.skill_id() == state_id)
             || self
                 .daub_poison_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -3295,47 +3294,48 @@ impl CMoveShape {
             write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
             self.ex_states.extend_from_slice(&state.encoded());
         }
-        self.cure_state.replace(state)
+        if let Some(first) = self.cure_states.first_mut() {
+            Some(std::mem::replace(first, state))
+        } else {
+            self.cure_states.push(state);
+            None
+        }
     }
 
-    pub(crate) fn activate_loaded_cure_state(&mut self, now_ms: u32) -> Option<CureState> {
-        let mut state = self.cure_state?;
-        state.activate_loaded(now_ms);
-        self.cure_state = Some(state);
-        Some(state)
+    pub(crate) fn push_cure_state(&mut self, state: CureState) {
+        self.append_serialized_state_record(&state.encoded());
+        self.cure_states.push(state);
     }
 
-    pub(crate) const fn cure_state(&self) -> Option<CureState> {
-        self.state_storage.cure_state
+    pub(crate) fn activate_loaded_cure_states(&mut self, now_ms: u32) -> Vec<CureState> {
+        for state in &mut self.cure_states {
+            state.activate_loaded(now_ms);
+        }
+        self.cure_states.clone()
     }
 
-    pub(crate) fn take_cure_state_for_ai(&mut self, now_ms: u32) -> Option<CureState> {
-        self.cure_state.filter(|state| state.expired(now_ms))?;
-        self.take_cure_state()
+    pub(crate) fn cure_states(&self) -> &[CureState] {
+        &self.state_storage.cure_states
+    }
+
+    pub(crate) fn cure_state(&self) -> Option<CureState> {
+        self.cure_states().first().copied()
     }
 
     pub(crate) fn take_cure_state(&mut self) -> Option<CureState> {
-        let state = self.cure_state.take()?;
-        let Some(offset) = known_state_record_offsets(&self.ex_states)
+        self.remove_cure_state(0)
+    }
+
+    pub(crate) fn remove_cure_state(&mut self, position: usize) -> Option<CureState> {
+        let state = *self.cure_states.get(position)?;
+        if let Some(offset) = known_state_record_offsets(&self.ex_states)
             .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
-        else {
-            return Some(state);
-        };
-        self.ex_states.drain(offset..offset + CURE_STATE_BYTES);
-        if self.ex_states.len() >= 4 {
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
+            .nth(position)
+        {
+            self.remove_serialized_state_record_at(offset, CURE_STATE_BYTES);
         }
-        for known in &mut self.extended_states { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        for known in &mut self.change_body_states { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        for known in &mut self.undead_states { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        if let Some(known) = &mut self.kerosene_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        if let Some(known) = &mut self.meteor_arrow_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
-        if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        self.cure_states.remove(position);
         Some(state)
     }
 

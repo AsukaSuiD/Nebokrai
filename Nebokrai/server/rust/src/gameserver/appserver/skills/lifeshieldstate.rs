@@ -231,7 +231,7 @@ pub(crate) fn finish_life_shield_state(
         let _ = end_player_cure_state(game, player_id);
         let cure = CureState::new(identity, identity).begin_now();
         send_cure_state_visual(game, player_id, cure, true);
-        let _ = game.find_player_mut(player_id).map(|player| player.replace_cure_state(cure));
+        let _ = game.find_player_mut(player_id).map(|player| player.push_cure_state(cure));
         let _ = game.update_player_properties(player_id);
     }
     send_life_shield_state_visual(game, player_id, state, false, || now_ms);

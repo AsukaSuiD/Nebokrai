@@ -5896,7 +5896,7 @@ impl CPlayer {
         self.move_shape.replace_cure_state(state)
     }
 
-    pub(crate) const fn cure_state(&self) -> Option<super::skills::curestate::CureState> {
+    pub(crate) fn cure_state(&self) -> Option<super::skills::curestate::CureState> {
         self.move_shape.cure_state()
     }
 
@@ -5904,18 +5904,26 @@ impl CPlayer {
         self.move_shape.take_cure_state()
     }
 
-    pub(crate) fn activate_loaded_cure_state(
+    pub(crate) fn activate_loaded_cure_states(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::curestate::CureState> {
-        self.move_shape.activate_loaded_cure_state(now_ms)
+    ) -> Vec<super::skills::curestate::CureState> {
+        self.move_shape.activate_loaded_cure_states(now_ms)
     }
 
-    pub(crate) fn take_cure_state_for_ai(
+    pub(crate) fn remove_cure_state(
         &mut self,
-        now_ms: u32,
+        position: usize,
     ) -> Option<super::skills::curestate::CureState> {
-        self.move_shape.take_cure_state_for_ai(now_ms)
+        self.move_shape.remove_cure_state(position)
+    }
+
+    pub(crate) fn cure_states(&self) -> &[super::skills::curestate::CureState] {
+        self.move_shape.cure_states()
+    }
+
+    pub(crate) fn push_cure_state(&mut self, state: super::skills::curestate::CureState) {
+        self.move_shape.push_cure_state(state);
     }
 
     pub(crate) fn replace_daub_poison_state(

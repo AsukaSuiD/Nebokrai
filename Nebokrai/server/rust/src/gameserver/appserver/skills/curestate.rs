@@ -14,6 +14,9 @@
 //! а нулевая длительность задаётся конструктором самого `CCureState`.
 //! Монстровая доставка использует текущий region owner, а не повторный lookup
 //! в `CGame` во время owner-side AI-прохода.
+//! Fury может накопить несколько Cure: стандартный Vec сохраняет порядок
+//! записей, загрузка активирует каждую, AI завершает каждую отдельно с visual
+//! перед удалением соответствующей DB-записи и пересчётом свойств игрока.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 pub(crate) const CURE_STATE_BYTES: usize = 20;
@@ -87,13 +90,33 @@ impl CureState {
 }
 
 pub(crate) fn end_player_cure_state(game: &mut CGame, player_id: i32) -> bool {
-    let Some(state) = game.find_player(player_id).and_then(|player| player.cure_state()) else {
+    end_player_cure_state_at(game, player_id, 0)
+}
+
+fn end_player_cure_state_at(game: &mut CGame, player_id: i32, position: usize) -> bool {
+    let Some(state) = game.find_player(player_id)
+        .and_then(|player| player.cure_states().get(position).copied()) else {
         return false;
     };
     send_cure_state_visual(game, player_id, state, false);
-    let _ = game.find_player_mut(player_id).and_then(|player| player.take_cure_state());
+    let _ = game.find_player_mut(player_id).and_then(|player| player.remove_cure_state(position));
     let _ = game.update_player_properties(player_id);
     true
+}
+
+pub(crate) fn expire_player_cure_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let mut ended = false;
+    let mut position = 0;
+    while let Some(state) = game.find_player(player_id)
+        .and_then(|player| player.cure_states().get(position).copied())
+    {
+        if state.expired(now_ms) {
+            ended |= end_player_cure_state_at(game, player_id, position);
+        } else {
+            position += 1;
+        }
+    }
+    ended
 }
 
 pub(crate) fn send_cure_state_visual(
@@ -157,15 +180,21 @@ pub(crate) fn expire_monster_cure_state(
     monster_id: i32,
     now_ms: u32,
 ) -> bool {
-    let expired = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_cure_state_for_ai(now_ms)?;
-        Some((state, monster.move_shape().shape().clone()))
-    });
-    let Some((state, shape)) = expired else {
-        return false;
-    };
-    send_cure_state_visual_in_region(game, region, &shape, state, false);
-    true
+    let mut ended = false;
+    let mut position = 0;
+    while let Some((state, shape)) = region.find_monster_by_id(monster_id).and_then(|monster| {
+        Some((*monster.move_shape().cure_states().get(position)?, monster.move_shape().shape().clone()))
+    }) {
+        if !state.expired(now_ms) {
+            position += 1;
+            continue;
+        }
+        send_cure_state_visual_in_region(game, region, &shape, state, false);
+        let _ = region.find_monster_by_id_mut(monster_id)
+            .and_then(|monster| monster.move_shape_mut().remove_cure_state(position));
+        ended = true;
+    }
+    ended
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
