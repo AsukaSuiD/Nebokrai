@@ -1,5 +1,7 @@
 //! Громовое рассечение `CThunderSlash` (`0x72`).
-//! Reuse проверяется exact `CSkill::IsRestored`; cast/phalanx часы — elapsed.
+//! Reuse проверяется exact `CSkill::IsRestored`. Каст сравнивает unsigned
+//! now >= wrapping(start + delay), как cmp/jb в AI по `0x0057B1BE`;
+//! срок и частота формы принадлежат отдельному `CThunderSlashPhalanx::AI`.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunderslash.cpp`. Навык требует топор категории `1` и
@@ -16,7 +18,7 @@
 //! повторный UpdateProperty. Отказ после MP сохраняет это частичное списание.
 
 use super::baseattack::{
-    finish_delayed_base_attack, time_reached, SKILL_USAGE_DELAY_TIME,
+    finish_delayed_base_attack, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_SUMMONED_LIFETIME};
@@ -167,7 +169,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         if let Some(state) = ai.thunder_slash_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started = ai.thunder_slash().map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
-    if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, Some((target, target_x, target_y)));
     let direction = game.find_player(player_id).map(|player| player.shape().get_direction()).unwrap_or_default();
     if let Ok(front) = CShape::get_direction_position(direction, ShapeAreaCoordinates { x: source_x, y: source_y }) {
