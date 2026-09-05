@@ -10,6 +10,13 @@
 use super::*;
 
 impl CGame {
+    fn increase_owned_skill_attacker_rp(&mut self, player_id: i32, skill_id: u32) {
+        // `CMonsterRangeAttack::Attack` (VA 0x005123e0) не вызывает IncreaseRp
+        // после OnBeenAttacked; RP защищающейся стороны остаётся обычным.
+        if skill_id != MONSTER_RANGE_ATTACK_SKILL_ID {
+            self.increase_owned_player_rp(player_id, true, 0);
+        }
+    }
     /// Рассчитанная атака навыка проходит ту же защиту `CBuild/CCityGate`,
     /// что базовая атака; death-script и wire остаются у общего build-owner-а.
     pub(crate) fn apply_owned_skill_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
@@ -28,7 +35,7 @@ impl CGame {
             target.element_resistance, &self.globe_setup, &mut random);
         self.apply_defended_player_attack_to_stationary_build(player_id, region_id, identity,
             view.tile_x, view.tile_y, &attack, runtime);
-        self.increase_owned_player_rp(player_id, true, 0);
+        self.increase_owned_skill_attacker_rp(player_id, attack.skill_id);
     }
 
     fn player_on_owned_skill_attack<Runtime: GameMainLoopRuntime>(
@@ -346,7 +353,7 @@ impl CGame {
                 missed.add_long(target_id);
                 let _ = self.send_player_shape_around(target_id, None, &missed);
             }
-            self.increase_owned_player_rp(master.master_id, true, 0);
+            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         let current_health = target_health - damage;
@@ -420,7 +427,7 @@ impl CGame {
             let _ = self.send_player_shape_around(target_id, None, &hurt);
             self.damage_player_armor(target_id, runtime);
         }
-        self.increase_owned_player_rp(master.master_id, true, 0);
+        self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }
 
     pub(crate) fn apply_monster_periodic_state_attack<Runtime: GameMainLoopRuntime>(
@@ -799,11 +806,11 @@ impl CGame {
             missed.add_long(MONSTER_TYPE);
             missed.add_long(target_id);
             let _ = self.send_shape_position_around(region_id, x, y, &missed);
-            self.increase_owned_player_rp(master.master_id, true, 0);
+            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         if damage == 0 {
-            self.increase_owned_player_rp(master.master_id, true, 0);
+            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         if current_health != 0 {
@@ -824,7 +831,7 @@ impl CGame {
                 master.master_type,
                 master.master_id,
             );
-            self.increase_owned_player_rp(master.master_id, true, 0);
+            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
 
@@ -837,7 +844,7 @@ impl CGame {
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_shape_position_around(region_id, x, y, &died);
-        self.increase_owned_player_rp(master.master_id, true, 0);
+        self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }
 
 }

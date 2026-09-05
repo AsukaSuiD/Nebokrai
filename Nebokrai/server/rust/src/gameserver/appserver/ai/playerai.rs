@@ -305,6 +305,8 @@ pub(crate) struct CPlayerAI {
     monster_fast_attack_last_used_ms: u32,
     monster_base_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     monster_base_attack_last_used_ms: u32,
+    monster_range_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    monster_range_attack_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -599,6 +601,7 @@ impl CPlayerAI {
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
         self.monster_base_attack = None;
+        self.monster_range_attack = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -922,6 +925,10 @@ impl CPlayerAI {
         if let Some(mut kernel) = self.monster_base_attack.take() {
             let _ = kernel.terminate(termination);
             tracing::trace!(?expected, ?termination, "исполнение базовой атаки монстра игроком завершено");
+        }
+        if let Some(mut kernel) = self.monster_range_attack.take() {
+            let _ = kernel.terminate(termination);
+            tracing::trace!(?expected, ?termination, "круговая атака монстра игроком завершена");
         }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -1760,6 +1767,22 @@ impl CPlayerAI {
     pub(crate) const fn mark_monster_base_attack_used(&mut self, now_ms: u32) {
         self.monster_base_attack_last_used_ms = now_ms;
     }
+
+    pub(crate) const fn monster_range_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.monster_range_attack.as_ref()
+    }
+
+    pub(crate) fn monster_range_attack_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.monster_range_attack.as_mut()
+    }
+
+    pub(crate) fn begin_monster_range_attack(&mut self, dispatch: PlayerSkillDispatch, now_ms: u32) {
+        self.monster_range_attack = Some(SkillExecutionKernel::begin(dispatch, now_ms));
+    }
+
+    pub(crate) const fn monster_range_attack_last_used_ms(&self) -> u32 { self.monster_range_attack_last_used_ms }
+
+    pub(crate) const fn mark_monster_range_attack_used(&mut self, now_ms: u32) { self.monster_range_attack_last_used_ms = now_ms; }
 
     pub(crate) const fn mark_fast_attack_used(&mut self, skill_id: u32, now_ms: u32) {
         if skill_id == super::super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID {

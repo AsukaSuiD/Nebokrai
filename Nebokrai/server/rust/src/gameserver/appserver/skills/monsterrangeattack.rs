@@ -1,157 +1,32 @@
-//! Дальняя круговая атака монстра (`CMonsterRangeAttack`).
+//! Круговая атака `CMonsterRangeAttack` (ID `0x2ef`) для игрока и монстра.
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
-//! `appserver/skills/monsterrangeattack.cpp`. Достигнутый путь монстра хранит
-//! стадии навыка и формулу здесь, а `CGame` координирует владельцев региона и
-//! игроков. Исходная область — подтверждённая из EXE маска 7x7; клетки
-//! обходятся сначала по X, затем по Y, а успешно допущенные цели дедуплицируются
-//! после проверки `IsAttackAble`. Ветви игрока с MP, critical и сообщениями об
-//! ошибках пока сохраняются как RAW, поскольку реальный вызов игроком не найден.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.h
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:131
-// RVA: 0x00111620
-// ADDRESS: 00511620
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:147
-// RVA: 0x001116F0
-// ADDRESS: 005116f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:114
-// RVA: 0x001117E0
-// ADDRESS: 005117e0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttackEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:402
-// RVA: 0x001118A0
-// ADDRESS: 005118a0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:45
-// RVA: 0x00111CF0
-// ADDRESS: 00511cf0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:338
-// RVA: 0x00112170
-// ADDRESS: 00512170
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:314
-// RVA: 0x001123E0
-// ADDRESS: 005123e0
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterRangeAttack::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterrangeattack.cpp:176
-// RVA: 0x00112500
-// ADDRESS: 00512500
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/skills/monsterrangeattack.cpp`. Player-диспетчер хранит отдельный
+//! kernel и reuse в `CPlayerAI`; monster-расписание использует свой cast.
+//! Все варианты Begin центрируют эффект на источнике, а не на цели запроса.
+//! CheckCastCondition (VA `0x00511cf0`) проверяет reuse; игрок дополнительно
+//! требует ненулевую стоимость MP и достаточный запас. Нулевой cost отвергается
+//! (VA `0x00511df4`), non-player проходит без MP (VA `0x00511de7`).
+//! Первая AI-фаза повторно проверяет и списывает MP, вызывает OnChangeStates,
+//! затем посылает начало без изменения направления. Ошибки reuse/MP сохраняют
+//! failure 13/7 и строки GS1143/GS1144; Begin не добавляет failure 2.
+//!
+//! AI (VA `0x00512500`) использует абсолютный wrapping-срок delay. Fire
+//! `0xbfe01` предшествует обходу подтверждённой маски 7x7 по X, затем Y.
+//! Каждая клетка читается после предыдущих повреждений; IsAttackAble вызывается
+//! перед дедупликацией, цель добавляется в список после Attack. Общий регион,
+//! Vec и kernel заменяют только указатели, STL и хранение исполнения.
+//!
+//! Расчёт (VA `0x00512170`) сохраняет RNG `abs(max-min)+1`, элементальный
+//! урон и x87-усечение EM-бонуса с исходной константой `0.01_f32`.
+//! Игрок добавляет ElementModify/GetAddElementAtk, оружейный фактор по уровню
+//! цели и личный критический множитель; для монстра эти player-ветви отсутствуют.
+//! Унаследованный GetLevel построек/ворот равен 1 (VA `0x004cfb30`).
+//! Защита, HP, death-script и wire используют существующих owners урона.
+//! Attack (VA `0x005123e0`) не увеличивает RP атакующего, в отличие от
+//! базовой атаки; RP защищающегося не меняется этим различием.
+//! End (VA `0x00546090`) возвращает движение; только успешный исход
+//! выполняет AfterUseSkill с износом оружия и фиксирует reuse.
 
 use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
 use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
@@ -159,12 +34,16 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::SkillTermination;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::skills::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit,
     defend_owned_monster_attack, monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;
@@ -173,6 +52,160 @@ const RANGE_SCOPE_SIDE: i32 = 7;
 const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
 
 pub(crate) const MONSTER_RANGE_ATTACK_SKILL_ID: u32 = 0x2ef;
+
+fn player_range_outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+fn end_player_range_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
+) {
+    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+    if success { game.damage_player_weapon(player_id, runtime); }
+    if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(None); }
+    if success { ai.mark_monster_range_attack_used(runtime.now_milliseconds()); }
+}
+
+pub(crate) fn finish_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
+) -> bool {
+    let Some(dispatch) = ai.monster_range_attack().map(|kernel| kernel.dispatch()) else { return false };
+    end_player_range_attack(game, player_id, ai, runtime, success);
+    ai.finish_player_skill(dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
+}
+
+fn calculate_player_range_attack(
+    game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity,
+    level: i32, properties: &CSkillBaseProperties,
+) -> Option<(crate::gameserver::appserver::masterinfo::MasterInfo, AttackInformation)> {
+    use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
+    use super::fightdefense::truncate_original;
+    let target_level = if matches!(target.object_type, 1100 | 1200) { 1 }
+        else { super::flash::target_level(game, region_id, target)? };
+    let player = game.find_player(player_id)?;
+    let combat = player.combat_properties();
+    let master = super::lordfastattack::master_info(player);
+    let (divisor, floor) = game.globe_setup().weapon_damage_factors();
+    let damage_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, floor);
+    let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+    let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
+    let bonus = truncate_original(f64::from(properties.query_property(SKILL_USAGE_EM_MODIFIER))
+        * f64::from(0.01_f32) * f64::from(combat.element_modify));
+    let damage = (combat.add_element_attack as i32).wrapping_add(minimum)
+        .wrapping_add(game.skill_random_below(span)).wrapping_add(bonus).max(0);
+    let critical = game.skill_random_below(100) < i32::from(combat.cch);
+    let damage = if critical { truncate_original(f64::from(damage) * f64::from(combat.critical_rate())) } else { damage };
+    Some((master, AttackInformation {
+        skill_id: MONSTER_RANGE_ATTACK_SKILL_ID, skill_level: level as u8,
+        attacker_type: PLAYER_TYPE, attacker_id: player_id,
+        attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id,
+        attacker_union_id: master.master_union_id,
+        hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
+        damage_factor, damage_modifier: 0, critical, blast_attack: false, full_miss: 0,
+        damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }],
+    }))
+}
+
+pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
+    use super::kernel::skill_is_restored;
+    let rejected = || player_range_outcome(QueuedSkillExecutionState::Rejected);
+    if dispatch.skill_id() != MONSTER_RANGE_ATTACK_SKILL_ID { return rejected(); }
+    let Some((region_id, level, mana)) = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.learned_skill_level(MONSTER_RANGE_ATTACK_SKILL_ID), player.mana()))
+    }) else { return rejected() };
+    let Some(properties) = game.skill_base_properties(MONSTER_RANGE_ATTACK_SKILL_ID, level).cloned() else {
+        end_player_range_attack(game, player_id, ai, runtime, false);
+        return rejected();
+    };
+    let mp_loss = properties.query_property(2);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let _can_be_breaked = properties.query_property(super::basemagic::SKILL_USAGE_CAN_BE_BREAKED);
+    let mp_failure = |game: &CGame| {
+        game.send_self_state_skill_failure(0x000b_fe01, player_id, 7);
+        game.send_skill_system_info_with_unsigned(player_id, b"GS1144", mp_loss);
+    };
+    if ai.monster_range_attack().is_none() {
+        let now = runtime.now_milliseconds();
+        if !skill_is_restored(ai.monster_range_attack_last_used_ms(), reuse, now) {
+            game.send_self_state_skill_failure(0x000b_fe01, player_id, 13);
+            game.send_skill_system_info(player_id, b"GS1143");
+            end_player_range_attack(game, player_id, ai, runtime, false);
+            return rejected();
+        }
+        if mp_loss == 0 || (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            if mp_loss != 0 { mp_failure(game); }
+            end_player_range_attack(game, player_id, ai, runtime, false);
+            return rejected();
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(MONSTER_RANGE_ATTACK_SKILL_ID));
+        }
+        ai.begin_monster_range_attack(dispatch, now);
+    } else if ai.monster_range_attack().is_none_or(|kernel| kernel.dispatch() != dispatch) {
+        return rejected();
+    }
+    if ai.monster_range_attack().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
+        let remaining = game.find_player(player_id).map_or(0, |player| player.mana()).wrapping_sub(mp_loss);
+        if (remaining as i32) < 0 {
+            mp_failure(game);
+            end_player_range_attack(game, player_id, ai, runtime, false);
+            return rejected();
+        }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(remaining); }
+        let _ = game.publish_player_states(player_id);
+        super::lordfastattack::send_start(game, player_id, MONSTER_RANGE_ATTACK_SKILL_ID, level);
+        if let Some(kernel) = ai.monster_range_attack_mut() { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); }
+    }
+    let started = ai.monster_range_attack().map(|kernel| kernel.started_at_ms()).expect("круговая атака хранит начало");
+    if !skill_is_restored(started, delay, runtime.now_milliseconds()) {
+        return player_range_outcome(QueuedSkillExecutionState::Pending);
+    }
+    let Some(view) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
+        end_player_range_attack(game, player_id, ai, runtime, false);
+        return rejected();
+    };
+    let mut fire = CMessage::new(0x000b_fe01);
+    fire.add_byte(2); fire.add_long(MONSTER_RANGE_ATTACK_SKILL_ID as i32); fire.add_short(level as i16);
+    fire.add_long(PLAYER_TYPE); fire.add_long(player_id); fire.add_long(0); fire.add_long(0);
+    fire.add_long(view.tile_x); fire.add_long(view.tile_y);
+    let _ = game.send_player_shape_around(player_id, None, &fire);
+    if let Some(kernel) = ai.monster_range_attack_mut() { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); }
+    let mut attacked = Vec::new();
+    for (dx, dy) in range_attack_scope_cells() {
+        for target in super::flash::cell_views(game, region_id, view.tile_x.wrapping_add(dx), view.tile_y.wrapping_add(dy)) {
+            let target = target.identity;
+            let Some(master) = game.find_player(player_id).map(super::lordfastattack::master_info) else { break };
+            let attackable = if matches!(target.object_type, 1100 | 1200) {
+                game.stationary_build_attackable_by_player(player_id, region_id, target)
+            } else { game.owned_player_skill_target_attackable(master, target, region_id) };
+            if !attackable || attacked.contains(&target) { continue; }
+            if !(target.object_type == PLAYER_TYPE && target.id == player_id)
+                && let Some((master, attack)) = calculate_player_range_attack(game, player_id, region_id, target, level, &properties)
+            {
+                match target.object_type {
+                    PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
+                    MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                    1100 | 1200 => game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, target, attack, runtime),
+                    _ => {}
+                }
+            }
+            attacked.push(target);
+        }
+    }
+    if let Some(kernel) = ai.monster_range_attack_mut() {
+        let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    end_player_range_attack(game, player_id, ai, runtime, true);
+    player_range_outcome(QueuedSkillExecutionState::Completed)
+}
 
 // `g_bScope` по адресу 0x006A0ECC при `g_dwLength/g_dwHeight == 7`.
 const RANGE_SCOPE: [u8; 49] = [
@@ -307,7 +340,7 @@ pub(crate) fn prepare_owned_monster_range_cast(
         return false;
     }
     let delay_ms = properties.query_property(super::baseattack::SKILL_USAGE_DELAY_TIME);
-    if !super::baseattack::time_reached(now_ms, cast.started_at_ms(), delay_ms) {
+    if !super::kernel::skill_is_restored(cast.started_at_ms(), delay_ms, now_ms) {
         return true;
     }
     let (Ok(tile_x), Ok(tile_y)) = (shape.get_tile_x(), shape.get_tile_y()) else {
