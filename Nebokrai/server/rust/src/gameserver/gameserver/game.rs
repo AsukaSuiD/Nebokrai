@@ -29008,7 +29008,7 @@ impl CGame {
                     id: player_id,
                     ex_id: CGuid::GUID_INVALID,
                 },
-                now_ms,
+                || runtime.now_milliseconds(),
             );
         }
         let agility_state_2_ended =
@@ -47393,7 +47393,7 @@ impl CGame {
                         id: monster_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
-                    now_ms,
+                    || runtime.now_milliseconds(),
                 );
                 if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {
                     continue;

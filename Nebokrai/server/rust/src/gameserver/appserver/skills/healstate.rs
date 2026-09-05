@@ -21,6 +21,9 @@
 //! запись удаляется с UpdateProperty. При раздельных storage/target либо
 //! исчезнувшей цели End ничего не меняет; состояние продолжает существовать.
 //! Во время лечения остальные записи остаются доступны каноническому owner-у.
+//! AI (`0x005EEDF0`) читает часы отдельно для интервала и для срока после
+//! OnChangeStates; время общего прохода не заменяет эти два чтения. Мёртвая
+//! цель завершает состояние до обращения к часам.
 
 use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -50,7 +53,7 @@ pub(crate) struct HealState {
 pub(crate) struct HealStatePass {
     pub(crate) health: u32,
     pub(crate) changed: bool,
-    pub(crate) ended: bool,
+    pub(crate) dead: bool,
 }
 
 impl HealState {
@@ -133,7 +136,7 @@ impl HealState {
 
     pub(crate) fn advance(
         &mut self,
-        now_ms: u32,
+        mut now_milliseconds: impl FnMut() -> u32,
         mut health: u32,
         maximum_health: u32,
         dead: bool,
@@ -143,13 +146,13 @@ impl HealState {
             return HealStatePass {
                 health,
                 changed: false,
-                ended: true,
+                dead: true,
             };
         }
         let due = self
             .started_at_ms
             .wrapping_add(self.frequency_ms.wrapping_mul(self.heal_count))
-            < now_ms;
+            < now_milliseconds();
         let mut changed = false;
         if due {
             self.heal_count = self.heal_count.wrapping_add(1);
@@ -166,7 +169,7 @@ impl HealState {
         HealStatePass {
             health,
             changed,
-            ended: self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms,
+            dead: false,
         }
     }
 }
@@ -250,7 +253,7 @@ fn advance_effect(
     game: &mut CGame,
     region_id: i32,
     state: &mut HealState,
-    now_ms: u32,
+    now_milliseconds: &mut impl FnMut() -> u32,
 ) -> Option<(bool, i32, i32)> {
     let target = state.effect_target();
     match target.object_type {
@@ -261,7 +264,7 @@ fn advance_effect(
             let tile_x = player.shape().get_tile_x().ok()?;
             let tile_y = player.shape().get_tile_y().ok()?;
             let pass = state.advance(
-                now_ms,
+                &mut *now_milliseconds,
                 player.health(),
                 player.maximum_health(),
                 player.is_dead(),
@@ -271,7 +274,9 @@ fn advance_effect(
             if pass.changed {
                 let _ = game.publish_player_states(target.id);
             }
-            Some((pass.ended, tile_x, tile_y))
+            let ended = pass.dead
+                || state.started_at_ms.wrapping_add(state.keep_time_ms) < now_milliseconds();
+            Some((ended, tile_x, tile_y))
         }
         600 => {
             let property = game
@@ -291,7 +296,7 @@ fn advance_effect(
                     let health = monster.hit_points();
                     let promotion = monster.move_shape().promotion_heal_recover_factor();
                     let pass = state.advance(
-                        now_ms,
+                        &mut *now_milliseconds,
                         health,
                         maximum_health,
                         health == 0,
@@ -305,7 +310,9 @@ fn advance_effect(
             }
             game.restore_region_owner(owner);
             let (pass, tile_x, tile_y) = result?;
-            Some((pass.ended, tile_x, tile_y))
+            let ended = pass.dead
+                || state.started_at_ms.wrapping_add(state.keep_time_ms) < now_milliseconds();
+            Some((ended, tile_x, tile_y))
         }
         _ => None,
     }
@@ -317,7 +324,7 @@ pub(crate) fn update_stored_heal_states(
     game: &mut CGame,
     region_id: i32,
     storage: ShapeIdentity,
-    now_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some(mut states) = take_stored_states(game, region_id, storage) else {
         return;
@@ -327,7 +334,7 @@ pub(crate) fn update_stored_heal_states(
         let mut state = states[position];
         let target = state.effect_target();
         restore_stored_states(game, region_id, storage, states);
-        let ended = advance_effect(game, region_id, &mut state, now_ms)
+        let ended = advance_effect(game, region_id, &mut state, &mut now_milliseconds)
             .is_some_and(|(ended, _, _)| ended);
         let Some(current) = take_stored_states(game, region_id, storage) else {
             return;
