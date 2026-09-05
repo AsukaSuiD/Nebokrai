@@ -70,6 +70,9 @@
 //! (0x00509FF0/0x0050A230) заменяет только ожидающую команду, не execution.
 //! Общий хвост завершения проверяет именно выбранную команду, поэтому End
 //! concrete owner-а не позволяет повторно снять следующую совпавшую команду.
+//! Освобождение execution также ограничено этой командой: CSkill::End
+//! (0x004D84C0) очищает свой экземпляр, не соседние навыки. Option::take_if
+//! сохраняет остальные kernel, включая отдельные варианты лечения.
 //! OnFighting (0x005092B0) сохраняет Attack до отдельного такта после End;
 //! затем ChangeSkill (0x00508E40) возвращает вычисленный после End default.
 //! Допуск OnSchedule не повторяется внутри Attack, а завершивший AI не
@@ -77,8 +80,14 @@
 //! FIFO CBaseAI, включая её очистку Defense/Stiffen и отдельный такт смены.
 //! Ещё остаются разделение Begin/первого AI в concrete адаптерах и переход
 //! prepared-навыка в фон до его End; эти ветви нельзя подменять ended-состоянием.
-//! В Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam и модули,
-//! поэтому их расписание не переносится в наш CSkill lifecycle.
+//! В активном коде Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam.
+//! Однако старый закомментированный WhenAddBackStageSkill в AI/BaseAI.cpp
+//! сохраняет наш контракт 0x004C94B0: при owner != null и ID != SKILL_UNKNOW
+//! добавляет ID в m_vBackStageSkills без дедупликации. Этот фрагмент не следует
+//! смешивать с новым модульным расписанием. Подготовка через запись регистра
+//! в +0x44 сохраняется между AI, например у HeartLessArrow (0x005931BE),
+//! EnergyBolt (0x0053CB9C) и GhostCut (0x0059E348); это не только временный
+//! флаг синхронного Summon у RainArrow, сбрасываемый в том же AI вызовом End.
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
 //! следующий навык продвигается только после завершения текущего. Отмена
@@ -635,11 +644,22 @@ impl CPlayerAI {
         if self.current_player_skill.take().is_none() {
             self.player_skills.pop_front();
         }
-        if let Some(mut execution) = self.base_attack.take() {
+        self.finish_player_skill_execution(expected, termination);
+        true
+    }
+
+    /// End освобождает только выбранный CSkill, не остальные экземпляры.
+    /// Отделено от снятия команды для общего foreground/background lifecycle.
+    fn finish_player_skill_execution(
+        &mut self,
+        expected: PlayerSkillDispatch,
+        termination: SkillTermination,
+    ) {
+        if let Some(mut execution) = self.base_attack.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
         }
-        if let Some(mut execution) = self.archery.take() {
+        if let Some(mut execution) = self.archery.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(
                 ?expected,
@@ -648,288 +668,288 @@ impl CPlayerAI {
                 "выполнение базовой стрельбы завершено"
             );
         }
-        if let Some(mut execution) = self.heartless_arrow.take() {
+        if let Some(mut execution) = self.heartless_arrow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бессердечной стрелы завершено");
         }
-        if let Some(mut execution) = self.heartless_arrow_area.take() {
+        if let Some(mut execution) = self.heartless_arrow_area.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение региональной стрелы завершено");
         }
-        if let Some(mut execution) = self.lighting_arrow.take() {
+        if let Some(mut execution) = self.lighting_arrow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение световой стрелы завершено");
         }
-        if let Some(mut execution) = self.lighting_arrow_2.take() {
+        if let Some(mut execution) = self.lighting_arrow_2.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение второй световой стрелы завершено");
         }
-        if let Some(mut execution) = self.meteor_arrow_mass.take() {
+        if let Some(mut execution) = self.meteor_arrow_mass.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "накопление метеорных стрел завершено");
         }
-        if let Some(mut execution) = self.meteor_arrow.take() {
+        if let Some(mut execution) = self.meteor_arrow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение метеорной стрелы завершено");
         }
-        if let Some(mut execution) = self.rain_arrow.take() {
+        if let Some(mut execution) = self.rain_arrow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение дождя стрел завершено");
         }
-        if let Some(mut execution) = self.poison_moth.take() {
+        if let Some(mut execution) = self.poison_moth.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение ядовитого мотылька завершено");
         }
-        if let Some(mut execution) = self.blood_rose.take() {
+        if let Some(mut execution) = self.blood_rose.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение кровавой розы завершено");
         }
-        if let Some(mut execution) = self.scorpion.take() {
+        if let Some(mut execution) = self.scorpion.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение скорпиона завершено");
         }
-        if let Some(mut execution) = self.boa_lock.take() {
+        if let Some(mut execution) = self.boa_lock.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение связывания удава завершено");
         }
-        if let Some(mut execution) = self.falling_star.take() {
+        if let Some(mut execution) = self.falling_star.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение падающей звезды завершено");
         }
-        if let Some(mut execution) = self.explosive_arrow.take() {
+        if let Some(mut execution) = self.explosive_arrow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей стрелы завершено");
         }
-        if let Some(mut execution) = self.strike.take() {
+        if let Some(mut execution) = self.strike.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение оглушающего снаряда завершено");
         }
-        if let Some(mut execution) = self.daub_poison.take() {
+        if let Some(mut execution) = self.daub_poison.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение смазки оружия ядом завершено");
         }
-        if let Some(mut execution) = self.yaksha_slash.take() {
+        if let Some(mut execution) = self.yaksha_slash.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение удара якши завершено");
         }
-        if let Some(mut execution) = self.agility_family.take() {
+        if let Some(mut execution) = self.agility_family.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка ловкости завершено");
         }
-        if let Some(mut execution) = self.base_magic.take() {
+        if let Some(mut execution) = self.base_magic.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
         }
-        if let Some(mut execution) = self.fire_bolt.take() {
+        if let Some(mut execution) = self.fire_bolt.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной стрелы завершено");
         }
-        if let Some(mut execution) = self.fire_ball.take() {
+        if let Some(mut execution) = self.fire_ball.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного шара завершено");
         }
-        if let Some(mut execution) = self.item_skill_2.take() {
+        if let Some(mut execution) = self.item_skill_2.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового огня завершено");
         }
-        if let Some(mut execution) = self.chain_lightning.take() {
+        if let Some(mut execution) = self.chain_lightning.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение цепной молнии завершено");
         }
-        if let Some(mut execution) = self.thunder_blow.take() {
+        if let Some(mut execution) = self.thunder_blow.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового удара завершено");
         }
-        if let Some(mut execution) = self.thunder_slash.take() {
+        if let Some(mut execution) = self.thunder_slash.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового рассечения завершено");
         }
-        if let Some(mut execution) = self.pillar.take() {
+        if let Some(mut execution) = self.pillar.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение защитной стойки завершено");
         }
-        if let Some(mut execution) = self.rush.take() {
+        if let Some(mut execution) = self.rush.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение прямого рывка завершено");
         }
-        if let Some(mut execution) = self.rush_2.take() {
+        if let Some(mut execution) = self.rush_2.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго прямого рывка завершено");
         }
-        if let Some(mut execution) = self.roar.take() {
+        if let Some(mut execution) = self.roar.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение боевого клича завершено");
         }
-        if let Some(mut execution) = self.energy_holding.take() {
+        if let Some(mut execution) = self.energy_holding.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение накопления энергии завершено");
         }
-        if let Some(mut execution) = self.inverse_chopped.take() {
+        if let Some(mut execution) = self.inverse_chopped.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение обратного рубящего удара завершено");
         }
-        if let Some(mut execution) = self.thunder_blow_2.take() {
+        if let Some(mut execution) = self.thunder_blow_2.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго громового удара завершено");
         }
-        if let Some(mut execution) = self.mosou.take() {
+        if let Some(mut execution) = self.mosou.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение Мо-шоу завершено");
         }
-        if let Some(mut execution) = self.ghost_cut.take() {
+        if let Some(mut execution) = self.ghost_cut.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бегущего удара завершено");
         }
-        if let Some(mut execution) = self.knight_cut.take() {
+        if let Some(mut execution) = self.knight_cut.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рыцарского удара завершено");
         }
-        if let Some(mut execution) = self.army_break.take() {
+        if let Some(mut execution) = self.army_break.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение армейского удара завершено");
         }
-        if let Some(mut execution) = self.rage.take() {
+        if let Some(mut execution) = self.rage.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение канала ярости завершено");
         }
-        if let Some(mut execution) = self.rage_break.take() {
+        if let Some(mut execution) = self.rage_break.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение подготовки яростного удара завершено");
         }
-        if let Some(mut execution) = self.fury.take() {
+        if let Some(mut execution) = self.fury.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости завершено");
         }
-        if let Some(mut execution) = self.flash.take() {
+        if let Some(mut execution) = self.flash.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рывка сквозь строй завершено");
         }
-        if let Some(mut execution) = self.swallow.take() {
+        if let Some(mut execution) = self.swallow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение двойного направленного удара завершено");
         }
-        if let Some(mut execution) = self.leaf_cut.take() {
+        if let Some(mut execution) = self.leaf_cut.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение периодического удара завершено");
         }
-        if let Some(mut execution) = self.leaf_cut_2.take() {
+        if let Some(mut execution) = self.leaf_cut_2.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго периодического удара завершено");
         }
-        if let Some(mut execution) = self.leaf_cut_3.take() {
+        if let Some(mut execution) = self.leaf_cut_3.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение третьего периодического удара завершено");
         }
-        if let Some(mut execution) = self.kerosene.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "наложение горючей смеси завершено"); }
-        if let Some(mut execution) = self.ignition.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "воспламенение завершено"); }
-        if let Some(mut execution) = self.blind.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "ослепление завершено"); }
-        if let Some(mut execution) = self.ju_cut.take() {
+        if let Some(mut execution) = self.kerosene.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "наложение горючей смеси завершено"); }
+        if let Some(mut execution) = self.ignition.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "воспламенение завершено"); }
+        if let Some(mut execution) = self.blind.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "ослепление завершено"); }
+        if let Some(mut execution) = self.ju_cut.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение рубящего удара завершено");
         }
-        if let Some(mut execution) = self.lightning_sword.take() {
+        if let Some(mut execution) = self.lightning_sword.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение молниеносного меча завершено");
         }
-        if let Some(mut execution) = self.little_flash.take() {
+        if let Some(mut execution) = self.little_flash.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малого рывка завершено");
         }
-        if let Some(mut execution) = self.fire_wall.take() {
+        if let Some(mut execution) = self.fire_wall.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненной стены завершено");
         }
-        if let Some(mut execution) = self.poison_fog.take() { self.poison_fog_destination = None; let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитого тумана завершено"); }
-        if let Some(mut execution) = self.infernol.take() {
+        if let Some(mut execution) = self.poison_fog.take_if(|state| state.dispatch() == expected) { self.poison_fog_destination = None; let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитого тумана завершено"); }
+        if let Some(mut execution) = self.infernol.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного круга завершено");
         }
-        if let Some(mut execution) = self.seven_shooting_star.take() {
+        if let Some(mut execution) = self.seven_shooting_star.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение семи падающих звёзд завершено");
         }
-        if let Some(mut execution) = self.little_star.take() {
+        if let Some(mut execution) = self.little_star.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малой звезды завершено");
         }
-        if let Some(mut execution) = self.path_projectile.take() {
+        if let Some(mut execution) = self.path_projectile.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение пошагового снаряда завершено");
         }
-        if let Some(mut execution) = self.direct_projectile.take() {
+        if let Some(mut execution) = self.direct_projectile.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение прямого снаряда завершено");
         }
-        if let Some(mut execution) = self.yunsheng_lightning.take() {
+        if let Some(mut execution) = self.yunsheng_lightning.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии Юньшэн завершено");
         }
-        if let Some(mut execution) = self.corpse_ptomaine.take() {
+        if let Some(mut execution) = self.corpse_ptomaine.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение трупного яда завершено");
         }
-        if let Some(mut execution) = self.monster_thorn.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение шипастой атаки завершено"); }
-        if let Some(mut execution) = self.spider_mist.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
-        if let Some(mut execution) = self.spider_web.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
-        if let Some(mut execution) = self.spider_poison.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитой атаки паука завершено"); }
-        if let Some(mut execution) = self.summon_creature.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
-        if let Some(mut execution) = self.boss_blue_fury.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости синего босса завершено"); }
-        if let Some(mut execution) = self.boss_blue_quake.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение землетрясения синего босса завершено"); }
-        if let Some(mut execution) = self.boss_fiend_penetrate.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей атаки демона-босса завершено"); }
-        if let Some(mut execution) = self.sprite_burn.take() {
+        if let Some(mut execution) = self.monster_thorn.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение шипастой атаки завершено"); }
+        if let Some(mut execution) = self.spider_mist.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
+        if let Some(mut execution) = self.spider_web.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
+        if let Some(mut execution) = self.spider_poison.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитой атаки паука завершено"); }
+        if let Some(mut execution) = self.summon_creature.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
+        if let Some(mut execution) = self.boss_blue_fury.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости синего босса завершено"); }
+        if let Some(mut execution) = self.boss_blue_quake.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение землетрясения синего босса завершено"); }
+        if let Some(mut execution) = self.boss_fiend_penetrate.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей атаки демона-босса завершено"); }
+        if let Some(mut execution) = self.sprite_burn.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
         }
-        if let Some(mut kernel) = self.wide_arc_attack.take() {
+        if let Some(mut kernel) = self.wide_arc_attack.take_if(|state| state.dispatch() == expected) {
             let _ = kernel.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение широкой дуговой атаки завершено");
         }
-        if let Some(mut execution) = self.lord_fast_attack.take() {
+        if let Some(mut execution) = self.lord_fast_attack.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение быстрой атаки владыки завершено");
         }
-        if let Some(mut kernel) = self.monster_base_attack.take() {
+        if let Some(mut kernel) = self.monster_base_attack.take_if(|state| state.dispatch() == expected) {
             let _ = kernel.terminate(termination);
             tracing::trace!(?expected, ?termination, "исполнение базовой атаки монстра игроком завершено");
         }
-        if let Some(mut kernel) = self.monster_range_attack.take() {
+        if let Some(mut kernel) = self.monster_range_attack.take_if(|state| state.dispatch() == expected) {
             let _ = kernel.terminate(termination);
             tracing::trace!(?expected, ?termination, "круговая атака монстра игроком завершена");
         }
-        if let Some(mut execution) = self.chaos_sphere.take() {
+        if let Some(mut execution) = self.chaos_sphere.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
         }
-        if let Some(mut execution) = self.lightning.take() {
+        if let Some(mut execution) = self.lightning.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии завершено");
         }
-        if let Some(mut execution) = self.seal.take() {
+        if let Some(mut execution) = self.seal.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение печати завершено");
         }
-        if let Some(mut execution) = self.yin_yang.take() {
+        if let Some(mut execution) = self.yin_yang.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение инь-ян завершено");
         }
-        if let Some(mut execution) = self.yin_yang_2.take() {
+        if let Some(mut execution) = self.yin_yang_2.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго инь-ян завершено");
         }
-        if let Some(mut execution) = self.god_punishment.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественной кары завершено"); }
-        if let Some(mut execution) = self.god_thunder.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного грома завершено"); }
-        if let Some(mut execution) = self.god_thunder_2.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго божественного грома завершено"); }
-        if let Some(mut execution) = self.soul_collect.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение сбора душ завершено"); }
-        if let Some(mut execution) = self.soul_mirror.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение зеркала душ завершено"); }
-        if let Some(mut execution) = self.callosity.take() {
+        if let Some(mut execution) = self.god_punishment.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественной кары завершено"); }
+        if let Some(mut execution) = self.god_thunder.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного грома завершено"); }
+        if let Some(mut execution) = self.god_thunder_2.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго божественного грома завершено"); }
+        if let Some(mut execution) = self.soul_collect.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение сбора душ завершено"); }
+        if let Some(mut execution) = self.soul_mirror.take_if(|state| state.dispatch() == expected) { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение зеркала душ завершено"); }
+        if let Some(mut execution) = self.callosity.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
         }
-        if let Some(mut execution) = self.hearten.take() {
+        if let Some(mut execution) = self.hearten.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение воодушевления завершено");
         }
-        if let Some(mut execution) = self.promotion.take() {
+        if let Some(mut execution) = self.promotion.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение усиления завершено");
         }
@@ -937,64 +957,63 @@ impl CPlayerAI {
             .heal_family
             .each_mut()
             .into_iter()
-            .filter_map(Option::take)
+            .filter_map(|slot| slot.take_if(|state| state.dispatch() == expected))
         {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение периодического лечения завершено");
         }
-        if let Some(mut execution) = self.pets_control.take() {
+        if let Some(mut execution) = self.pets_control.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение управления питомцами завершено");
         }
-        if let Some(mut execution) = self.monster_taming.take() {
+        if let Some(mut execution) = self.monster_taming.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение приручения монстра завершено");
         }
-        if let Some(mut execution) = self.knock_out.take() {
+        if let Some(mut execution) = self.knock_out.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение оглушения завершено");
         }
-        if let Some(mut execution) = self.snow_storm.take() {
+        if let Some(mut execution) = self.snow_storm.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение снежной бури завершено");
         }
-        if let Some(mut execution) = self.weak.take() {
+        if let Some(mut execution) = self.weak.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ослабления завершено");
         }
-        if let Some(mut execution) = self.god_bless.take() {
+        if let Some(mut execution) = self.god_bless.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного благословения завершено");
         }
-        if let Some(mut execution) = self.cure.take() {
+        if let Some(mut execution) = self.cure.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение очищения завершено");
         }
-        if let Some(mut execution) = self.machine_shield.take() {
+        if let Some(mut execution) = self.machine_shield.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение машинного щита завершено");
         }
-        if let Some(mut execution) = self.mana_shield.take() {
+        if let Some(mut execution) = self.mana_shield.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение мана-щита завершено");
         }
-        if let Some(mut execution) = self.immediate_state.take() {
+        if let Some(mut execution) = self.immediate_state.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение немедленного состояния завершено");
         }
-        if let Some(mut execution) = self.non_fun.take() {
+        if let Some(mut execution) = self.non_fun.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение пустого навыка завершено");
         }
-        if let Some(mut execution) = self.swordship.take() {
+        if let Some(mut execution) = self.swordship.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение корабля мечей завершено");
         }
-        if let Some(mut execution) = self.gibe.take() {
+        if let Some(mut execution) = self.gibe.take_if(|state| state.dispatch() == expected) {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение провокации завершено");
         }
-        true
     }
 
     /// Fallback встречного `CPlayerAI::OnLoseTarget`, когда concrete execution

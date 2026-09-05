@@ -40853,6 +40853,446 @@ impl CGame {
         skill_ids.len()
     }
 
+    /// Вызов concrete CSkill без снятия команды и повторного допуска.
+    /// Общий обработчик сохраняет один путь формул, эффектов и End для
+    /// обычного исполнения и последующего подключения фонового AI.
+    fn execute_player_skill_owner<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let concrete_base_attack = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
+            PlayerSkillDispatch::Object { skill_id, target } => {
+                skill_id == BASE_ATTACK_SKILL_ID
+                    && (matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                        || target.object_type == BUILD_OBJECT_TYPE as i32
+                        || target.object_type == CITY_GATE_OBJECT_TYPE as i32)
+            }
+        };
+        let concrete_base_magic = match dispatch {
+            PlayerSkillDispatch::Object { skill_id, target } => {
+                skill_id == BASE_MAGIC_SKILL_ID
+                    && is_base_magic_object_target_type(target.object_type)
+            }
+            _ => false,
+        };
+        let concrete_fire_bolt = is_fire_bolt_target(dispatch);
+        let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
+        let concrete_item_skill_2 = is_item_skill_2_dispatch(dispatch);
+        let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
+        let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
+        let concrete_thunder_slash = is_thunder_slash_dispatch(dispatch);
+        let concrete_pillar = is_pillar_dispatch(dispatch);
+        let concrete_rush = is_rush_dispatch(dispatch);
+        let concrete_rush_2 = is_rush_2_dispatch(dispatch);
+        let concrete_roar = is_roar_dispatch(dispatch);
+        let concrete_energy_holding = is_energy_holding_dispatch(dispatch);
+        let concrete_inverse_chopped = is_inverse_chopped_dispatch(dispatch);
+        let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
+        let concrete_mosou = is_mosou_dispatch(dispatch);
+        let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
+        let concrete_knight_cut = is_knight_cut_dispatch(dispatch);
+        let concrete_army_break = is_army_break_dispatch(dispatch);
+        let concrete_rage = is_rage_dispatch(dispatch);
+        let concrete_rage_break = is_rage_break_dispatch(dispatch);
+        let concrete_fury = is_fury_dispatch(dispatch);
+        let concrete_flash = is_flash_dispatch(dispatch);
+        let concrete_swallow = is_swallow_dispatch(dispatch);
+        let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
+        let concrete_leaf_cut_2 = is_leaf_cut_2_dispatch(dispatch);
+        let concrete_leaf_cut_3 = is_leaf_cut_3_dispatch(dispatch);
+        let concrete_ju_cut = is_ju_cut_dispatch(dispatch);
+        let concrete_lightning_sword = is_lightning_sword_dispatch(dispatch);
+        let concrete_little_flash = is_little_flash_dispatch(dispatch);
+        let concrete_fire_wall = is_fire_wall_target(dispatch);
+        let concrete_poison_fog = is_poison_fog_target(dispatch);
+        let concrete_infernol = is_infernol_dispatch(dispatch);
+        let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
+        let concrete_little_star = is_player_little_star_dispatch(dispatch);
+        let concrete_path_projectile = is_player_path_projectile_dispatch(dispatch);
+        let concrete_direct_projectile = is_player_direct_projectile_dispatch(dispatch);
+        let concrete_yunsheng_lightning = is_player_yunsheng_lightning_dispatch(dispatch);
+        let concrete_corpse_ptomaine = is_player_corpse_ptomaine_dispatch(dispatch);
+        let concrete_monster_thorn = is_player_monster_thorn_dispatch(dispatch);
+        let concrete_spider_mist = is_player_spider_mist_dispatch(dispatch);
+        let concrete_spider_web = is_player_spider_web_dispatch(dispatch);
+        let concrete_spider_poison = is_player_spider_poison_dispatch(dispatch);
+        let concrete_summon_creature = is_player_summon_creature_dispatch(dispatch);
+        let concrete_boss_blue_fury = is_player_boss_blue_fury_dispatch(dispatch);
+        let concrete_boss_blue_quake = is_player_boss_blue_quake_dispatch(dispatch);
+        let concrete_boss_fiend_penetrate =
+            is_player_boss_fiend_penetrate_dispatch(dispatch);
+        let path_projectile_skill_id = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+        };
+        let concrete_sprite_burn = is_sprite_burn_dispatch(dispatch);
+        let concrete_machinery_stomp = is_machinery_stomp_dispatch(dispatch);
+        let concrete_lord_wideranging_attack = is_lord_wideranging_attack_dispatch(dispatch);
+        let concrete_lord_fast_attack = is_lord_fast_attack_dispatch(dispatch);
+        let concrete_monster_base_attack = is_player_monster_base_attack(dispatch);
+        let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
+        let concrete_lightning = is_lightning_target(dispatch);
+        let concrete_seal = is_seal_target(dispatch);
+        let concrete_archery = match dispatch {
+            PlayerSkillDispatch::Object { skill_id, target } => {
+                skill_id == ARCHERY_SKILL_ID
+                    && is_base_magic_object_target_type(target.object_type)
+            }
+            _ => false,
+        };
+        let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
+        let concrete_heartless_arrow_area = is_heartless_arrow_area_dispatch(dispatch);
+        let concrete_lighting_arrow = is_lighting_arrow_dispatch(dispatch);
+        let concrete_lighting_arrow_2 = is_lighting_arrow_2_dispatch(dispatch);
+        let concrete_meteor_arrow_mass = is_meteor_arrow_mass_dispatch(dispatch);
+        let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
+        let concrete_rain_arrow = is_rain_arrow_dispatch(dispatch);
+        let concrete_poison_moth = is_poison_moth_dispatch(dispatch);
+        let concrete_kerosene = is_kerosene_dispatch(dispatch);
+        let concrete_ignition = is_ignition_dispatch(dispatch);
+        let concrete_blind = is_blind_dispatch(dispatch);
+        let concrete_blood_rose = is_blood_rose_dispatch(dispatch);
+        let concrete_scorpion = is_scorpion_dispatch(dispatch);
+        let concrete_boa_lock = is_boa_lock_dispatch(dispatch);
+        let concrete_falling_star = is_falling_star_dispatch(dispatch);
+        let concrete_explosive_arrow = explosive_arrow_variant(dispatch).is_some();
+        let concrete_strike = is_strike_dispatch(dispatch);
+        let concrete_daub_poison = is_daub_poison_dispatch(dispatch);
+        let concrete_yaksha_slash = is_yaksha_slash_dispatch(dispatch);
+        let concrete_callosity = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => {
+                matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID)
+            }
+        };
+        let concrete_agility_family = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => {
+                matches!(
+                    skill_id,
+                    AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
+                )
+            }
+        };
+        let concrete_hearten = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == HEARTEN_SKILL_ID,
+            PlayerSkillDispatch::Object { skill_id, target } => {
+                skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE
+            }
+        };
+        let concrete_promotion = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == PROMOTION_SKILL_ID,
+            PlayerSkillDispatch::Object { skill_id, target } => {
+                skill_id == PROMOTION_SKILL_ID
+                    && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+            }
+        };
+        let concrete_heal = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. } => is_heal_skill(skill_id),
+            PlayerSkillDispatch::Object { skill_id, target } => {
+                is_heal_skill(skill_id)
+                    && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+            }
+        };
+        let concrete_pets_control = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => {
+                skill_id == PETS_CONTROL_SKILL_ID
+            }
+        };
+        let concrete_monster_taming = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => {
+                skill_id == MONSTER_TAMING_SKILL_ID
+            }
+        };
+        let concrete_knock_out = is_knock_out_dispatch(dispatch);
+        let concrete_snow_storm = is_snow_storm_target(dispatch);
+        let concrete_weak = is_weak_target(dispatch);
+        let concrete_yin_yang = is_yin_yang_target(dispatch);
+        let concrete_yin_yang_2 = is_yin_yang_2_target(dispatch);
+        let concrete_god_punishment = is_god_punishment_target(dispatch);
+        let concrete_god_thunder = is_god_thunder_dispatch(dispatch);
+        let concrete_god_thunder_2 = is_god_thunder_2_dispatch(dispatch);
+        let concrete_soul_collect = is_soul_collect_skill(dispatch);
+        let concrete_soul_mirror = is_soul_mirror_skill(dispatch);
+        let concrete_god_bless = is_god_bless_skill(dispatch);
+        let concrete_cure = is_cure_target(dispatch);
+        let concrete_self_shield = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => {
+                is_self_shield_skill(skill_id)
+            }
+        };
+        let concrete_immediate_state = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => {
+                is_immediate_state_skill(skill_id)
+            }
+        };
+        let concrete_non_fun = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => is_non_fun_skill(skill_id),
+        };
+        let concrete_swordship = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => is_swordship_skill(skill_id),
+        };
+        let concrete_gibe = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == GIBE_SKILL_ID,
+        };
+        if concrete_base_attack {
+            baseattackruntime::execute_player_base_attack(
+                self,
+                player_id,
+                dispatch,
+                player_ai,
+                runtime,
+            )
+        } else if concrete_archery {
+            execute_player_archery(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_heartless_arrow {
+            execute_player_heartless_arrow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_heartless_arrow_area {
+            execute_player_heartless_arrow_area(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_lighting_arrow {
+            execute_player_lighting_arrow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_lighting_arrow_2 {
+            execute_player_lighting_arrow_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_meteor_arrow_mass {
+            execute_player_meteor_arrow_mass(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_meteor_arrow {
+            execute_player_meteor_arrow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_rain_arrow {
+            execute_player_rain_arrow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_poison_moth {
+            execute_player_poison_moth(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_kerosene {
+            execute_player_kerosene(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_ignition {
+            execute_player_ignition(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_blind {
+            execute_player_blind(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_blood_rose {
+            execute_player_blood_rose(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_scorpion {
+            execute_player_scorpion(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_boa_lock {
+            execute_player_boa_lock(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_falling_star {
+            execute_player_falling_star(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_explosive_arrow {
+            execute_player_explosive_arrow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_strike {
+            execute_player_strike(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_daub_poison {
+            execute_player_daub_poison(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_yaksha_slash {
+            execute_player_yaksha_slash(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_base_magic {
+            execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_fire_bolt {
+            execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_fire_ball {
+            execute_player_fire_ball(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_item_skill_2 {
+            execute_player_item_skill_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_chain_lightning {
+            execute_player_chain_lightning(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_thunder_blow {
+            execute_player_thunder_blow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_thunder_slash {
+            execute_player_thunder_slash(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_pillar {
+            execute_player_pillar(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_rush {
+            execute_player_rush(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_rush_2 {
+            execute_player_rush_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_roar {
+            execute_player_roar(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_energy_holding {
+            execute_player_energy_holding(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_inverse_chopped {
+            execute_player_inverse_chopped(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_thunder_blow_2 {
+            execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_mosou {
+            execute_player_mosou(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_ghost_cut {
+            execute_player_ghost_cut(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_knight_cut {
+            execute_player_knight_cut(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_army_break {
+            execute_player_army_break(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_rage {
+            execute_player_rage(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_rage_break {
+            execute_player_rage_break(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_fury {
+            execute_player_fury(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_flash {
+            execute_player_flash(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_swallow {
+            execute_player_swallow(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_leaf_cut {
+            execute_player_leaf_cut(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_leaf_cut_2 {
+            execute_player_leaf_cut_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_leaf_cut_3 {
+            execute_player_leaf_cut_3(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_ju_cut {
+            execute_player_ju_cut(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_lightning_sword {
+            execute_player_lightning_sword(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_little_flash {
+            execute_player_little_flash(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_fire_wall {
+            execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_poison_fog {
+            execute_player_poison_fog(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_infernol {
+            execute_player_infernol(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_seven_shooting_star {
+            execute_player_seven_shooting_star(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_little_star {
+            execute_player_little_star(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_path_projectile && path_projectile_skill_id == ENERGY_BOLT_SKILL_ID {
+            execute_player_energy_bolt(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_path_projectile && path_projectile_skill_id == ZOMBIE_CLAW_SKILL_ID {
+            execute_player_zombie_claw(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_path_projectile && path_projectile_skill_id == SNAKE_BOLT_SKILL_ID {
+            execute_player_snake_bolt(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_direct_projectile && path_projectile_skill_id == CHUCK_STONE_SKILL_ID {
+            execute_player_chuck_stone(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_direct_projectile && path_projectile_skill_id == SKELETON_ARCHERY_SKILL_ID {
+            execute_player_skeleton_archery(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_yunsheng_lightning {
+            execute_player_yunsheng_lightning(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_corpse_ptomaine {
+            execute_player_corpse_ptomaine(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_monster_thorn {
+            execute_player_monster_thorn(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_spider_mist {
+            execute_player_spider_mist(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_spider_web {
+            execute_player_spider_web(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_spider_poison {
+            execute_player_spider_poison(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_summon_creature {
+            execute_player_summon_creature(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_boss_blue_fury {
+            execute_player_boss_blue_fury(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_boss_blue_quake {
+            execute_player_boss_blue_quake(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_boss_fiend_penetrate {
+            execute_player_boss_fiend_penetrate(
+                self,
+                player_id,
+                dispatch,
+                player_ai,
+                runtime,
+            )
+        } else if concrete_sprite_burn {
+            execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_machinery_stomp {
+            execute_player_machinery_stomp(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_lord_wideranging_attack {
+            execute_player_lord_wideranging_attack(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_lord_fast_attack {
+            execute_player_lord_fast_attack(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_monster_base_attack {
+            execute_player_monster_base_attack(self, player_id, dispatch, player_ai, runtime)
+        } else if dispatch.skill_id() == MONSTER_RANGE_ATTACK_SKILL_ID {
+            execute_player_monster_range_attack(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_chaos_sphere {
+            execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_lightning {
+            execute_player_lightning(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_seal {
+            execute_player_seal(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_callosity {
+            execute_player_callosity(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_agility_family {
+            execute_player_agility_family(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_hearten {
+            execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_promotion {
+            execute_player_promotion(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_heal {
+            execute_player_heal(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_pets_control {
+            execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_monster_taming {
+            execute_player_monster_taming(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_knock_out {
+            execute_player_knock_out(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_snow_storm {
+            execute_player_snow_storm(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_weak {
+            execute_player_weak(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_yin_yang {
+            execute_player_yin_yang(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_yin_yang_2 {
+            execute_player_yin_yang_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_god_punishment {
+            execute_player_god_punishment(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_god_thunder {
+            execute_player_god_thunder(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_god_thunder_2 {
+            execute_player_god_thunder_2(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_soul_collect {
+            execute_player_soul_collect(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_soul_mirror {
+            execute_player_soul_mirror(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_god_bless {
+            execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_cure {
+            execute_player_cure(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_self_shield {
+            execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_immediate_state {
+            execute_player_immediate_state(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_non_fun {
+            execute_player_non_fun(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_swordship {
+            execute_player_swordship(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_gibe {
+            execute_player_gibe(self, player_id, dispatch, player_ai, runtime)
+        } else {
+            let _ = self.send_base_attack_failure(player_id, 2);
+            tracing::debug!(
+                player_id,
+                ?dispatch,
+                "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка игрока"
+            );
+            QueuedSkillExecutionOutcome {
+                state: QueuedSkillExecutionState::Rejected,
+                first_contact: false,
+                killing_blow: None,
+            }
+        }
+    }
+
     /// Исполняет независимые обычную и war-soul очереди одного игрока. Уже
     /// начатый `ASA_MOVE` удерживает только обычную очередь; навык боевой феи
     /// продолжает свой `SkillExecutionKernel` в том же такте.
@@ -40940,203 +41380,6 @@ impl CGame {
             && let Some(dispatch) = player_ai.current_player_skill()
         {
             player_execution_count = 1;
-            let concrete_base_attack = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == BASE_ATTACK_SKILL_ID
-                        && (matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                            || target.object_type == BUILD_OBJECT_TYPE as i32
-                            || target.object_type == CITY_GATE_OBJECT_TYPE as i32)
-                }
-            };
-            let concrete_base_magic = match dispatch {
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == BASE_MAGIC_SKILL_ID
-                        && is_base_magic_object_target_type(target.object_type)
-                }
-                _ => false,
-            };
-            let concrete_fire_bolt = is_fire_bolt_target(dispatch);
-            let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
-            let concrete_item_skill_2 = is_item_skill_2_dispatch(dispatch);
-            let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
-            let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
-            let concrete_thunder_slash = is_thunder_slash_dispatch(dispatch);
-            let concrete_pillar = is_pillar_dispatch(dispatch);
-            let concrete_rush = is_rush_dispatch(dispatch);
-            let concrete_rush_2 = is_rush_2_dispatch(dispatch);
-            let concrete_roar = is_roar_dispatch(dispatch);
-            let concrete_energy_holding = is_energy_holding_dispatch(dispatch);
-            let concrete_inverse_chopped = is_inverse_chopped_dispatch(dispatch);
-            let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
-            let concrete_mosou = is_mosou_dispatch(dispatch);
-            let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
-            let concrete_knight_cut = is_knight_cut_dispatch(dispatch);
-            let concrete_army_break = is_army_break_dispatch(dispatch);
-            let concrete_rage = is_rage_dispatch(dispatch);
-            let concrete_rage_break = is_rage_break_dispatch(dispatch);
-            let concrete_fury = is_fury_dispatch(dispatch);
-            let concrete_flash = is_flash_dispatch(dispatch);
-            let concrete_swallow = is_swallow_dispatch(dispatch);
-            let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
-            let concrete_leaf_cut_2 = is_leaf_cut_2_dispatch(dispatch);
-            let concrete_leaf_cut_3 = is_leaf_cut_3_dispatch(dispatch);
-            let concrete_ju_cut = is_ju_cut_dispatch(dispatch);
-            let concrete_lightning_sword = is_lightning_sword_dispatch(dispatch);
-            let concrete_little_flash = is_little_flash_dispatch(dispatch);
-            let concrete_fire_wall = is_fire_wall_target(dispatch);
-            let concrete_poison_fog = is_poison_fog_target(dispatch);
-            let concrete_infernol = is_infernol_dispatch(dispatch);
-            let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
-            let concrete_little_star = is_player_little_star_dispatch(dispatch);
-            let concrete_path_projectile = is_player_path_projectile_dispatch(dispatch);
-            let concrete_direct_projectile = is_player_direct_projectile_dispatch(dispatch);
-            let concrete_yunsheng_lightning = is_player_yunsheng_lightning_dispatch(dispatch);
-            let concrete_corpse_ptomaine = is_player_corpse_ptomaine_dispatch(dispatch);
-            let concrete_monster_thorn = is_player_monster_thorn_dispatch(dispatch);
-            let concrete_spider_mist = is_player_spider_mist_dispatch(dispatch);
-            let concrete_spider_web = is_player_spider_web_dispatch(dispatch);
-            let concrete_spider_poison = is_player_spider_poison_dispatch(dispatch);
-            let concrete_summon_creature = is_player_summon_creature_dispatch(dispatch);
-            let concrete_boss_blue_fury = is_player_boss_blue_fury_dispatch(dispatch);
-            let concrete_boss_blue_quake = is_player_boss_blue_quake_dispatch(dispatch);
-            let concrete_boss_fiend_penetrate =
-                is_player_boss_fiend_penetrate_dispatch(dispatch);
-            let path_projectile_skill_id = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
-            };
-            let concrete_sprite_burn = is_sprite_burn_dispatch(dispatch);
-            let concrete_machinery_stomp = is_machinery_stomp_dispatch(dispatch);
-            let concrete_lord_wideranging_attack = is_lord_wideranging_attack_dispatch(dispatch);
-            let concrete_lord_fast_attack = is_lord_fast_attack_dispatch(dispatch);
-            let concrete_monster_base_attack = is_player_monster_base_attack(dispatch);
-            let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
-            let concrete_lightning = is_lightning_target(dispatch);
-            let concrete_seal = is_seal_target(dispatch);
-            let concrete_archery = match dispatch {
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == ARCHERY_SKILL_ID
-                        && is_base_magic_object_target_type(target.object_type)
-                }
-                _ => false,
-            };
-            let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
-            let concrete_heartless_arrow_area = is_heartless_arrow_area_dispatch(dispatch);
-            let concrete_lighting_arrow = is_lighting_arrow_dispatch(dispatch);
-            let concrete_lighting_arrow_2 = is_lighting_arrow_2_dispatch(dispatch);
-            let concrete_meteor_arrow_mass = is_meteor_arrow_mass_dispatch(dispatch);
-            let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
-            let concrete_rain_arrow = is_rain_arrow_dispatch(dispatch);
-            let concrete_poison_moth = is_poison_moth_dispatch(dispatch);
-            let concrete_kerosene = is_kerosene_dispatch(dispatch);
-            let concrete_ignition = is_ignition_dispatch(dispatch);
-            let concrete_blind = is_blind_dispatch(dispatch);
-            let concrete_blood_rose = is_blood_rose_dispatch(dispatch);
-            let concrete_scorpion = is_scorpion_dispatch(dispatch);
-            let concrete_boa_lock = is_boa_lock_dispatch(dispatch);
-            let concrete_falling_star = is_falling_star_dispatch(dispatch);
-            let concrete_explosive_arrow = explosive_arrow_variant(dispatch).is_some();
-            let concrete_strike = is_strike_dispatch(dispatch);
-            let concrete_daub_poison = is_daub_poison_dispatch(dispatch);
-            let concrete_yaksha_slash = is_yaksha_slash_dispatch(dispatch);
-            let concrete_callosity = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID)
-                }
-            };
-            let concrete_agility_family = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    matches!(
-                        skill_id,
-                        AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
-                    )
-                }
-            };
-            let concrete_hearten = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == HEARTEN_SKILL_ID,
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE
-                }
-            };
-            let concrete_promotion = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == PROMOTION_SKILL_ID,
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == PROMOTION_SKILL_ID
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                }
-            };
-            let concrete_heal = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => is_heal_skill(skill_id),
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    is_heal_skill(skill_id)
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                }
-            };
-            let concrete_pets_control = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    skill_id == PETS_CONTROL_SKILL_ID
-                }
-            };
-            let concrete_monster_taming = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    skill_id == MONSTER_TAMING_SKILL_ID
-                }
-            };
-            let concrete_knock_out = is_knock_out_dispatch(dispatch);
-            let concrete_snow_storm = is_snow_storm_target(dispatch);
-            let concrete_weak = is_weak_target(dispatch);
-            let concrete_yin_yang = is_yin_yang_target(dispatch);
-            let concrete_yin_yang_2 = is_yin_yang_2_target(dispatch);
-            let concrete_god_punishment = is_god_punishment_target(dispatch);
-            let concrete_god_thunder = is_god_thunder_dispatch(dispatch);
-            let concrete_god_thunder_2 = is_god_thunder_2_dispatch(dispatch);
-            let concrete_soul_collect = is_soul_collect_skill(dispatch);
-            let concrete_soul_mirror = is_soul_mirror_skill(dispatch);
-            let concrete_god_bless = is_god_bless_skill(dispatch);
-            let concrete_cure = is_cure_target(dispatch);
-            let concrete_self_shield = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    is_self_shield_skill(skill_id)
-                }
-            };
-            let concrete_immediate_state = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    is_immediate_state_skill(skill_id)
-                }
-            };
-            let concrete_non_fun = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => is_non_fun_skill(skill_id),
-            };
-            let concrete_swordship = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => is_swordship_skill(skill_id),
-            };
-            let concrete_gibe = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == GIBE_SKILL_ID,
-            };
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
             if !schedule_rejected {
@@ -41148,236 +41391,8 @@ impl CGame {
                     first_contact: false,
                     killing_blow: None,
                 }
-            } else if concrete_base_attack {
-                baseattackruntime::execute_player_base_attack(
-                    self,
-                    player_id,
-                    dispatch,
-                    player_ai,
-                    runtime,
-                )
-            } else if concrete_archery {
-                execute_player_archery(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_heartless_arrow {
-                execute_player_heartless_arrow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_heartless_arrow_area {
-                execute_player_heartless_arrow_area(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_lighting_arrow {
-                execute_player_lighting_arrow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_lighting_arrow_2 {
-                execute_player_lighting_arrow_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_meteor_arrow_mass {
-                execute_player_meteor_arrow_mass(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_meteor_arrow {
-                execute_player_meteor_arrow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_rain_arrow {
-                execute_player_rain_arrow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_poison_moth {
-                execute_player_poison_moth(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_kerosene {
-                execute_player_kerosene(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_ignition {
-                execute_player_ignition(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_blind {
-                execute_player_blind(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_blood_rose {
-                execute_player_blood_rose(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_scorpion {
-                execute_player_scorpion(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_boa_lock {
-                execute_player_boa_lock(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_falling_star {
-                execute_player_falling_star(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_explosive_arrow {
-                execute_player_explosive_arrow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_strike {
-                execute_player_strike(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_daub_poison {
-                execute_player_daub_poison(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_yaksha_slash {
-                execute_player_yaksha_slash(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_base_magic {
-                execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_fire_bolt {
-                execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_fire_ball {
-                execute_player_fire_ball(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_item_skill_2 {
-                execute_player_item_skill_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_chain_lightning {
-                execute_player_chain_lightning(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_thunder_blow {
-                execute_player_thunder_blow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_thunder_slash {
-                execute_player_thunder_slash(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_pillar {
-                execute_player_pillar(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_rush {
-                execute_player_rush(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_rush_2 {
-                execute_player_rush_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_roar {
-                execute_player_roar(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_energy_holding {
-                execute_player_energy_holding(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_inverse_chopped {
-                execute_player_inverse_chopped(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_thunder_blow_2 {
-                execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_mosou {
-                execute_player_mosou(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_ghost_cut {
-                execute_player_ghost_cut(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_knight_cut {
-                execute_player_knight_cut(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_army_break {
-                execute_player_army_break(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_rage {
-                execute_player_rage(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_rage_break {
-                execute_player_rage_break(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_fury {
-                execute_player_fury(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_flash {
-                execute_player_flash(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_swallow {
-                execute_player_swallow(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_leaf_cut {
-                execute_player_leaf_cut(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_leaf_cut_2 {
-                execute_player_leaf_cut_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_leaf_cut_3 {
-                execute_player_leaf_cut_3(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_ju_cut {
-                execute_player_ju_cut(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_lightning_sword {
-                execute_player_lightning_sword(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_little_flash {
-                execute_player_little_flash(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_fire_wall {
-                execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_poison_fog {
-                execute_player_poison_fog(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_infernol {
-                execute_player_infernol(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_seven_shooting_star {
-                execute_player_seven_shooting_star(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_little_star {
-                execute_player_little_star(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_path_projectile && path_projectile_skill_id == ENERGY_BOLT_SKILL_ID {
-                execute_player_energy_bolt(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_path_projectile && path_projectile_skill_id == ZOMBIE_CLAW_SKILL_ID {
-                execute_player_zombie_claw(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_path_projectile && path_projectile_skill_id == SNAKE_BOLT_SKILL_ID {
-                execute_player_snake_bolt(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_direct_projectile && path_projectile_skill_id == CHUCK_STONE_SKILL_ID {
-                execute_player_chuck_stone(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_direct_projectile && path_projectile_skill_id == SKELETON_ARCHERY_SKILL_ID {
-                execute_player_skeleton_archery(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_yunsheng_lightning {
-                execute_player_yunsheng_lightning(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_corpse_ptomaine {
-                execute_player_corpse_ptomaine(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_monster_thorn {
-                execute_player_monster_thorn(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_spider_mist {
-                execute_player_spider_mist(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_spider_web {
-                execute_player_spider_web(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_spider_poison {
-                execute_player_spider_poison(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_summon_creature {
-                execute_player_summon_creature(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_boss_blue_fury {
-                execute_player_boss_blue_fury(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_boss_blue_quake {
-                execute_player_boss_blue_quake(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_boss_fiend_penetrate {
-                execute_player_boss_fiend_penetrate(
-                    self,
-                    player_id,
-                    dispatch,
-                    player_ai,
-                    runtime,
-                )
-            } else if concrete_sprite_burn {
-                execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_machinery_stomp {
-                execute_player_machinery_stomp(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_lord_wideranging_attack {
-                execute_player_lord_wideranging_attack(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_lord_fast_attack {
-                execute_player_lord_fast_attack(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_monster_base_attack {
-                execute_player_monster_base_attack(self, player_id, dispatch, player_ai, runtime)
-            } else if dispatch.skill_id() == MONSTER_RANGE_ATTACK_SKILL_ID {
-                execute_player_monster_range_attack(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_chaos_sphere {
-                execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_lightning {
-                execute_player_lightning(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_seal {
-                execute_player_seal(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_callosity {
-                execute_player_callosity(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_agility_family {
-                execute_player_agility_family(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_hearten {
-                execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_promotion {
-                execute_player_promotion(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_heal {
-                execute_player_heal(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_pets_control {
-                execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_monster_taming {
-                execute_player_monster_taming(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_knock_out {
-                execute_player_knock_out(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_snow_storm {
-                execute_player_snow_storm(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_weak {
-                execute_player_weak(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_yin_yang {
-                execute_player_yin_yang(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_yin_yang_2 {
-                execute_player_yin_yang_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_god_punishment {
-                execute_player_god_punishment(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_god_thunder {
-                execute_player_god_thunder(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_god_thunder_2 {
-                execute_player_god_thunder_2(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_soul_collect {
-                execute_player_soul_collect(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_soul_mirror {
-                execute_player_soul_mirror(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_god_bless {
-                execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_cure {
-                execute_player_cure(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_self_shield {
-                execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_immediate_state {
-                execute_player_immediate_state(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_non_fun {
-                execute_player_non_fun(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_swordship {
-                execute_player_swordship(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_gibe {
-                execute_player_gibe(self, player_id, dispatch, player_ai, runtime)
             } else {
-                let _ = self.send_base_attack_failure(player_id, 2);
-                tracing::debug!(
-                    player_id,
-                    ?dispatch,
-                    "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка игрока"
-                );
-                QueuedSkillExecutionOutcome {
-                    state: QueuedSkillExecutionState::Rejected,
-                    first_contact: false,
-                    killing_blow: None,
-                }
+                self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
             };
             player_ai.set_scheduled_skill_begin(None);
             let begin_rejected = !schedule_rejected
