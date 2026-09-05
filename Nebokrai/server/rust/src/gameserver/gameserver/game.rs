@@ -47106,11 +47106,11 @@ impl CGame {
                                     runtime.now_milliseconds(),
                                 )
                             };
-                            let passive_action_handled = defense_processed
-                                || passive_stiffen != PassiveStiffenAction::None;
+                            let passive_action_hung_up = passive_stiffen.blocks_active();
                             let interrupt_current_skill = matches!(
                                 passive_stiffen,
                                 PassiveStiffenAction::InterruptAttack
+                                    | PassiveStiffenAction::InterruptAttackFinished
                                     | PassiveStiffenAction::StartedWaiting
                                     | PassiveStiffenAction::StartedFinished
                             )
@@ -47133,16 +47133,16 @@ impl CGame {
                                 .is_some_and(|player| !player.is_dead());
                             let moving_started =
                                 !ai_hibernated
-                                    && !passive_action_handled
+                                    && !passive_action_hung_up
                                     && player_ai.active_move_unhandled();
                             let active_move_handled = !ai_hibernated
-                                && !passive_action_handled
+                                && !passive_action_hung_up
                                 && player_ai.advance_active_move(runtime.now_milliseconds());
                             if moving_started {
                                 let _ = self.on_player_stand_on_switch_point(player_id);
                             }
                             let active_stand_handled = if !ai_hibernated
-                                && !passive_action_handled
+                                && !passive_action_hung_up
                                 && !active_move_handled
                                 && player_ai.active_stand_pending()
                             {
@@ -47158,7 +47158,7 @@ impl CGame {
                                 false
                             };
                             let change_skill_handled = !ai_hibernated
-                                && !passive_action_handled
+                                && !passive_action_hung_up
                                 && !active_move_handled
                                 && !active_stand_handled
                                 && player_ai.active_change_skill_pending();
@@ -47167,7 +47167,7 @@ impl CGame {
                                 player_ai.finish_active_change_skill(runtime.now_milliseconds());
                             }
                             let ended_attack_handled = !ai_hibernated
-                                && !passive_action_handled
+                                && !passive_action_hung_up
                                 && !active_move_handled
                                 && !active_stand_handled
                                 && !change_skill_handled
@@ -47177,7 +47177,7 @@ impl CGame {
                                 || change_skill_handled
                                 || ended_attack_handled;
                             let (executed_skills, executed_player_skills) = if ai_hibernated
-                                || passive_action_handled
+                                || passive_action_hung_up
                             {
                                 (0, 0)
                             } else {
@@ -47192,7 +47192,7 @@ impl CGame {
                             player_skill_executions += back_stage_skills + executed_skills;
                             let _destination_handled = active_action_handled
                                 || (!ai_hibernated
-                                    && !passive_action_handled
+                                    && !passive_action_hung_up
                                     && executed_player_skills == 0
                                     && self.find_player(player_id).is_some()
                                     && self.run_player_ai_destination(
@@ -47487,6 +47487,11 @@ impl CGame {
                     })
                     .unwrap_or((0, 0));
                 if let Some(mut owner) = self.take_region_owner(region_id) {
+                    let _ = self.execute_owned_monster_back_stage_skills(
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
                     let mut schedule_ready = false;
                     let mut attack_pending = false;
                     let mut move_pending = false;
@@ -47495,7 +47500,6 @@ impl CGame {
                     let mut search_enemy_pending = false;
                     let mut passive_death = PassiveDeathAction::None;
                     let mut passive_stiffen = PassiveStiffenAction::None;
-                    let mut passive_defense_processed = false;
                     let (
                         death_started,
                         guard_target_release,
@@ -47509,7 +47513,6 @@ impl CGame {
                                 runtime.now_milliseconds()
                             });
                             if processed != 0 {
-                                passive_defense_processed = true;
                                 tracing::trace!(
                                     region_id,
                                     monster_id,
@@ -47572,17 +47575,10 @@ impl CGame {
                             passive_death = monster.finish_reached_death_action();
                         }
                     }
-                    if passive_defense_processed
-                        || passive_stiffen != PassiveStiffenAction::None
-                    {
+                    if passive_stiffen.blocks_active() {
                         self.restore_region_owner(owner);
                         continue;
                     }
-                    let _ = self.execute_owned_monster_back_stage_skills(
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         if passive_death == PassiveDeathAction::WaitingForMove {
                             move_pending = monster.advance_active_ai_move(now_ms);

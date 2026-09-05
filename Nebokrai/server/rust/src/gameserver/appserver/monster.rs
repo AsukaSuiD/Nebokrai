@@ -1348,7 +1348,7 @@ impl CMonster {
         now_ms: u32,
     ) -> PassiveStiffenAction {
         let action = self.base_ai.process_reached_stiffen_action(now_ms);
-        if action == PassiveStiffenAction::InterruptAttack {
+        if action.interrupts_attack() {
             self.cancel_base_attack_cast();
             self.base_ai.lose_target();
         }

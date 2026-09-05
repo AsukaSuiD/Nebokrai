@@ -34,7 +34,12 @@
 //! повторном проходе, а owner death разрешается лишь после завершения этого
 //! движения. `WhenBeenHurted` сохраняет отдельные часы `Defense`/`Stiffen`, а
 //! достигнутый monster runtime прерывает атаку, теряет цель, сохраняет движение
-//! и удерживает passive FIFO до исходного stun deadline. Указатель владельца и
+//! и удерживает passive FIFO до исходного stun deadline.
+//! PassiveStiffenAction отдельно сообщает прерывание и AES_HUNG_UP: End(4)
+//! при уже достигнутом сроке не задерживает active. Обработанный Defense
+//! возвращает AES_EXEC, поэтому также не запрещает active игрока/монстра.
+//! Фоновая фаза обоих владельцев предшествует passive и не зависит от stun.
+//! Указатель владельца и
 //! остальные обработчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Публичный `MoveTo`
 //! сохраняет исходный промежуточный `float` времени шага и усекает сумму со
 //! stop-frame к нулю перед постановкой действия в очередь.
@@ -85,10 +90,24 @@ pub(crate) enum PassiveDeathAction {
 pub(crate) enum PassiveStiffenAction {
     None,
     InterruptAttack,
+    InterruptAttackFinished,
     StartedWaiting,
     StartedFinished,
     Waiting,
     Finished,
+}
+
+impl PassiveStiffenAction {
+    /// ProcessPassiveAction (0x004C84F0): незавершённый Stiffen возвращает
+    /// AES_HUNG_UP, снятый по сроку — AES_IDLE/AES_EXEC. Сам факт вызова
+    /// OnStiffen или End(4) не запрещает последующий ProcessActiveAction.
+    pub(crate) const fn blocks_active(self) -> bool {
+        matches!(self, Self::InterruptAttack | Self::StartedWaiting | Self::Waiting)
+    }
+
+    pub(crate) const fn interrupts_attack(self) -> bool {
+        matches!(self, Self::InterruptAttack | Self::InterruptAttackFinished)
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -268,7 +287,7 @@ impl CBaseAI {
         }
         self.passive_actions.pop_front();
         if interrupt_attack {
-            PassiveStiffenAction::InterruptAttack
+            PassiveStiffenAction::InterruptAttackFinished
         } else if started {
             PassiveStiffenAction::StartedFinished
         } else {
