@@ -35,6 +35,7 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -122,18 +123,14 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, variant_index: usize, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    game.damage_player_weapon(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
-    player_ai.mark_summon_creature_used(variant_index, runtime.now_milliseconds());
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_summon_creature_used(variant_index, now_ms);
+    });
 }
 
 fn abort_player_summon_creature(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
+    abort_skill(game, player_id);
 }
 
 pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {

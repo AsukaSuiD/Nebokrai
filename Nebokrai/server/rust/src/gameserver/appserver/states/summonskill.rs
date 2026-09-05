@@ -1,15 +1,14 @@
-//! Общий достигнутый хвост `CSummonSkill::End`.
+//! Общий хвост завершения навыков игрока через CSummonSkill::End.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/states/summonskill.cpp`. При `End(1)` конкретный навык сначала
-//! выполняет свой виртуальный `Summon`, включая унаследованный оружейный
-//! `AfterUseSkill`, после чего базовый `CSkill::End` обновляет свойства,
-//! очищает текущий навык и фиксирует время восстановления. В достигнутых
-//! владельцах виртуальный `Summon` является синхронным обновлением свойств
-//! игрока; skill-specific состояние и движение остаются у конкретного owner-а.
-//! При `End(0)` `Summon` и `AfterUseSkill` не выполняются, но базовый
-//! `CSkill::End` всё равно обновляет свойства перед очисткой current skill;
-//! concrete owner завершает свои флаги через отдельный abort-путь. `CCorpsePtomaine`,
+//! `appserver/states/summonskill.cpp`. End (0x005e0f40) при успехе вызывает
+//! virtual AfterUseSkill (+0x90), затем CSkill::End (0x004d84c0). Обычный
+//! AfterUseSkill (0x0053cf30) вызывает CPlayer::OnWeaponDamaged (0x00441d50).
+//! Базовый End вызывает у источника virtual +0x158, который у CPlayer пуст:
+//! здесь нет дополнительного пересчёта свойств или повторного Summon.
+//! Игровые эффекты, пересчёты от изменения состояний и движение принадлежат
+//! конкретному навыку. После успешного завершения фиксируется время reuse;
+//! End(0) не вызывает AfterUseSkill и не меняет reuse. `CCorpsePtomaine`,
 //! `CSpriteBurn`, `CGibe`, `CMonsterTaming` и `CPetsControl` переопределяют
 //! `AfterUseSkill` пустой функцией; для них используется явный хвост без
 //! износа оружия.
@@ -22,7 +21,6 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) fn abort_skill(game: &mut CGame, player_id: i32) {
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
@@ -42,7 +40,6 @@ fn finish_summon_skill_owner<Runtime, MarkUsed>(
     if damage_weapon {
         game.damage_player_weapon(player_id, runtime);
     }
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

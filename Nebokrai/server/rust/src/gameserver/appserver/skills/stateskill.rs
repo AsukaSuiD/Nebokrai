@@ -3,10 +3,12 @@
 //! Несколько конкретных владельцев используют одинаковый каркас пакета
 //! отказа и начала/завершения каста. Значения `opcode`, `skill ID` и `action`
 //! передаёт конкретный навык; здесь сохраняется только общий порядок полей.
-//! Унаследованный `CStateSkill::End(true)` после установки состояния выполняет
-//! общий оружейный `AfterUseSkill`, а `CSkill::End` обновляет свойства,
-//! очищает current skill и фиксирует cooldown без повторного применения уже
-//! установленного состояния.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/states/stateskill.cpp.
+//! CStateSkill::End (0x005dfbd0) при успехе вызывает AfterUseSkill через +0x8c,
+//! затем CSkill::End (0x004d84c0). Обычный AfterUseSkill (0x0053cf30) вызывает
+//! только CPlayer::OnWeaponDamaged. Виртуальный +0x158 базового End у игрока
+//! пуст: пересчёт при наложении состояния остаётся у конкретного навыка,
+//! здесь он не повторяется. Хвост очищает current skill и фиксирует cooldown.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::CGame;
@@ -24,7 +26,6 @@ pub(crate) fn finish_state_skill<Runtime, MarkUsed>(
     MarkUsed: FnOnce(&mut CPlayerAI, u32),
 {
     game.damage_player_weapon(player_id, runtime);
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
