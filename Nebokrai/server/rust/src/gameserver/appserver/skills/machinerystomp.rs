@@ -33,6 +33,9 @@
 //! Это относится и к отказам Begin до создания kernel. Монстровый Begin
 //! использует тот же GetTargetPath: линия идёт к GetBeAttackedPoint цели,
 //! но направление, fire и дополнительные дуги сохраняют её центральную клетку.
+//! Общий CMonster завершает существующий cast через политику End 0x00546090
+//! при успехе, отмене и Stiffen. End(0) без живого cast остаётся здесь:
+//! он тоже вызывает SetMoveable(true), но не создаёт kernel и не пишет reuse.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -619,20 +622,17 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
+    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
+        .filter(|target| !target.dead)
+    else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
             monster.clear_ai_target();
         }
         return true;
     };
-    if target.dead {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
-            monster.clear_ai_target();
-        }
-        return true;
-    }
     let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (
         source.get_tile_x(),
         source.get_tile_y(),
@@ -880,7 +880,6 @@ pub(crate) fn finish_owned_wide_arc_attack(
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
         monster.move_shape_mut().shape_mut().set_action(1);
-        monster.move_shape_mut().set_moveable(true);
         let _ = monster.finish_base_attack_cast(dispatch.now_ms);
     }
 }
