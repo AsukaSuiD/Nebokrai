@@ -4,6 +4,9 @@
 //! сохранённого первичного AI. У стационарных лучников SearchEnemy следует
 //! после базового ChangeSkill, у StupidArcher заменяет его. Последовательность
 //! вычисляется по каноническому binding, а не хранится отдельным action-полем.
+//! CBaseAI::OnFighting 0x004C9320 проверяет IsEnded до AI навыка. End
+//! сохраняет terminated kernel до следующего active-прохода: только тот
+//! ставит completion FIFO и снимает Attack, читая часы каждого события.
 //! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
 //! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
 //! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
@@ -1450,8 +1453,34 @@ impl CMonster {
         self.base_ai.advance_active_move(now)
     }
 
-    pub(crate) fn finish_active_ai_attack(&mut self, now_ms: u32) {
-        self.base_ai.finish_active_attack(now_ms);
+    pub(crate) fn active_ai_attack_ended(&self) -> bool {
+        self.base_attack_cast.is_some_and(|cast| {
+            cast.termination().is_some()
+                || (super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(cast.dispatch().skill_id).is_some()
+                    && self.move_shape.immediate_skill_ended(cast.dispatch().skill_id))
+        })
+    }
+
+    pub(crate) fn finish_active_ai_attack(&mut self, mut now: impl FnMut() -> u32) {
+        if self.active_ai_attack_ended()
+            && self.base_attack_cast.is_some_and(|cast| cast.termination().is_none())
+        {
+            self.finish_active_immediate_skill(now());
+        }
+        if self.base_attack_cast.is_some_and(|cast| cast.termination().is_some()) {
+            self.base_attack_cast = None;
+            let completion_ai_type = if self.is_tamed() {
+                0
+            } else {
+                self.ai_binding.map_or(0, MonsterAiBinding::ai_type)
+            };
+            for &action in crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_actions(
+                completion_ai_type, !CMoveShape::is_died(self.hit_points),
+            ) {
+                self.base_ai.add_ai_event(action, 0, 0, now());
+            }
+        }
+        self.base_ai.finish_active_attack(now());
     }
 
     pub(crate) fn finish_active_ai_change_skill(&mut self, now_ms: u32) {
@@ -1602,7 +1631,10 @@ impl CMonster {
         now_ms: u32,
         mark_reuse: bool,
     ) -> Option<MonsterBaseAttackCast> {
-        let mut execution = self.base_attack_cast.take()?;
+        let mut execution = self.base_attack_cast?;
+        if execution.termination().is_some() {
+            return None;
+        }
         let skill_id = execution.dispatch().skill_id;
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.finish_curable_skill_state(skill_id);
@@ -1612,16 +1644,7 @@ impl CMonster {
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
         }
-        let completion_ai_type = if self.is_tamed() {
-            0
-        } else {
-            self.ai_binding.map_or(0, MonsterAiBinding::ai_type)
-        };
-        for &action in crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_actions(
-            completion_ai_type, !CMoveShape::is_died(self.hit_points),
-        ) {
-            self.base_ai.add_ai_event(action, 0, 0, now_ms);
-        }
+        self.base_attack_cast = Some(execution);
         Some(execution)
     }
 

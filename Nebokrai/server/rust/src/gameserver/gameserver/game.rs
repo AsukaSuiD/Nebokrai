@@ -39487,15 +39487,6 @@ impl CGame {
                 self.restore_region_owner(owner);
             }
         }
-        if let Some(mut owner) = self.take_region_owner(region_id) {
-            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id)
-                && monster.active_ai_attack_pending()
-                && monster.base_attack_cast().is_none()
-            {
-                monster.finish_active_ai_attack(runtime.now_milliseconds());
-            }
-            self.restore_region_owner(owner);
-        }
         handled
     }
 
@@ -47402,10 +47393,10 @@ impl CGame {
                             monster.queue_search_after_active_move(ai_type, || runtime.now_milliseconds());
                             move_pending = monster.advance_active_ai_move(|| runtime.now_milliseconds());
                             if !move_pending && monster.active_ai_attack_pending() {
-                                if monster.base_attack_cast().is_some() {
+                                if monster.base_attack_cast().is_some() && !monster.active_ai_attack_ended() {
                                     attack_pending = true;
                                 } else {
-                                    monster.finish_active_ai_attack(runtime.now_milliseconds());
+                                    monster.finish_active_ai_attack(|| runtime.now_milliseconds());
                                     active_action_completed = true;
                                 }
                             } else {
