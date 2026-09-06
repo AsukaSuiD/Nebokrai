@@ -40,6 +40,9 @@
 //! После false из HasTarget OnSchedule переходит к назначению движения
 //! (0x005099D3..0x00509A2F). Сохранённая команда без цели и pending FIFO
 //! сами по себе этот переход не блокируют: проверяется только текущая цель.
+//! OnStiffen (0x004C8770) после подтверждённого IsEnded снимает Attack,
+//! вызывает виртуальный OnLoseTarget, назначает default и лишь затем
+//! продолжает удаление служебного префикса. Хвост FIFO виден callback-у.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -46841,7 +46844,14 @@ impl CGame {
                                         }
                                     }
                                     player_ai.finish_stiffen_attack(release_target);
-                                    self.restore_player_default_attack_after_skill_end(player_id);
+                                    if release_target {
+                                        self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                                            game.lose_player_skill_target(player_id, runtime)
+                                        });
+                                    } else {
+                                        self.restore_player_default_attack_after_skill_end(player_id);
+                                    }
+                                    player_ai.discard_active_prefix();
                                 }
                             }
                             let moving_started =

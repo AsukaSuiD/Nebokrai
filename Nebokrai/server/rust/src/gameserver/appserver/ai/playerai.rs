@@ -514,6 +514,10 @@ impl CPlayerAI {
         self.base_ai.finish_stiffen_attack(release_target);
     }
 
+    pub(crate) fn discard_active_prefix(&mut self) {
+        self.base_ai.discard_active_prefix();
+    }
+
     pub(crate) fn queue_client_destination(&mut self, direction: i32, is_run: bool) {
         while 3 < self.destinations.len() {
             self.destinations.pop_front();

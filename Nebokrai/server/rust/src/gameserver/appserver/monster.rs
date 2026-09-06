@@ -1356,6 +1356,7 @@ impl CMonster {
                     self.cancel_base_attack_cast();
                 }
                 self.base_ai.finish_stiffen_attack(release_target);
+                self.base_ai.discard_active_prefix();
             }
         }
         action

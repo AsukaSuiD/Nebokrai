@@ -229,11 +229,7 @@ impl CBaseAI {
             .front()
             .is_some_and(|event| event.action == AiShapeAction::Defense && event.handling == 0)
         {
-            while self.active_actions.front().is_some_and(|event| {
-                !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
-            }) {
-                self.active_actions.pop_front();
-            }
+            self.discard_active_prefix();
             self.passive_actions.pop_front();
             processed = processed.wrapping_add(1);
         }
@@ -259,11 +255,7 @@ impl CBaseAI {
         let mut interrupt_attack = false;
         if event.handling == 0 {
             started = true;
-            while self.active_actions.front().is_some_and(|event| {
-                !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
-            }) {
-                self.active_actions.pop_front();
-            }
+            self.discard_active_prefix();
             if self
                 .active_actions
                 .front()
@@ -323,11 +315,17 @@ impl CBaseAI {
             if release_target {
                 self.lose_target();
             }
-            while self.active_actions.front().is_some_and(|event| {
-                !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
-            }) {
-                self.active_actions.pop_front();
-            }
+        }
+    }
+
+    /// Общий префикс Defense/Stiffen до первой границы Attack/Move.
+    /// OnStiffen продолжает обход после виртуального OnLoseTarget/default.
+    /// Производный callback должен увидеть ещё не удалённый хвост очереди.
+    pub(crate) fn discard_active_prefix(&mut self) {
+        while self.active_actions.front().is_some_and(|event| {
+            !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
+        }) {
+            self.active_actions.pop_front();
         }
     }
 
