@@ -1,4 +1,11 @@
 //! Достигнутая часть очередей и исполнения `CPlayerAI` GameServer.
+//! Attack (0x00509FF0/0x0050A230) заменяет ожидающую команду независимо от
+//! текущего исполнения. Для WarSoul point-ветвь 0x0050A334..0x0050A3BF
+//! сравнивает голову, удаляет старые запросы и добавляет новый без Reject;
+//! обычная очередь отдельно отправляет Reject для каждой замены (0x0050A43C).
+//! Общая Rust-операция сохраняет два отдельных FIFO и не отменяет текущий ID.
+//! У подключённых WarSoul 0x212..0x224 нет записи prepared (см. battlefairyskill),
+//! поэтому проверка повторного prepared Attack не даёт им дополнительный End.
 //! Сроки одиночных обычных навыков и подключённых семейств хранятся по исходному skill_id в
 //! BTreeMap вместо отдельных полей и getter/setter-каталогов. Отсутствие
 //! записи означает нулевой срок; End обновляет только свой ID, очистка
@@ -366,7 +373,6 @@ pub(crate) struct PlayerAiDestination {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairySkillQueueOutcome {
-    ActiveRejected,
     PendingUnchanged,
     Queued { replaced: usize },
 }
@@ -615,32 +621,33 @@ impl CPlayerAI {
     /// Native Attack заменяет только m_qTarget; выбранная OnSchedule команда
     /// уже извлечена из FIFO и сохраняется независимо от текущего ID навыка.
     pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
-        if self.player_skills.front().copied() == Some(dispatch) {
-            return 0;
-        }
-        let rejected = self.player_skills.len();
-        self.player_skills.clear();
-        self.player_skills.push_back(dispatch);
-        rejected
+        Self::replace_pending_skill(&mut self.player_skills, dispatch).unwrap_or(0)
     }
 
     pub(crate) fn queue_battle_fairy_skill(
         &mut self,
         dispatch: BattleFairySkillDispatch,
     ) -> BattleFairySkillQueueOutcome {
-        if self
-            .current_battle_fairy_skill
-            .is_some_and(|current| current.skill_id() == dispatch.skill_id())
-        {
-            return BattleFairySkillQueueOutcome::ActiveRejected;
+        match Self::replace_pending_skill(&mut self.battle_fairy_skills, dispatch) {
+            None => BattleFairySkillQueueOutcome::PendingUnchanged,
+            Some(replaced) => BattleFairySkillQueueOutcome::Queued { replaced },
         }
-        if self.battle_fairy_skills.front().copied() == Some(dispatch) {
-            return BattleFairySkillQueueOutcome::PendingUnchanged;
+    }
+
+    /// Общая механика двух независимых очередей: точный повтор головы ничего
+    /// не меняет, другой запрос заменяет ожидающие. Текущее исполнение не входит
+    /// в эту операцию; разницу wire-отказов применяет CGame по числу замен.
+    fn replace_pending_skill<Dispatch: PartialEq>(
+        queue: &mut VecDeque<Dispatch>,
+        dispatch: Dispatch,
+    ) -> Option<usize> {
+        if queue.front() == Some(&dispatch) {
+            return None;
         }
-        let replaced = self.battle_fairy_skills.len();
-        self.battle_fairy_skills.clear();
-        self.battle_fairy_skills.push_back(dispatch);
-        BattleFairySkillQueueOutcome::Queued { replaced }
+        let replaced = queue.len();
+        queue.clear();
+        queue.push_back(dispatch);
+        Some(replaced)
     }
 
     pub(crate) fn player_skills(&self) -> &VecDeque<PlayerSkillDispatch> {

@@ -630,7 +630,7 @@ macro_rules! player_property_recompute {
 }
 
 use crate::gameserver::appserver::ai::playerai::{
-    BattleFairySkillQueueOutcome, CPlayerAI, PlayerAutoProgress,
+    CPlayerAI, PlayerAutoProgress,
 };
 use crate::gameserver::appserver::ai::puninesscreature::execute_owned_puniness_creature;
 use crate::gameserver::appserver::area::{
@@ -37218,10 +37218,6 @@ impl CGame {
                         .expect("battle-fairy dispatch сохраняет canonical player")
                         .player_ai_mut()
                         .queue_battle_fairy_skill(dispatch);
-                    if outcome == BattleFairySkillQueueOutcome::ActiveRejected {
-                        let _interrupted = self.cancel_active_battle_fairy_skill(player_id);
-                        self.send_battle_fairy_skill_failure(player_id, 2);
-                    }
                     trace!(
                         player_id,
                         ?dispatch,
