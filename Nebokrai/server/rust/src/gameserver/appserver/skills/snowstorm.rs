@@ -13,6 +13,10 @@
 //! только разрешает владельцев, регистрирует область и выполняет доставку.
 //! Player и monster ветви используют абсолютный срок `CSkill::IsRestored`, а
 //! задержка и lifetime области сохраняют elapsed-семантику.
+//! End (0x005AE7A0) снимает один запрет движения и вызывает CSummonSkill::End
+//! также для монстра, хотя его Begin не запрещает движение. Общая политика
+//! CMonster сохраняет это при завершении, отмене и Stiffen, не удаляя
+//! независимую SnowStormPhalanx и не создавая область повторно.
 
 use super::baseattack::time_reached;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};

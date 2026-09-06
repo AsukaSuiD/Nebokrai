@@ -74,6 +74,8 @@
 //! SummonCorpseCandle/SummonSkeleton/SummonSpore/BossFiendSummon разделяют
 //! End 0x005AE7A0: SetMoveable(true), затем CSummonSkill::End. Завершение
 //! cast не затрагивает уже созданных существ и не выполняет новый призыв.
+//! Archery/BaseMagic/SnowStorm используют тот же End 0x005AE7A0;
+//! их самостоятельные phalanx не удаляются вместе с исполнением навыка.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1772,7 +1774,10 @@ impl CMonster {
             | super::skills::summoncorpsecandle::SUMMON_CORPSE_CANDLE_SKILL_ID
             | super::skills::summonskeleton::SUMMON_SKELETON_SKILL_ID
             | super::skills::summonspore::SUMMON_SPORE_SKILL_ID
-            | super::skills::bossfiendsummon::BOSS_FIEND_SUMMON_SKILL_ID)
+            | super::skills::bossfiendsummon::BOSS_FIEND_SUMMON_SKILL_ID
+            | super::skills::archery::ARCHERY_SKILL_ID
+            | super::skills::basemagic::BASE_MAGIC_SKILL_ID
+            | super::skills::snowstorm::SNOW_STORM_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {

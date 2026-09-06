@@ -24,6 +24,10 @@
 //! проверяется exact `CSkill::IsRestored`. Как и
 //! исходный `CState::GetSufferer`, owner принимает player/NPC/monster/build/gate;
 //! NPC отклоняется как мёртвый, а постройки проходят region-owned defence.
+//! Monster Archery/BaseMagic завершаются общей политикой CMonster также
+//! при End(0) и Stiffen. Отдельный SetMoveable(true) перед выпуском
+//! (Archery AI 0x005B2620) сохраняется сверх декремента в End; жизненный цикл
+//! уже созданного phalanx не сокращается при завершении cast.
 
 use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
@@ -144,7 +148,9 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
     let now_ms = runtime.now_milliseconds();
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
             if cast.is_some() {
                 let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
             }
@@ -167,7 +173,9 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 )))
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
             if cast.is_some() {
                 let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
             }
@@ -184,7 +192,6 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         if cast.is_some()
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
-            monster.move_shape_mut().set_moveable(true);
             let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
         }
         return true;
