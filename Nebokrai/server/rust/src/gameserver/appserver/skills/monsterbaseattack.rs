@@ -1306,7 +1306,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .is_some_and(|monster| monster.move_shape().immediate_skill_ended(skill_id))
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.finish_active_immediate_skill(now_ms);
+                monster.finish_active_immediate_skill();
             }
             return true;
         }

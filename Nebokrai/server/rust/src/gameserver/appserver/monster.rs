@@ -7,6 +7,9 @@
 //! CBaseAI::OnFighting 0x004C9320 проверяет IsEnded до AI навыка. End
 //! сохраняет terminated kernel до следующего active-прохода: только тот
 //! ставит completion FIFO и снимает Attack, читая часы каждого события.
+//! Завершение immediate-cast без reuse не читает часы перед этим FIFO:
+//! `CSkill::End(0)` (0x004D84C0) пропускает timeGetTime. Отсутствие часов
+//! представлено явно, а не отдельным флагом рядом с неиспользуемым timestamp.
 //! OnFighting без GetCurrentSkill не исполняет старый kernel и не ставит
 //! базовый ChangeSkill; производный SearchEnemy учитывается независимо.
 //! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
@@ -1594,7 +1597,7 @@ impl CMonster {
         if has_skill && self.active_ai_attack_ended()
             && self.base_attack_cast.is_some_and(|cast| cast.termination().is_none())
         {
-            self.finish_active_immediate_skill(now());
+            self.finish_active_immediate_skill();
         }
         let skill_ended = has_skill && self.base_attack_cast.is_some_and(|cast| cast.termination().is_some());
         if skill_ended || !has_skill {
@@ -1752,7 +1755,7 @@ impl CMonster {
     /// Готовое время AI/попадания сюда не передаётся: каждый owner предоставляет
     /// чтение runtime, которое вызывается только для живого завершения с reuse.
     pub(crate) fn finish_base_attack_cast_with_clock(&mut self, now: impl FnOnce() -> u32) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(now, true)
+        self.finish_base_attack_cast_with_reuse(Some(now))
     }
 
     /// `CSkill::End(false)` завершает самостоятельное AI-действие, но не
@@ -1760,9 +1763,8 @@ impl CMonster {
     /// derived AI всё равно получает своё обычное completion action.
     pub(crate) fn finish_base_attack_cast_without_reuse(
         &mut self,
-        now_ms: u32,
     ) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(|| now_ms, false)
+        self.finish_base_attack_cast_with_reuse(None::<fn() -> u32>)
     }
 
     const fn attack_end_restores_movement(skill_id: u32) -> bool {
@@ -1816,8 +1818,7 @@ impl CMonster {
 
     fn finish_base_attack_cast_with_reuse(
         &mut self,
-        now: impl FnOnce() -> u32,
-        mark_reuse: bool,
+        reuse_clock: Option<impl FnOnce() -> u32>,
     ) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast?;
         if execution.termination().is_some() {
@@ -1827,7 +1828,7 @@ impl CMonster {
         self.attack_progress = MonsterAttackProgress::default();
         self.finish_attack_skill_resources(skill_id);
         let _ = execution.terminate(SkillTermination::Completed);
-        if mark_reuse {
+        if let Some(now) = reuse_clock {
             self.skill_last_used_ms.insert(skill_id, now());
         }
         self.base_attack_cast = Some(execution);
@@ -1843,9 +1844,9 @@ impl CMonster {
 
     /// Активный `OnFighting` завершает и `End(0)`: очередь меняет навык,
     /// но отметка восстановления остаётся прежней. Фоновый вызов сюда не идёт.
-    pub(crate) fn finish_active_immediate_skill(&mut self, now_ms: u32) {
+    pub(crate) fn finish_active_immediate_skill(&mut self) {
         self.move_shape.shape_mut().set_action(1);
-        let _ = self.finish_base_attack_cast_without_reuse(now_ms);
+        let _ = self.finish_base_attack_cast_without_reuse();
     }
 
     pub(crate) fn advance_base_attack_cast(

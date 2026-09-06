@@ -154,7 +154,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 monster.move_shape_mut().set_moveable(true);
             }
             if cast.is_some() {
-                let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
+                let _ = monster.finish_base_attack_cast_without_reuse();
             }
             monster.clear_ai_target();
         }
@@ -179,7 +179,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 monster.move_shape_mut().set_moveable(true);
             }
             if cast.is_some() {
-                let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
+                let _ = monster.finish_base_attack_cast_without_reuse();
             }
             monster.clear_ai_target();
         }
@@ -194,7 +194,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         if cast.is_some()
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
-            let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
+            let _ = monster.finish_base_attack_cast_without_reuse();
         }
         return true;
     };

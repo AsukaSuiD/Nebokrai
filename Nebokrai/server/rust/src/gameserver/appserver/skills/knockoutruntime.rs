@@ -331,7 +331,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         level_rate,
     );
     if chance <= game.skill_random_below(100) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(now_ms); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(); }
         return true;
     }
     let Some((attacker_master, attack)) = monster_attack(game, region, monster_id, property) else { return true };
