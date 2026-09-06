@@ -37902,19 +37902,15 @@ impl CGame {
                     Some(PlayerSkillDispatch::Object { target: current, .. }) if current == target
                 );
                 matches_target.then(|| {
-                    // `m_pCurrentSkill` является исходным владельцем факта
-                    // начатого навыка. Concrete execution может ещё не быть
-                    // материализован в Rust, поэтому перечисление известных
-                    // адаптеров оставляло current skill и move-lock висеть
-                    // после удаления его object-target.
-                    let interrupted_active_skill = player.current_skill_id().is_some();
+                    let interrupted_active_skill = player.current_skill_id()
+                        .is_some_and(|id| player.player_ai().player_skill_requires_target_end(id));
                     (player.current_skill_id(), interrupted_active_skill)
                 })
             })
         else {
             return;
         };
-        let materialized_end = current_skill_id.and_then(|skill_id| {
+        let materialized_end = current_skill_id.filter(|_| interrupted_active_skill).and_then(|skill_id| {
             self.end_materialized_player_skill(
                 player_id,
                 skill_id,
@@ -37963,6 +37959,17 @@ impl CGame {
         else {
             return false;
         };
+        let needs_end = current_skill_id.is_some_and(|skill_id| {
+            self.find_player(player_id)
+                .is_some_and(|player| player.player_ai().player_skill_requires_target_end(skill_id))
+        });
+        if !needs_end {
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.player_ai_mut().release_current_player_command();
+            }
+            self.restore_player_default_attack_after_skill_end(player_id);
+            return false;
+        }
         let materialized_end = current_skill_id.and_then(|current_skill_id| {
             self.end_materialized_player_skill(
                 player_id,
@@ -40807,8 +40814,8 @@ impl CGame {
     /// OnExecuteBackStageSkills (0x004C88E0): сначала удаляются старые
     /// SKILL_UNKNOW, затем каждый ID разрешается заново. End не удаляет
     /// запись немедленно; дубликат ID уже видит завершённый экземпляр.
-    /// Сейчас здесь подключены автонавыки AddObject; подготовленные боевые
-    /// исполнения подключаются к тому же хранилищу и тому же порядку.
+    /// Автонавыки AddObject и подготовленные боевые исполнения используют
+    /// то же хранилище и тот же порядок. Begin в этом обходе не повторяется.
     fn execute_player_back_stage_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -40838,6 +40845,24 @@ impl CGame {
             } else if is_swordship_skill(skill_id) {
                 execute_player_auto_start_swordship(self, player_id, skill_id, runtime)
             } else {
+                let Some(player) = self.find_player_mut(player_id) else { break };
+                let mut player_ai = player.take_player_ai();
+                let outcome = self.execute_player_skill_owner(
+                    player_id, execution.dispatch(), &mut player_ai, runtime,
+                );
+                self.apply_player_skill_contacts(player_id, execution.dispatch(), &outcome, runtime);
+                let termination = match outcome.state {
+                    QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => None,
+                    QueuedSkillExecutionState::Completed => Some(SkillTermination::Completed),
+                    QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => Some(SkillTermination::Rejected),
+                };
+                if let Some(termination) = termination {
+                    player_ai.finish_player_skill_execution(execution.dispatch(), termination);
+                }
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.restore_player_ai(player_ai);
+                }
+                execution_count += 1;
                 index += 1;
                 continue;
             };
@@ -41338,6 +41363,29 @@ impl CGame {
         }
     }
 
+    /// Общий результат concrete AI, независимо от активного или фонового
+    /// вызова. Первый контакт и смерть не должны пропадать при переносе в фон.
+    fn apply_player_skill_contacts<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        outcome: &QueuedSkillExecutionOutcome,
+        runtime: &mut Runtime,
+    ) {
+        if outcome.first_contact {
+            match dispatch {
+                PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
+                    .find_player(player_id)
+                    .and_then(CPlayer::server_region_id)
+                    .and_then(|region_id| {
+                        self.player_on_first_skill(player_id, target.id, Some(region_id), runtime)
+                    }),
+                _ => None,
+            };
+        }
+        let _death = outcome.killing_blow.and_then(|blow| self.player_on_death(blow, runtime));
+    }
+
     /// Исполняет обычную очередь игрока; отдельный war-soul хвост вызывается
     /// координатором после основных действий независимо от passive-результата.
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
@@ -41376,6 +41424,9 @@ impl CGame {
                 // OnSchedule: Reject (0x0050998E/0x005099C3) предшествует
                 // OnLoseTarget; его End(1) добавляет собственный Reject.
                 let delivery = self.send_base_attack_failure(player_id, 2);
+                let current_skill_id = current_skill_id.filter(|skill_id| {
+                    player_ai.player_skill_requires_target_end(*skill_id)
+                });
                 let ended = if let Some(skill_id) = current_skill_id {
                     self.end_detached_player_skill(
                         player_id,
@@ -41385,7 +41436,8 @@ impl CGame {
                         runtime,
                     ) == Some(PlayerSkillEndRuntimeOutcome::Ended)
                 } else {
-                    player_ai.finish_player_skill(dispatch, SkillTermination::Rejected)
+                    player_ai.release_current_player_command();
+                    false
                 };
                 if !ended && current_skill_id.is_some() {
                     let released = player_ai.finish_player_skill(
@@ -41460,25 +41512,7 @@ impl CGame {
             {
                 player_ai.begin_player_fighting(runtime.now_milliseconds());
             }
-            if outcome.first_contact {
-                match dispatch {
-                    PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
-                        .find_player(player_id)
-                        .and_then(CPlayer::server_region_id)
-                        .and_then(|region_id| {
-                            self.player_on_first_skill(
-                                player_id,
-                                target.id,
-                                Some(region_id),
-                                runtime,
-                            )
-                        }),
-                    _ => None,
-                };
-            }
-            let _death = outcome
-                .killing_blow
-                .and_then(|blow| self.player_on_death(blow, runtime));
+            self.apply_player_skill_contacts(player_id, dispatch, &outcome, runtime);
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
                 QueuedSkillExecutionState::Completed =>
@@ -47218,7 +47252,15 @@ impl CGame {
                                 && !active_move_handled
                                 && !active_stand_handled
                                 && !change_skill_handled
-                                && player_ai.finish_ended_player_attack(|| runtime.now_milliseconds());
+                                && player_ai.finish_player_attack(
+                                    self.find_player(player_id).and_then(CPlayer::current_skill_id),
+                                    |skill_id| {
+                                        if let Some(player) = self.find_player_mut(player_id) {
+                                            player.move_shape_mut().add_started_back_stage_skill(skill_id);
+                                        }
+                                    },
+                                    || runtime.now_milliseconds(),
+                                );
                             let active_action_handled = active_move_handled
                                 || active_stand_handled
                                 || change_skill_handled

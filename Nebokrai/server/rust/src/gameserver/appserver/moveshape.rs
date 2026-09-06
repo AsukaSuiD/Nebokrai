@@ -52,8 +52,9 @@
 //! хранилище. Фоновая очередь игрока сохраняет порядок и повторные ID:
 //! старые SKILL_UNKNOW удаляются перед обходом, новые пометки — только
 //! на следующем проходе (CPlayerAI::OnExecuteBackStageSkills, 0x004C88E0).
-//! Частичное извлечение ID монстра сохраняет порядок и cursor
-//! ещё не материализованных concrete owner-ов. Ещё не восстановленные
+//! Признак ожидающего Begin принадлежит записи: добавление подготовленного
+//! навыка не переставляет очередь и не повторяет Begin. Частичное извлечение
+//! ID монстра сохраняет порядок и признаки остальных записей. Ещё не восстановленные
 //! классы навыков и ИИ остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 
 use std::collections::BTreeMap;
@@ -581,12 +582,17 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct BackStageSkill {
+    skill_id: u32,
+    begin_pending: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
     skills: BTreeMap<u32, MoveShapeSkill>,
     state_skill_order: IndexSet<u32>,
-    back_stage_skill_ids: Vec<u32>,
-    back_stage_begin_cursor: usize,
+    back_stage_skill_ids: Vec<BackStageSkill>,
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     state_storage: CanonicalStateStorage,
@@ -789,7 +795,6 @@ impl Default for CMoveShape {
             skills: BTreeMap::new(),
             state_skill_order: IndexSet::new(),
             back_stage_skill_ids: Vec::new(),
-            back_stage_begin_cursor: 0,
             current_skill_id: None,
             item_skill_ids: Vec::new(),
             state_storage: CanonicalStateStorage::default(),
@@ -1195,68 +1200,59 @@ impl CMoveShape {
             .filter(|skill_id| is_auto_start_state_skill(*skill_id))
             .collect();
         let count = started.len();
-        self.back_stage_skill_ids.extend(started);
+        self.back_stage_skill_ids.extend(started.into_iter().map(|skill_id| BackStageSkill { skill_id, begin_pending: true }));
         count
+    }
+
+    /// WhenAddBackStageSkill (0x004C94B0): уже начатый экземпляр не требует
+    /// нового Begin. Признак ожидающего Begin хранится у записи, а не
+    /// общим cursor: подготовленный skill всегда добавляется в конец.
+    pub(crate) fn add_started_back_stage_skill(&mut self, skill_id: u32) {
+        if skill_id != 0x7fff_ffff {
+            self.back_stage_skill_ids.push(BackStageSkill { skill_id, begin_pending: false });
+        }
     }
 
     /// OnExecuteBackStageSkills (0x004C88E0) удаляет старые SKILL_UNKNOW
     /// перед обходом. Новые пометки остаются до следующего прохода.
     pub(crate) fn prepare_back_stage_skill_pass(&mut self) {
-        let old_cursor = self.back_stage_begin_cursor;
-        let mut index = 0;
-        let mut begun = 0;
-        self.back_stage_skill_ids.retain(|id| {
-            let keep = *id != 0x7fff_ffff;
-            if keep && index < old_cursor { begun += 1; }
-            index += 1;
-            keep
-        });
-        self.back_stage_begin_cursor = begun;
+        self.back_stage_skill_ids.retain(|entry| entry.skill_id != 0x7fff_ffff);
     }
 
     pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
-        self.back_stage_skill_ids.get(index).copied()
+        self.back_stage_skill_ids.get(index).map(|entry| entry.skill_id)
     }
 
     pub(crate) fn mark_ended_back_stage_skill(&mut self, index: usize, expected: u32) {
-        if let Some(id) = self.back_stage_skill_ids.get_mut(index)
-            && *id == expected
+        if let Some(entry) = self.back_stage_skill_ids.get_mut(index)
+            && entry.skill_id == expected
         {
-            *id = 0x7fff_ffff;
+            entry.skill_id = 0x7fff_ffff;
         }
     }
 
     /// Извлекает только уже достигнутые concrete background-owner-ы, не
-    /// удаляя остальные записи из native-порядка. Cursor начатых `Begin`
-    /// пересчитывается относительно сохранённого подпорядка.
+    /// удаляя остальные записи из native-порядка и не теряя ожидающий Begin.
     pub(crate) fn take_matching_back_stage_skill_ids(
         &mut self,
         mut predicate: impl FnMut(u32) -> bool,
     ) -> Vec<u32> {
-        let old_cursor = self.back_stage_begin_cursor;
-        let queued = std::mem::take(&mut self.back_stage_skill_ids);
         let mut selected = Vec::new();
-        let mut retained = Vec::new();
-        let mut retained_begun = 0usize;
-        for (index, skill_id) in queued.into_iter().enumerate() {
-            if predicate(skill_id) {
-                selected.push(skill_id);
+        self.back_stage_skill_ids.retain(|entry| {
+            if predicate(entry.skill_id) {
+                selected.push(entry.skill_id);
+                false
             } else {
-                if index < old_cursor {
-                    retained_begun = retained_begun.wrapping_add(1);
-                }
-                retained.push(skill_id);
+                true
             }
-        }
-        self.back_stage_skill_ids = retained;
-        self.back_stage_begin_cursor = retained_begun;
+        });
         selected
     }
 
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
-        let pending = self.back_stage_skill_ids[self.back_stage_begin_cursor..].to_vec();
-        self.back_stage_begin_cursor = self.back_stage_skill_ids.len();
-        pending
+        self.back_stage_skill_ids.iter_mut().filter_map(|entry| {
+            std::mem::take(&mut entry.begin_pending).then_some(entry.skill_id)
+        }).collect()
     }
 
     pub(crate) fn undead_states(&self) -> &[UndeadState] {
@@ -5288,7 +5284,6 @@ impl CMoveShape {
         self.skills.clear();
         self.state_skill_order.clear();
         self.back_stage_skill_ids.clear();
-        self.back_stage_begin_cursor = 0;
     }
 
     /// `CSkillFactory::QuerySkill(SKILL_BASE_DEFENSE, 1)` создавал
@@ -5425,17 +5420,7 @@ impl CMoveShape {
             return false;
         }
         self.state_skill_order.shift_remove(&skill_id);
-        let mut old_index = 0usize;
-        let mut retained_begun = 0usize;
-        self.back_stage_skill_ids.retain(|queued| {
-            let keep = *queued != skill_id;
-            if keep && old_index < self.back_stage_begin_cursor {
-                retained_begun += 1;
-            }
-            old_index += 1;
-            keep
-        });
-        self.back_stage_begin_cursor = retained_begun;
+        self.back_stage_skill_ids.retain(|entry| entry.skill_id != skill_id);
         self.skills.remove(&skill_id);
         true
     }

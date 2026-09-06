@@ -19,6 +19,10 @@
 //! При переносе яда DWORD-произведение уровня оружия и модификатора остаётся
 //! точным unsigned-значением в x87 вплоть до умножения на `-0.01f` и прямого
 //! `FISTP dword`; промежуточного сохранения в `f32` нет.
+//! После эффекта выпуска (0x005931BE) устанавливается общий prepared-флаг.
+//! Следующий OnFighting переносит исполнение в фон без End; полёт продолжает
+//! тот же owner с исходной целью и временем. Это не attacking_started,
+//! который лишь прекращает удержание, и не разрешение движения при попадании.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -57,14 +61,13 @@ pub(crate) struct HeartlessArrowExecutionState {
     target: ShapeIdentity,
     condition_checked: bool,
     attacking_started: bool,
-    skill_casted: bool,
     hold_time_ms: u32,
     missile_flying_time_ms: u32,
 }
 
 impl HeartlessArrowExecutionState {
     fn begin(dispatch: PlayerSkillDispatch, target: ShapeIdentity, started_at_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), target, condition_checked: false, attacking_started: false, skill_casted: false, hold_time_ms: 0, missile_flying_time_ms: 0 }
+        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), target, condition_checked: false, attacking_started: false, hold_time_ms: 0, missile_flying_time_ms: 0 }
     }
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
@@ -287,7 +290,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
     }
     if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some_and(|state| !state.attacking_started) { return terminal(QueuedSkillExecutionState::Pending); }
 
-    if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some_and(|state| !state.skill_casted) {
+    if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some_and(|state| !state.kernel().is_prepared()) {
         let state = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().expect("удержание выстрела существует");
         let unit = action_interval_ms / 2;
         let hold_time_ms = if unit != 0 && state.hold_time_ms % unit != 0 { state.hold_time_ms.wrapping_div(unit).wrapping_add(1).wrapping_mul(unit) } else { state.hold_time_ms };
@@ -297,7 +300,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
         if path.iter().any(|cell| cell.2 == 2) { game.send_base_magic_failure(player_id, 0x0f); game.send_skill_system_info_with_text(player_id, b"GS0307", target_name(game, region_id, target)); abort_player_heartless_arrow(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         let flying_time_ms = missile_step_ms.wrapping_mul(path.len() as u32);
         send_fire(game, player_id, level, target, target_x, target_y, flying_time_ms);
-        if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) { state.hold_time_ms = hold_time_ms; state.missile_flying_time_ms = flying_time_ms; state.skill_casted = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); }
+        if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) { state.hold_time_ms = hold_time_ms; state.missile_flying_time_ms = flying_time_ms; state.kernel_mut().mark_prepared(); let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); }
     }
 
     let state = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().expect("снаряд выстрела сохраняется до попадания");

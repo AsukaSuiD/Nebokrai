@@ -28,6 +28,9 @@
 //! установщиками нового исполнения в AI и привязан к dispatch. Некоторые
 //! владельцы до установки уже выполняют первый переход в Check; это не
 //! основание терять исходный отсчёт. Активный AI сюда повторно не входит.
+//! m_bSkillPrepared — независимый флаг CSkill (+0x44), не стадия Attack:
+//! OnFighting (0x005092B0) переносит подготовленный экземпляр в фон до End.
+//! Конкретный owner устанавливает его в подтверждённой точке выпуска.
 
 pub(crate) fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
     (f64::from(cost) * 0.0001_f64).trunc() as i64 as u32
@@ -67,6 +70,7 @@ pub(crate) struct SkillExecutionKernel<Dispatch> {
     started_at_ms: u32,
     stage: SkillStage,
     termination: Option<SkillTermination>,
+    prepared: bool,
 }
 
 impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
@@ -76,6 +80,7 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
             started_at_ms,
             stage: SkillStage::Begin,
             termination: None,
+            prepared: false,
         }
     }
 
@@ -104,6 +109,16 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
         self.termination
     }
 
+    pub(crate) const fn is_prepared(self) -> bool {
+        self.prepared
+    }
+
+    pub(crate) fn mark_prepared(&mut self) {
+        if self.termination.is_none() {
+            self.prepared = true;
+        }
+    }
+
     pub(crate) fn advance(&mut self, expected: SkillStage, next: SkillStage) -> bool {
         if self.termination.is_some() || self.stage != expected || next <= expected {
             return false;
@@ -117,6 +132,7 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
             return false;
         }
         self.termination = Some(termination);
+        self.prepared = false;
         true
     }
 }

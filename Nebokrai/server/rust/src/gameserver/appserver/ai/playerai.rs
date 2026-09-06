@@ -91,7 +91,7 @@
 //! хвоста. Attack снимается лишь после подтверждённого завершения concrete
 //! навыка; неоконченный End(4) сохраняет событие. До Move очистка доходит без
 //! прерывания навыка. Разделение расписания/исполнения остальных owner-ов и
-//! фоновых подготовленных навыков ещё требуют замыкания. Stiffen передаёт
+//! точки подготовки остальных боевых навыков ещё требуют замыкания. Stiffen передаёт
 //! ненулевой End отдельно от отказного End(0); удерживаемая HeartLessArrow
 //! выпускается без снятия execution и Attack до последующего AI.
 //! Обработанный Defense разрешает active в том же Run; Stiffen запрещает
@@ -103,6 +103,8 @@
 //! current-skill и запрет движения.
 //! Отказный `0xBFE01` при `OnLoseTarget` следует только за `End(1)` реально
 //! прерванного навыка; одна ожидающая object-команда удаляется без ответа.
+//! Завершённый либо prepared экземпляр не получает End при потере цели
+//! (OnLoseTarget, 0x00509130); выбранный ID сам по себе не означает исполнение.
 //! `OnSchedule` (0x005098D0) извлекает команду до допуска и Begin: текущая
 //! команда хранится в Option, ожидающая m_qTarget — в VecDeque. Attack
 //! (0x00509FF0/0x0050A230) заменяет только ожидающую команду, не execution.
@@ -121,8 +123,10 @@
 //! FIFO CBaseAI, включая её очистку Defense/Stiffen и отдельный такт смены.
 //! Базовые атака, стрельба и магия возвращают Begun до первого AI: Attack
 //! исполняет его в том же Run, без искусственного дополнительного такта.
-//! Ещё остаются разделение Begin/первого AI в остальных адаптерах и переход
-//! prepared-навыка в фон до его End; эти ветви нельзя подменять ended-состоянием.
+//! Подготовленный kernel передаётся в общую фоновую очередь до ChangeSkill,
+//! без End и без повторного Begin. HeartLessArrow использует этот путь после
+//! выпуска; у остальных владельцев ещё требуется подключить точку подготовки.
+//! Разделение Begin/первого AI остальных адаптеров также не завершено.
 //! В активном коде Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam.
 //! Однако старый закомментированный WhenAddBackStageSkill в AI/BaseAI.cpp
 //! сохраняет наш контракт 0x004C94B0: при owner != null и ID != SKILL_UNKNOW
@@ -502,13 +506,29 @@ impl CPlayerAI {
         }
     }
 
-    /// CPlayerAI::OnFighting проверяет IsEnded до AI, а не после него. Исчезнувший
-    /// concrete execution поэтому обрабатывается только следующим тактом.
-    pub(crate) fn finish_ended_player_attack(&mut self, mut now: impl FnMut() -> u32) -> bool {
-        if self.current_player_skill.is_some() || !self.base_ai.active_attack_pending() {
+    /// OnFighting проверяет IsEnded и IsPrepared до AI. Перенос в фон
+    /// выполняется до ChangeSkill, но после уже прошедшего фонового обхода.
+    pub(crate) fn finish_player_attack(
+        &mut self,
+        selected_skill_id: Option<u32>,
+        mut add_background: impl FnMut(u32),
+        mut now: impl FnMut() -> u32,
+    ) -> bool {
+        if !self.base_ai.active_attack_pending() {
             return false;
         }
-        self.base_ai.add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now());
+        if let Some(skill_id) = selected_skill_id
+            && let Some(execution) = self.player_skill_execution(skill_id)
+        {
+            if !execution.is_prepared() {
+                return false;
+            }
+            add_background(skill_id);
+        }
+        self.current_player_skill = None;
+        if selected_skill_id.is_some() {
+            self.base_ai.add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now());
+        }
         self.base_ai.finish_active_attack(now());
         true
     }
@@ -676,7 +696,25 @@ impl CPlayerAI {
         if current != target {
             return false;
         }
+        if self.current_player_skill.is_none() {
+            self.player_skills.pop_front();
+            return true;
+        }
+        if self.player_skill_execution(dispatch.skill_id()).is_some_and(|execution| execution.is_prepared()) {
+            self.current_player_skill = None;
+            return true;
+        }
         self.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    }
+
+    pub(crate) fn release_current_player_command(&mut self) {
+        self.current_player_skill = None;
+    }
+
+    /// Общий guard OnLoseTarget: End(1) нужен только живому неподготовленному
+    /// экземпляру, а не сохранённому выбранному ID.
+    pub(crate) fn player_skill_requires_target_end(&self, skill_id: u32) -> bool {
+        self.player_skill_execution(skill_id).is_some_and(|execution| !execution.is_prepared())
     }
 
     pub(crate) fn begin_poison_fog(&mut self, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) {
@@ -962,10 +1000,11 @@ impl CPlayerAI {
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkill
 // STATUS: PARTIALLY_IMPLEMENTED
-// MATERIALIZED: ended-ветвь исполняется отдельным событием ChangeSkill,
-// восстанавливает default после End и не продвигает следующую команду в том
-// же такте. Вызов 0x0047B150 возвращает константу 1; prepared-ветвь ещё не
-// достигнута. RAW сохранён для этой оставшейся зависимости.
+// MATERIALIZED: ended/prepared исполняются отдельным событием ChangeSkill,
+// не продвигая следующую команду в том же такте и не завершая prepared kernel.
+// Вызов 0x0047B150 возвращает константу 1. RAW сохраняет полный порядок
+// виртуального OnLoseTarget и назначения default: пока выбранный default
+// остаётся отдельным idle-полем игрока, а не общим current-skill ID.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:608
@@ -1051,19 +1090,6 @@ impl CPlayerAI {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayerAI::OnFighting
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:563
-// RVA: 0x001092B0
-// ADDRESS: 005092b0
-// PROTOTYPE: int __thiscall OnFighting(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkillWithWarSoul
