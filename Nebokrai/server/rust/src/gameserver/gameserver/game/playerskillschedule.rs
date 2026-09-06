@@ -3,6 +3,10 @@
 //! общий OnBeginSkill здесь, owner сохраняет свой порядок в конкретной логике.
 //! Та же регистрация отличает ещё не начатое исполнение от неизвестного ID.
 //! Допуск CSkillFactory шире подключённых owners и не подменяет эту границу.
+//! Self-запрос сообщения идёт в объектный Attack с самим CPlayer
+//! (0x00488E20, WarSoul 0x0048953D..0x00489547). Оба расписания используют
+//! общий object_target: self проходит IsDied/DoesTargetEffective как объект,
+//! а не отклоняется по форме команды. Point сохраняет свой отдельный вход.
 //!
 //! Источник: gameserver.exe + GameServer.pdb, appserver/ai/playerai.cpp,
 //! VA 0x005098d0; CSkill::DoesTargetEffective — 0x004d82e0.
@@ -150,10 +154,9 @@ impl CGame {
         {
             return false;
         }
-        let rejected = match dispatch {
-            BattleFairySkillDispatch::SelfTarget { .. } => true,
-            BattleFairySkillDispatch::Point { x, y, .. } => x == 0 || y == 0,
-            BattleFairySkillDispatch::Object { target, .. } => {
+        let rejected = match dispatch.object_target() {
+            None => matches!(dispatch, BattleFairySkillDispatch::Point { x, y, .. } if x == 0 || y == 0),
+            Some(target) => {
                 let Some(player) = self.find_player(player_id) else { return false };
                 let Some(region_id) = player.server_region_id() else { return false };
                 let master = crate::gameserver::appserver::skills::flash::master_info(player);
@@ -330,10 +333,9 @@ impl CGame {
             id if is_swordship_skill(id) || is_immediate_state_skill(id) => TargetRule::Never,
             _ => TargetRule::Attackable,
         };
-        let enter_combat = match dispatch {
-            PlayerSkillDispatch::Point { .. } => return false,
-            PlayerSkillDispatch::SelfTarget { .. } => false,
-            PlayerSkillDispatch::Object { target, .. } => {
+        let enter_combat = match dispatch.object_target() {
+            None => return false,
+            Some(target) => {
                 let Some(player) = self.find_player(player_id) else { return false };
                 let Some(region_id) = player.server_region_id() else { return false };
                 let master = crate::gameserver::appserver::skills::flash::master_info(player);
