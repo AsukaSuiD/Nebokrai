@@ -46867,7 +46867,7 @@ impl CGame {
                                 passive_stiffen
                             } else {
                                 player_ai.finish_reached_stiffen_action(
-                                    passive_stiffen, runtime.now_milliseconds(),
+                                    passive_stiffen, || runtime.now_milliseconds(),
                                 )
                             };
                             let passive_action_hung_up = handled_passive_action.unwrap_or(false)
@@ -47281,7 +47281,9 @@ impl CGame {
                                 );
                             }
                             if handled_passive_action.is_none() && processed == 0 {
-                                passive_stiffen = monster.process_reached_stiffen_action(now_ms);
+                                passive_stiffen = monster.process_reached_stiffen_action(|| {
+                                    runtime.now_milliseconds()
+                                });
                             }
                             let death_started = handled_passive_action.is_none()
                                 && processed == 0

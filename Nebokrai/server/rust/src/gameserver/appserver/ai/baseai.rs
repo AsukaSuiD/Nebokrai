@@ -17,6 +17,8 @@
 //! OnBeenKilled (0x004C9220) проверяет active FIFO после OnLoseTarget,
 //! затем вызывает owner OnDied. Died остаётся в passive FIFO до возврата
 //! owner-а; только после него ProcessPassiveAction фиксирует handling и deadline.
+//! Проверка срока Stiffen получает часы лениво после прерывания навыка
+//! и записи handling, а не использует время начала внешнего прохода монстра.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -294,7 +296,7 @@ impl CBaseAI {
     pub(crate) fn finish_reached_stiffen_action(
         &mut self,
         begun: PassiveStiffenAction,
-        now_ms: u32,
+        now: impl FnOnce() -> u32,
     ) -> PassiveStiffenAction {
         if begun == PassiveStiffenAction::None {
             return PassiveStiffenAction::None;
@@ -311,7 +313,7 @@ impl CBaseAI {
         } else {
             event.handling = 1;
         }
-        if !ai_event_deadline_reached(event, now_ms) {
+        if !ai_event_deadline_reached(event, now()) {
             return begun;
         }
         self.passive_actions.pop_front();
