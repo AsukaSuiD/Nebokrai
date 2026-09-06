@@ -12,6 +12,8 @@
 //! Begin немедленного навыка хранится отдельно от IsEnded: новый экземпляр
 //! ещё не ended, но его AI не выполняет эффект до Begin (флаг +0x4c,
 //! например EnlargeFullMiss::AI 0x0051673b). End снимает этот флаг.
+//! Три достижимые комбинации Begin/IsEnded представлены одним lifecycle;
+//! одновременно начатого и завершённого immediate-экземпляра нет.
 //! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
 //! Поиск по общему реестру заменяет два прохода native-векторов: порядок
@@ -282,6 +284,13 @@ const fn is_auto_start_state_skill(skill_id: u32) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImmediateSkillLifecycle {
+    Unbegun,
+    Begun,
+    Ended,
+}
+
 /// Достигнутая common-проекция `CSkill`: identity, level, category и name.
 /// Исполнение concrete attack/defense/state/summon owners остаётся у самих
 /// skill owners; здесь хранится точный результат `CMoveShape::AddSkill`.
@@ -292,8 +301,7 @@ pub(crate) struct MoveShapeSkill {
     skill_type: u32,
     name: Vec<u8>,
     item_position: i32,
-    immediate_ended: bool,
-    immediate_started: bool,
+    immediate_lifecycle: ImmediateSkillLifecycle,
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
@@ -1263,24 +1271,22 @@ impl CMoveShape {
     }
 
     pub(crate) fn immediate_skill_ended(&self, skill_id: u32) -> bool {
-        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_ended)
+        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_lifecycle == ImmediateSkillLifecycle::Ended)
     }
 
     pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32) {
         if let Some(skill) = self.skills.get_mut(&skill_id) {
-            skill.immediate_ended = false;
-            skill.immediate_started = true;
+            skill.immediate_lifecycle = ImmediateSkillLifecycle::Begun;
         }
     }
 
     pub(crate) fn immediate_skill_started(&self, skill_id: u32) -> bool {
-        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_started)
+        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_lifecycle == ImmediateSkillLifecycle::Begun)
     }
 
     pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32) {
         if let Some(skill) = self.skills.get_mut(&skill_id) {
-            skill.immediate_ended = true;
-            skill.immediate_started = false;
+            skill.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
         }
         for entry in &mut self.back_stage_skill_ids {
             if entry.skill_id == skill_id {
@@ -5343,8 +5349,7 @@ impl CMoveShape {
                 skill_type: SKILL_TYPE_DEFENSE,
                 name,
                 item_position: -1,
-                immediate_ended: false,
-                immediate_started: false,
+                immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             },
         );
     }
@@ -5444,8 +5449,7 @@ impl CMoveShape {
                 skill_type,
                 name: properties.skill_name().to_vec(),
                 item_position: -1,
-                immediate_ended: false,
-                immediate_started: false,
+                immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             },
         );
         if skill_type == SKILL_TYPE_STATE {

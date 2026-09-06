@@ -33,6 +33,9 @@
 //! вызывает UpdateProperty по 0x00516857 и End(1) по 0x00516863. Общий
 //! monster-owner фиксирует ended/reuse после публикации, читая свежие часы
 //! runtime, а не timestamp начала active/background-прохода.
+//! Общая граница AI проверяет выполненный Begin до concrete-owner-а:
+//! новый или уже завершённый экземпляр не накладывает состояние повторно,
+//! не публикует его и не меняет reuse. Проверка одинакова для active и background.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
@@ -90,6 +93,11 @@ impl MonsterImmediateSkill {
         self, game: &CGame, region: &mut CServerRegion, monster_id: i32,
         skill_id: u32, skill_level: i32, runtime: &mut Runtime,
     ) -> bool {
+        if !region.find_monster_by_id(monster_id)
+            .is_some_and(|monster| monster.move_shape().immediate_skill_started(skill_id))
+        {
+            return false;
+        }
         match self {
             Self::State => execute_monster_immediate_state(
                 game, region, monster_id, skill_id, skill_level, runtime,
