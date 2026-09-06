@@ -11,6 +11,10 @@
 //! основных очередях `CBaseAI`; PDB-владелец и таблица виртуальных методов
 //! подтверждают эту проверку. Начальная последовательность
 //! `ChangeSkill → Move/Stand → SearchEnemy` проходит через тот же FIFO.
+//! CGame вызывает этот OnSchedule (0x0060F4B0) до background/passive,
+//! направляя существующую цель в Tracing вместо общего Begin атаки.
+//! После фаз отдельный вход без цели выполняет OnIdle. Проверка принадлежности
+//! исключает приручённого монстра: его текущий владелец CPet, даже при setup AI7.
 
 
 use super::baseai::one_step_move_delay_ms;
@@ -77,6 +81,9 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
+    if region.find_monster_by_id(monster_id).is_some_and(CMonster::is_tamed) {
+        return false;
+    }
     let Some((property, source, source_view, stop_frame, target, schedule_idle)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
