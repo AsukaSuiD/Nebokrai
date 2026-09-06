@@ -1339,7 +1339,7 @@ use crate::gameserver::appserver::ai::jiumai::{
     release_jiumai_target, retarget_jiumai_after_hurt,
     synchronize_jiumai_target_loss,
 };
-use crate::gameserver::appserver::ai::pet::release_pet_target_for_death;
+use crate::gameserver::appserver::ai::pet::release_pet_target;
 use crate::gameserver::appserver::skills::monsterbaseattack::{
     MONSTER_BASE_ATTACK_SKILL_ID, execute_player_monster_base_attack,
     finish_player_monster_base_attack, is_player_monster_base_attack,
@@ -47240,15 +47240,15 @@ impl CGame {
                 {
                     continue;
                 }
-                let (ai_type, stop_frame, tamed, pet_action) = self
+                let (ai_type, tamed, pet_action) = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .and_then(|monster| {
                         let property = self
                             .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-                        Some((property.ai, monster.stop_frame(property), monster.is_tamed(), monster.pet_action()))
+                        Some((property.ai, monster.is_tamed(), monster.pet_action()))
                     })
-                    .unwrap_or((0, 0, false, 0));
+                    .unwrap_or((0, false, 0));
                 if ai_type == 20 && !tamed {
                     if let Some(mut owner) = self.take_region_owner(region_id) {
                         let _ = crate::gameserver::appserver::ai::jiumai::maintain_jiumai_twin(
@@ -47369,12 +47369,7 @@ impl CGame {
                                 runtime,
                             );
                         } else if pet_target_release {
-                            release_pet_target_for_death(
-                                owner.base_mut(),
-                                monster_id,
-                                stop_frame,
-                                runtime,
-                            );
+                            release_pet_target(owner.base_mut(), monster_id);
                         } else if jiumai_target_release {
                             release_jiumai_target(owner.base_mut(), monster_id);
                         } else if let Some(monster) =

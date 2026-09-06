@@ -5,9 +5,12 @@
 //! шестичасовой счётчик жизни, переходы режима/действия, возврат и одичание.
 //! `OnMoving` живого питомца без текущего навыка ставит отдельный
 //! `ASA_SEARCH_ENEMY` в общую FIFO-очередь.
-//! `OnIdle` сохраняет `ChangeSkill? → Stand → SearchEnemy`, а `OnLoseTarget`
-//! для атакующего питомца ставит эту очередь до внешнего повторного поиска и
-//! переводит действие в `FOLLOWING`.
+//! `OnIdle` сохраняет `ChangeSkill? → Stand → SearchEnemy`. OnLoseTarget
+//! 0x004E95F0 вызывает базовую очистку цели, затем для ATTACKING проверяет
+//! HasTarget (+0x50), при необходимости повторяет OnLoseTarget (+0x2C),
+//! и пишет FOLLOWING. Это не OnIdle (+0x48): новых событий здесь нет.
+//! Базовый переход обнуляет цель, поэтому повторный вызов не требуется.
+//! Исполнение навыка и Move сохраняются; внешний SearchEnemy ставит caller.
 //! OnIdle (RVA 0x000E9580) проверяет GetCurrentSkill, а не один выбранный ID:
 //! если зарегистрированного навыка нет, ChangeSkill сохраняется в начале FIFO.
 //! OnFallowingSchedule (0x004E9BB0) требует пустые active/passive очереди и
@@ -385,46 +388,25 @@ pub(crate) fn queue_pet_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Выполняет `CPet::OnLoseTarget` и следующий `SearchEnemy` окружающего
-/// schedule-owner-а. Только действие `ATTACKING` вызывает промежуточный
-/// `OnIdle`; `clear_ai_target` канонически переводит его в `FOLLOWING`.
+/// Выполняет `CPet::OnLoseTarget` и отдельный SearchEnemy его schedule-caller-а.
 pub(crate) fn lose_pet_target_and_search<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,
     monster_id: i32,
-    stop_frame: u32,
     runtime: &mut Runtime,
 ) {
-    let was_attacking = region
-        .find_monster_by_id(monster_id)
-        .is_some_and(|pet| pet.is_tamed() && pet.pet_action() == 0);
-    if let Some(pet) = region.find_monster_by_id_mut(monster_id) {
-        pet.clear_ai_target();
-    }
-    if was_attacking {
-        let _ = queue_pet_idle(region, monster_id, stop_frame, runtime);
-    }
+    release_pet_target(region, monster_id);
     if let Some(pet) = region.find_monster_by_id_mut(monster_id) {
         pet.begin_active_ai_search_enemy(runtime.now_milliseconds());
     }
 }
 
-/// Чистый virtual `CPet::OnLoseTarget` из `OnBeenKilled`: сохранённый Move
-/// остаётся в FIFO, атакующий питомец выполняет свой `OnIdle`, а внешний
-/// schedule-`SearchEnemy` сюда не добавляется.
-pub(crate) fn release_pet_target_for_death<Runtime: GameMainLoopRuntime>(
+/// Чистый virtual CPet::OnLoseTarget, общий для расписания и death FIFO.
+pub(crate) fn release_pet_target(
     region: &mut CServerRegion,
     monster_id: i32,
-    stop_frame: u32,
-    runtime: &mut Runtime,
 ) {
-    let was_attacking = region
-        .find_monster_by_id(monster_id)
-        .is_some_and(|pet| pet.is_tamed() && pet.pet_action() == 0);
     if let Some(pet) = region.find_monster_by_id_mut(monster_id) {
-        pet.release_ai_target_for_death();
-    }
-    if was_attacking {
-        let _ = queue_pet_idle(region, monster_id, stop_frame, runtime);
+        pet.release_pet_ai_target();
     }
 }
 

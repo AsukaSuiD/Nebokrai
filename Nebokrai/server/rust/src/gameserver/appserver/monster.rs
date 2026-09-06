@@ -1369,6 +1369,11 @@ impl CMonster {
         self.base_ai.lose_target();
     }
 
+    pub(crate) fn release_pet_ai_target(&mut self) {
+        self.base_ai.lose_target();
+        self.pet_behavior.target_cleared(true);
+    }
+
     pub(crate) fn reached_death_action_state(&self) -> PassiveDeathAction {
         self.base_ai.reached_death_action_state()
     }

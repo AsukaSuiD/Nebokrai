@@ -275,7 +275,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::{
-    PetMasterRef, lose_pet_target_and_search, pet_master_ref, queue_pet_idle,
+    PetMasterRef, lose_pet_target_and_search, pet_master_ref, queue_pet_idle, release_pet_target,
 };
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
@@ -518,15 +518,13 @@ fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
     target_id: i32,
     runtime: &mut Runtime,
 ) {
-    let Some((tamed, pet_action, stop_frame, ai_type)) = region
+    let Some((tamed, ai_type)) = region
         .find_monster_by_id(target_id)
         .and_then(|target| {
             let property = game
                 .find_monster_property_by_origin_name(target.base_property_key()?)?;
             Some((
                 target.is_tamed(),
-                target.pet_action(),
-                target.stop_frame(property),
                 property.ai,
             ))
         })
@@ -534,12 +532,7 @@ fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
         return;
     };
     if tamed {
-        if let Some(target) = region.find_monster_by_id_mut(target_id) {
-            target.clear_ai_target();
-        }
-        if pet_action == 0 {
-            let _ = queue_pet_idle(region, target_id, stop_frame, runtime);
-        }
+        release_pet_target(region, target_id);
     } else if matches!(ai_type, 10 | 12 | 16) {
         release_guard_sword_target(game, region, target_id, runtime);
     } else if ai_type == 20 {
@@ -1147,7 +1140,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 lose_pet_target_and_search(
                     region,
                     monster_id,
-                    stop_frame,
                     runtime,
                 );
             } else if matches!(property.ai, 10 | 12 | 16) {
@@ -1163,7 +1155,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         };
         if tamed && schedule_target.dead {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
             return true;
         }
         if tamed && pet_action == 0 {
@@ -1171,7 +1163,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 .unwrap_or((monster_view.tile_x, monster_view.tile_y));
             let anchor_distance = schedule_target.shape.distance_to_point(anchor_x, anchor_y);
             if game.globe_setup().maximum_pet_tracing_distance() as i32 <= anchor_distance {
-                lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+                lose_pet_target_and_search(region, monster_id, runtime);
                 return true;
             }
         }
@@ -1210,7 +1202,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 lose_pet_target_and_search(
                     region,
                     monster_id,
-                    stop_frame,
                     runtime,
                 );
             } else if matches!(property.ai, 10 | 12 | 16) {
@@ -1304,7 +1295,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32;
         if distance < minimum_distance || distance > maximum_distance {
             if tamed {
-                lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+                lose_pet_target_and_search(region, monster_id, runtime);
             } else {
                 release_owned_monster_target(game, region, monster_id, runtime);
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -1780,7 +1771,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     )) = target_snapshot
     else {
         if tamed {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
         } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
@@ -1802,7 +1793,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     ))))
     {
         if tamed {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
         } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
@@ -1835,12 +1826,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         {
             game.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
             game.release_reciprocal_player_target(target.id, pet_identity, runtime);
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
             return true;
         }
         if !game.player_base_attackable(attacker_master.master_id, target.id) {
             game.release_reciprocal_player_target(target.id, pet_identity, runtime);
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
             return true;
         }
     }
@@ -2087,7 +2078,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         now_ms,
     ) {
         if tamed && pet_action == 2 {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
         }
         return true;
     }
@@ -2109,7 +2100,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .unwrap_or_default();
     if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
         if tamed {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, runtime);
         }
         return true;
     }
