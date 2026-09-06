@@ -9,6 +9,9 @@
 //! координатор фонового обхода не выводит завершение из общего bool результата.
 //! Новый Begin сбрасывает этот же признак в AutoStart и допущенном active-пути;
 //! сброс не затрагивает очередь, выбранный ID и время восстановления.
+//! Begin немедленного навыка хранится отдельно от IsEnded: новый экземпляр
+//! ещё не ended, но его AI не выполняет эффект до Begin (флаг +0x4c,
+//! например EnlargeFullMiss::AI 0x0051673b). End снимает этот флаг.
 //! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
 //! Поиск по общему реестру заменяет два прохода native-векторов: порядок
@@ -290,6 +293,7 @@ pub(crate) struct MoveShapeSkill {
     name: Vec<u8>,
     item_position: i32,
     immediate_ended: bool,
+    immediate_started: bool,
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
@@ -1265,12 +1269,18 @@ impl CMoveShape {
     pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32) {
         if let Some(skill) = self.skills.get_mut(&skill_id) {
             skill.immediate_ended = false;
+            skill.immediate_started = true;
         }
+    }
+
+    pub(crate) fn immediate_skill_started(&self, skill_id: u32) -> bool {
+        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_started)
     }
 
     pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32) {
         if let Some(skill) = self.skills.get_mut(&skill_id) {
             skill.immediate_ended = true;
+            skill.immediate_started = false;
         }
         for entry in &mut self.back_stage_skill_ids {
             if entry.skill_id == skill_id {
@@ -5334,6 +5344,7 @@ impl CMoveShape {
                 name,
                 item_position: -1,
                 immediate_ended: false,
+                immediate_started: false,
             },
         );
     }
@@ -5434,6 +5445,7 @@ impl CMoveShape {
                 name: properties.skill_name().to_vec(),
                 item_position: -1,
                 immediate_ended: false,
+                immediate_started: false,
             },
         );
         if skill_type == SKILL_TYPE_STATE {

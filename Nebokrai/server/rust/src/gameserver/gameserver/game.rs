@@ -47353,9 +47353,7 @@ impl CGame {
                             monster.queue_search_after_active_move(ai_type, || runtime.now_milliseconds());
                             move_pending = monster.advance_active_ai_move(|| runtime.now_milliseconds());
                             if !move_pending && monster.active_ai_attack_pending() {
-                                if monster.current_active_attack_cast().is_some()
-                                    && !monster.active_ai_attack_ended()
-                                {
+                                if monster.active_ai_attack_can_execute() {
                                     attack_pending = true;
                                 } else {
                                     active_action_completed = monster.finish_active_ai_attack(|| runtime.now_milliseconds());

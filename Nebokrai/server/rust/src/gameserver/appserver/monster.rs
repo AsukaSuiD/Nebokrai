@@ -1603,6 +1603,17 @@ impl CMonster {
         self.base_attack_cast.filter(|cast| cast.dispatch().skill_id == skill_id)
     }
 
+    pub(crate) fn active_ai_attack_can_execute(&self) -> bool {
+        if self.active_ai_attack_ended() {
+            return false;
+        }
+        self.current_active_attack_cast().is_some()
+            || self.move_shape.current_skill().is_some_and(|skill| {
+                super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill.id()).is_some()
+                    && self.move_shape.immediate_skill_started(skill.id())
+            })
+    }
+
     pub(crate) fn finish_active_ai_attack(&mut self, mut now: impl FnMut() -> u32) -> bool {
         let has_skill = self.move_shape.current_skill().is_some();
         let skill_ended = self.active_ai_attack_ended();

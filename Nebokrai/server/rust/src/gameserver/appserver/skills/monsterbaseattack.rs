@@ -7,6 +7,10 @@
 //! при следующем входе, не повторяя AI после background-End. Idle и поиск
 //! без цели сохраняют отдельные производные пути и требуют дальнейшего
 //! согласования полного OnSchedule/OnIdle для всех AI-типов.
+//! OnFighting уже начатого immediate вызывает тот же owner до target/range
+//! расписания: его sufferer — сам монстр. Фоновый Begin не требует attack-cast,
+//! повторного Begin или наличия боевой цели; завершение FIFO остаётся следующим
+//! active-проходом. Признак Begin берётся из зарегистрированного экземпляра.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -974,6 +978,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
     snow_storm_entry: &mut Option<i32>,
 ) -> bool {
+    let immediate = region.find_monster_by_id(monster_id).and_then(|monster| {
+        if !monster.active_ai_attack_pending() {
+            return None;
+        }
+        let skill = monster.move_shape().current_skill()?;
+        if !monster.move_shape().immediate_skill_started(skill.id()) {
+            return None;
+        }
+        Some((MonsterImmediateSkill::from_skill_id(skill.id())?, skill.id(), skill.level()))
+    });
+    if let Some((owner, skill_id, skill_level)) = immediate {
+        return owner.execute(game, region, monster_id, skill_id, skill_level, runtime);
+    }
     let Some((
         property,
         monster_shape,
