@@ -599,10 +599,6 @@ impl CPlayerAI {
         self.base_ai.is_hibernated()
     }
 
-    pub(crate) fn has_queued_player_skill(&self) -> bool {
-        self.current_player_skill.is_some() || !self.player_skills.is_empty()
-    }
-
     pub(crate) fn next_destination(&self) -> Option<PlayerAiDestination> {
         self.destinations.front().copied()
     }

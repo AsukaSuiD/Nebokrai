@@ -37,6 +37,9 @@
 //! семейство атрибутов проверяется первым; PoisonArrow/BloodLoss сохраняют
 //! player/monster object-guard, базовая магия — только прежний Object-вход.
 //! Выбор функции не объединяет обычный и WarSoul lifecycle или хранилища.
+//! После false из HasTarget OnSchedule переходит к назначению движения
+//! (0x005099D3..0x00509A2F). Сохранённая команда без цели и pending FIFO
+//! сами по себе этот переход не блокируют: проверяется только текущая цель.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -41395,7 +41398,7 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> bool {
-        if player_ai.has_queued_player_skill() {
+        if player_ai.current_player_skill().is_some_and(|dispatch| dispatch.has_target()) {
             return false;
         }
         let Some(destination) = player_ai.next_destination() else {
