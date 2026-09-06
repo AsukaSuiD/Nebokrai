@@ -1,4 +1,10 @@
 //! Реализованная часть `CMoveShape` исторического GameServer.
+//! Немедленный background-owner сохраняет признак End у навыка до следующего
+//! OnExecuteBackStageSkills (0x004C88E0): сначала проверка IsEnded, затем AI.
+//! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
+//! ещё следующий удаляет пометку. Неуспешное исполнение не фиксирует End.
+//! Повторные ID видят общий End зарегистрированного навыка; AutoStart сбрасывает
+//! его перед Begin. Полные исполнения игрока остаются у CPlayerAI.
 //! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
 //! Поиск по общему реестру заменяет два прохода native-векторов: порядок
@@ -275,6 +281,7 @@ pub(crate) struct MoveShapeSkill {
     skill_type: u32,
     name: Vec<u8>,
     item_position: i32,
+    immediate_ended: bool,
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
@@ -1204,6 +1211,11 @@ impl CMoveShape {
             .filter(|skill_id| is_auto_start_state_skill(*skill_id))
             .collect();
         let count = started.len();
+        for skill_id in &started {
+            if let Some(skill) = self.skills.get_mut(skill_id) {
+                skill.immediate_ended = false;
+            }
+        }
         self.back_stage_skill_ids.extend(started.into_iter().map(|skill_id| BackStageSkill { skill_id, begin_pending: true }));
         count
     }
@@ -1235,22 +1247,21 @@ impl CMoveShape {
         }
     }
 
-    /// Извлекает только уже достигнутые concrete background-owner-ы, не
-    /// удаляя остальные записи из native-порядка и не теряя ожидающий Begin.
-    pub(crate) fn take_matching_back_stage_skill_ids(
-        &mut self,
-        mut predicate: impl FnMut(u32) -> bool,
-    ) -> Vec<u32> {
-        let mut selected = Vec::new();
-        self.back_stage_skill_ids.retain(|entry| {
-            if predicate(entry.skill_id) {
-                selected.push(entry.skill_id);
-                false
-            } else {
-                true
+    pub(crate) fn immediate_back_stage_skill_ended(&self, index: usize) -> bool {
+        self.back_stage_skill_ids.get(index)
+            .and_then(|entry| self.skills.get(&entry.skill_id))
+            .is_some_and(|skill| skill.immediate_ended)
+    }
+
+    pub(crate) fn finish_immediate_back_stage_skill(&mut self, index: usize, expected: u32) {
+        if let Some(entry) = self.back_stage_skill_ids.get_mut(index)
+            && entry.skill_id == expected
+        {
+            entry.begin_pending = false;
+            if let Some(skill) = self.skills.get_mut(&expected) {
+                skill.immediate_ended = true;
             }
-        });
-        selected
+        }
     }
 
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
@@ -5307,6 +5318,7 @@ impl CMoveShape {
                 skill_type: SKILL_TYPE_DEFENSE,
                 name,
                 item_position: -1,
+                immediate_ended: false,
             },
         );
     }
@@ -5403,6 +5415,7 @@ impl CMoveShape {
                 skill_type,
                 name: properties.skill_name().to_vec(),
                 item_position: -1,
+                immediate_ended: false,
             },
         );
         if skill_type == SKILL_TYPE_STATE {

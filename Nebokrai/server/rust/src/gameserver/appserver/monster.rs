@@ -628,22 +628,18 @@ impl CMonster {
     /// `CBaseAI::OnExecuteBackStageSkills` для подтверждённых monster-ветвей
     /// пяти немедленных state-owner-ов и Swordship. WuXing снимается по
     /// подтверждённому `End(0)` для type != 400; неизвестные ID остаются в очереди.
-    pub(crate) fn take_reached_back_stage_skills(&mut self) -> Vec<(u32, i32)> {
-        self.move_shape
-            .take_matching_back_stage_skill_ids(|skill_id| {
-                matches!(
-                    skill_id,
-                    TAIJI_SKILL_ID
-                        | ORIGIN_SKILL_ID
-                        | ENLARGE_MAX_HP_SKILL_ID
-                        | ENLARGE_MAX_MP_SKILL_ID
-                        | ENLARGE_FULL_MISS_SKILL_ID
-                ) || is_swordship_skill(skill_id) || is_wuxing_skill(skill_id)
-            })
-            .into_iter()
-            .filter(|skill_id| !is_wuxing_skill(*skill_id))
-            .map(|skill_id| (skill_id, self.move_shape.skill_level(skill_id)))
-            .collect()
+    /// Some(false) — подтверждённый player-only отказ без эффекта.
+    pub(crate) fn immediate_back_stage_skill_policy(skill_id: u32) -> Option<bool> {
+        if is_wuxing_skill(skill_id) {
+            Some(false)
+        } else if matches!(skill_id, TAIJI_SKILL_ID | ORIGIN_SKILL_ID
+            | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID | ENLARGE_FULL_MISS_SKILL_ID)
+            || is_swordship_skill(skill_id)
+        {
+            Some(true)
+        } else {
+            None
+        }
     }
 
     pub(crate) const fn carriage_action(&self) -> i32 {

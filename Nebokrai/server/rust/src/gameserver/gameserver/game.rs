@@ -40808,25 +40808,50 @@ impl CGame {
         monster_id: i32,
         now_ms: u32,
     ) -> usize {
-        let skill_ids = region
-            .find_monster_by_id_mut(monster_id)
-            .map(CMonster::take_reached_back_stage_skills)
-            .unwrap_or_default();
-        for (skill_id, skill_level) in &skill_ids {
-            let executed = if is_swordship_skill(*skill_id) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().prepare_back_stage_skill_pass();
+        }
+        let mut index = 0;
+        let mut execution_count = 0;
+        loop {
+            let Some((skill_id, skill_level, ended)) = region.find_monster_by_id(monster_id)
+                .and_then(|monster| {
+                    let shape = monster.move_shape();
+                    let skill_id = shape.back_stage_skill_id(index)?;
+                    Some((skill_id, shape.skill_level(skill_id),
+                        shape.immediate_back_stage_skill_ended(index) || shape.skill(skill_id).is_none()))
+                })
+            else {
+                break;
+            };
+            if ended {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.move_shape_mut().mark_ended_back_stage_skill(index, skill_id);
+                }
+                index += 1;
+                continue;
+            }
+            let Some(has_effect) = CMonster::immediate_back_stage_skill_policy(skill_id) else {
+                index += 1;
+                continue;
+            };
+            let executed = if !has_effect {
+                true
+            } else if is_swordship_skill(skill_id) {
                 execute_monster_auto_start_swordship(
-                    self, region, monster_id, *skill_id, *skill_level,
+                    self, region, monster_id, skill_id, skill_level,
                 )
             } else {
                 execute_monster_immediate_state(
-                    self,
-                    region,
-                    monster_id,
-                    *skill_id,
-                    *skill_level,
-                    now_ms,
+                    self, region, monster_id, skill_id, skill_level, now_ms,
                 )
             };
+            if executed {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.move_shape_mut().finish_immediate_back_stage_skill(index, skill_id);
+                }
+            }
+            execution_count += usize::from(has_effect);
             tracing::trace!(
                 region_id = region.id,
                 monster_id,
@@ -40834,8 +40859,9 @@ impl CGame {
                 executed,
                 "исполнен background-навык монстра"
             );
+            index += 1;
         }
-        skill_ids.len()
+        execution_count
     }
 
     /// Вызов concrete CSkill без снятия команды и повторного допуска.
