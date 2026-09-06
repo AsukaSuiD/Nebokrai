@@ -878,7 +878,7 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }

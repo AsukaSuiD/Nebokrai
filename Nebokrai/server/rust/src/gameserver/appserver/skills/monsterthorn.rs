@@ -312,7 +312,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }

@@ -1748,10 +1748,9 @@ impl CMonster {
         self.attack_progress.yunsheng_lightning_progress = Some(progress);
     }
 
-    pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(|| now_ms, true)
-    }
-
+    /// Общий `CSkill::End` (0x004D84C0) читает reuse после derived-cleanup.
+    /// Готовое время AI/попадания сюда не передаётся: каждый owner предоставляет
+    /// чтение runtime, которое вызывается только для живого завершения с reuse.
     pub(crate) fn finish_base_attack_cast_with_clock(&mut self, now: impl FnOnce() -> u32) -> Option<MonsterBaseAttackCast> {
         self.finish_base_attack_cast_with_reuse(now, true)
     }

@@ -1325,6 +1325,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             skill_level,
             &skill_properties,
             now_ms,
+            runtime,
         );
     }
     if skill_id == PROMOTION_SKILL_ID {
@@ -1379,6 +1380,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &skill_properties,
             now_ms,
             projectile_dispatch,
+            runtime,
         );
     }
     if skill_id == YUNSHENG_LIGHTNING_SKILL_ID {
@@ -1542,6 +1544,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             skill_level,
             &skill_properties,
             now_ms,
+            runtime,
         );
     }
     if skill_id == BOSS_BLUE_QUAKE_SKILL_ID {
@@ -2036,7 +2039,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
             monster.move_shape_mut().shape_mut().set_action(1);
-            let _ = monster.finish_base_attack_cast(now_ms);
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
         }
         return true;
     }

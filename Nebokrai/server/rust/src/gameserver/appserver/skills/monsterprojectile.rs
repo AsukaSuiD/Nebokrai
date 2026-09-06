@@ -119,7 +119,7 @@ fn send_projectile_visual(
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт полёта")]
-pub(crate) fn prepare_owned_monster_projectile(
+pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -129,6 +129,7 @@ pub(crate) fn prepare_owned_monster_projectile(
     properties: &CSkillBaseProperties,
     now_ms: u32,
     dispatch: &mut Option<MonsterProjectileDispatch>,
+    runtime: &mut Runtime,
 ) -> bool {
     let Some((source, property, master, tamed, cast, progress)) = region
         .find_monster_by_id(monster_id)
@@ -163,7 +164,7 @@ pub(crate) fn prepare_owned_monster_projectile(
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_some() {
-                let _ = monster.finish_base_attack_cast(now_ms);
+                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
             }
             monster.clear_ai_target();
         }

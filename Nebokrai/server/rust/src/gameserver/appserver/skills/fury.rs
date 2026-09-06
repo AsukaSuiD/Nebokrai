@@ -167,7 +167,7 @@ fn remove_reached_conflict_states(
     }
 }
 
-pub(crate) fn execute_owned_fury(
+pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -175,6 +175,7 @@ pub(crate) fn execute_owned_fury(
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
+    runtime: &mut Runtime,
 ) -> bool {
     let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
@@ -265,7 +266,7 @@ pub(crate) fn execute_owned_fury(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         if monster.move_shape_mut().restart_rage_break_state(now_ms) {
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast(now_ms);
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
             return true;
         }
     }
@@ -290,7 +291,7 @@ pub(crate) fn execute_owned_fury(
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }
