@@ -133,7 +133,10 @@
 //! WarSoul Attack ставится после Begin и переживает собственный End навыка:
 //! следующий Run снимает событие без нового расписания и без ChangeSkill
 //! (OnFightingWithWarSoul, 0x00509230). Выбранный ID сохраняется после End.
-//! Подготовленная ветвь и явный caller ChangeSkill ещё требуют замыкания.
+//! Prepared-ветвь вызывает общий WhenAddBackStageSkill (слот +0x88,
+//! 0x004C94B0): ID добавляется в ту же FIFO, без отдельного фона WarSoul.
+//! Фоновый End удаляет только экземпляр, сохраняя команды и выбранный ID.
+//! Явный caller ChangeSkill и конкретные prepared-writer-ы требуют проверки.
 //! Подготовленный kernel передаётся в общую фоновую очередь до ChangeSkill,
 //! без End и без повторного Begin. Достигнутые длительные prepared-навыки
 //! устанавливают общий флаг в своих подтверждённых точках выпуска. Сам по себе
@@ -759,6 +762,11 @@ impl CPlayerAI {
             self.current_battle_fairy_skill = self.battle_fairy_skills.pop_front();
             if let Some(dispatch) = self.current_battle_fairy_skill {
                 self.selected_battle_fairy_skill_id = dispatch.skill_id();
+                // OnScheduleAboutWarSoul извлёк запрос, но IsEnded запрещает
+                // повторный Begin уже работающего фонового экземпляра.
+                if self.battle_fairy_execution(dispatch.skill_id()).is_some() {
+                    self.current_battle_fairy_skill = None;
+                }
             }
         }
         self.current_battle_fairy_skill
@@ -770,12 +778,25 @@ impl CPlayerAI {
 
     /// OnFightingWithWarSoul (0x00509230) проверяет IsEnded до вызова AI.
     /// End внутри AI оставляет Attack до следующего Run, без ChangeSkill.
-    pub(crate) fn finish_ended_battle_fairy_attack(&mut self, now_ms: u32) -> bool {
-        let pending = self.base_ai.active_war_soul_actions().front()
-            .is_some_and(|event| event.action == AiShapeAction::Attack && event.handling <= 1);
-        if !pending || self.battle_fairy_execution(self.selected_battle_fairy_skill_id()).is_some() {
+    pub(crate) fn finish_battle_fairy_attack(
+        &mut self,
+        mut add_background: impl FnMut(u32),
+        now_ms: u32,
+    ) -> bool {
+        let Some(handling) = self.base_ai.active_war_soul_actions().front()
+            .filter(|event| event.action == AiShapeAction::Attack && event.handling <= 1)
+            .map(|event| event.handling)
+        else {
             return false;
+        };
+        let skill_id = self.selected_battle_fairy_skill_id();
+        if handling == 0 && let Some(execution) = self.battle_fairy_execution(skill_id) {
+            if !execution.is_prepared() {
+                return false;
+            }
+            add_background(skill_id);
         }
+        self.current_battle_fairy_skill = None;
         self.base_ai.finish_war_soul_attack(now_ms);
         true
     }
@@ -808,6 +829,16 @@ impl CPlayerAI {
             return false;
         }
         self.current_battle_fairy_skill = None;
+        self.finish_battle_fairy_execution(expected, termination);
+        true
+    }
+
+    /// Фоновый End очищает только совпавший экземпляр, не команду WarSoul.
+    pub(crate) fn finish_battle_fairy_execution(
+        &mut self,
+        expected: BattleFairySkillDispatch,
+        termination: SkillTermination,
+    ) -> bool {
         let skill_id = expected.skill_id();
         if self.battle_fairy_execution(skill_id).is_some_and(|state| state.dispatch() == expected)
             && let Some(mut execution) = self.battle_fairy_executions.remove(&skill_id)
@@ -815,8 +846,9 @@ impl CPlayerAI {
             let kernel = execution.kernel_mut();
             let _ = kernel.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение навыка боевой феи завершено");
+            return true;
         }
-        true
+        false
     }
 
     /// `true` означает, что выбранная war-soul команда уже прошла concrete
@@ -1115,7 +1147,8 @@ impl CPlayerAI {
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: Begin ставит отдельный Attack; AI возвращает 0 даже после
 // собственного End. Следующий Run проверяет IsEnded и снимает Attack без
-// ChangeSkill. Prepared-перенос по virtual +0x88 остаётся ниже.
+// ChangeSkill. Prepared-перенос по virtual +0x88 добавляет ID в общую FIFO;
+// фоновый обход разрешает обычные и WarSoul экземпляры из их хранилищ.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:517
