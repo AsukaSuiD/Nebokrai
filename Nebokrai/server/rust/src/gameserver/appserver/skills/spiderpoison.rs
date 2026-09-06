@@ -398,7 +398,9 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
             monster.clear_ai_target();
         }
         return true;
@@ -407,7 +409,9 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         game, region.id, &property, attacker_tamed, attacker_master, target_identity, &target,
     ) {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
             monster.clear_ai_target();
         }
         return true;

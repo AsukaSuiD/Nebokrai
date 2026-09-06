@@ -60,6 +60,9 @@
 //! и полётные поля, затем вызывает SetMoveable(true) и общий End. Owned Vec
 //! пути освобождается с MonsterAttackProgress; нанесённые попадания и состояния
 //! целей не являются ресурсами этого исполнения и при End не откатываются.
+//! SpiderPoison/SpriteBurn/CorpsePtomaine/Promotion/KnockOut разделяют
+//! End 0x00546090. Общая политика завершает их cast, не снимая наложенные
+//! poison/burn/control-состояния; отдельные player-only эффекты сюда не входят.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1730,7 +1733,12 @@ impl CMonster {
             | super::skills::skeletonarchery::SKELETON_ARCHERY_SKILL_ID
             | super::skills::energybolt::ENERGY_BOLT_SKILL_ID
             | super::skills::snakebolt::SNAKE_BOLT_SKILL_ID
-            | super::skills::zombieclaw::ZOMBIE_CLAW_SKILL_ID)
+            | super::skills::zombieclaw::ZOMBIE_CLAW_SKILL_ID
+            | super::skills::spiderpoison::SPIDER_POISON_SKILL_ID
+            | super::skills::spriteburn::SPRITE_BURN_SKILL_ID
+            | super::skills::corpseptomaine::CORPSE_PTOMAINE_SKILL_ID
+            | super::skills::promotion::PROMOTION_SKILL_ID
+            | super::skills::knockoutruntime::KNOCK_OUT_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {
