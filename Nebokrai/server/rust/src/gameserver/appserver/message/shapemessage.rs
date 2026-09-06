@@ -62,7 +62,7 @@ pub(crate) enum GameShapeMessageError {
     Coordinate(ShapeCoordinateBlock),
 }
 
-fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<(), GameShapeMessageError> {
+pub(crate) fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<(), GameShapeMessageError> {
     let Some(player) = game.find_player(player_id) else {
         return Ok(());
     };

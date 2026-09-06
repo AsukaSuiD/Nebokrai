@@ -1,4 +1,10 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Шаг назначения следует CPlayerAI::MoveTo (0x00508F10): ход проверяет
+//! одну клетку, бег две, а бег с riding-state 0x186A4 три (0x00508FB8).
+//! Каждая клетка проходит GetNextWalkPos (0x00509360) до единственного Move;
+//! препятствие отменяет весь шаг с OnCannotMove (0x00509111), без частичного
+//! перемещения. Длительность остаётся исходной функцией направления и скорости,
+//! а не умножается на число клеток. Это координатор над региональным block API.
 //! На границах End, первого контакта, смерти и OnStandOnSwitchPoint
 //! временно извлечённый AI возвращается в CPlayer до callback. После вызова
 //! извлекается изменённый владелец, чтобы вложенный End/ChangeRegion видел
@@ -41910,29 +41916,36 @@ impl CGame {
                 },
                 player.is_movement_allowed(),
                 player.movement_speed(),
+                player.is_rider(),
             ))
         });
         let _ = player_ai.finish_destination(destination);
-        let Some((region_id, origin, moveable, speed)) = snapshot else {
+        let Some((region_id, origin, moveable, speed, is_rider)) = snapshot else {
             player_ai.stop_destination_move();
             return true;
         };
         if !moveable {
+            let _ = crate::gameserver::appserver::message::shapemessage::send_player_cannot_move(self, player_id);
             player_ai.stop_destination_move();
             return true;
         }
-        let Ok(target) = CShape::get_direction_position(destination.direction, origin) else {
-            player_ai.stop_destination_move();
-            return true;
-        };
         let Some(mut owner) = self.take_region_owner(region_id) else {
             player_ai.stop_destination_move();
             return true;
         };
-        if owner.base().block_at(target.x, target.y) != Some(0) {
-            self.restore_region_owner(owner);
-            player_ai.stop_destination_move();
-            return true;
+        let steps = if !destination.is_run { 1 } else if is_rider { 3 } else { 2 };
+        let mut target = origin;
+        for _ in 0..steps {
+            let next = CShape::get_direction_position(destination.direction, target)
+                .ok()
+                .filter(|next| owner.base().block_at(next.x, next.y) == Some(0));
+            let Some(next) = next else {
+                self.restore_region_owner(owner);
+                let _ = crate::gameserver::appserver::message::shapemessage::send_player_cannot_move(self, player_id);
+                player_ai.stop_destination_move();
+                return true;
+            };
+            target = next;
         }
         let Some(mut player) = self.players.remove(&player_id) else {
             self.restore_region_owner(owner);
