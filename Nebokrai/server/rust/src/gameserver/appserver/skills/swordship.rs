@@ -17,6 +17,10 @@
 //! 0x00580947/0x0055893A: нет AfterUseSkill, износа оружия и записи cooldown.
 //! Фоновый и активный вызовы используют одно тело AI; успешный Begin
 //! возвращает Begun до применения, не добавляя отдельного игрового такта.
+//! Отказ QuerySkillBaseProperties также вызывает End(0): VA
+//! 0x005809D7/0x005589CA/0x0054BABA/0x0054B83A. Monster-owner отмечает
+//! завершение без повторного применения, публикации и reuse; прежнее
+//! SwordshipState сохраняется, а запись фона снимает штатный обход.
 
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::swordshipstate::SwordshipState;
@@ -52,11 +56,12 @@ pub(crate) fn execute_monster_auto_start_swordship(
     if !is_swordship_skill(skill_id) {
         return false;
     }
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return false;
-    };
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
         return false;
+    };
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        monster.move_shape_mut().finish_immediate_skill(skill_id);
+        return true;
     };
     let state = SwordshipState::new(
         skill_id,
