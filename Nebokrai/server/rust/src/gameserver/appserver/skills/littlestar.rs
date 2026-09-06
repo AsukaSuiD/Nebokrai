@@ -25,6 +25,10 @@
 //! этот порядок, как и End(4) достигнутого Stiffen через monsterai runtime.
 //! Прочие расширенные отмены cast пока не доставляют action 3; они требуют
 //! такой же runtime-границы и не покрываются простой политикой снятия движения.
+//! Потеря объектной цели не отменяет уже начатый cast: AI (0x00535E34)
+//! использует резервные координаты +0x24/+0x28. Объектный Begin обнуляет
+//! их (0x005DBDBA), поэтому до построения пути fallback равен (0, 0),
+//! а не позиции источника. После выпуска сохранённый путь независим от цели.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -566,12 +570,6 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let target = resolve_owned_monster_attack_target(game, region, target_identity);
-    if progress.is_none() && target.is_none() {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
-        }
-        return true;
-    }
     if cast.is_none()
         && !target.as_ref().is_some_and(|target| {
             !target.dead
@@ -596,7 +594,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     let target_position = target.as_ref().and_then(|target| {
         Some((target.shape.get_tile_x().ok()?, target.shape.get_tile_y().ok()?))
     });
-    let (target_x, target_y) = target_position.unwrap_or((source_x, source_y));
+    let (target_x, target_y) = target_position.unwrap_or((0, 0));
 
     if cast.is_none() {
         let trace_target = target.as_ref().map_or_else(
