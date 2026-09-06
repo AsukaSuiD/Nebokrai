@@ -546,16 +546,16 @@ impl CPlayerAI {
     /// Выполняет достигнутую `ASA_MOVE`-границу после текущего `OnSchedule`.
     /// Даже снятое в этом вызове событие удерживает расписание до следующего
     /// такта, как `CBaseAI::ProcessActiveAction`.
-    pub(crate) fn advance_active_move(&mut self, now_ms: u32) -> bool {
-        self.base_ai.advance_active_move(now_ms)
+    pub(crate) fn advance_active_move(&mut self, now: impl FnOnce() -> u32) -> bool {
+        self.base_ai.advance_active_move(now)
     }
 
     pub(crate) fn active_move_unhandled(&self) -> bool {
         self.base_ai.active_move_unhandled()
     }
 
-    pub(crate) fn advance_active_stand(&mut self, now_ms: u32) -> bool {
-        self.base_ai.advance_active_stand(now_ms)
+    pub(crate) fn advance_active_stand(&mut self, now: impl FnOnce() -> u32) -> bool {
+        self.base_ai.advance_active_stand(now)
     }
 
     pub(crate) fn active_stand_pending(&self) -> bool {

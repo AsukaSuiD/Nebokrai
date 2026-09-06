@@ -7,6 +7,9 @@
 //! истёкшая последняя запись даёт IDLE, оставшийся хвост — EXEC, ожидание
 //! не-Move — HUNG_UP. Ни один результат не запускает следующий handler.
 //! IDLE разрешает только хвостовой OnIdle без цели, а не второй OnSchedule.
+//! Move/Stand читают часы непосредственно при проверке deadline после записи
+//! handling. Время внешнего прохода до Begin/background/passive не используется;
+//! пустая очередь и чужой action не вызывают лишнего чтения часов.
 //! Базовый OnBeenHurted: EXE/PDB GameServer, appserver/ai/baseai.cpp:815,
 //! RVA 0x000C8700; discard_active_prefix сохраняет первую Attack/Move-границу.
 //! Defense в ProcessPassiveAction (0x004C84F0) вызывает производный
@@ -433,7 +436,7 @@ impl CBaseAI {
     /// Повторный вызов после истечения снимает событие и разрешает расписание
     /// только при пустом остатке FIFO. Другие активные действия пока не
     /// интерпретируются и поэтому продолжают блокировать расписание.
-    pub(crate) fn advance_active_stand(&mut self, now_ms: u32) -> bool {
+    pub(crate) fn advance_active_stand(&mut self, now: impl FnOnce() -> u32) -> bool {
         let Some(event) = self.active_actions.front_mut() else {
             return true;
         };
@@ -441,7 +444,7 @@ impl CBaseAI {
             return false;
         }
         if event.handling == 1 {
-            if ai_event_deadline_reached(event, now_ms) {
+            if ai_event_deadline_reached(event, now()) {
                 self.active_actions.pop_front();
                 return self.active_actions.is_empty();
             }
@@ -451,7 +454,7 @@ impl CBaseAI {
             return false;
         }
         event.handling = 1;
-        if ai_event_deadline_reached(event, now_ms) {
+        if ai_event_deadline_reached(event, now()) {
             self.active_actions.pop_front();
         }
         false
@@ -531,7 +534,7 @@ impl CBaseAI {
     /// Выполняет общий `OnMoving`, который возвращает единицу, и сохраняет
     /// исходную границу задержки уже совершённого шага. Производные реакции
     /// лучника, охранника и питомца остаются отдельными проходами владельцев.
-    pub(crate) fn advance_active_move(&mut self, now_ms: u32) -> bool {
+    pub(crate) fn advance_active_move(&mut self, now: impl FnOnce() -> u32) -> bool {
         let Some(event) = self.active_actions.front_mut() else {
             return false;
         };
@@ -541,7 +544,7 @@ impl CBaseAI {
         if event.handling == 0 {
             event.handling = 1;
         }
-        if event.handling == 1 && ai_event_deadline_reached(event, now_ms) {
+        if event.handling == 1 && ai_event_deadline_reached(event, now()) {
             self.active_actions.pop_front();
         }
         true

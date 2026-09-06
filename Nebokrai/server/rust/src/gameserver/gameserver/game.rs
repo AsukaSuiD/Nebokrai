@@ -46899,7 +46899,7 @@ impl CGame {
                             let active_move_advanced = !ai_hibernated
                                 && !passive_action_hung_up
                                 && !handled_active_action
-                                && player_ai.advance_active_move(runtime.now_milliseconds());
+                                && player_ai.advance_active_move(|| runtime.now_milliseconds());
                             let active_move_handled = moving_started || active_move_advanced;
                             let active_stand_handled = if !ai_hibernated
                                 && !passive_action_hung_up
@@ -46914,7 +46914,7 @@ impl CGame {
                                     });
                                 }
                                 let _ =
-                                    player_ai.advance_active_stand(runtime.now_milliseconds());
+                                    player_ai.advance_active_stand(|| runtime.now_milliseconds());
                                 true
                             } else {
                                 false
@@ -47367,7 +47367,7 @@ impl CGame {
                     }
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         if passive_death == PassiveDeathAction::WaitingForMove {
-                            move_pending = monster.advance_active_ai_move(now_ms);
+                            move_pending = monster.advance_active_ai_move(|| runtime.now_milliseconds());
                         } else if !death_started
                             && let Some(state) = monster.advance_handled_active_ai_action(|| runtime.now_milliseconds())
                         {
@@ -47377,13 +47377,13 @@ impl CGame {
                                 && monster.ai_target().is_none();
                             active_action_completed = !schedule_ready;
                         } else if !death_started {
-                            monster.queue_search_after_active_move(ai_type, now_ms);
-                            move_pending = monster.advance_active_ai_move(now_ms);
+                            monster.queue_search_after_active_move(ai_type, || runtime.now_milliseconds());
+                            move_pending = monster.advance_active_ai_move(|| runtime.now_milliseconds());
                             if !move_pending && monster.active_ai_attack_pending() {
                                 if monster.base_attack_cast().is_some() {
                                     attack_pending = true;
                                 } else {
-                                    monster.finish_active_ai_attack(now_ms);
+                                    monster.finish_active_ai_attack(runtime.now_milliseconds());
                                     active_action_completed = true;
                                 }
                             } else {
@@ -47398,7 +47398,7 @@ impl CGame {
                                 && !search_enemy_pending
                                 && !change_skill_pending
                             {
-                                schedule_ready = monster.advance_active_ai_stand(now_ms)
+                                schedule_ready = monster.advance_active_ai_stand(|| runtime.now_milliseconds())
                                     && monster.primary_ai_queues_idle()
                                     && !passive_action_executed
                                     && monster.ai_target().is_none();

@@ -1365,8 +1365,8 @@ impl CMonster {
         self.base_ai.finish_reached_death_action(now_ms);
     }
 
-    pub(crate) fn advance_active_ai_stand(&mut self, now_ms: u32) -> bool {
-        self.base_ai.advance_active_stand(now_ms)
+    pub(crate) fn advance_active_ai_stand(&mut self, now: impl FnOnce() -> u32) -> bool {
+        self.base_ai.advance_active_stand(now)
     }
 
     pub(crate) fn advance_handled_active_ai_action(&mut self, now: impl FnOnce() -> u32) -> Option<AiPhaseState> {
@@ -1389,7 +1389,7 @@ impl CMonster {
         self.base_ai.active_attack_pending()
     }
 
-    pub(crate) fn queue_search_after_active_move(&mut self, ai_type: u32, now_ms: u32) {
+    pub(crate) fn queue_search_after_active_move(&mut self, ai_type: u32, now: impl FnOnce() -> u32) {
         if !self.base_ai.active_move_unhandled() {
             return;
         }
@@ -1417,7 +1417,7 @@ impl CMonster {
             || passive_gladiator_search
             || pet_search
         {
-            self.base_ai.begin_active_search_enemy(now_ms);
+            self.base_ai.begin_active_search_enemy(now());
         }
     }
 
@@ -1438,8 +1438,8 @@ impl CMonster {
             .add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now_ms);
     }
 
-    pub(crate) fn advance_active_ai_move(&mut self, now_ms: u32) -> bool {
-        self.base_ai.advance_active_move(now_ms)
+    pub(crate) fn advance_active_ai_move(&mut self, now: impl FnOnce() -> u32) -> bool {
+        self.base_ai.advance_active_move(now)
     }
 
     pub(crate) fn finish_active_ai_attack(&mut self, now_ms: u32) {
