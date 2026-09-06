@@ -1,4 +1,7 @@
 //! Достигнутая часть очередей и исполнения `CPlayerAI` GameServer.
+//! Встречный OnLoseTarget питомца (0x004E96DC..0x004E970E) сравнивает
+//! установленные OnSchedule type/id цели, не ожидающий запрос и не GUID.
+//! Fallback освобождает только текущую команду; pending FIFO не затрагивается.
 //! Attack (0x00509FF0/0x0050A230) заменяет ожидающую команду независимо от
 //! текущего исполнения. Для WarSoul point-ветвь 0x0050A334..0x0050A3BF
 //! сравнивает голову, удаляет старые запросы и добавляет новый без Reject;
@@ -725,6 +728,11 @@ impl CPlayerAI {
         false
     }
 
+    pub(crate) fn has_current_object_target(&self, target: super::super::shape::ShapeIdentity) -> bool {
+        self.current_player_skill.and_then(PlayerSkillDispatch::object_target)
+            .is_some_and(|current| current.object_type == target.object_type && current.id == target.id)
+    }
+
     /// Fallback встречного `CPlayerAI::OnLoseTarget`, когда concrete execution
     /// ещё не материализован: удаляет только текущую object-команду,
     /// действительно направленную на отказавшегося питомца. Уже начатый skill
@@ -733,18 +741,10 @@ impl CPlayerAI {
         &mut self,
         target: super::super::shape::ShapeIdentity,
     ) -> bool {
-        let Some(dispatch @ PlayerSkillDispatch::Object { target: current, .. }) =
-            self.next_player_skill()
-        else {
-            return false;
-        };
-        if current != target {
+        if !self.has_current_object_target(target) {
             return false;
         }
-        if self.current_player_skill.is_none() {
-            self.player_skills.pop_front();
-            return true;
-        }
+        let dispatch = self.current_player_skill.expect("проверена текущая объектная цель");
         if self.player_skill_execution(dispatch.skill_id()).is_some_and(|execution| execution.is_prepared()) {
             self.current_player_skill = None;
             return true;
@@ -1135,9 +1135,10 @@ impl CPlayerAI {
 // ============================================================================
 // FUNCTION: CPlayerAI::OnLoseTarget
 // STATUS: PARTIALLY_IMPLEMENTED, VERIFIED_DISASSEMBLY
-// IMPLEMENTED: достигнутый вызов из `CPet::ReleaseReciprocalTarget` завершает
+// IMPLEMENTED: встречный вызов из `CPet::OnStayingSchedule` завершает
 // начатый concrete skill через `End(1)` и только тогда отправляет отказный
-// `0xBFE01`; ещё не начатую совпавшую object-команду удаляет без ответа.
+// `0xBFE01`; текущую команду без живого исполнения снимает без ответа.
+// Ожидающая команда сама по себе не проходит встречную проверку цели.
 // Default attack восстанавливается в обоих случаях, независимая очередь боевой
 // феи не затрагивается. Остались иные недостигнутые вызывающие стороны.
 // COMPONENT: GameServer

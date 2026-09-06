@@ -37940,10 +37940,7 @@ impl CGame {
         let Some((current_skill_id, interrupted_active_skill)) = self
             .find_player(player_id)
             .and_then(|player| {
-                let matches_target = matches!(
-                    player.player_ai().next_player_skill(),
-                    Some(PlayerSkillDispatch::Object { target: current, .. }) if current == target
-                );
+                let matches_target = player.player_ai().has_current_object_target(target);
                 matches_target.then(|| {
                     let interrupted_active_skill = player.current_skill_id()
                         .is_some_and(|id| player.player_ai().player_skill_requires_target_end(id));
@@ -37977,8 +37974,8 @@ impl CGame {
         };
         if released {
             // Exact `OnLoseTarget` подтверждает отказный `0xBFE01` только
-            // рядом с `End(1)`. Одна ожидающая object-команда удаляется без
-            // ответа, но default attack восстанавливается в обоих случаях.
+            // рядом с `End(1)`. Текущая команда без живого исполнения снимается
+            // без ответа; ожидающий FIFO сохраняется, default восстанавливается.
             if interrupted {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }
