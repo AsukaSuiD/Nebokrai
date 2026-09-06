@@ -75,6 +75,9 @@
 //! не расходуя RNG выбора навыка и не затрагивая уже начатое исполнение.
 //! Мёртвая цель CPet теряется до IsAttackable: уведомление об уровне и
 //! встречный OnLoseTarget относятся только к отказу живой цели от атаки.
+//! Отказ базового Begin по reuse (CheckCastCondition 0x00514340) для CPet
+//! завершает попытку через OnLoseTarget → SearchEnemy, а не оставляет цель
+//! в ожидании. Проверка идёт после Tracing; движение не считается отказом.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -2107,6 +2110,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .map(|monster| monster.skill_last_used_ms(skill_id))
         .unwrap_or_default();
     if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
+        if tamed {
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+        }
         return true;
     }
     let direction = get_line_direction(monster_x, monster_y, target_x, target_y);
