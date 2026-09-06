@@ -3,6 +3,10 @@
 //! 0x004C9320. Завершение его атаки ставит ChangeSkill независимо от
 //! сохранённого первичного AI; специальные SearchEnemy лучников остаются
 //! только неприручённому владельцу.
+//! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
+//! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
+//! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
+//! проверка восстановления конкретного навыка остаётся у его владельца.
 //! Техническое хранение прогресса cast сгруппировано в MonsterAttackProgress:
 //! Default обслуживает одинаковую очистку при End и отмене. Типизированные
 //! значения остаются независимыми; Begin не получает дополнительного сброса,
@@ -1678,6 +1682,9 @@ impl CMonster {
         now_ms: u32,
         interval_ms: u32,
     ) -> bool {
+        if self.tamed {
+            return true;
+        }
         self.ai_schedule
             .begin_attack_attempt(now_ms, interval_ms)
     }
