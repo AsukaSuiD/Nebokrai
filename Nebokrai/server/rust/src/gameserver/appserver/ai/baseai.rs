@@ -1,4 +1,6 @@
 //! Достигнутая event-queue часть `CBaseAI` исторического GameServer.
+//! Базовый OnBeenHurted: EXE/PDB GameServer, appserver/ai/baseai.cpp:815,
+//! RVA 0x000C8700; discard_active_prefix сохраняет первую Attack/Move-границу.
 //! Defense в ProcessPassiveAction (0x004C84F0) вызывает производный
 //! OnBeenHurted для каждого элемента до его pop. Callback находится внутри
 //! FIFO-прохода: следующий Defense видит мутации active-очереди предыдущего.
@@ -934,17 +936,11 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:815
-// RVA: 0x000C8700
-// ADDRESS: 004c8700
-// PROTOTYPE: int __thiscall OnBeenHurted(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: discard_active_prefix и process_reached_defense_actions;
+// EXE/PDB GameServer, appserver/ai/baseai.cpp:815, RVA 0x000C8700.
+// Базовый обработчик сохраняет первую Attack/Move-границу и возвращает 1.
+// Nullable owner заменён владением CPlayer/CMonster; отдельного вызова без owner нет.
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnStiffen
