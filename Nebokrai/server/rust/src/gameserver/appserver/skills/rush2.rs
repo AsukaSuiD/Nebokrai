@@ -1,4 +1,7 @@
 //! Второй прямой рывок `CRush2` (`0x7c`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/rush2.cpp`. Геометрия пути и wire-форма совпадают с
@@ -184,6 +187,7 @@ pub(crate) fn execute_player_rush_2<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(RUSH_2_SKILL_ID));
         }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(RUSH_2_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

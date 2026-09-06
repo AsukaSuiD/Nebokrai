@@ -1,4 +1,7 @@
 //! Семейство фронтальных ударов молниеносным мечом (`0x70/0x77/0x78/0x7E`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/lightningsword*.cpp`. Навык повторно проверяет оружие
@@ -166,6 +169,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(skill_id)
         .is_none_or(|execution| execution.dispatch() != dispatch)

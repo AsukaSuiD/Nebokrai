@@ -1,4 +1,7 @@
 //! Малая звезда `CLittleStar` (`0x1a4`) для игроков и монстров.
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/littlestar.cpp`. Навык после задержки один раз строит
@@ -263,6 +266,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(LITTLE_STAR_SKILL_ID));
         }
         ai.begin_player_skill_execution(PlayerLittleStarExecutionState::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

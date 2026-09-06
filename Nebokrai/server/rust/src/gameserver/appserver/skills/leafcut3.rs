@@ -1,4 +1,7 @@
 //! Третий периодический удар листвы `CLeafCut3` (`0x8F`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //! Reuse проверяется exact `CSkill::IsRestored`; cast и periodic часы — elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
@@ -126,6 +129,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { return reject_initial(game, player_id, 7, mp_loss, None) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(LEAF_CUT_3_SKILL_ID)); }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     }
 
     if target_dead { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10); finish_player_leaf_cut_3(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }

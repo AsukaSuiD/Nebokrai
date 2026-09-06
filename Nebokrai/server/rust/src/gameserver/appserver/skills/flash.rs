@@ -1,4 +1,7 @@
 //! Рывок сквозь строй `CFlash` (`0x69`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/flash.cpp`. Навык требует меч категории `2` и живое
@@ -227,6 +230,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         if player.has_state_by_skill_id(PILLAR_SKILL_ID) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2); game.send_skill_system_info(player_id, b"GS0302"); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(FLASH_SKILL_ID)); }
         ai.begin_player_skill_execution(FlashExecutionState::begin(dispatch, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_some_and(|state| !state.condition_checked) {

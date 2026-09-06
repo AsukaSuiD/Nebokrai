@@ -1,4 +1,7 @@
 //! Подготовка яростного удара `CRageBreak` (`0x6E`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //! Reuse проверяется exact `CSkill::IsRestored`; каст и состояние используют
 //! абсолютный wrapping-срок.
 //!
@@ -111,6 +114,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(RAGE_BREAK_SKILL_ID));
         }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(RAGE_BREAK_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

@@ -1,4 +1,7 @@
 //! Огненный круг `CInfernol` (`0x135`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/infernol.cpp`. PDB-глобали `0x006A36F4..0x006A372C`
@@ -317,6 +320,7 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(INFERNOL_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(INFERNOL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

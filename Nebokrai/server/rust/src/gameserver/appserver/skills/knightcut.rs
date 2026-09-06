@@ -1,4 +1,7 @@
 //! Рыцарский удар `CKnightCut` (`0x67`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //! Reuse проверяется exact `CSkill::IsRestored`; cast/state часы — elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
@@ -214,6 +217,7 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
         if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 { send_failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(KNIGHT_CUT_SKILL_ID)); }
         player_ai.begin_player_skill_execution(KnightCutExecutionState::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<KnightCutExecutionState>(KNIGHT_CUT_SKILL_ID).is_none_or(|execution| execution.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if player_ai.player_skill_state::<KnightCutExecutionState>(KNIGHT_CUT_SKILL_ID).is_some_and(|execution| execution.kernel().stage() == SkillStage::Begin) {

@@ -1,4 +1,7 @@
 //! Фронтальный рубящий удар `CJuCut` (`0x6C`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //! Reuse проверяется exact `CSkill::IsRestored`; cast delay остаётся elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
@@ -136,6 +139,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(JU_CUT_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(JU_CUT_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

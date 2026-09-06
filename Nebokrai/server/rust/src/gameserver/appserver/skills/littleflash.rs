@@ -1,4 +1,7 @@
 //! Семейство малых рывков `CLittleFlash` (`0x71`) и `CLittleFlash2` (`0x7f`).
+//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
+//! перемещение и атака остаются у AI после постановки Attack в том же Run;
+//! раннее время Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/littleflash.cpp` и `littleflash2.cpp`. Первый навык
@@ -366,6 +369,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         ai.begin_player_skill_execution(LittleFlashExecutionState::begin(dispatch, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
