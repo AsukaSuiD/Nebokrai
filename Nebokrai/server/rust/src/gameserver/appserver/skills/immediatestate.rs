@@ -36,6 +36,10 @@
 //! Общая граница AI проверяет выполненный Begin до concrete-owner-а:
 //! новый или уже завершённый экземпляр не накладывает состояние повторно,
 //! не публикует его и не меняет reuse. Проверка одинакова для active и background.
+//! Отсутствие SkillBaseProperties после Begin вызывает End(0), а не повтор
+//! AI на каждом проходе: EnlargeFullMiss/MaxMp/MaxHp — 0x00516893,
+//! 0x00516B23, 0x00516D63; TaiJi/Origin сохраняют тот же отказ в RAW owners.
+//! Отказ не снимает уже наложенное состояние, не публикует его и не пишет reuse.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
@@ -128,11 +132,12 @@ pub(crate) fn execute_monster_immediate_state<Runtime: GameMainLoopRuntime>(
     skill_level: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return false;
-    };
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
         return false;
+    };
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        monster.move_shape_mut().finish_immediate_skill(skill_id);
+        return true;
     };
     match skill_id {
         TAIJI_SKILL_ID => {
