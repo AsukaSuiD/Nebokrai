@@ -83,6 +83,9 @@
 //! эффектов End: в частности, пути EnergyBolt/SnakeBolt/ZombieClaw
 //! (0x0053BF50) — до SetMoveable(true). Stiffen чужого текущего навыка
 //! не очищает сохранённое исполнение другого owner-а.
+//! Неизвестный concrete End не заменяется cancel_base_attack_cast: Stiffen
+//! оставляет его Attack и ресурсы нетронутыми до подключения owner-а, вместо
+//! фиктивного IsEnded с потерей цели. Это незавершённая ветвь реконструкции.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1435,8 +1438,6 @@ impl CMonster {
                     self.base_attack_cast = None;
                 }
                 ended_skill = Some(skill_id);
-            } else if owns_cast {
-                self.cancel_base_attack_cast();
             } else {
                 return None;
             }
