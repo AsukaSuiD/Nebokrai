@@ -1,4 +1,7 @@
 //! Общий короткий runtime немедленных состояний игрока и монстра.
+//! Monster active/background используют единый выбор concrete owner-а.
+//! Он не выполняет Begin и не меняет active FIFO: допуск и фазы остаются
+//! у caller-а; WuXing сохраняет End(0), Swordship — собственный порядок End.
 //!
 //! Владелец объединяет только подтверждённую одинаковую последовательность
 //! `Begin → Check → Calculate → Attack → Apply`. Идентификатор usage,
@@ -49,6 +52,51 @@ enum ImmediateStateKind {
     EnlargeMaxHp,
     EnlargeMaxMp,
     Origin,
+}
+
+pub(crate) enum MonsterImmediateSkill {
+    State,
+    Swordship,
+    PlayerOnly,
+}
+
+impl MonsterImmediateSkill {
+    pub(crate) fn from_skill_id(skill_id: u32) -> Option<Self> {
+        if super::swordship::is_swordship_skill(skill_id) {
+            Some(Self::Swordship)
+        } else if is_wuxing_skill(skill_id) {
+            Some(Self::PlayerOnly)
+        } else if is_immediate_state_skill(skill_id) {
+            Some(Self::State)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn has_effect(&self) -> bool {
+        !matches!(self, Self::PlayerOnly)
+    }
+
+    pub(crate) fn execute(
+        self, game: &CGame, region: &mut CServerRegion, monster_id: i32,
+        skill_id: u32, skill_level: i32, now_ms: u32,
+    ) -> bool {
+        match self {
+            Self::State => execute_monster_immediate_state(
+                game, region, monster_id, skill_id, skill_level, now_ms,
+            ),
+            Self::Swordship => super::swordship::execute_monster_auto_start_swordship(
+                game, region, monster_id, skill_id, skill_level,
+            ),
+            Self::PlayerOnly => {
+                let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+                    return false;
+                };
+                monster.move_shape_mut().finish_immediate_skill(skill_id);
+                true
+            }
+        }
+    }
 }
 
 /// Monster-ветвь пяти подтверждённых immediate-state `AI`: owner навыка

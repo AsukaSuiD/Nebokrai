@@ -111,8 +111,6 @@
 //! ближайшую клетку footprint, а не центральную tile-позицию монстра.
 
 use std::collections::BTreeMap;
-use super::skills::swordship::is_swordship_skill;
-use super::skills::wuxing::is_wuxing_skill;
 
 use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
 use super::ai::baseai::{
@@ -137,16 +135,11 @@ use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::energybolt::PathProjectileProgress;
 use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
-use super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
-use super::skills::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
-use super::skills::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
-use super::skills::origin::ORIGIN_SKILL_ID;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
-use super::skills::taiji::TAIJI_SKILL_ID;
 use super::skills::yunshenglightning::YunShengLightningProgress;
 use super::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::CMessage;
@@ -622,23 +615,6 @@ impl CMonster {
             let _loaded =
                 self.move_shape
                     .add_skill(u32::from(skill.id), i32::from(skill.level), factory);
-        }
-    }
-
-    /// `CBaseAI::OnExecuteBackStageSkills` для подтверждённых monster-ветвей
-    /// пяти немедленных state-owner-ов и Swordship. WuXing снимается по
-    /// подтверждённому `End(0)` для type != 400; неизвестные ID остаются в очереди.
-    /// Some(false) — подтверждённый player-only отказ без эффекта.
-    pub(crate) fn immediate_back_stage_skill_policy(skill_id: u32) -> Option<bool> {
-        if is_wuxing_skill(skill_id) {
-            Some(false)
-        } else if matches!(skill_id, TAIJI_SKILL_ID | ORIGIN_SKILL_ID
-            | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID | ENLARGE_FULL_MISS_SKILL_ID)
-            || is_swordship_skill(skill_id)
-        {
-            Some(true)
-        } else {
-            None
         }
     }
 

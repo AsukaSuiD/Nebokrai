@@ -1377,7 +1377,7 @@ use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::immediatestate::{
-    execute_monster_immediate_state,
+    MonsterImmediateSkill,
     execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
@@ -1469,7 +1469,6 @@ use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
 use crate::gameserver::appserver::skills::swordship::{
-    execute_monster_auto_start_swordship,
     execute_player_swordship, is_swordship_skill,
 };
 use crate::gameserver::appserver::skills::lifeshield::{
@@ -40831,24 +40830,12 @@ impl CGame {
                 index += 1;
                 continue;
             }
-            let Some(has_effect) = CMonster::immediate_back_stage_skill_policy(skill_id) else {
+            let Some(owner) = MonsterImmediateSkill::from_skill_id(skill_id) else {
                 index += 1;
                 continue;
             };
-            let executed = if !has_effect {
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().finish_immediate_skill(skill_id);
-                }
-                true
-            } else if is_swordship_skill(skill_id) {
-                execute_monster_auto_start_swordship(
-                    self, region, monster_id, skill_id, skill_level,
-                )
-            } else {
-                execute_monster_immediate_state(
-                    self, region, monster_id, skill_id, skill_level, now_ms,
-                )
-            };
+            let has_effect = owner.has_effect();
+            let executed = owner.execute(self, region, monster_id, skill_id, skill_level, now_ms);
             execution_count += usize::from(has_effect);
             tracing::trace!(
                 region_id = region.id,

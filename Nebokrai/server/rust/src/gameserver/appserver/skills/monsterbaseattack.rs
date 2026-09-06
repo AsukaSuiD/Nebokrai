@@ -129,9 +129,7 @@ use super::corpsecandleblasting::{
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
-use super::immediatestate::{execute_monster_immediate_state, is_immediate_state_skill};
-use super::swordship::{execute_monster_auto_start_swordship, is_swordship_skill};
-use super::wuxing::is_wuxing_skill;
+use super::immediatestate::MonsterImmediateSkill;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
@@ -412,7 +410,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | KNOCK_OUT_SKILL_ID
             | YAKSHA_SLASH_SKILL_ID
             | SNOW_STORM_SKILL_ID
-    ) || is_immediate_state_skill(skill_id) || is_swordship_skill(skill_id)
+    ) || MonsterImmediateSkill::from_skill_id(skill_id).is_some()
 }
 
 /// Rust-владелец выбирает навык только когда любой явно установленный результат
@@ -1239,7 +1237,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let now_ms = runtime.now_milliseconds();
-    if is_immediate_state_skill(skill_id) || is_swordship_skill(skill_id) {
+    if let Some(owner) = MonsterImmediateSkill::from_skill_id(skill_id) {
         let attack_interval = schedule_attack_interval(
             property.ai,
             pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
@@ -1262,21 +1260,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().begin_immediate_skill(skill_id);
         }
-        let executed = if is_swordship_skill(skill_id) {
-            execute_monster_auto_start_swordship(
-                game, region, monster_id, skill_id, i32::from(skill.level),
-            )
-        } else if is_wuxing_skill(skill_id) {
-            // Exact player-only отказ завершает навык, но не создаёт состояние.
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.move_shape_mut().finish_immediate_skill(skill_id);
-            }
-            true
-        } else {
-            execute_monster_immediate_state(
-                game, region, monster_id, skill_id, i32::from(skill.level), now_ms,
-            )
-        };
+        let executed = owner.execute(
+            game, region, monster_id, skill_id, i32::from(skill.level), now_ms,
+        );
         if executed {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.finish_active_immediate_skill(now_ms);
