@@ -1,4 +1,8 @@
 //! Достигнутая send-family проекция `CPlayer` исторического GameServer.
+//! Сравнение ожидающего WarSoul-запроса не равно равенству исполнения:
+//! Attack point (0x0050A349..0x0050A367) сравнивает ID/x/y, object
+//! (0x0050A13A..0x0050A15C) — ID/type/target ID. Снимок уровня и GUID
+//! не заменяют ожидающую команду; полный Eq dispatch остаётся для lifecycle.
 //! OnChangeSkill (0x00508E6A..0x00508E7E) выбирает GetDefaultAttackSkillID
 //! через обычный SetCurrentSkill. Выбранный ID сохраняется после End;
 //! живое исполнение отдельно принадлежит CPlayerAI, дополнительного idle-ID нет.
@@ -1128,6 +1132,16 @@ pub(crate) enum BattleFairySkillDispatch {
 }
 
 impl BattleFairySkillDispatch {
+    pub(crate) fn same_pending_request(self, other: Self) -> bool {
+        let key = |dispatch| match dispatch {
+            Self::SelfTarget { skill_id, player_id, .. } => (skill_id, 0, player_id, 0),
+            Self::Point { skill_id, x, y, .. } => (skill_id, 1, x, y),
+            Self::Object { skill_id, target, .. } =>
+                (skill_id, 2, target.object_type, target.id),
+        };
+        key(self) == key(other)
+    }
+
     pub(crate) const fn skill_id(self) -> u32 {
         match self {
             Self::SelfTarget { skill_id, .. }

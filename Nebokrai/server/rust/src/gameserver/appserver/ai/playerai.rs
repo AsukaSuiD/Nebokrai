@@ -621,14 +621,16 @@ impl CPlayerAI {
     /// Native Attack заменяет только m_qTarget; выбранная OnSchedule команда
     /// уже извлечена из FIFO и сохраняется независимо от текущего ID навыка.
     pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
-        Self::replace_pending_skill(&mut self.player_skills, dispatch).unwrap_or(0)
+        Self::replace_pending_skill(&mut self.player_skills, dispatch, PartialEq::eq).unwrap_or(0)
     }
 
     pub(crate) fn queue_battle_fairy_skill(
         &mut self,
         dispatch: BattleFairySkillDispatch,
     ) -> BattleFairySkillQueueOutcome {
-        match Self::replace_pending_skill(&mut self.battle_fairy_skills, dispatch) {
+        match Self::replace_pending_skill(&mut self.battle_fairy_skills, dispatch, |pending, requested| {
+            pending.same_pending_request(*requested)
+        }) {
             None => BattleFairySkillQueueOutcome::PendingUnchanged,
             Some(replaced) => BattleFairySkillQueueOutcome::Queued { replaced },
         }
@@ -637,11 +639,12 @@ impl CPlayerAI {
     /// Общая механика двух независимых очередей: точный повтор головы ничего
     /// не меняет, другой запрос заменяет ожидающие. Текущее исполнение не входит
     /// в эту операцию; разницу wire-отказов применяет CGame по числу замен.
-    fn replace_pending_skill<Dispatch: PartialEq>(
+    fn replace_pending_skill<Dispatch>(
         queue: &mut VecDeque<Dispatch>,
         dispatch: Dispatch,
+        same_request: impl FnOnce(&Dispatch, &Dispatch) -> bool,
     ) -> Option<usize> {
-        if queue.front() == Some(&dispatch) {
+        if queue.front().is_some_and(|pending| same_request(pending, &dispatch)) {
             return None;
         }
         let replaced = queue.len();
