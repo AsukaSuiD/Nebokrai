@@ -1,8 +1,9 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
 //! CPet vtable 0x00652D0C: OnFighting (+0x1C) указывает на CBaseAI
 //! 0x004C9320. Завершение его атаки ставит ChangeSkill независимо от
-//! сохранённого первичного AI; специальные SearchEnemy лучников остаются
-//! только неприручённому владельцу.
+//! сохранённого первичного AI. У стационарных лучников SearchEnemy следует
+//! после базового ChangeSkill, у StupidArcher заменяет его. Последовательность
+//! вычисляется по каноническому binding, а не хранится отдельным action-полем.
 //! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
 //! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
 //! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
@@ -203,7 +204,6 @@ pub(crate) struct CMonster {
     skill_last_used_ms: BTreeMap<u32, u32>,
     ai_schedule: MonsterAiScheduleState,
     base_attack_owned_tick: bool,
-    attack_completion_action: AiShapeAction,
     boss_blue_ai: BossBlueAiState,
     boss_fiend_ai: Option<BossFiendAiState>,
     passive_gladiator_ai: Option<PassiveGladiatorState>,
@@ -387,7 +387,6 @@ impl CMonster {
             skill_last_used_ms: BTreeMap::new(),
             ai_schedule: MonsterAiScheduleState::default(),
             base_attack_owned_tick: false,
-            attack_completion_action: AiShapeAction::ChangeSkill,
             boss_blue_ai: BossBlueAiState::default(),
             boss_fiend_ai: None,
             passive_gladiator_ai: None,
@@ -933,13 +932,7 @@ impl CMonster {
     pub(crate) fn initialize_ai(&mut self, property: &MonsterProperties, now_ms: u32) {
         let binding = MonsterAiBinding::create(property, self.tame_attempt_count);
         let primary = binding.primary();
-        let ai_type = binding.ai_type();
         self.ai_binding = Some(binding);
-        self.attack_completion_action = if matches!(primary, MonsterAiKind::StupidArcher) {
-            AiShapeAction::SearchEnemy
-        } else {
-            crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_action(ai_type)
-        };
         self.boss_fiend_ai =
             matches!(primary, MonsterAiKind::BossFiend).then(|| BossFiendAiState::new(now_ms));
         self.passive_gladiator_ai =
@@ -1619,12 +1612,16 @@ impl CMonster {
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
         }
-        let completion_action = if self.is_tamed() {
-            AiShapeAction::ChangeSkill
+        let completion_ai_type = if self.is_tamed() {
+            0
         } else {
-            self.attack_completion_action
+            self.ai_binding.map_or(0, MonsterAiBinding::ai_type)
         };
-        self.base_ai.add_ai_event(completion_action, 0, 0, now_ms);
+        for &action in crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_actions(
+            completion_ai_type, !CMoveShape::is_died(self.hit_points),
+        ) {
+            self.base_ai.add_ai_event(action, 0, 0, now_ms);
+        }
         Some(execution)
     }
 

@@ -7,8 +7,8 @@
 //! Реальный путь `monsterbaseattack` выполняет выбор навыка и поиск цели, а
 //! достигнутый владелец навыка не использует произвольный порядок хранилища
 //! сущностей. `OnIdle` ставит строгую очередь
-//! `ChangeSkill → Stand → SearchEnemy`, а завершённая атака сохраняет навык и
-//! снова ставит поиск. `OnChangeSkill` проверяет `CSkill::IsRestored` и только
+//! `ChangeSkill → Stand → SearchEnemy`, а завершение атаки ставит
+//! ChangeSkill, затем SearchEnemy. `OnChangeSkill` проверяет `CSkill::IsRestored` и только
 //! для ещё не восстановленного навыка дописывает полный `GetRestoreTime` в
 //! хвост FIFO. Стационарный idle сам по себе не означает наследование этого
 //! метода: например, exact constructor `CVilCouGuardWithBow` напрямую строит
@@ -40,13 +40,18 @@ pub(crate) struct FixedArcherTarget {
     pub(crate) distance: i32,
 }
 
-/// Стационарные лучники и охранники завершают атаку новым поиском, не сбрасывая
-/// текущий навык. Остальные monster-owner-ы сохраняют общий `ChangeSkill`.
-pub(crate) const fn attack_completion_action(ai_type: u32) -> AiShapeAction {
-    if matches!(ai_type, 5 | 11 | 103) {
-        AiShapeAction::SearchEnemy
+/// OnFighting 0x0060FA70 сначала вызывает CBaseAI 0x004C9320 (ChangeSkill),
+/// затем добавляет SearchEnemy. Вариант 0x0060D930 добавляет поиск только
+/// живому владельцу; StupidArcher 0x0060F6F0 не вызывает базовый обработчик.
+pub(crate) const fn attack_completion_actions(ai_type: u32, alive: bool) -> &'static [AiShapeAction] {
+    if ai_type == 6 {
+        &[AiShapeAction::SearchEnemy]
+    } else if matches!(ai_type, 5 | 103)
+        || (alive && super::monsterai::uses_stationary_attack_schedule(ai_type))
+    {
+        &[AiShapeAction::ChangeSkill, AiShapeAction::SearchEnemy]
     } else {
-        AiShapeAction::ChangeSkill
+        &[AiShapeAction::ChangeSkill]
     }
 }
 
