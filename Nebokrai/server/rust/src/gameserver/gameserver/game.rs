@@ -41315,6 +41315,9 @@ impl CGame {
         can_schedule: bool,
         runtime: &mut Runtime,
     ) -> usize {
+        if player_ai.advance_handled_war_soul_action(|| runtime.now_milliseconds()) {
+            return 1;
+        }
         // OnSchedule видит ещё занятый Attack. Его снятие в active-фазе
         // не разрешает извлечь следующий запрос в оставшейся части Run.
         if player_ai.finish_battle_fairy_attack(
@@ -46862,9 +46865,13 @@ impl CGame {
                                 )
                             };
                             let passive_action_hung_up = passive_stiffen.blocks_active();
+                            let handled_active_action = !ai_hibernated
+                                && !passive_action_hung_up
+                                && player_ai.advance_handled_active_action(|| runtime.now_milliseconds());
                             let moving_started =
                                 !ai_hibernated
                                     && !passive_action_hung_up
+                                    && !handled_active_action
                                     && player_ai.active_move_unhandled();
                             if moving_started {
                                 let _ = self.with_published_player_ai(player_id, &mut player_ai, |game| {
@@ -46873,10 +46880,12 @@ impl CGame {
                             }
                             let active_move_advanced = !ai_hibernated
                                 && !passive_action_hung_up
+                                && !handled_active_action
                                 && player_ai.advance_active_move(runtime.now_milliseconds());
                             let active_move_handled = moving_started || active_move_advanced;
                             let active_stand_handled = if !ai_hibernated
                                 && !passive_action_hung_up
+                                && !handled_active_action
                                 && !active_move_handled
                                 && player_ai.active_stand_pending()
                             {
@@ -46894,6 +46903,7 @@ impl CGame {
                             };
                             let change_skill_handled = !ai_hibernated
                                 && !passive_action_hung_up
+                                && !handled_active_action
                                 && !active_move_handled
                                 && !active_stand_handled
                                 && player_ai.active_change_skill_pending();
@@ -46905,6 +46915,7 @@ impl CGame {
                             }
                             let ended_attack_handled = !ai_hibernated
                                 && !passive_action_hung_up
+                                && !handled_active_action
                                 && !active_move_handled
                                 && !active_stand_handled
                                 && !change_skill_handled
@@ -46917,7 +46928,8 @@ impl CGame {
                                     },
                                     || runtime.now_milliseconds(),
                                 );
-                            let active_action_handled = active_move_handled
+                            let active_action_handled = handled_active_action
+                                || active_move_handled
                                 || active_stand_handled
                                 || change_skill_handled
                                 || ended_attack_handled;
@@ -47317,6 +47329,8 @@ impl CGame {
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         if passive_death == PassiveDeathAction::WaitingForMove {
                             move_pending = monster.advance_active_ai_move(now_ms);
+                        } else if !death_started && monster.advance_handled_active_ai_action(now_ms) {
+                            active_action_completed = true;
                         } else if !death_started {
                             monster.queue_search_after_active_move(ai_type, now_ms);
                             move_pending = monster.advance_active_ai_move(now_ms);

@@ -1382,6 +1382,10 @@ impl CMonster {
         self.base_ai.advance_active_stand(now_ms)
     }
 
+    pub(crate) fn advance_handled_active_ai_action(&mut self, now_ms: u32) -> bool {
+        self.base_ai.advance_handled_active_action(|| now_ms)
+    }
+
     pub(crate) fn active_ai_change_skill_pending(&self) -> bool {
         self.base_ai.active_change_skill_pending()
     }

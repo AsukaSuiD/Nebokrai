@@ -8,6 +8,9 @@
 //! То же различие сохраняют ProcessActiveAction (0x004C81D0) и WarSoul
 //! (0x004C8390): общий завершитель принимает только handling 0 или 1,
 //! а не весь знаковый диапазон до единицы.
+//! Уже обработанная голова active FIFO проверяет deadline до dispatch любого
+//! action. Даже её снятие завершает этот проход, не исполняя следующий элемент.
+//! Общая операция обслуживает раздельные обычную и WarSoul очереди.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -522,6 +525,24 @@ impl CBaseAI {
 
     pub(crate) fn finish_war_soul_attack(&mut self, now_ms: u32) {
         Self::finish_action(&mut self.active_war_soul_actions, AiShapeAction::Attack, now_ms);
+    }
+
+    pub(crate) fn advance_handled_active_action(&mut self, now: impl FnOnce() -> u32) -> bool {
+        Self::advance_handled_action(&mut self.active_actions, now)
+    }
+
+    pub(crate) fn advance_handled_war_soul_action(&mut self, now: impl FnOnce() -> u32) -> bool {
+        Self::advance_handled_action(&mut self.active_war_soul_actions, now)
+    }
+
+    fn advance_handled_action(queue: &mut VecDeque<AiEvent>, now: impl FnOnce() -> u32) -> bool {
+        let Some(event) = queue.front().filter(|event| event.handling == 1) else {
+            return false;
+        };
+        if ai_event_deadline_reached(event, now()) {
+            queue.pop_front();
+        }
+        true
     }
 
     fn finish_action(queue: &mut VecDeque<AiEvent>, action: AiShapeAction, now_ms: u32) {
