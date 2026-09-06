@@ -678,7 +678,8 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 // через `CBaseAI::advance_active_stand`. Пустой OnIdle игрока не добавляет
 // Stand. Слоты +0x40/+8/+0/+4 задают OnSchedule/background/passive/active;
 // +0x44/+0xC — отдельный хвост WarSoul даже после AES_HUNG_UP passive.
-// В player runtime ещё не разделены все Begin и AI по этим фазам.
+// Player Begin выполняется в OnSchedule до background, первый AI — только
+// в active после passive. Разделение Begin/AI WarSoul ещё не замкнуто.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:472

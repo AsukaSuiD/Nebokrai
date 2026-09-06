@@ -85,13 +85,14 @@
 //! (0x00485540), поэтому idle игрока не ставит базовый Stand на 1000 мс.
 //! CBaseAI::Run (0x004C7D10) вызывает OnSchedule, затем background, passive и
 //! active; только AES_HUNG_UP запрещает следующую основную фазу. WarSoul
-//! обрабатывается после них независимо от результата passive. В Rust фон
-//! уже предшествует passive, а WarSoul вызывается отдельным хвостом даже
+//! обрабатывается после них независимо от результата passive. В Rust Begin
+//! выполняется до фона, а WarSoul вызывается отдельным хвостом даже
 //! при Defense/Stiffen. Прерывание concrete навыка завершается до этого
 //! хвоста. Attack снимается лишь после подтверждённого завершения concrete
 //! навыка; неоконченный End(4) сохраняет событие. До Move очистка доходит без
-//! прерывания навыка. Разделение расписания/исполнения остальных owner-ов
-//! ещё требует замыкания. Stiffen передаёт
+//! прерывания навыка. Расписание проверяет пустоту обеих основных очередей
+//! до background/passive/active; новое расписание после их очистки ждёт
+//! следующего Run. Разделение WarSoul ещё требует замыкания. Stiffen передаёт
 //! ненулевой End отдельно от отказного End(0); удерживаемая HeartLessArrow
 //! выпускается без снятия execution и Attack до последующего AI.
 //! Обработанный Defense разрешает active в том же Run; Stiffen запрещает
@@ -478,7 +479,7 @@ impl CPlayerAI {
             .push_back(PlayerAiDestination { direction, is_run });
     }
 
-    /// Выполняет достигнутую `ASA_MOVE`-границу до нового `OnSchedule`.
+    /// Выполняет достигнутую `ASA_MOVE`-границу после текущего `OnSchedule`.
     /// Даже снятое в этом вызове событие удерживает расписание до следующего
     /// такта, как `CBaseAI::ProcessActiveAction`.
     pub(crate) fn advance_active_move(&mut self, now_ms: u32) -> bool {
@@ -503,6 +504,10 @@ impl CPlayerAI {
 
     pub(crate) fn active_attack_pending(&self) -> bool {
         self.base_ai.active_attack_pending()
+    }
+
+    pub(crate) fn primary_queues_idle(&self) -> bool {
+        self.base_ai.primary_queues_idle()
     }
 
     pub(crate) fn begin_player_fighting(&mut self, now_ms: u32) {

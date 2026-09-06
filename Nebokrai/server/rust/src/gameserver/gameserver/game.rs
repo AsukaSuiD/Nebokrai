@@ -1,4 +1,9 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Player Run следует CBaseAI::Run (0x004C7D10): OnSchedule/Begin до фона,
+//! затем passive и active. Первый AI не вызывается из Begin; фон может
+//! завершить навык, а passive — прервать Attack до его первого исполнения.
+//! Допуск расписания проверяет обе основные очереди до их обработки;
+//! освобождение события не запускает второе расписание в том же Run.
 //! GameSave повозки следует CPlayer::AddToByteArray (0x00441254..0x00441450):
 //! при наличии региона живая auxiliary-повозка проверяется раньше сохранённой.
 //! Fallback по m_bReCreateCarriage допустим лишь при отсутствии monster/AI;
@@ -41365,28 +41370,25 @@ impl CGame {
         let _death = outcome.killing_blow.and_then(|blow| self.player_on_death(blow, runtime));
     }
 
-    /// Исполняет обычную очередь игрока; отдельный war-soul хвост вызывается
-    /// координатором после основных действий независимо от passive-результата.
-    fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
+    /// OnSchedule до background: выбирает одну команду и выполняет только Begin.
+    fn schedule_player_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         player_ai: &mut CPlayerAI,
-        execute_player_skill: bool,
-        can_schedule: bool,
         runtime: &mut Runtime,
-    ) -> (usize, usize) {
+    ) -> usize {
+        if !player_ai.primary_queues_idle()
+            || self.find_player(player_id).is_none_or(CPlayer::is_dead)
+        {
+            return 0;
+        }
         let mut execution_count: usize = 0;
         let mut player_execution_count = 0;
         let active_player_skill = self
             .find_player(player_id)
             .is_some_and(|player| player.current_skill_id().is_some());
-        let can_schedule_player = can_schedule && !player_ai.active_attack_pending();
-        if execute_player_skill {
-            let _ = player_ai.begin_next_player_skill(can_schedule_player);
-        }
-        if execute_player_skill
-            && can_schedule_player
-            && let Some(dispatch) = player_ai.current_player_skill()
+        let _ = player_ai.begin_next_player_skill(true);
+        if let Some(dispatch) = player_ai.current_player_skill()
         {
             let (is_rider, can_fight, current_skill_id) = self
                 .find_player(player_id)
@@ -41447,14 +41449,15 @@ impl CGame {
                 player_execution_count = 1;
             }
         }
-        if execute_player_skill
-            // OnSchedule завершён отказом: следующий элемент FIFO не должен
-            // обходить тот же guard в оставшейся части текущего AI-такта.
-            && player_execution_count == 0
-            && (can_schedule_player || player_ai.active_attack_pending())
+        // После отказа следующий элемент FIFO ждёт следующего Run.
+        if player_execution_count == 0
             && let Some(dispatch) = player_ai.current_player_skill()
         {
-            player_execution_count = 1;
+            // Native IsEnded перед Begin: живой экземпляр, в том числе
+            // уже переданный в фон, не получает лишний AI из OnSchedule.
+            if Self::materialized_player_skill_active(player_ai, dispatch.skill_id()) == Some(true) {
+                return 1;
+            }
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
             if !schedule_rejected {
@@ -41471,12 +41474,9 @@ impl CGame {
             };
             player_ai.set_scheduled_skill_begin(None);
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
-            let outcome = if begin_completed {
+            if begin_completed {
                 player_ai.begin_player_fighting(runtime.now_milliseconds());
-                self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
-            } else {
-                outcome
-            };
+            }
             let begin_rejected = !schedule_rejected
                 && !begin_completed
                 && begin_was_pending
@@ -41485,20 +41485,9 @@ impl CGame {
             if begin_rejected {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }
-            if !player_ai.active_attack_pending() && !schedule_rejected && !begin_rejected
-                && (outcome.state != QueuedSkillExecutionState::Rejected
-                    || Self::materialized_player_skill_active(player_ai, dispatch.skill_id()) == Some(true))
-            {
-                player_ai.begin_player_fighting(runtime.now_milliseconds());
-            }
-            self.apply_player_skill_contacts(player_id, dispatch, &outcome, runtime);
-            let removed_from_queue = match outcome.state {
-                QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
-                QueuedSkillExecutionState::Completed =>
-                    player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Completed),
-                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
-                    player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Rejected),
-            };
+            let removed_from_queue = self.finish_player_skill_outcome(
+                player_id, dispatch, player_ai, &outcome, runtime,
+            );
             if (schedule_rejected || begin_rejected)
                 && removed_from_queue
             {
@@ -41507,7 +41496,46 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
-        (execution_count, player_execution_count)
+        if execution_count == 0 {
+            let _ = self.run_player_ai_destination(player_id, player_ai, runtime);
+        }
+        execution_count
+    }
+
+    /// OnFighting достигнутого Attack: без повторного допуска и Begin расписания.
+    fn execute_active_player_skill<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> usize {
+        if !player_ai.active_attack_pending() {
+            return 0;
+        }
+        let Some(dispatch) = player_ai.current_player_skill() else {
+            return 0;
+        };
+        let outcome = self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime);
+        self.finish_player_skill_outcome(player_id, dispatch, player_ai, &outcome, runtime);
+        1
+    }
+
+    fn finish_player_skill_outcome<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        outcome: &QueuedSkillExecutionOutcome,
+        runtime: &mut Runtime,
+    ) -> bool {
+        self.apply_player_skill_contacts(player_id, dispatch, outcome, runtime);
+        match outcome.state {
+            QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
+            QueuedSkillExecutionState::Completed =>
+                player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Completed),
+            QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
+                player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Rejected),
+        }
     }
 
     /// Слоты +0x44/+0xC CBaseAI::Run исполняются даже после AES_HUNG_UP
@@ -47144,15 +47172,29 @@ impl CGame {
                             }
                             let ai_hibernated = self.find_player(player_id)
                                 .is_none_or(|player| player.player_ai().is_hibernated());
+                            let scheduled_skills = if ai_hibernated {
+                                0
+                            } else {
+                                let mut player_ai = self.find_player_mut(player_id)
+                                    .expect("расписание проверило владельца")
+                                    .take_player_ai();
+                                let scheduled = self.schedule_player_skill(
+                                    player_id, &mut player_ai, runtime,
+                                );
+                                if let Some(player) = self.find_player_mut(player_id) {
+                                    player.restore_player_ai(player_ai);
+                                }
+                                scheduled
+                            };
                             let back_stage_skills = if ai_hibernated {
                                 0
                             } else {
                                 self.execute_player_back_stage_skills(player_id, runtime)
                             };
-                            let mut player_ai = self
-                                .find_player_mut(player_id)
-                                .expect("active-state caller проверил canonical player")
-                                .take_player_ai();
+                            let Some(player) = self.find_player_mut(player_id) else {
+                                continue;
+                            };
+                            let mut player_ai = player.take_player_ai();
                             let defense_processed = !ai_hibernated
                                 && player_ai.process_reached_defense_actions() != 0;
                             let passive_stiffen = if ai_hibernated || defense_processed {
@@ -47188,9 +47230,6 @@ impl CGame {
                                     self.restore_player_default_attack_after_skill_end(player_id);
                                 }
                             }
-                            let can_schedule_skill = self
-                                .find_player(player_id)
-                                .is_some_and(|player| !player.is_dead());
                             let moving_started =
                                 !ai_hibernated
                                     && !passive_action_hung_up
@@ -47244,30 +47283,20 @@ impl CGame {
                                 || active_stand_handled
                                 || change_skill_handled
                                 || ended_attack_handled;
-                            let (executed_skills, executed_player_skills) = if ai_hibernated
+                            let executed_skills = if ai_hibernated
                                 || passive_action_hung_up
+                                || active_action_handled
                             {
-                                (0, 0)
+                                0
                             } else {
-                                self.execute_queued_player_skills(
+                                self.execute_active_player_skill(
                                     player_id,
                                     &mut player_ai,
-                                    !active_action_handled,
-                                    can_schedule_skill,
                                     runtime,
                                 )
                             };
-                            player_skill_executions += back_stage_skills + executed_skills;
-                            let _destination_handled = active_action_handled
-                                || (!ai_hibernated
-                                    && !passive_action_hung_up
-                                    && executed_player_skills == 0
-                                    && self.find_player(player_id).is_some()
-                                    && self.run_player_ai_destination(
-                                        player_id,
-                                        &mut player_ai,
-                                        runtime,
-                                    ));
+                            player_skill_executions +=
+                                scheduled_skills + back_stage_skills + executed_skills;
                             if !ai_hibernated {
                                 let can_schedule_fairy = self
                                     .find_player(player_id)
