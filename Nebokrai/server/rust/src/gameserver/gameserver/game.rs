@@ -23,6 +23,9 @@
 //! не параллельным списком ID. Игровой End-dispatch остаётся единственным
 //! источником поддержки завершения; неизвестный владелец возвращает None
 //! с восстановленным AI и сохранённым исполнением, без фиктивного успеха.
+//! Оба расписания проверяют CBaseAI::HasTarget (0x004C7DD0) до допуска
+//! Begin: пустая цель не вызывает Reject. Обычное расписание при этом
+//! продолжает движение к назначению; WarSoul не запускает навык.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -41310,7 +41313,7 @@ impl CGame {
             player_ai.select_player_skill(dispatch);
         }
         let mut execution_count: usize = 0;
-        if let Some(dispatch) = player_ai.current_player_skill() {
+        if let Some(dispatch) = player_ai.current_player_skill().filter(|dispatch| dispatch.has_target()) {
             if self.find_player(player_id).is_some_and(|player| !player.can_fight()) {
                 let _ = self.send_base_attack_failure(player_id, 2);
                 self.with_published_player_ai(player_id, player_ai, |game| {
@@ -41629,7 +41632,9 @@ impl CGame {
             return 1;
         }
         let mut execution_count = 0;
-        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule) {
+        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule)
+            .filter(|dispatch| dispatch.has_target())
+        {
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
                 && !player_ai.battle_fairy_skill_execution_is_materialized();

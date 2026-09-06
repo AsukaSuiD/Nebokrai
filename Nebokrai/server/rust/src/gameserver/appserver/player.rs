@@ -1159,6 +1159,18 @@ macro_rules! skill_dispatch_request {
                     Self::Point { .. } => None,
                 }
             }
+
+            /// CBaseAI::HasTarget (0x004C7DD0): знак важен для type/id,
+            /// координаты проверяются только на ноль, не на границы региона.
+            pub(crate) const fn has_target(self) -> bool {
+                match self {
+                    Self::Point { x, y, .. } => x != 0 && y != 0,
+                    _ => match self.object_target() {
+                        Some(target) => target.object_type > 0 && target.id > 0,
+                        None => false,
+                    },
+                }
+            }
         }
     )+};
 }

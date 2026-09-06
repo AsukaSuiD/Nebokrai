@@ -6,6 +6,9 @@
 //! При свободных очередях действий новый запрос заменяет текущую цель, даже
 //! если прежняя команда ещё сохранена. Riding-отказ вызывает OnLoseTarget
 //! до pop и не устанавливает цель отклоняемого запроса (0x0050998E..0x0050999D).
+//! HasTarget (0x004C7DD0) не допускает Begin при нулевой координате или
+//! неположительном type/id. Такой запрос уже извлечён, но следующий запрос
+//! может заменить цель при свободной очереди действий, в том числе WarSoul.
 //! Встречный OnLoseTarget питомца (0x004E96DC..0x004E970E) сравнивает
 //! установленные OnSchedule type/id цели, не ожидающий запрос и не GUID.
 //! После проверки цели общий OnLoseTarget очищает команду до End;
@@ -751,18 +754,17 @@ impl CPlayerAI {
         }
     }
 
-    /// Продвигает ровно одну ожидающую команду только после конечного состояния
-    /// предыдущей. Новый запрос может заменить ещё не начатый хвост FIFO, но
-    /// не уничтожает уже начатый `SkillExecutionKernel`. Запрет нового
-    /// расписания у мёртвого владельца не останавливает активную команду.
+    /// Свободная WarSoul-очередь допускает выбор одной новой цели независимо
+    /// от сохранённой команды; живой kernel не уничтожается этим выбором.
+    /// Запрет расписания у мёртвого владельца не останавливает активный AI.
     pub(crate) fn begin_next_battle_fairy_skill(
         &mut self,
         can_schedule: bool,
     ) -> Option<BattleFairySkillDispatch> {
-        if self.current_battle_fairy_skill.is_none() && can_schedule
-            && self.base_ai.active_war_soul_actions().is_empty()
+        if can_schedule && self.base_ai.active_war_soul_actions().is_empty()
+            && let Some(dispatch) = self.battle_fairy_skills.pop_front()
         {
-            self.current_battle_fairy_skill = self.battle_fairy_skills.pop_front();
+            self.current_battle_fairy_skill = Some(dispatch);
             if let Some(dispatch) = self.current_battle_fairy_skill {
                 self.selected_battle_fairy_skill_id = dispatch.skill_id();
                 // OnScheduleAboutWarSoul извлёк запрос, но IsEnded запрещает
