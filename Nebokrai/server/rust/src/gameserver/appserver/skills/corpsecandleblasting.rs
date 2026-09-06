@@ -6,6 +6,10 @@
 //! сохраняет порядок X→Y и отдельный бросок урона для каждой цели. Формула,
 //! визуальные пакеты и самоубийственный жизненный цикл находятся здесь; `CGame`
 //! остаётся владельцем защиты, применения смерти и сценарной очереди.
+//! End (0x00582810, общий со SporeBlasting) сбрасывает флаги, снимает один
+//! запрет движения и вызывает CAttackSkill::End. Общая очистка CMonster
+//! выполняет его после сообщения смерти либо при отмене/Stiffen без взрыва;
+//! скрипт, урон и пометка удаления не являются побочными эффектами End.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::monsterattack::{
@@ -282,7 +286,6 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.stage_for_delete();
-        monster.move_shape_mut().set_moveable(true);
     }
     if target_identity.object_type == PLAYER_TYPE
         && !script_file.is_empty()

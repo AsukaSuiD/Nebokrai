@@ -6,6 +6,10 @@
 //! `KnockOutState` каждой допустимой цели и помечает монстра-источник на
 //! удаление. Каноническое состояние и его `End(old) → Begin(new)` принадлежат
 //! `knockoutstate.rs`; `CGame` остаётся координатором поиска и доставки.
+//! End (0x00582810, общий с CorpseCandleBlasting) сбрасывает флаги, снимает
+//! один запрет движения и вызывает CAttackSkill::End. AI вызывает его после
+//! сообщения смерти (0x00582509); общая очистка CMonster также обслуживает
+//! отмену/Stiffen, не взрывая источник и не снимая KnockOutState на целях.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::knockoutstate::{
@@ -221,7 +225,6 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.stage_for_delete();
-        monster.move_shape_mut().set_moveable(true);
     }
     let mut died = CMessage::new(0x000b_f60b);
     died.add_long(0);

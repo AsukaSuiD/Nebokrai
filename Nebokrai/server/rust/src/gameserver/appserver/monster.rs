@@ -68,6 +68,9 @@
 //! а SpiderWebState на цели остаётся у собственного state-owner-а.
 //! YunShengLightning разделяет End 0x0057B810: общий путь снимает один запрет
 //! движения и очищает полёт, без повторного удара или сообщения эффекта.
+//! CorpseCandleBlasting/SporeBlasting разделяют End 0x00582810: снятие
+//! запрета движения принадлежит End, а взрыв, удаление источника и сообщение
+//! смерти — только AI. Прерывание не исполняет самоубийственный эффект.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1745,7 +1748,9 @@ impl CMonster {
             | super::skills::promotion::PROMOTION_SKILL_ID
             | super::skills::knockoutruntime::KNOCK_OUT_SKILL_ID
             | super::skills::spiderweb::SPIDER_WEB_SKILL_ID
-            | super::skills::yunshenglightning::YUNSHENG_LIGHTNING_SKILL_ID)
+            | super::skills::yunshenglightning::YUNSHENG_LIGHTNING_SKILL_ID
+            | super::skills::corpsecandleblasting::CORPSE_CANDLE_BLASTING_SKILL_ID
+            | super::skills::sporeblasting::SPORE_BLASTING_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {
