@@ -692,10 +692,9 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
             monster.prepare_little_star_end();
         }
         send_end(game, region, &source, skill_level);
-        let end_now_ms = runtime.now_milliseconds();
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast(end_now_ms);
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.set_little_star_progress(Some(progress));

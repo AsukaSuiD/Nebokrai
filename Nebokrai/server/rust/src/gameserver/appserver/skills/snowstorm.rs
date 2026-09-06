@@ -17,6 +17,8 @@
 //! также для монстра, хотя его Begin не запрещает движение. Общая политика
 //! CMonster сохраняет это при завершении, отмене и Stiffen, не удаляя
 //! независимую SnowStormPhalanx и не создавая область повторно.
+//! Часы reuse читаются внутри End после регистрации области и очистки cast,
+//! отдельно от времени проверки задержки и начала жизни SnowStormPhalanx.
 
 use super::baseattack::time_reached;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
@@ -139,7 +141,12 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
     let (area_width, area_height) = game.area_dimensions();
     let summoned = initialized && region.add_snow_storm_phalanx(phalanx, target_x, target_y, area_width, area_height, started_at_ms, runtime).is_ok();
     if summoned { *entry = Some(summon_id); }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate); let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack); let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply); let _ = monster.finish_base_attack_cast(now_ms); }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+    }
     true
 }
 

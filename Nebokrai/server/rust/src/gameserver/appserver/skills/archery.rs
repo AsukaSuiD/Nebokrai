@@ -28,6 +28,8 @@
 //! при End(0) и Stiffen. Отдельный SetMoveable(true) перед выпуском
 //! (Archery AI 0x005B2620) сохраняется сверх декремента в End; жизненный цикл
 //! уже созданного phalanx не сокращается при завершении cast.
+//! Reuse записывается отдельным чтением часов внутри общего End после
+//! публикации phalanx; раннее время AI и начало жизни снаряда не подменяют его.
 
 use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
@@ -355,7 +357,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }
