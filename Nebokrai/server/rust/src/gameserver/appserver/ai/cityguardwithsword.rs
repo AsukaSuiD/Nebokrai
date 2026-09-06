@@ -19,6 +19,11 @@
 //! превышении вызывает OnLoseTarget. Новый selector и добавочный SearchEnemy
 //! в этой ветви не исполняются. Проверка не переносится на такты cast;
 //! координаты источника берутся из CShape, без округления до клетки заранее.
+//! Tracing (0x0060D0E0) за пределом chase_range вызывает виртуальный
+//! OnLoseTarget, затем SearchEnemy (0x0060D292), не общий cancel. При
+//! сближении ForceMove предшествует отдельному Move(0) (0x0060D1F7),
+//! независимо от результата переноса. Ветка короткого отхода ещё требует
+//! полного подключения общего CBaseAI::MoveTo вместо одного пространственного шага.
 //! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
 //! порядка и фильтров достигнутого selector-а.
 
@@ -305,9 +310,7 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
         return CitySwordTraceOutcome::Ready;
     }
     if distance > chase_range {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
-        }
+        lose_guard_sword_target(game, region, monster_id, runtime);
         return CitySwordTraceOutcome::Handled;
     }
     if distance > maximum_distance {
@@ -329,6 +332,9 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
                 destination.y,
                 0,
             );
+        }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.begin_active_ai_move(0, runtime.now_milliseconds());
         }
         return CitySwordTraceOutcome::Handled;
     }

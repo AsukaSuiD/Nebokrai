@@ -263,7 +263,7 @@ use crate::gameserver::appserver::ai::bossfiend::{
 };
 use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
-    CitySwordTraceOutcome, lose_guard_sword_target,
+    CitySwordTraceOutcome,
     select_city_guard_enemy, trace_city_sword_target,
 };
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
@@ -1136,8 +1136,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     monster_id,
                     runtime,
                 );
-            } else if matches!(property.ai, 10 | 12 | 16) {
-                lose_guard_sword_target(game, region, monster_id, runtime);
             } else {
                 release_owned_monster_target(game, region, monster_id, runtime);
                 if has_owned_search_enemy(property.ai, tamed)
@@ -1198,8 +1196,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     monster_id,
                     runtime,
                 );
-            } else if matches!(property.ai, 10 | 12 | 16) {
-                lose_guard_sword_target(game, region, monster_id, runtime);
             } else {
                 release_owned_monster_target(game, region, monster_id, runtime);
                 if has_owned_search_enemy(property.ai, tamed)
