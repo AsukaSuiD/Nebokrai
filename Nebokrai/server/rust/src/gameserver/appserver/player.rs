@@ -1,4 +1,8 @@
 //! Достигнутая send-family проекция `CPlayer` исторического GameServer.
+//! SelfTarget — объектная перегрузка Attack с самим игроком: обычный запрос
+//! вызывает virtual +0x78 в 0x00488E20, item — в 0x00489109/0x00489547,
+//! WarSoul — в 0x0048953D/0x00489547. Он имеет ту же цель type=400/id игрока,
+//! что явный Object на себя; Point использует другую перегрузку +0x74.
 //! Сравнение ожидающего запроса не равно равенству исполнения:
 //! Attack point (0x0050A349..0x0050A367) сравнивает ID/x/y, object
 //! (0x0050A13A..0x0050A15C) — ID/type/target ID. Снимок уровня и GUID
@@ -1129,7 +1133,7 @@ macro_rules! skill_dispatch_request {
         impl $dispatch {
             const fn pending_request_key(self) -> (u32, u8, i32, i32) {
                 match self {
-                    Self::SelfTarget { skill_id, player_id, .. } => (skill_id, 0, player_id, 0),
+                    Self::SelfTarget { skill_id, player_id, .. } => (skill_id, 2, PLAYER_TYPE, player_id),
                     Self::Point { skill_id, x, y, .. } => (skill_id, 1, x, y),
                     Self::Object { skill_id, target, .. } =>
                         (skill_id, 2, target.object_type, target.id),
@@ -1142,6 +1146,18 @@ macro_rules! skill_dispatch_request {
 
             pub(crate) fn same_pending_request(self, other: Self) -> bool {
                 self.pending_request_key() == other.pending_request_key()
+            }
+
+            pub(crate) const fn object_target(self) -> Option<ShapeIdentity> {
+                match self {
+                    Self::SelfTarget { player_id, .. } => Some(ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    }),
+                    Self::Object { target, .. } => Some(target),
+                    Self::Point { .. } => None,
+                }
             }
         }
     )+};

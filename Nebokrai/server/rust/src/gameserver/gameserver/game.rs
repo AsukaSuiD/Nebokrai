@@ -37184,7 +37184,7 @@ impl CGame {
                             MaterializedSkillEndCause::Interruption,
                             runtime,
                         );
-                        if matches!(dispatch, PlayerSkillDispatch::Object { .. }) {
+                        if dispatch.object_target().is_some() {
                             let _ = self.send_base_attack_failure(player_id, 2);
                             continue;
                         }
@@ -43989,7 +43989,8 @@ impl CGame {
 
     /// Достигнутый `CBaseAI::GetTarget` игрока: до планирования FIFO-команды
     /// поля цели ещё нулевые, поэтому требуется совпадающий текущий навык.
-    /// Координатная и самостоятельная команды указатель цели не создают.
+    /// Только координатная команда не создаёт указатель цели; SelfTarget
+    /// использует объектную перегрузку с самим игроком.
     pub(crate) fn player_ai_has_resolved_target(&self, player_id: i32, region_id: i32) -> bool {
         let Some(player) = self.find_player(player_id) else {
             return false;
@@ -43997,12 +43998,13 @@ impl CGame {
         let Some(current_skill_id) = player.current_skill_id() else {
             return false;
         };
-        let Some(PlayerSkillDispatch::Object { skill_id, target }) =
-            player.player_ai().current_player_skill()
-        else {
+        let Some(dispatch) = player.player_ai().current_player_skill() else {
             return false;
         };
-        skill_id == current_skill_id
+        let Some(target) = dispatch.object_target() else {
+            return false;
+        };
+        dispatch.skill_id() == current_skill_id
             && 0 < target.object_type
             && 0 < target.id
             && self.find_shape_in_region(region_id, target).is_some()
