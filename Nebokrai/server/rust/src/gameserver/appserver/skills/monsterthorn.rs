@@ -32,9 +32,15 @@
 //! Отказ вызывает End(0) (0x00541751), включая SetMoveable(true) даже
 //! без новой блокировки; Attack при отказе не ставится. Begin и AI
 //! используют один выбор точки GetBeAttackedPoint, не центр footprint.
-//! Отсутствие свойств до входа в monster-owner остаётся разрывом caller-а;
-//! этот отказ пока не проходит native Begin/End(0). Player Begin также
-//! ещё не согласован для отсутствующих свойств и неразрешённого объекта.
+//! Отсутствие свойств после Begin вызывает End(0) (0x005423E2); caller
+//! передаёт этот отказ owner-у, не оставляя живой cast в очереди. Player
+//! CheckCastCondition без свойств также завершается через End(0).
+//! Объектный Begin(type/id) (0x005415F0 → 0x005DBE20) хранит заданную
+//! identity и нулевой fallback независимо от разрешения объекта. Null-цель
+//! не запрещена CheckCastCondition: Begin использует пустой путь, а AI
+//! повторно разрешает сохранённую identity. До monster Begin отсутствие
+//! свойств всё ещё останавливает schedule, требующий их для дистанции;
+//! точный отказ этого раннего caller-а остаётся несогласованным.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -155,6 +161,15 @@ fn reject_monster_begin(region: &mut CServerRegion, monster_id: i32) {
     }
 }
 
+pub(crate) fn end_monster_thorn_without_reuse(region: &mut CServerRegion, monster_id: i32) -> bool {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
+    if !monster.base_attack_cast().is_some_and(|cast| cast.dispatch().skill_id == MONSTER_THORN_SKILL_ID) {
+        return false;
+    }
+    let _ = monster.finish_base_attack_cast_without_reuse();
+    true
+}
+
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -222,9 +237,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if target.dead && cast.is_some_and(|cast| cast.dispatch().skill_id == MONSTER_THORN_SKILL_ID) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.finish_base_attack_cast_without_reuse();
-        }
+        let _ = end_monster_thorn_without_reuse(region, monster_id);
         return true;
     }
     if cast.is_none()
@@ -319,9 +332,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     };
     let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if maximum != 0 && path.len() > maximum as usize {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.finish_base_attack_cast_without_reuse();
-        }
+        let _ = end_monster_thorn_without_reuse(region, monster_id);
         return true;
     }
     if path.iter().any(|cell| cell.2 == 2) {
@@ -476,8 +487,8 @@ fn player_target_path(
 
 pub(crate) fn execute_player_monster_thorn<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_player_monster_thorn_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(MONSTER_THORN_SKILL_ID)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(MONSTER_THORN_SKILL_ID, level).cloned() else { if ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).is_some() { restore_player(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) }; let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let hit = properties.query_property(super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
-    if ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).is_none() { if !skill_is_restored(ai.skill_last_used_ms(MONSTER_THORN_SKILL_ID), reuse, now) { send_player_failure(game, player_id, 0x0d); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } let Some(destination) = player_destination(game, region_id, dispatch, None) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let Some(path) = player_target_path(game, region_id, player_id, (source_x, source_y), dispatch) else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }; if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); drop(path); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); drop(path); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(MONSTER_THORN_SKILL_ID)); } ai.begin_player_skill_execution(PlayerMonsterThornExecutionState::begin(dispatch, destination, now)); return player_terminal(QueuedSkillExecutionState::Begun); }
+    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(MONSTER_THORN_SKILL_ID)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(MONSTER_THORN_SKILL_ID, level).cloned() else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }; let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let hit = properties.query_property(super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
+    if ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).is_none() { if !skill_is_restored(ai.skill_last_used_ms(MONSTER_THORN_SKILL_ID), reuse, now) { send_player_failure(game, player_id, 0x0d); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } let Some(destination) = player_destination(game, region_id, dispatch, Some((0, 0))) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let Some(path) = player_target_path(game, region_id, player_id, (source_x, source_y), dispatch) else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }; if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); drop(path); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); drop(path); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(MONSTER_THORN_SKILL_ID)); } ai.begin_player_skill_execution(PlayerMonsterThornExecutionState::begin(dispatch, destination, now)); return player_terminal(QueuedSkillExecutionState::Begun); }
     let fallback = ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).map(|state| state.destination); let Some(destination) = player_destination(game, region_id, dispatch, fallback) else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }; if player_target(dispatch).is_some_and(|target| game.base_magic_target_view(region_id, target).is_some() && game.periodic_state_target_dead(region_id, target)) { send_player_failure(game, player_id, 10); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }
     if ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) { if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_visual(game, player_id, level, 1, None, destination); if let Some(state) = ai.player_skill_state_mut::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); } }
     let started = ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default(); if runtime.now_milliseconds() < started.wrapping_add(delay) { return player_terminal(QueuedSkillExecutionState::Pending) } let Some(path) = player_target_path(game, region_id, player_id, (source_x, source_y), dispatch) else { return player_terminal(QueuedSkillExecutionState::Pending) }; if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); finish_player(game, player_id, ai, runtime); return player_terminal(QueuedSkillExecutionState::RejectedAfterUse) }

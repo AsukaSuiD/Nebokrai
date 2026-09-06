@@ -11,6 +11,9 @@
 //! расписания: его sufferer — сам монстр. Фоновый Begin не требует attack-cast,
 //! повторного Begin или наличия боевой цели; завершение FIFO остаётся следующим
 //! active-проходом. Признак Begin берётся из зарегистрированного экземпляра.
+//! MonsterThorn AI без свойств (0x005423E2) вызывает owner End(0).
+//! Общий lookup не поглощает этот отказ живого cast; до Begin свойства
+//! по-прежнему необходимы расписанию для расчёта диапазона.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -1268,6 +1271,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
     else {
+        if skill_id == MONSTER_THORN_SKILL_ID && cast.is_some() {
+            return super::monsterthorn::end_monster_thorn_without_reuse(region, monster_id);
+        }
         return false;
     };
     if cast.is_none()
