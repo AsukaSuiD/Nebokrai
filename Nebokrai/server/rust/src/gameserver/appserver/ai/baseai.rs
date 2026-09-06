@@ -11,6 +11,9 @@
 //! Уже обработанная голова active FIFO проверяет deadline до dispatch любого
 //! action. Даже её снятие завершает этот проход, не исполняя следующий элемент.
 //! Общая операция обслуживает раздельные обычную и WarSoul очереди.
+//! Passive-фаза также сначала проверяет ненулевой handling: снятие головы
+//! завершает только passive-проход, а ожидание любого action, кроме Move,
+//! возвращает блокировку active-фазы. Следующий passive-handler не вызывается.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -229,6 +232,16 @@ impl CBaseAI {
         self.target_id = 0;
         self.target_type = 0;
         self.is_dormant = false;
+    }
+
+    /// None — требуется dispatch; Some — проход занят, значение блокирует active.
+    pub(crate) fn advance_handled_passive_action(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
+        let event = self.passive_actions.front().filter(|event| event.handling != 0)?;
+        if event.handling == 1 && ai_event_deadline_reached(event, now()) {
+            self.passive_actions.pop_front();
+            return Some(false);
+        }
+        Some(event.action != AiShapeAction::Move)
     }
 
     /// Выполняет материализованный `Defense`-участок `ProcessPassiveAction`.

@@ -46820,9 +46820,15 @@ impl CGame {
                                 continue;
                             };
                             let mut player_ai = player.take_player_ai();
+                            let handled_passive_action = if ai_hibernated {
+                                None
+                            } else {
+                                player_ai.advance_handled_passive_action(|| runtime.now_milliseconds())
+                            };
                             let defense_processed = !ai_hibernated
+                                && handled_passive_action.is_none()
                                 && player_ai.process_reached_defense_actions() != 0;
-                            let passive_stiffen = if ai_hibernated || defense_processed {
+                            let passive_stiffen = if ai_hibernated || handled_passive_action.is_some() || defense_processed {
                                 PassiveStiffenAction::None
                             } else {
                                 player_ai.begin_reached_stiffen_action()
@@ -46864,7 +46870,8 @@ impl CGame {
                                     passive_stiffen, runtime.now_milliseconds(),
                                 )
                             };
-                            let passive_action_hung_up = passive_stiffen.blocks_active();
+                            let passive_action_hung_up = handled_passive_action.unwrap_or(false)
+                                || passive_stiffen.blocks_active();
                             let handled_active_action = !ai_hibernated
                                 && !passive_action_hung_up
                                 && player_ai.advance_handled_active_action(|| runtime.now_milliseconds());
@@ -47247,6 +47254,7 @@ impl CGame {
                     let mut search_enemy_pending = false;
                     let mut passive_death = PassiveDeathAction::None;
                     let mut passive_stiffen = PassiveStiffenAction::None;
+                    let mut handled_passive_action = None;
                     let (
                         death_started,
                         guard_target_release,
@@ -47256,9 +47264,14 @@ impl CGame {
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
                         .map_or((false, false, false, false), |monster| {
-                            let processed = monster.process_reached_defense_actions(|| {
+                            handled_passive_action = monster.advance_handled_passive_ai_action(|| {
                                 runtime.now_milliseconds()
                             });
+                            let processed = if handled_passive_action.is_none() {
+                                monster.process_reached_defense_actions(|| runtime.now_milliseconds())
+                            } else {
+                                0
+                            };
                             if processed != 0 {
                                 tracing::trace!(
                                     region_id,
@@ -47267,10 +47280,11 @@ impl CGame {
                                     "обработаны пассивные Defense-события монстра"
                                 );
                             }
-                            if processed == 0 {
+                            if handled_passive_action.is_none() && processed == 0 {
                                 passive_stiffen = monster.process_reached_stiffen_action(now_ms);
                             }
-                            let death_started = processed == 0
+                            let death_started = handled_passive_action.is_none()
+                                && processed == 0
                                 && passive_stiffen == PassiveStiffenAction::None
                                 && monster.begin_reached_death_action();
                             let guard_target_release = death_started
@@ -47322,7 +47336,7 @@ impl CGame {
                             passive_death = monster.finish_reached_death_action();
                         }
                     }
-                    if passive_stiffen.blocks_active() {
+                    if handled_passive_action.unwrap_or(false) || passive_stiffen.blocks_active() {
                         self.restore_region_owner(owner);
                         continue;
                     }
