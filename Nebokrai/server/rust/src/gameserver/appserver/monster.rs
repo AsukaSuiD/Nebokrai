@@ -79,6 +79,10 @@
 //! YakshaSlash разделяет End 0x0057B810. BossFiendPenetrate::End
 //! (0x0052B410) освобождает путь и список поражённых целей до возврата движения;
 //! оба завершают CAttackSkill без повторного урона и без пакета End.
+//! Ресурсы совпавшего active-cast освобождаются до конкретных побочных
+//! эффектов End: в частности, пути EnergyBolt/SnakeBolt/ZombieClaw
+//! (0x0053BF50) — до SetMoveable(true). Stiffen чужого текущего навыка
+//! не очищает сохранённое исполнение другого owner-а.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1419,13 +1423,15 @@ impl CMonster {
                 || skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID
                 || immediate
             {
+                if owns_cast {
+                    self.attack_progress = MonsterAttackProgress::default();
+                }
                 if skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID {
                     self.prepare_little_star_end();
                 } else {
                     self.finish_attack_skill_resources(skill_id);
                 }
                 if owns_cast {
-                    self.attack_progress = MonsterAttackProgress::default();
                     self.base_attack_cast = None;
                 }
                 ended_skill = Some(skill_id);
@@ -1807,8 +1813,8 @@ impl CMonster {
             return None;
         }
         let skill_id = execution.dispatch().skill_id;
-        self.finish_attack_skill_resources(skill_id);
         self.attack_progress = MonsterAttackProgress::default();
+        self.finish_attack_skill_resources(skill_id);
         let _ = execution.terminate(SkillTermination::Completed);
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
