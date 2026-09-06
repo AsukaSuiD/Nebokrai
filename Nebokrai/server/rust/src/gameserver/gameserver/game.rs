@@ -47251,6 +47251,14 @@ impl CGame {
                         Some((property.ai, monster.stop_frame(property)))
                     })
                     .unwrap_or((0, 0));
+                let schedule_attempted = self.find_region(region_id)
+                    .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+                    .is_some_and(|monster| monster.primary_ai_queues_idle()
+                        && monster.ai_target().is_some()
+                        && monster.base_attack_cast().is_none());
+                if schedule_attempted {
+                    let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
+                }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = self.execute_owned_monster_back_stage_skills(
                         owner.base_mut(),
@@ -47436,7 +47444,7 @@ impl CGame {
                 if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
                     continue;
                 }
-                if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
+                if !self.run_owned_pet_follow(region_id, monster_id, runtime) && !schedule_attempted {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
                 let _ = self.run_owned_pet_active_search(region_id, monster_id, false);

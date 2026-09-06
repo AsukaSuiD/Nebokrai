@@ -1,4 +1,12 @@
 //! Базовая атака монстра и приручённого питомца (`CMonsterBaseAttack`).
+//! Достигнутый OnSchedule с целью и пустыми active/passive FIFO вызывается
+//! до background/passive (CBaseAI::Run 0x004C7D10; проверки CMonsterAI
+//! 0x005DCFA2..0x005DCFB0). Первые входы owners сохраняют только Begin;
+//! немедленный навык тоже получает общий cast и Attack до первого эффекта.
+//! Его End виден обоим проходам; OnFighting снимает завершённое исполнение
+//! при следующем входе, не повторяя AI после background-End. Idle и поиск
+//! без цели сохраняют отдельные производные пути и требуют дальнейшего
+//! согласования полного OnSchedule/OnIdle для всех AI-типов.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -1238,36 +1246,43 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     };
     let now_ms = runtime.now_milliseconds();
     if let Some(owner) = MonsterImmediateSkill::from_skill_id(skill_id) {
-        let attack_interval = schedule_attack_interval(
-            property.ai,
-            pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
-        );
-        if attack_interval.is_some_and(|interval| {
-            region
-                .find_monster_by_id_mut(monster_id)
-                .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
-        }) {
+        if cast.is_none() {
+            let attack_interval = schedule_attack_interval(
+                property.ai,
+                pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
+            );
+            if attack_interval.is_some_and(|interval| {
+                region
+                    .find_monster_by_id_mut(monster_id)
+                    .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
+            }) {
+                return true;
+            }
+            let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+            let last_used_ms = region
+                .find_monster_by_id(monster_id)
+                .map(|monster| monster.skill_last_used_ms(skill_id))
+                .unwrap_or_default();
+            if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
+                return true;
+            }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.move_shape_mut().begin_immediate_skill(skill_id);
+                monster.begin_base_attack_cast(target, skill_id, skill.level, now_ms);
+            }
             return true;
         }
-        let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        let last_used_ms = region
-            .find_monster_by_id(monster_id)
-            .map(|monster| monster.skill_last_used_ms(skill_id))
-            .unwrap_or_default();
-        if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
+        if region.find_monster_by_id(monster_id)
+            .is_some_and(|monster| monster.move_shape().immediate_skill_ended(skill_id))
+        {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.finish_active_immediate_skill(now_ms);
+            }
             return true;
-        }
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().begin_immediate_skill(skill_id);
         }
         let executed = owner.execute(
             game, region, monster_id, skill_id, i32::from(skill.level), now_ms,
         );
-        if executed {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.finish_active_immediate_skill(now_ms);
-            }
-        }
         return executed;
     }
     if skill_id == FURY_SKILL_ID {

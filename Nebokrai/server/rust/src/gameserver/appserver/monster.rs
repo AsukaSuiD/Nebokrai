@@ -1609,7 +1609,7 @@ impl CMonster {
         Some(execution)
     }
 
-    /// Завершает немедленный self-state навык без искусственного attack-cast.
+    /// Фиксирует End немедленного self-state навыка независимо от active-cast.
     /// `CSkill::End(1)` фиксирует reuse независимо от активной/фоновой очереди.
     pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32) {
         self.move_shape.finish_immediate_skill(skill_id);
@@ -1620,8 +1620,7 @@ impl CMonster {
     /// но отметка восстановления остаётся прежней. Фоновый вызов сюда не идёт.
     pub(crate) fn finish_active_immediate_skill(&mut self, now_ms: u32) {
         self.move_shape.shape_mut().set_action(1);
-        self.base_ai
-            .add_ai_event(self.attack_completion_action, 0, 0, now_ms);
+        let _ = self.finish_base_attack_cast_without_reuse(now_ms);
     }
 
     pub(crate) fn advance_base_attack_cast(
@@ -1650,6 +1649,9 @@ impl CMonster {
         self.attack_progress = MonsterAttackProgress::default();
         if let Some(mut execution) = self.base_attack_cast.take() {
             let skill_id = execution.dispatch().skill_id;
+            if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
+                self.move_shape.finish_immediate_skill(skill_id);
+            }
             if skill_id == SPIDER_MIST_SKILL_ID {
                 self.move_shape.finish_curable_skill_state(skill_id);
             }

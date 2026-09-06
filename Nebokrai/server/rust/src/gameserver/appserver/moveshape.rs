@@ -1251,8 +1251,11 @@ impl CMoveShape {
 
     pub(crate) fn immediate_back_stage_skill_ended(&self, index: usize) -> bool {
         self.back_stage_skill_ids.get(index)
-            .and_then(|entry| self.skills.get(&entry.skill_id))
-            .is_some_and(|skill| skill.immediate_ended)
+            .is_some_and(|entry| self.immediate_skill_ended(entry.skill_id))
+    }
+
+    pub(crate) fn immediate_skill_ended(&self, skill_id: u32) -> bool {
+        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_ended)
     }
 
     pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32) {
