@@ -69,6 +69,12 @@
 //! текущего навыка до любого concrete Begin, включая immediate-навыки.
 //! При выходе за диапазон выполняется OnLoseTarget → SearchEnemy; Tracing
 //! в Stay не вызывается. Проверки самого Begin этим не подменяются.
+//! OnAttackingSchedule (0x004E9A20) ограничивает дистанцию цели от хозяина
+//! (при его отсутствии — от питомца) до GetCurrentSkill/OnChangeSkill/Begin.
+//! Граница distance >= MaxPetTracingDistance сбрасывает цель и ставит поиск,
+//! не расходуя RNG выбора навыка и не затрагивая уже начатое исполнение.
+//! Мёртвая цель CPet теряется до IsAttackable: уведомление об уровне и
+//! встречный OnLoseTarget относятся только к отказу живой цели от атаки.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -1148,6 +1154,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             return true;
         };
+        if tamed && schedule_target.dead {
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            return true;
+        }
+        if tamed && pet_action == 0 {
+            let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region, attacker_master)
+                .unwrap_or((monster_view.tile_x, monster_view.tile_y));
+            let anchor_distance = schedule_target.shape.distance_to_point(anchor_x, anchor_y);
+            if game.globe_setup().maximum_pet_tracing_distance() as i32 <= anchor_distance {
+                lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+                return true;
+            }
+        }
         let attackable = owned_monster_attackable(
             game,
             region.id,
@@ -1780,15 +1799,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
 
-    if tamed && cast.is_none() && pet_action == 0 {
-        let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region, attacker_master)
-            .unwrap_or((monster_x, monster_y));
-        let anchor_distance = target_shape.distance_to_point(anchor_x, anchor_y);
-        if game.globe_setup().maximum_pet_tracing_distance() as i32 <= anchor_distance {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
-            return true;
-        }
-    }
     if tamed
         && target.object_type == PLAYER_TYPE
         && attacker_master.master_type == PLAYER_TYPE
