@@ -1,8 +1,11 @@
 //! Достигнутая send-family проекция `CPlayer` исторического GameServer.
-//! Сравнение ожидающего WarSoul-запроса не равно равенству исполнения:
+//! Сравнение ожидающего запроса не равно равенству исполнения:
 //! Attack point (0x0050A349..0x0050A367) сравнивает ID/x/y, object
 //! (0x0050A13A..0x0050A15C) — ID/type/target ID. Снимок уровня и GUID
 //! не заменяют ожидающую команду; полный Eq dispatch остаётся для lifecycle.
+//! Обычная object-очередь повторяет ID/type/target ID guard в
+//! 0x0050A1B5..0x0050A1D7. Обе типизированные формы используют одно правило
+//! проекции запроса; контейнеры и полное равенство исполнений независимы.
 //! OnChangeSkill (0x00508E6A..0x00508E7E) выбирает GetDefaultAttackSkillID
 //! через обычный SetCurrentSkill. Выбранный ID сохраняется после End;
 //! живое исполнение отдельно принадлежит CPlayerAI, дополнительного idle-ID нет.
@@ -1076,16 +1079,6 @@ pub(crate) enum PlayerSkillDispatch {
     },
 }
 
-impl PlayerSkillDispatch {
-    pub(crate) const fn skill_id(self) -> u32 {
-        match self {
-            Self::SelfTarget { skill_id, .. }
-            | Self::Point { skill_id, .. }
-            | Self::Object { skill_id, .. } => skill_id,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequest {
     pub(crate) raw_skill_id: i32,
@@ -1131,25 +1124,32 @@ pub(crate) enum BattleFairySkillDispatch {
     },
 }
 
-impl BattleFairySkillDispatch {
-    pub(crate) fn same_pending_request(self, other: Self) -> bool {
-        let key = |dispatch| match dispatch {
-            Self::SelfTarget { skill_id, player_id, .. } => (skill_id, 0, player_id, 0),
-            Self::Point { skill_id, x, y, .. } => (skill_id, 1, x, y),
-            Self::Object { skill_id, target, .. } =>
-                (skill_id, 2, target.object_type, target.id),
-        };
-        key(self) == key(other)
-    }
+macro_rules! skill_dispatch_request {
+    ($($dispatch:ty),+ $(,)?) => {$(
+        impl $dispatch {
+            const fn pending_request_key(self) -> (u32, u8, i32, i32) {
+                match self {
+                    Self::SelfTarget { skill_id, player_id, .. } => (skill_id, 0, player_id, 0),
+                    Self::Point { skill_id, x, y, .. } => (skill_id, 1, x, y),
+                    Self::Object { skill_id, target, .. } =>
+                        (skill_id, 2, target.object_type, target.id),
+                }
+            }
 
-    pub(crate) const fn skill_id(self) -> u32 {
-        match self {
-            Self::SelfTarget { skill_id, .. }
-            | Self::Point { skill_id, .. }
-            | Self::Object { skill_id, .. } => skill_id,
+            pub(crate) const fn skill_id(self) -> u32 {
+                self.pending_request_key().0
+            }
+
+            pub(crate) fn same_pending_request(self, other: Self) -> bool {
+                self.pending_request_key() == other.pending_request_key()
+            }
         }
-    }
+    )+};
+}
 
+skill_dispatch_request!(PlayerSkillDispatch, BattleFairySkillDispatch);
+
+impl BattleFairySkillDispatch {
     pub(crate) const fn skill_level(self) -> i32 {
         match self {
             Self::SelfTarget { skill_level, .. }

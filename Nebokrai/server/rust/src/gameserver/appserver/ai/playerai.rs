@@ -621,7 +621,9 @@ impl CPlayerAI {
     /// Native Attack заменяет только m_qTarget; выбранная OnSchedule команда
     /// уже извлечена из FIFO и сохраняется независимо от текущего ID навыка.
     pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
-        Self::replace_pending_skill(&mut self.player_skills, dispatch, PartialEq::eq).unwrap_or(0)
+        Self::replace_pending_skill(&mut self.player_skills, dispatch, |pending, requested| {
+            pending.same_pending_request(*requested)
+        }).unwrap_or(0)
     }
 
     pub(crate) fn queue_battle_fairy_skill(
