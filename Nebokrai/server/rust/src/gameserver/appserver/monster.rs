@@ -1610,7 +1610,7 @@ impl CMonster {
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
         }
-        let completion_action = if self.tamed {
+        let completion_action = if self.is_tamed() {
             AiShapeAction::ChangeSkill
         } else {
             self.attack_completion_action
@@ -1682,7 +1682,7 @@ impl CMonster {
         now_ms: u32,
         interval_ms: u32,
     ) -> bool {
-        if self.tamed {
+        if self.is_tamed() {
             return true;
         }
         self.ai_schedule

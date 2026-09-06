@@ -60,6 +60,11 @@
 //! и SelectAttackSkill (+0x8C → 0x005DD0B0). Поэтому приручение отключает
 //! boss/lord-selector и производный restore-delay AI5/AI103, но сохраняет
 //! исходный список odds, один RNG и общий default/IsRestored.
+//! CPet::OnSchedule (0x004E9DC0) выбирает собственные Attack/Follow/Stay:
+//! сохранённый property.ai не включает связывание Цзюмай, пост стража,
+//! стационарный поиск дальности или исключение AI13 из проверки цели.
+//! Эти ветви первичного владельца действуют только до приручения;
+//! CPet::OnAttackingSchedule/OnStayingSchedule проверяют допустимость цели.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -1033,12 +1038,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    if property.ai == 20
+    if !tamed && property.ai == 20
         && !ensure_jiumai_twin(game, region, monster_id, &property)
     {
         return false;
     }
-    if property.ai == 20
+    if !tamed && property.ai == 20
         && !maintain_jiumai_twin(game, region, monster_id, &property, runtime)
     {
         return false;
@@ -1052,7 +1057,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    if matches!(property.ai, 10 | 12 | 16) {
+    if !tamed && matches!(property.ai, 10 | 12 | 16) {
         let left_chase_range = region
             .find_monster_by_id_mut(monster_id)
             .and_then(|monster| {
@@ -1149,7 +1154,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &schedule_target,
         );
         if schedule_target.dead
-            || (property.ai != 13
+            || ((tamed || property.ai != 13)
                 && (schedule_target.god || schedule_target.city_dead || !attackable))
         {
             if !attackable && tamed {
@@ -1726,7 +1731,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if target_dead
-        || ((property.ai != 13 || cast.is_some())
+        || ((tamed || property.ai != 13 || cast.is_some())
             && (target_god
                 || target_city_dead
                 || (!tamed
@@ -1793,7 +1798,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    if matches!(property.ai, 11 | 13)
+    if !tamed && matches!(property.ai, 11 | 13)
         && cast.is_none()
         && !stationary_bow_target_ready(
             region,
@@ -1810,7 +1815,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    if matches!(property.ai, 10 | 12 | 16)
+    if !tamed && matches!(property.ai, 10 | 12 | 16)
         && cast.is_none()
         && trace_city_sword_target(
             game,
