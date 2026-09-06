@@ -11,6 +11,11 @@
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
 //! владельца: неуспешно загруженный навык не участвует в выборе default.
+//! CMonsterAI::OnSchedule (0x005DCF80) и CPet::OnAttackingSchedule
+//! (0x004E9A20) проверяют цель до выбора навыка/RNG. Если GetCurrentSkill
+//! не разрешает выбранный ID, выполняется полный OnChangeSkill с IsRestored,
+//! затем повторный поиск в реестре. Его отказ вызывает только виртуальный
+//! OnLoseTarget, без внешнего SearchEnemy; FIFO-обёртка здесь не исполняется.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -468,13 +473,26 @@ fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
     pet_identity: ShapeIdentity,
     runtime: &mut Runtime,
 ) {
-    let Some((reciprocal, tamed, pet_action, stop_frame, ai_type)) = region
+    let reciprocal = region.find_monster_by_id(target_id)
+        .is_some_and(|target| target.ai_target() == Some(pet_identity));
+    if reciprocal {
+        release_owned_monster_target(game, region, target_id, runtime);
+    }
+}
+
+/// Виртуальный OnLoseTarget без внешнего schedule-SearchEnemy.
+fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    target_id: i32,
+    runtime: &mut Runtime,
+) {
+    let Some((tamed, pet_action, stop_frame, ai_type)) = region
         .find_monster_by_id(target_id)
         .and_then(|target| {
             let property = game
                 .find_monster_property_by_origin_name(target.base_property_key()?)?;
             Some((
-                target.ai_target() == Some(pet_identity),
                 target.is_tamed(),
                 target.pet_action(),
                 target.stop_frame(property),
@@ -484,9 +502,6 @@ fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
     else {
         return;
     };
-    if !reciprocal {
-        return;
-    }
     if tamed {
         if let Some(target) = region.find_monster_by_id_mut(target_id) {
             target.clear_ai_target();
@@ -571,7 +586,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     Some(selected)
 }
 
-/// Выполняет точный `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом. После
+/// Выполняет `CMonsterAI::OnChangeSkill` из FIFO либо непосредственно OnSchedule. После
 /// единственного weighted RNG выбранный concrete skill проверяется через
 /// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
 /// monster AI заменяется `GetDefaultAttackSkillID`. AI5 и наследующий его
@@ -1126,47 +1141,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
         return true;
     }
-    let selected_skill_id = if let Some(cast) = cast {
-        cast.dispatch().skill_id as u16
-    } else if let Some(skill_id) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| monster.move_shape().current_skill_id())
-    {
-        skill_id as u16
-    } else {
-        let Some(selected) = select_and_store_monster_attack_skill(
-            game,
-            region,
-            monster_id,
-            &property,
-            monster_health,
-            runtime,
-        ) else {
-            return true;
-        };
-        selected
-    };
-    let Some(skill) = installed_monster_skill(&property.skills, selected_skill_id) else {
-        return false;
-    };
-    let skill_id = u32::from(skill.id);
-    if !is_owned_monster_attack_skill(skill_id) {
-        return false;
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && matches!(property.ai, 21 | 23)
-        && queue_boss_idle(game, region, monster_id, &property, runtime)
-    {
-        return true;
-    }
-    let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
-    let target = cast.map(|cast| cast.dispatch().target).or(target);
-    let Some(target) = target else {
-        return false;
-    };
-    if cast.is_none() {
+    if cast.is_none() && let Some(target) = target {
         let Some(schedule_target) =
             resolve_owned_monster_attack_target(game, region, target)
         else {
@@ -1238,6 +1213,55 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
     }
+    let selected_skill_id = if let Some(cast) = cast {
+        cast.dispatch().skill_id as u16
+    } else if let Some(skill_id) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().current_skill())
+        .map(|skill| skill.id())
+    {
+        skill_id as u16
+    } else if target.is_none() {
+        // Собственный выбор босса в OnIdle не подменяется боевым OnSchedule.
+        let Some(selected) = select_and_store_monster_attack_skill(
+            game, region, monster_id, &property, monster_health, runtime,
+        ) else {
+            return false;
+        };
+        selected
+    } else {
+        if !change_owned_monster_attack_skill(game, region, monster_id, runtime) {
+            return false;
+        }
+        let Some(selected) = region.find_monster_by_id(monster_id)
+            .and_then(|monster| monster.move_shape().current_skill())
+            .map(|skill| skill.id() as u16)
+        else {
+            release_owned_monster_target(game, region, monster_id, runtime);
+            return true;
+        };
+        selected
+    };
+    let Some(skill) = installed_monster_skill(&property.skills, selected_skill_id) else {
+        return false;
+    };
+    let skill_id = u32::from(skill.id);
+    if !is_owned_monster_attack_skill(skill_id) {
+        return false;
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && matches!(property.ai, 21 | 23)
+        && queue_boss_idle(game, region, monster_id, &property, runtime)
+    {
+        return true;
+    }
+    let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
+    let target = cast.map(|cast| cast.dispatch().target).or(target);
+    let Some(target) = target else {
+        return false;
+    };
     let Some(skill_properties) = game
         .skill_base_properties(skill_id, i32::from(skill.level))
         .cloned()
