@@ -25,6 +25,9 @@
 //! Внешний virtual `Attack(skill, target)` не запускает навык: он только
 //! передаёт identity в `SetTarget`; client-команда и `CPetsControl` проводят
 //! этот контракт через ordered список питомцев игрока.
+//! CPet::OnStayingSchedule (0x004E9650) не вызывает Tracing: его диапазон
+//! проверяет общий dispatcher перед Begin. Поэтому помощник преследования
+//! в Stay ничего не делает и не добавляет проверку прямого пути вместо Begin.
 
 use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
@@ -324,6 +327,9 @@ pub(crate) fn approach_attack_range(
         return false;
     };
 
+    if tamed && pet_action == 2 {
+        return true;
+    }
     let target_coordinates = target.coordinates();
     let (target_x, target_y) = (target_coordinates.x, target_coordinates.y);
     let distance = match target {
@@ -336,12 +342,6 @@ pub(crate) fn approach_attack_range(
         .any(|cell| cell.2 == 2);
     if (maximum_distance == 0 || distance <= maximum_distance as i32) && !path_blocked {
         return true;
-    }
-    if tamed && pet_action == 2 {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
-        }
-        return false;
     }
     let chase_range = if tamed {
         game.globe_setup().maximum_pet_tracing_distance()

@@ -65,6 +65,10 @@
 //! стационарный поиск дальности или исключение AI13 из проверки цели.
 //! Эти ветви первичного владельца действуют только до приручения;
 //! CPet::OnAttackingSchedule/OnStayingSchedule проверяют допустимость цели.
+//! OnStayingSchedule (0x004E9650) проверяет включительный min/max диапазон
+//! текущего навыка до любого concrete Begin, включая immediate-навыки.
+//! При выходе за диапазон выполняется OnLoseTarget → SearchEnemy; Tracing
+//! в Stay не вызывается. Проверки самого Begin этим не подменяются.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -1122,7 +1126,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none() && cast.is_none() && tamed {
         return queue_pet_idle(region, monster_id, stop_frame, runtime);
     }
-    if cast.is_none() && let Some(target) = target {
+    let schedule_target_view = if cast.is_none() && let Some(target) = target {
         let Some(schedule_target) =
             resolve_owned_monster_attack_target(game, region, target)
         else {
@@ -1193,7 +1197,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             return true;
         }
-    }
+        Some(schedule_target.view)
+    } else {
+        None
+    };
     let selected_skill_id = if let Some(cast) = cast {
         cast.dispatch().skill_id as u16
     } else if let Some(skill_id) = region
@@ -1258,6 +1265,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
+    if tamed && pet_action == 2 && cast.is_none() {
+        let Some(target_view) = schedule_target_view else {
+            return false;
+        };
+        let distance = monster_view.real_distance(Some(target_view));
+        let minimum_distance = skill_properties.query_property(5_004) as i32;
+        let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32;
+        if distance < minimum_distance || distance > maximum_distance {
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            return true;
+        }
+    }
     let now_ms = runtime.now_milliseconds();
     if let Some(owner) = MonsterImmediateSkill::from_skill_id(skill_id) {
         if cast.is_none() {
@@ -1830,15 +1849,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         ) == CitySwordTraceOutcome::Handled
     {
         return true;
-    }
-
-    if tamed && pet_action == 2 && cast.is_none() {
-        let distance = monster_view.real_distance(Some(target_view));
-        let minimum_distance = skill_properties.query_property(5_004) as i32;
-        if distance < minimum_distance || distance > maximum_distance as i32 {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
-            return true;
-        }
     }
 
     if let Some(cast) = cast {
