@@ -1,4 +1,7 @@
 //! Огненный шар `CFireBall` (`0x13D`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/fireball.cpp`. Владелец сохраняет обе проверки MP,
@@ -227,6 +230,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(FIRE_BALL_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(FIRE_BALL_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

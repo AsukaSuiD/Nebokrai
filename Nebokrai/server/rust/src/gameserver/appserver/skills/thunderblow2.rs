@@ -1,4 +1,7 @@
 //! Второй громовой удар `CThunderBlow2` (`0x14D`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunderblow2.cpp`. Навык принимает только отдельную живую
@@ -287,6 +290,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

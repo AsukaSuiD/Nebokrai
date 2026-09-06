@@ -1,4 +1,7 @@
 //! Летящий по клеткам навык `CPoisonMoth` (`0xCF`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/poisonmoth.cpp`. Навык дважды проверяет оружие, причём
@@ -149,6 +152,7 @@ pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mu
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { reject(game, 7); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(POISON_MOTH_SKILL_ID)); }
         player_ai.begin_player_skill_execution(PoisonMothExecutionState::begin(dispatch, now_ms, destination));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_some_and(|state| !state.condition_checked) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);

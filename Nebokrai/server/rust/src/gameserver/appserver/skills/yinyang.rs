@@ -1,4 +1,7 @@
 //! Область инь-ян `CYinYang` (`0x139`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/yinyang.cpp`. Здесь находятся три достигнутых варианта
@@ -169,6 +172,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
         if mp_loss == 0 || player.mana() < mp_loss { if mp_loss != 0 { send_error(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if execution(player_ai, second).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 
     if execution(player_ai, second).is_some_and(|execution| execution.stage() == SkillStage::Begin) {

@@ -1,4 +1,7 @@
 //! Божественная кара `CGodPunishment` (`0x13A`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/godpunishment.cpp`. Здесь находятся достигнутые варианты
@@ -97,6 +100,7 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
         if mp == 0 || player.mana() < mp { if mp != 0 { fail(game, player_id, 7, mp); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(id)); }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };

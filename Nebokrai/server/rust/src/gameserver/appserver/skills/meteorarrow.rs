@@ -1,4 +1,7 @@
 //! Расходование накопленных стрел `CMeteorArrow` (`0xCD`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/meteorarrow.cpp`. Навык сохраняет позднее списание MP,
@@ -137,6 +140,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
         if (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return outcome(QueuedSkillExecutionState::Rejected) }
         let now = runtime.now_milliseconds(); if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(METEOR_ARROW_SKILL_ID)); }
         ai.begin_player_skill_execution(MeteorArrowExecutionState::begin(dispatch, destination, target, now));
+        return outcome(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
 
     let state = ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().expect("выполнение метеорной стрелы создано"); let (mut destination, target) = (state.destination, state.target);

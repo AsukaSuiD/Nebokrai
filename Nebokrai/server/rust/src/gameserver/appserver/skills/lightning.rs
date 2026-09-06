@@ -1,4 +1,7 @@
 //! Молния `CLightning` (`0x133`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/lightning.cpp`. Владелец сохраняет две проверки MP,
@@ -414,6 +417,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             destination,
             started_at_ms,
         ));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch || state.target != target)

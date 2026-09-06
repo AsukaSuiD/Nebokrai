@@ -1,4 +1,7 @@
 //! Сфера хаоса `CChaosSphere` (`0x137`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/chaossphere.cpp`. Владелец сохраняет координатную и объектную
@@ -226,6 +229,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(CHAOS_SPHERE_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(ChaosSphereExecutionState::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

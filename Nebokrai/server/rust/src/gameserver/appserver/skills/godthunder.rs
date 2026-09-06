@@ -1,4 +1,7 @@
 //! Божественный гром `CGodThunder` (`0x140`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/godthunder.cpp`. Владелец сохраняет проверки пути и его
@@ -195,6 +198,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id));
         }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if execution(ai, second).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

@@ -1,4 +1,7 @@
 //! Снежная буря `CSnowStorm` (`0x193`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/snowstorm.cpp`. Здесь находятся три достигнутых варианта
@@ -224,6 +227,7 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(SNOW_STORM_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

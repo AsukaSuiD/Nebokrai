@@ -1,4 +1,7 @@
 //! Огненная стена `CFireWall` (`0x134`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
 //! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
 //! callback CPlayer +0x158 (0x00485540).
@@ -229,6 +232,7 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(FIRE_WALL_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(FIRE_WALL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

@@ -1,4 +1,7 @@
 //! Огненная стрела `CFireBolt` (`0x132`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/firebolt.cpp`. Владелец сохраняет двойную проверку MP,
@@ -225,6 +228,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         player_ai.begin_player_skill_execution(BaseMagicExecutionState::begin(
             dispatch, target, started_at_ms,
         ));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

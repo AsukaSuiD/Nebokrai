@@ -1,4 +1,7 @@
 //! Накопление метеорных стрел `CMeteorArrowMass` (`0xCC`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/meteorarrowmass.cpp`. Навык проверяет лук категории `3`,
@@ -90,6 +93,7 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
         if (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return result(QueuedSkillExecutionState::Rejected); }
         let now = runtime.now_milliseconds(); if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(METEOR_ARROW_MASS_SKILL_ID)); }
         ai.begin_player_skill_execution(MeteorArrowMassExecutionState::begin(dispatch, now));
+        return result(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected) }
     if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);

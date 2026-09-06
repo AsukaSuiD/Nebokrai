@@ -1,4 +1,7 @@
 //! Громовой удар `CThunderBlow` (`0x13F`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunderblow.cpp`. Владелец сохраняет две проверки MP и
@@ -177,6 +180,7 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(THUNDER_BLOW_SKILL_ID)); }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

@@ -1,4 +1,7 @@
 //! Громовое рассечение `CThunderSlash` (`0x72`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //! Reuse проверяется exact `CSkill::IsRestored`. Каст сравнивает unsigned
 //! now >= wrapping(start + delay), как cmp/jb в AI по `0x0057B1BE`;
 //! срок и частота формы принадлежат отдельному `CThunderSlashPhalanx::AI`.
@@ -130,6 +133,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         if rp_loss != 0 && u32::from(rp) < rp_loss { failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(THUNDER_SLASH_SKILL_ID)); }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else {

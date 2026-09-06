@@ -1,4 +1,7 @@
 //! Цепная молния `CChainLightning` (`0x13E`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/chainlightning.cpp`. Первый такт поворачивает владельца,
@@ -290,6 +293,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(CHAIN_LIGHTNING_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(ChainLightningExecutionState::begin(dispatch, started_at_ms, x, y));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

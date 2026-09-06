@@ -1,4 +1,7 @@
 //! Расходование накопленных метеорных стрел навыком `CFallingStar` (`0xD5`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/fallingstar.cpp`. Начальная проверка сохраняет задержку
@@ -261,6 +264,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             target,
             now_ms,
         ));
+        return outcome(QueuedSkillExecutionState::Begun);
     } else if ai
         .player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

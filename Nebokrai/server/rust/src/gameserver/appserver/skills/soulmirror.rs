@@ -1,4 +1,7 @@
 //! Зеркало душ `CSoulMirror` (`0x13C`).
+//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
+//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
+//! же Run; исходный отсчёт Begin сохраняется общим kernel.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/soulmirror.cpp`. Направленные маски `3×3`, `5×5` и `7×7`
@@ -297,6 +300,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(SOUL_MIRROR_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
