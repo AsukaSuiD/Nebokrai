@@ -37899,7 +37899,7 @@ impl CGame {
     /// На границе callback возвращает настоящий AI в CPlayer. Вложенные
     /// вызовы читают и меняют того же владельца; обратно извлекается уже
     /// обновлённый AI, без слияния копий, новых очередей и сырых указателей.
-    fn with_published_player_ai<R>(
+    pub(crate) fn with_published_player_ai<R>(
         &mut self,
         player_id: i32,
         player_ai: &mut CPlayerAI,

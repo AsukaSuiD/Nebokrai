@@ -25,6 +25,11 @@
 //! новый в освободившийся слот (`0x005AE53A`). End пересчитывает свойства
 //! без обоих экземпляров; остальные Cure сохраняются. При отсутствии
 //! прежней записи новый экземпляр добавляется в конец без UpdateProperty.
+//! CastCure (0x005ADB10) допускает 0x198 (cmp в 0x005ADC0A) без
+//! исключения для самого заклинателя и вызывает End состояния через +0x1C
+//! в 0x005ADC58. На время очищения извлечённый AI публикуется в CPlayer:
+//! завершение собственного SpiderMist видит тот же экземпляр и возвращает
+//! изменённый AI, сохраняя Cure и остальные независимые исполнения.
 
 use super::fightdefense::truncate_original;
 use super::bossbluequakestate::{
@@ -580,21 +585,23 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     send_cast(game, player_id, &target, level, true);
     let element_modify = game.find_player(player_id).map(|player| player.combat_properties().element_modify).unwrap_or_default();
     let threshold = cure_threshold(element_modify, base_probability, constant, em_modifier);
-    let mut properties_changed = false;
-    for state_id in curable_state_ids(game, region_id, target.identity) {
-        if game.skill_random_below(100) < threshold {
-            // Пакеты завершения этих состояний не содержат время; дополнительное
-            // чтение часов между вызовами генератора MSVCRT исходный `CastCure` не делал.
-            properties_changed |= if state_id == SPIDER_MIST_SKILL_ID
-                && target.identity.object_type == PLAYER_TYPE
-                && target.identity.id != player_id
-            {
-                finish_active_spider_mist_on_cure(game, target.identity.id, runtime)
-            } else {
-                finish_curable_state(game, region_id, target.identity, state_id, 0)
-            };
+    let properties_changed = game.with_published_player_ai(player_id, player_ai, |game| {
+        let mut properties_changed = false;
+        for state_id in curable_state_ids(game, region_id, target.identity) {
+            if game.skill_random_below(100) < threshold {
+                // Пакеты завершения этих состояний не содержат время; дополнительное
+                // чтение часов между вызовами генератора MSVCRT исходный `CastCure` не делал.
+                properties_changed |= if state_id == SPIDER_MIST_SKILL_ID
+                    && target.identity.object_type == PLAYER_TYPE
+                {
+                    finish_active_spider_mist_on_cure(game, target.identity.id, runtime)
+                } else {
+                    finish_curable_state(game, region_id, target.identity, state_id, 0)
+                };
+            }
         }
-    }
+        properties_changed
+    });
     if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id); }
     let installed = install_cure_state(
         game,
