@@ -19,6 +19,10 @@
 //! очистка команды не зависит от совпадения её dispatch с живым экземпляром.
 //! Встречный вызов питомца (0x004E96DC..0x004E970E) добавляет только проверку
 //! type/id цели и затем входит в тот же OnLoseTarget; отдельного End/cleanup нет.
+//! Наличие живого исполнения для End и фаз AI определяется общим хранилищем,
+//! не параллельным списком ID. Игровой End-dispatch остаётся единственным
+//! источником поддержки завершения; неизвестный владелец возвращает None
+//! с восстановленным AI и сохранённым исполнением, без фиктивного успеха.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -39845,139 +39849,8 @@ impl CGame {
         cause: MaterializedSkillEndCause,
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
-        if !matches!(
-            skill_id,
-            BASE_ATTACK_SKILL_ID
-                | BASE_MAGIC_SKILL_ID
-                | FIRE_BOLT_SKILL_ID
-                | FIRE_BALL_SKILL_ID
-                | FIRE_WALL_SKILL_ID
-                | SEVEN_SHOOTING_STAR_SKILL_ID
-                | THUNDER_SLASH_SKILL_ID
-                | CHAIN_LIGHTNING_SKILL_ID
-                | THUNDER_BLOW_SKILL_ID
-                | ITEM_SKILL_2_ID
-                | PILLAR_SKILL_ID
-                | RUSH_SKILL_ID
-                | RUSH_2_SKILL_ID
-                | ROAR_SKILL_ID
-                | ENERGY_HOLDING_SKILL_ID
-                | INVERSE_CHOPPED_SKILL_ID
-                | INFERNOL_SKILL_ID
-                | THUNDER_BLOW_2_SKILL_ID
-                | MOSOU_SKILL_ID
-                | GHOST_CUT_SKILL_ID
-                | GHOST_CUT_2_SKILL_ID
-                | GHOST_CUT_3_SKILL_ID
-                | KNIGHT_CUT_SKILL_ID
-                | ARMY_BREAK_SKILL_ID
-                | ARMY_BREAK_2_SKILL_ID
-                | RAGE_SKILL_ID
-                | RAGE_BREAK_SKILL_ID
-                | FURY_SKILL_ID
-                | FLASH_SKILL_ID
-                | SWALLOW_SKILL_ID
-                | LEAF_CUT_SKILL_ID
-                | LEAF_CUT_2_SKILL_ID
-                | LEAF_CUT_3_SKILL_ID
-                | JU_CUT_SKILL_ID
-                | LIGHTNING_SWORD_SKILL_ID
-                | LIGHTNING_SWORD_2_SKILL_ID
-                | LIGHTNING_SWORD_3_SKILL_ID
-                | LIGHTNING_SWORD_4_SKILL_ID
-                | LITTLE_FLASH_SKILL_ID
-                | LITTLE_FLASH_2_SKILL_ID
-                | LITTLE_STAR_SKILL_ID
-                | ENERGY_BOLT_SKILL_ID
-                | ZOMBIE_CLAW_SKILL_ID
-                | SNAKE_BOLT_SKILL_ID
-                | SPRITE_BURN_SKILL_ID
-                | MACHINERY_STOMP_SKILL_ID
-                | LORD_WIDERANGING_ATTACK_SKILL_ID
-                | LORD_FAST_ATTACK_SKILL_ID
-                | MONSTER_FAST_ATTACK_SKILL_ID
-                | MONSTER_BASE_ATTACK_SKILL_ID
-                | MONSTER_RANGE_ATTACK_SKILL_ID
-                | CHAOS_SPHERE_SKILL_ID
-                | LIGHTNING_SKILL_ID
-                | SEAL_SKILL_ID
-                | YIN_YANG_SKILL_ID
-                | YIN_YANG_2_SKILL_ID
-                | GOD_PUNISHMENT_SKILL_ID
-                | GOD_THUNDER_SKILL_ID
-                | GOD_THUNDER_2_SKILL_ID
-                | SOUL_COLLECT_SKILL_ID
-                | SOUL_MIRROR_SKILL_ID
-                | ARCHERY_SKILL_ID
-                | HEARTLESS_ARROW_SKILL_ID
-                | HEARTLESS_ARROW_2_SKILL_ID
-                | HEARTLESS_ARROW_3_SKILL_ID
-                | LIGHTING_ARROW_SKILL_ID
-                | LIGHTING_ARROW_2_SKILL_ID
-                | METEOR_ARROW_MASS_SKILL_ID
-                | METEOR_ARROW_SKILL_ID
-                | RAIN_ARROW_SKILL_ID
-                | POISON_MOTH_SKILL_ID
-                | BLOOD_ROSE_SKILL_ID
-                | SCORPION_SKILL_ID
-                | BOA_LOCK_SKILL_ID
-                | FALLING_STAR_SKILL_ID
-                | EXPLOSIVE_ARROW_SKILL_ID
-                | EXPLOSIVE_ARROW_2_SKILL_ID
-                | EXPLOSIVE_ARROW_3_SKILL_ID
-                | STRIKE_SKILL_ID
-                | YAKSHA_SLASH_SKILL_ID
-                | DAUB_POISON_SKILL_ID
-                | IGNITION_SKILL_ID
-                | KEROSENE_SKILL_ID
-                | BLIND_SKILL_ID
-                | CALLOSITY_SKILL_ID
-                | CALLOSITY_2_SKILL_ID
-                | AGILITY_SKILL_ID
-                | AGILITY_2_SKILL_ID
-                | NATURAL_SKILL_ID
-                | RAPTURE_SKILL_ID
-                | HEARTEN_SKILL_ID
-                | POISON_FOG_SKILL_ID
-                | SNOW_STORM_SKILL_ID
-                | WEAK_SKILL_ID
-                | GOD_BLESS_SKILL_ID
-                | GOD_BLESS_2_SKILL_ID
-                | CURE_SKILL_ID
-                | PROMOTION_SKILL_ID
-                | PETS_CONTROL_SKILL_ID
-                | MONSTER_TAMING_SKILL_ID
-                | KNOCK_OUT_SKILL_ID
-                | GIBE_SKILL_ID
-                | CHUCK_STONE_SKILL_ID
-                | SKELETON_ARCHERY_SKILL_ID
-                | YUNSHENG_LIGHTNING_SKILL_ID
-                | CORPSE_PTOMAINE_SKILL_ID
-                | MONSTER_THORN_SKILL_ID
-                | SPIDER_MIST_SKILL_ID
-                | SPIDER_WEB_SKILL_ID
-                | SPIDER_POISON_SKILL_ID
-                | SUMMON_CORPSE_CANDLE_SKILL_ID
-                | SUMMON_SKELETON_SKILL_ID
-                | SUMMON_SPORE_SKILL_ID
-                | BOSS_FIEND_SUMMON_SKILL_ID
-                | BOSS_BLUE_FURY_SKILL_ID
-                | BOSS_BLUE_QUAKE_SKILL_ID
-                | BOSS_FIEND_PENETRATE_SKILL_ID
-        ) && !is_self_shield_skill(skill_id)
-            && !is_heal_skill(skill_id)
-        {
-            return None;
-        }
+        self.find_player(player_id)?.player_ai().player_skill_execution(skill_id)?;
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
-        let materialized = Self::materialized_player_skill_active(&player_ai, skill_id)
-            .expect("фильтр ограничивает materialized end владельцами");
-        if !materialized {
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.restore_player_ai(player_ai);
-            }
-            return None;
-        }
         let explicitly_completed = if cause.uses_nonzero_end() {
             match skill_id {
                 HEARTLESS_ARROW_SKILL_ID => Some(complete_or_release_player_heartless_arrow(
@@ -40547,7 +40420,12 @@ impl CGame {
                 &mut player_ai,
                 runtime,
             ),
-                _ => unreachable!("фильтр ограничивает materialized end владельцами"),
+                _ => {
+                    if let Some(player) = self.find_player_mut(player_id) {
+                        player.restore_player_ai(player_ai);
+                    }
+                    return None;
+                }
             }
         };
         if let Some(player) = self.find_player_mut(player_id) {
@@ -41442,7 +41320,7 @@ impl CGame {
             }
             // Native IsEnded перед Begin: живой экземпляр, в том числе
             // уже переданный в фон, не получает лишний AI из OnSchedule.
-            if Self::materialized_player_skill_active(player_ai, dispatch.skill_id()) == Some(true) {
+            if player_ai.player_skill_execution(dispatch.skill_id()).is_some() {
                 return 1;
             }
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
@@ -47263,9 +47141,7 @@ impl CGame {
                                             &mut player_ai,
                                             runtime,
                                         );
-                                        if Self::materialized_player_skill_active(&player_ai, skill_id)
-                                            != Some(false)
-                                        {
+                                        if player_ai.player_skill_execution(skill_id).is_some() {
                                             break;
                                         }
                                     }
