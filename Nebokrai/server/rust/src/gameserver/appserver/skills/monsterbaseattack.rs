@@ -29,6 +29,10 @@
 //! по guard range без GetCurrentSkill; требование навыка остаётся только
 //! у ветвей, использующих его минимальную дистанцию. Общая проекция этой
 //! дистанции не вводит второй реестр и не меняет порядок обхода кандидатов.
+//! Ранний HasTarget в CSmartGladiator (0x00610B06) и CJiuMai (0x0060AD5A)
+//! завершает OnSearchEnemy до разрешения региона и обхода целей. Уже заданная
+//! цель не заменяется; новый шаг отхода и передача цели близнецу не выполняются.
+//! Общий caller по-прежнему завершает достигнутое FIFO-событие после возврата.
 //! Начало атаки получает ID/уровень из этого же реестра; после Begin источником
 //! обоих значений является MonsterBaseAttackDispatch. Повторный проход не
 //! перечитывает максимум setup и не смешивает сохранённую цель с другим уровнем.
@@ -662,30 +666,27 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    if region
+    let Some((property, has_target)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            game.find_monster_property_by_origin_name(monster.base_property_key()?)
+            Some((
+                game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
+                monster.ai_target().is_some(),
+            ))
         })
-        .is_some_and(|property| property.ai == 7)
-    {
+    else {
+        return false;
+    };
+    if matches!(property.ai, 2 | 20) && has_target {
+        return true;
+    }
+    if property.ai == 7 {
         return search_puniness_enemy(game, region, monster_id);
     }
-    if region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            game.find_monster_property_by_origin_name(monster.base_property_key()?)
-        })
-        .is_some_and(|property| property.ai == 1)
-    {
-        let Some((property, owner)) = region
+    if property.ai == 1 {
+        let Some(owner) = region
             .find_monster_by_id(monster_id)
-            .and_then(|monster| {
-                let property = game
-                    .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                    .clone();
-                Some((property.clone(), monster.shape_view(&property)?))
-            })
+            .and_then(|monster| monster.shape_view(&property))
         else {
             return false;
         };
@@ -710,18 +711,14 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    let Some((property, owner, area_index, skill, speed, master)) = region
+    let Some((owner, area_index, skill, speed, master)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                .clone();
             let owner = monster.shape_view(&property)?;
             let area_index = monster.move_shape().shape().area_index()?;
             let skill = monster.move_shape().current_skill()
                 .map(|skill| (skill.id(), skill.level()));
             Some((
-                property,
                 owner,
                 area_index,
                 skill,
