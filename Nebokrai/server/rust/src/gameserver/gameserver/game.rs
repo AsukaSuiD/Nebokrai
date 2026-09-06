@@ -1334,7 +1334,7 @@ use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind
 use crate::gameserver::appserver::ai::baseai::{
     PassiveDeathAction, PassiveStiffenAction,
 };
-use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target_for_death;
+use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target;
 use crate::gameserver::appserver::ai::jiumai::{
     release_jiumai_target, retarget_jiumai_after_hurt,
     synchronize_jiumai_target_loss,
@@ -47353,7 +47353,7 @@ impl CGame {
                         });
                     if death_started {
                         if guard_target_release {
-                            release_guard_sword_target_for_death(
+                            release_guard_sword_target(
                                 self,
                                 owner.base_mut(),
                                 monster_id,

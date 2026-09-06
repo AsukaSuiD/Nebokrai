@@ -10,7 +10,10 @@
 //! `OnMoving` с отдельным `ASA_SEARCH_ENEMY` и эту ветвь преследования, меняя
 //! только selector. `OnIdle` один раз фиксирует пост и продолжает через общий
 //! idle FIFO. `OnLoseTarget` возвращает владельца к посту, выбирая случайную
-//! соседнюю клетку для заблокированной точки, и лишь затем ставит поиск.
+//! соседнюю клетку для заблокированной точки. OnLoseTarget (0x0060D020)
+//! сначала вызывает CMonsterAI::OnLoseTarget (0x005DCC30), очищающий только
+//! цель: он не отменяет cast, выбранный навык или active Move. Один обработчик
+//! обслуживает бой и смерть; последующий SearchEnemy принадлежит caller-у.
 //! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
 //! порядка и фильтров достигнутого selector-а.
 
@@ -203,34 +206,8 @@ pub(crate) fn release_guard_sword_target<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) {
-    release_guard_sword_target_impl(game, region, monster_id, runtime, false);
-}
-
-/// Та же virtual-ветвь из `CBaseAI::OnBeenKilled`: общий target очищается,
-/// но единственный сохранённый active Move не отменяется до последующей
-/// проверки owner death.
-pub(crate) fn release_guard_sword_target_for_death<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    runtime: &mut Runtime,
-) {
-    release_guard_sword_target_impl(game, region, monster_id, runtime, true);
-}
-
-fn release_guard_sword_target_impl<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    runtime: &mut Runtime,
-    preserve_active_move: bool,
-) {
     let station = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        if preserve_active_move {
-            monster.release_ai_target_for_death();
-        } else {
-            monster.clear_ai_target();
-        }
+        monster.release_ai_target_for_death();
         monster.guard_station_ai_mut()?.station()
     });
     if let Some(station) = station {
