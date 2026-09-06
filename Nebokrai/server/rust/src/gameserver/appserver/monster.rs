@@ -7,6 +7,10 @@
 //! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
 //! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
 //! проверка восстановления конкретного навыка остаётся у его владельца.
+//! OnMoving выбирает ровно одного AI-владельца: CPet ищет цель лишь живым
+//! и без GetCurrentSkill, не наследуя добавочные SearchEnemy первичного AI.
+//! Назначение/сброс цели используют тот же is_tamed (флаг и identity игрока),
+//! что и координатор; один оставшийся флаг не переключает действие CPet.
 //! Техническое хранение прогресса cast сгруппировано в MonsterAttackProgress:
 //! Default обслуживает одинаковую очистку при End и отмене. Типизированные
 //! значения остаются независимыми; Begin не получает дополнительного сброса,
@@ -1402,9 +1406,6 @@ impl CMonster {
             return;
         }
         let alive = !CMoveShape::is_died(self.hit_points);
-        let pet_search = self.tamed
-            && alive
-            && self.move_shape.current_skill().is_none();
         let passive_gladiator_search = ai_type == 1
             && alive
             && self
@@ -1418,11 +1419,14 @@ impl CMonster {
         // factory-типов AI17/100, но не для самостоятельного AI101.
         // `CPassiveGladiator::OnMoving` RVA `0x00210E70` дополнительно требует
         // непустой `m_vEnemy`, которой соответствует owned IndexSet AI1.
-        if (alive && matches!(ai_type, 4 | 17 | 100))
-            || matches!(ai_type, 9 | 10 | 12 | 16)
-            || passive_gladiator_search
-            || pet_search
-        {
+        let search = if self.is_tamed() {
+            alive && self.move_shape.current_skill().is_none()
+        } else {
+            (alive && matches!(ai_type, 4 | 17 | 100))
+                || matches!(ai_type, 9 | 10 | 12 | 16)
+                || passive_gladiator_search
+        };
+        if search {
             self.base_ai.begin_active_search_enemy(now());
         }
     }
@@ -1472,7 +1476,7 @@ impl CMonster {
     }
 
     pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
-        self.pet_behavior.begin_ai_target(self.tamed);
+        self.pet_behavior.begin_ai_target(self.is_tamed());
         self.base_ai.set_object_target(target);
     }
 
@@ -1647,7 +1651,7 @@ impl CMonster {
         self.base_ai.lose_target();
         self.cancel_base_attack_cast();
         self.base_ai.cancel_active_move();
-        self.pet_behavior.target_cleared(self.tamed);
+        self.pet_behavior.target_cleared(self.is_tamed());
     }
 
     pub(crate) fn lose_ai_target_and_search(&mut self, now_ms: u32) {
