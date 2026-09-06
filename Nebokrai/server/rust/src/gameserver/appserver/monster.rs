@@ -12,6 +12,10 @@
 //! представлено явно, а не отдельным флагом рядом с неиспользуемым timestamp.
 //! OnFighting без GetCurrentSkill не исполняет старый kernel и не ставит
 //! базовый ChangeSkill; производный SearchEnemy учитывается независимо.
+//! GetCurrentSkill (0x004C9338) определяет и IsEnded, и последующий AI:
+//! завершённый cast другого skill ID не завершает выбранный навык. Если
+//! выбранный навык не имеет достигнутого исполнения, Attack остаётся в FIFO;
+//! отсутствие kernel не подменяет исходный успешный ответ IsEnded.
 //! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
 //! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
 //! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
@@ -1585,22 +1589,33 @@ impl CMonster {
     }
 
     pub(crate) fn active_ai_attack_ended(&self) -> bool {
-        self.base_attack_cast.is_some_and(|cast| {
-            cast.termination().is_some()
-                || (super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(cast.dispatch().skill_id).is_some()
-                    && self.move_shape.immediate_skill_ended(cast.dispatch().skill_id))
-        })
+        let Some(skill) = self.move_shape.current_skill() else { return false };
+        let skill_id = skill.id();
+        if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
+            self.move_shape.immediate_skill_ended(skill_id)
+        } else {
+            self.current_active_attack_cast().is_some_and(|cast| cast.termination().is_some())
+        }
     }
 
-    pub(crate) fn finish_active_ai_attack(&mut self, mut now: impl FnMut() -> u32) {
+    pub(crate) fn current_active_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
+        let skill_id = self.move_shape.current_skill()?.id();
+        self.base_attack_cast.filter(|cast| cast.dispatch().skill_id == skill_id)
+    }
+
+    pub(crate) fn finish_active_ai_attack(&mut self, mut now: impl FnMut() -> u32) -> bool {
         let has_skill = self.move_shape.current_skill().is_some();
-        if has_skill && self.active_ai_attack_ended()
-            && self.base_attack_cast.is_some_and(|cast| cast.termination().is_none())
+        let skill_ended = self.active_ai_attack_ended();
+        if has_skill && !skill_ended {
+            return false;
+        }
+        let owns_cast = self.current_active_attack_cast().is_some();
+        if skill_ended
+            && self.current_active_attack_cast().is_some_and(|cast| cast.termination().is_none())
         {
             self.finish_active_immediate_skill();
         }
-        let skill_ended = has_skill && self.base_attack_cast.is_some_and(|cast| cast.termination().is_some());
-        if skill_ended || !has_skill {
+        if (skill_ended && owns_cast) || !has_skill {
             self.base_attack_cast = None;
             self.attack_progress = MonsterAttackProgress::default();
         }
@@ -1615,6 +1630,7 @@ impl CMonster {
             self.base_ai.add_ai_event(action, 0, 0, now());
         }
         self.base_ai.finish_active_attack(now());
+        true
     }
 
     pub(crate) fn finish_active_ai_change_skill(&mut self, now_ms: u32) {
