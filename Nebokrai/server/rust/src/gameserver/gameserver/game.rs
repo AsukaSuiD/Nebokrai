@@ -9,6 +9,9 @@
 //! Rider-guard OnSchedule (0x00509927) применяется к новой команде независимо
 //! от выбранного default. GetTarget использует уже выбранную OnSchedule
 //! объектную команду, не ожидающий элемент FIFO с тем же ID навыка.
+//! После rider-guard выбор ID (0x0050994C) предшествует CanFight и IsEnded:
+//! отказ завершает запрошенный экземпляр, а не прежний default. Живой
+//! экземпляр сохраняет выбор без повторного Begin и AddAIEvent (0x00509A6F).
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -41448,8 +41451,11 @@ impl CGame {
         if let Some(dispatch) = player_ai.current_player_skill()
         {
             let (is_rider, can_fight, current_skill_id) = self
-                .find_player(player_id)
+                .find_player_mut(player_id)
                 .map(|player| {
+                    if !player.is_rider() {
+                        player.set_current_skill_id(Some(dispatch.skill_id()));
+                    }
                     (
                         player.is_rider(),
                         player.can_fight(),
