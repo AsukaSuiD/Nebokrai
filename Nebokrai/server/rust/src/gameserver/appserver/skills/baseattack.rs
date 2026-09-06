@@ -36,8 +36,11 @@
 //! При исчезновении объекта использует нулевой fallback CState::Begin:
 //! первый AI проверяет его дальность, после delay отправляет fire с нулевой
 //! identity/координатами (CBaseAttackEffect, 0x005B3100) и выполняет End(1)
-//! без RNG/Attack. Эти ветви не отменяют AI-цель или движение. Поздний
-//! IsAttackAble живой цели ещё отделён от AI недостаточно точно в caller-е.
+//! без RNG/Attack. Эти ветви не отменяют AI-цель или движение. Для живой
+//! цели Attack проверяет self/IsAttackAble после fire, перед RNG; отказ
+//! оставляет AI-цель и движение, но не отменяет последующий End(1).
+//! Разрешение цели и политика отношений переиспользуют общий monsterattack;
+//! NPC не входят в его боевой снимок и у исходного Attack исключены отдельно.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -46,6 +49,28 @@ use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillTe
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) const BASE_ATTACK_SKILL_ID: u32 = 1;
+
+#[allow(clippy::too_many_arguments, reason = "контекст исходного Attack и его IsAttackAble")]
+pub(crate) fn owned_monster_base_attack_allowed(
+    game: &CGame,
+    region: &crate::gameserver::appserver::serverregion::CServerRegion,
+    monster_id: i32,
+    property: &crate::setup::monsterlist::MonsterProperties,
+    tamed: bool,
+    master: crate::gameserver::appserver::masterinfo::MasterInfo,
+    target: crate::gameserver::appserver::shape::ShapeIdentity,
+) -> bool {
+    if target.object_type == 600 && target.id == monster_id {
+        return false;
+    }
+    super::monsterattack::resolve_owned_monster_attack_target(game, region, target)
+        .is_some_and(|snapshot| {
+            !snapshot.god && !snapshot.city_dead
+                && super::monsterattack::owned_monster_attackable(
+                    game, region.id, property, tamed, master, target, &snapshot,
+                )
+        })
+}
 
 pub(crate) fn begin_owned_monster_base_attack(
     region: &mut crate::gameserver::appserver::serverregion::CServerRegion,

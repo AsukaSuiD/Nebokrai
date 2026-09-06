@@ -200,7 +200,7 @@ use super::monsterfastattack::{
 };
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
-    monster_attackable_by_monster, owned_monster_attackable,
+    owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use super::monsterrangeattack::{
@@ -1687,94 +1687,31 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     {
         return true;
     }
-    let target_snapshot = match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).and_then(|player| {
-            let target_view = player.shape_view()?;
-            (player.server_region_id() == Some(region.id)).then(|| {
-                (
-                    player.shape().clone(),
-                    target_view,
-                    player.health(),
-                    player.mana(),
-                    player.war_soul_mana(game.goods_factory()),
-                    Some(player.combat_properties()),
-                    None,
-                    player.is_dead(),
-                    player.is_god_mode(),
-                    player.city_war_died_state(),
-                    None,
-                    None,
-                    false,
-                    false,
-                )
-            })
-        }),
-        MONSTER_TYPE => region
-            .find_monster_by_id(target.id)
-            .and_then(|target_monster| {
-                let target_property = game.find_monster_property_by_origin_name(
-                    target_monster.base_property_key()?,
-                )?;
-                let carriage = target_monster.is_carriage(target_property);
-                let target_master = target_monster.master_info();
-                let target_view = target_monster.shape_view(target_property)?;
-                let target_attackable = if carriage {
-                    game.carriage_attackable_by_monster(
-                        &property,
-                        tamed,
-                        attacker_master,
-                        target_master,
-                        region.id,
-                    )
-                } else {
-                    monster_attackable_by_monster(
-                        game,
-                        &property,
-                        tamed,
-                        attacker_master,
-                        target_property,
-                        target_monster.is_tamed(),
-                        target_master,
-                        region.id,
-                    )
-                };
-                target_attackable.then(|| {
-                    (
-                        target_monster.move_shape().shape().clone(),
-                        target_view,
-                        target_monster.hit_points(),
-                        0,
-                        None,
-                        None,
-                        Some(target_monster.combat_properties(target_property)),
-                        CMoveShape::is_died(target_monster.hit_points()),
-                        target_monster.move_shape().is_god(),
-                        false,
-                        Some(target_master),
-                        Some(target_property.clone()),
-                        target_monster.is_tamed(),
-                        carriage,
-                    )
-                })
-            }),
-        _ => None,
-    };
-    let Some((
-        target_shape,
-        target_view,
-        mut target_health,
-        mut target_mana,
-        target_war_soul_mana,
-        target_player_properties,
-        target_monster_properties,
-        target_dead,
-        target_god,
-        target_city_dead,
-        target_master,
-        target_monster_property,
-        target_tamed,
-        target_carriage,
-    )) = target_snapshot
+    let live_base_attack = skill_id == COMMON_BASE_ATTACK_SKILL_ID && cast.is_some();
+    let target_snapshot = super::monsterattack::resolve_owned_monster_attack_target(
+        game, region, target,
+    ).filter(|snapshot| {
+        live_base_attack || target.object_type != MONSTER_TYPE
+            || super::monsterattack::owned_monster_attackable(
+                game, region.id, &property, tamed, attacker_master, target, snapshot,
+            )
+    });
+    let Some(super::monsterattack::OwnedMonsterAttackTarget {
+        shape: target_shape,
+        view: target_view,
+        health: mut target_health,
+        mana: mut target_mana,
+        war_soul_mana: target_war_soul_mana,
+        player_properties: target_player_properties,
+        monster_properties: target_monster_properties,
+        dead: target_dead,
+        god: target_god,
+        city_dead: target_city_dead,
+        master: target_master,
+        monster_property: target_monster_property,
+        tamed: target_tamed,
+        carriage: target_carriage,
+    }) = target_snapshot
     else {
         if tamed {
             lose_pet_target_and_search(region, monster_id, runtime);
@@ -1783,7 +1720,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
         return true;
     };
-    if target_dead
+    if !live_base_attack && (target_dead
         || ((tamed || !uses_stationary_attack_schedule(property.ai) || cast.is_some())
             && (target_god
                 || target_city_dead
@@ -1796,7 +1733,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         &property,
                         tamed,
                         attacker_master,
-                    ))))
+                    )))))
     {
         if tamed {
             lose_pet_target_and_search(region, monster_id, runtime);
@@ -1814,7 +1751,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
 
-    if tamed
+    if !live_base_attack && tamed
         && target.object_type == PLAYER_TYPE
         && attacker_master.master_type == PLAYER_TYPE
         && attacker_master.master_id != 0
@@ -1955,6 +1892,17 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             let _ = game.send_game_shape_around(region, &monster_shape, None, &fire);
             (1, true)
         };
+
+        if live_base_attack
+            && !super::baseattack::owned_monster_base_attack_allowed(
+                game, region, monster_id, &property, tamed, attacker_master, target,
+            )
+        {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            }
+            return true;
+        }
 
         for hit_index in 0..hit_count {
             if hit_index != 0 {
