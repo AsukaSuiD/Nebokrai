@@ -44,6 +44,14 @@
 //! Предварительный запрет по всему списку удалён: второй внешней виртуальной
 //! ветви в CGame нет. Неподключённый выбранный skill всё ещё возвращает отказ
 //! перед Begin; это оставшийся конкретный owner, а не успешная атака.
+//! Допуск OnSchedule проверяет CMoveShape::can_fight до цели, RNG и Begin:
+//! CMonsterAI 0x005DCFB6, лучники/охрана 0x0060B8D7, BossBlue 0x0060A008,
+//! BossFiend 0x006095A7, SmartGladiator 0x0061071C. Запрет вызывает только
+//! виртуальный OnLoseTarget, без внешнего SearchEnemy. Уже начатый cast
+//! проходит OnFighting; эта проверка не подменяет его отдельный End.
+//! CJiuMai отличается: 0x0060AC3B при запрете сразу возвращается, сохраняя цель.
+//! CPuninessCreature (0x0060F4B0) переходит прямо к Tracing и такой проверки
+//! не имеет; исключение относится к первичному AI7, но не к приручённому CPet.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -1024,6 +1032,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && !maintain_jiumai_twin(game, region, monster_id, &property, runtime)
     {
         return false;
+    }
+    if cast.is_none() && target.is_some() && (tamed || property.ai != 7)
+        && region.find_monster_by_id(monster_id)
+            .is_some_and(|monster| !monster.move_shape().can_fight())
+    {
+        if tamed || property.ai != 20 {
+            release_owned_monster_target(game, region, monster_id, runtime);
+        }
+        return true;
     }
     if matches!(property.ai, 10 | 12 | 16) {
         let left_chase_range = region
