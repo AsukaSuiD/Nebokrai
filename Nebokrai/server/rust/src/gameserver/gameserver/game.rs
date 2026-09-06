@@ -1330,16 +1330,14 @@ use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
     send_knight_cut_state_visual,
 };
-use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::{
     PassiveDeathAction, PassiveStiffenAction,
 };
-use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target;
+use crate::gameserver::appserver::ai::monsterai::release_owned_monster_target;
 use crate::gameserver::appserver::ai::jiumai::{
-    release_jiumai_target, retarget_jiumai_after_hurt,
+    retarget_jiumai_after_hurt,
     synchronize_jiumai_target_loss,
 };
-use crate::gameserver::appserver::ai::pet::release_pet_target;
 use crate::gameserver::appserver::skills::monsterbaseattack::{
     MONSTER_BASE_ATTACK_SKILL_ID, execute_player_monster_base_attack,
     finish_player_monster_base_attack, is_player_monster_base_attack,
@@ -47293,15 +47291,10 @@ impl CGame {
                     let mut passive_stiffen = PassiveStiffenAction::None;
                     let mut handled_passive_action = None;
                     let mut passive_action_executed = false;
-                    let (
-                        death_started,
-                        guard_target_release,
-                        pet_target_release,
-                        jiumai_target_release,
-                    ) = owner
+                    let death_started = owner
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
-                        .map_or((false, false, false, false), |monster| {
+                        .is_some_and(|monster| {
                             handled_passive_action = monster.advance_handled_passive_ai_action(|| {
                                 runtime.now_milliseconds()
                             });
@@ -47330,44 +47323,10 @@ impl CGame {
                             passive_action_executed = processed != 0
                                 || passive_stiffen != PassiveStiffenAction::None
                                 || death_started;
-                            let guard_target_release = death_started
-                                && matches!(
-                                    monster.active_ai(),
-                                    Some(ActiveMonsterAi::Primary(
-                                        MonsterAiKind::CityGuardWithSword
-                                            | MonsterAiKind::VillageCountyGuardWithSword
-                                            | MonsterAiKind::NationCountyGuardWithSword
-                                    ))
-                                );
-                            let pet_target_release = death_started
-                                && monster.active_ai() == Some(ActiveMonsterAi::Pet);
-                            let jiumai_target_release = death_started
-                                && monster.active_ai()
-                                    == Some(ActiveMonsterAi::Primary(MonsterAiKind::JiuMai));
-                            (
-                                death_started,
-                                guard_target_release,
-                                pet_target_release,
-                                jiumai_target_release,
-                            )
+                            death_started
                         });
                     if death_started {
-                        if guard_target_release {
-                            release_guard_sword_target(
-                                self,
-                                owner.base_mut(),
-                                monster_id,
-                                runtime,
-                            );
-                        } else if pet_target_release {
-                            release_pet_target(owner.base_mut(), monster_id);
-                        } else if jiumai_target_release {
-                            release_jiumai_target(owner.base_mut(), monster_id);
-                        } else if let Some(monster) =
-                            owner.base_mut().find_monster_by_id_mut(monster_id)
-                        {
-                            monster.release_ai_target_for_death();
-                        }
+                        release_owned_monster_target(self, owner.base_mut(), monster_id, runtime);
                         if let Some(monster) =
                             owner.base_mut().find_monster_by_id_mut(monster_id)
                         {

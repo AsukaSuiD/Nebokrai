@@ -34,8 +34,13 @@
 //! Та же форма без Tracing у стационарного OnSchedule 0x0060B890:
 //! общий признак владельца задаёт диапазон перед Begin, отсутствие движения
 //! и дополнительного таймера; CheckCast конкретного навыка остаётся отдельным.
+//! Virtual OnLoseTarget разрешается через CMonster::GetAI, а не повторный
+//! поиск MonsterProperties. Бой и смерть используют одну диспетчеризацию:
+//! CPet (0x004E95F0), мечевые охранники (0x0060D020), JiuMai (0x0060A990)
+//! сохраняют свои побочные эффекты поверх очистки цели CMonsterAI
+//! (0x005DCC30). Следующее событие FIFO и отмена исполнения не входят сюда.
 
-use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
+use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -57,6 +62,33 @@ const SLIP_ORDER: [[usize; 8]; 8] = [
     [6, 5, 7, 4, 0, 3, 1, 2],
     [7, 6, 0, 5, 1, 4, 2, 3],
 ];
+
+pub(crate) fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) {
+    let Some(ai) = region.find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
+        return;
+    };
+    match ai {
+        ActiveMonsterAi::Pet => super::pet::release_pet_target(region, monster_id),
+        ActiveMonsterAi::Primary(
+            MonsterAiKind::CityGuardWithSword
+            | MonsterAiKind::VillageCountyGuardWithSword
+            | MonsterAiKind::NationCountyGuardWithSword,
+        ) => super::cityguardwithsword::release_guard_sword_target(game, region, monster_id, runtime),
+        ActiveMonsterAi::Primary(MonsterAiKind::JiuMai) => {
+            let _ = super::jiumai::release_jiumai_target(region, monster_id);
+        }
+        _ => {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.release_ai_target_for_death();
+            }
+        }
+    }
+}
 
 /// Точный одноклеточный `Slip` общего `CBaseAI::MoveTo`: желаемое
 /// направление и семь обходных направлений проверяются в legacy-порядке

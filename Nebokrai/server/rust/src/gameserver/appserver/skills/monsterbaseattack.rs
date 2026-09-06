@@ -251,7 +251,7 @@ use crate::gameserver::appserver::ai::bossfiend::{
 };
 use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
-    CitySwordTraceOutcome, lose_guard_sword_target, release_guard_sword_target,
+    CitySwordTraceOutcome, lose_guard_sword_target,
     select_city_guard_enemy, trace_city_sword_target,
 };
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
@@ -265,17 +265,17 @@ use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_batt
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
 use crate::gameserver::appserver::ai::jiumai::{
-    assign_jiumai_target, ensure_jiumai_twin, release_jiumai_target, select_jiumai_enemy,
+    assign_jiumai_target, ensure_jiumai_twin, select_jiumai_enemy,
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, has_owned_search_enemy,
-    hibernates_without_nearby_players,
+    hibernates_without_nearby_players, release_owned_monster_target,
     queue_monster_idle, schedule_attack_interval, select_attack_skill, uses_stationary_attack_schedule,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::{
-    PetMasterRef, lose_pet_target_and_search, pet_master_ref, queue_pet_idle, release_pet_target,
+    PetMasterRef, lose_pet_target_and_search, pet_master_ref, queue_pet_idle,
 };
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
@@ -508,37 +508,6 @@ fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
         .is_some_and(|target| target.ai_target() == Some(pet_identity));
     if reciprocal {
         release_owned_monster_target(game, region, target_id, runtime);
-    }
-}
-
-/// Виртуальный OnLoseTarget без внешнего schedule-SearchEnemy.
-fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    target_id: i32,
-    runtime: &mut Runtime,
-) {
-    let Some((tamed, ai_type)) = region
-        .find_monster_by_id(target_id)
-        .and_then(|target| {
-            let property = game
-                .find_monster_property_by_origin_name(target.base_property_key()?)?;
-            Some((
-                target.is_tamed(),
-                property.ai,
-            ))
-        })
-    else {
-        return;
-    };
-    if tamed {
-        release_pet_target(region, target_id);
-    } else if matches!(ai_type, 10 | 12 | 16) {
-        release_guard_sword_target(game, region, target_id, runtime);
-    } else if ai_type == 20 {
-        let _ = release_jiumai_target(region, target_id);
-    } else if let Some(target) = region.find_monster_by_id_mut(target_id) {
-        target.release_ai_target_for_death();
     }
 }
 
