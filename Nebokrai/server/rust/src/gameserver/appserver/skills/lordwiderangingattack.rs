@@ -13,13 +13,9 @@
 //! `400/600` после IsAttackAble. Delay использует абсолютный DWORD-срок;
 //! Attack не добавляет RP, отмена не изнашивает оружие и не ставит reuse.
 
-use super::machinerystomp::{
-    WideArcAttackDispatch, execute_player_wide_arc_attack, prepare_owned_wide_arc_attack,
-};
-use super::skillbaseproperties::CSkillBaseProperties;
+use super::machinerystomp::execute_player_wide_arc_attack;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
@@ -52,31 +48,5 @@ pub(crate) fn execute_player_lord_wideranging_attack<Runtime: GameMainLoopRuntim
         LORD_WIDERANGING_ATTACK_SKILL_ID,
         player_ai,
         runtime,
-    )
-}
-
-#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
-pub(crate) fn prepare_owned_lord_wideranging_attack<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    target_identity: ShapeIdentity,
-    skill_level: u16,
-    properties: &CSkillBaseProperties,
-    now_ms: u32,
-    runtime: &mut Runtime,
-    dispatch: &mut Option<WideArcAttackDispatch>,
-) -> bool {
-    prepare_owned_wide_arc_attack(
-        game,
-        region,
-        monster_id,
-        target_identity,
-        LORD_WIDERANGING_ATTACK_SKILL_ID,
-        skill_level,
-        properties,
-        now_ms,
-        runtime,
-        dispatch,
     )
 }

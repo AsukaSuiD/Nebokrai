@@ -57,7 +57,8 @@
 //! JiuMai 0x0060ACDA, BossBlue 0x0060A0A4, BossFiend 0x00609643,
 //! CPet Stay/Attack 0x004E979A/0x004E9B94. Общая граница не повторяет End,
 //! не отменяет Move и не фильтрует SearchEnemy по наличию тела обработчика.
-//! Явный результат пока подключён к MonsterThorn; прежний bool других
+//! Явный результат подключён к MonsterThorn и общей группе широких атак;
+//! прежний bool остальных
 //! owners ещё не отличает отказ Begin от ожидания расписания.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};

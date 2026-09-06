@@ -36,6 +36,12 @@
 //! Общий CMonster завершает существующий cast через политику End 0x00546090
 //! при успехе, отмене и Stiffen. End(0) без живого cast остаётся здесь:
 //! он тоже вызывает SetMoveable(true), но не создаёт kernel и не пишет reuse.
+//! CheckCastCondition (0x00531B80/0x0052F6B0) проверяет reuse, signed
+//! RealDistance до цели при ненулевом максимуме, затем BLOCK_UNFLY.
+//! Эти отказы обоих навыков выполняют End(0) и возвращают BeginRejected;
+//! общий schedule-caller вызывает OnLoseTarget → SearchEnemy. Ожидание
+//! Tracing/интервала не является отказом Begin. Раннее исчезновение/смерть
+//! цели и граница первого AI у monster-пути ещё требуют согласования.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -51,7 +57,7 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
+    MonsterSkillCallOutcome, MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -600,9 +606,9 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
-    _runtime: &mut Runtime,
+    runtime: &mut Runtime,
     dispatch: &mut Option<WideArcAttackDispatch>,
-) -> bool {
+) -> MonsterSkillCallOutcome {
     let Some((source, property, master, tamed, pet_attack, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
@@ -620,7 +626,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             ))
         })
     else {
-        return false;
+        return MonsterSkillCallOutcome::NotHandled;
     };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
         .filter(|target| !target.dead)
@@ -631,7 +637,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             }
             monster.clear_ai_target();
         }
-        return true;
+        return MonsterSkillCallOutcome::Handled;
     };
     let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (
         source.get_tile_x(),
@@ -639,7 +645,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         target.shape.get_tile_x(),
         target.shape.get_tile_y(),
     ) else {
-        return true;
+        return MonsterSkillCallOutcome::Handled;
     };
 
     if cast.is_none() {
@@ -651,7 +657,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {
-            return true;
+            return MonsterSkillCallOutcome::Handled;
         }
         let attack_interval_ms = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
         if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
@@ -662,16 +668,23 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
                     monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
                 });
             if !attack_started {
-                return true;
+                return MonsterSkillCallOutcome::Handled;
             }
         }
         if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used_ms,
                 properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
-                now_ms,
+                runtime.now_milliseconds(),
             )
         {
-            return true;
+            return abort_monster_wide_arc_begin(region, monster_id);
+        }
+        let Some(source_view) = region.find_monster_by_id(monster_id)
+            .and_then(|monster| monster.shape_view(&property))
+        else { return MonsterSkillCallOutcome::Handled };
+        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        if maximum != 0 && source_view.real_distance(Some(target.view)) > maximum as i32 {
+            return abort_monster_wide_arc_begin(region, monster_id);
         }
         let point = if target_identity.object_type == MONSTER_TYPE {
             region.find_monster_by_id(target_identity.id).and_then(|monster| {
@@ -680,17 +693,15 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         } else {
             Some((target_x, target_y))
         };
-        let Some((path_x, path_y)) = point else { return true };
+        let Some((path_x, path_y)) = point else { return MonsterSkillCallOutcome::Handled };
         let path = if target_identity.object_type == MONSTER_TYPE && target_identity.id == monster_id {
             Vec::new()
         } else {
             region.straight_skill_path(source_x, source_y, path_x, path_y, None)
         };
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
-            return true;
+            drop(path);
+            return abort_monster_wide_arc_begin(region, monster_id);
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -708,21 +719,21 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             .map(|monster| monster.move_shape().shape())
             .unwrap_or(&source);
         send_start(game, region, source, skill_id, skill_level);
-        return true;
+        return MonsterSkillCallOutcome::Handled;
     }
 
     let cast = cast.expect("выполнение механического топота проверено выше");
     if cast.dispatch().skill_id != skill_id
         || cast.dispatch().target != target_identity
     {
-        return false;
+        return MonsterSkillCallOutcome::NotHandled;
     }
     if !skill_is_restored(
         cast.started_at_ms(),
         properties.query_property(SKILL_USAGE_DELAY_TIME),
         now_ms,
     ) {
-        return true;
+        return MonsterSkillCallOutcome::Handled;
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
@@ -750,7 +761,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         pet_attack,
         now_ms,
     });
-    true
+    MonsterSkillCallOutcome::Handled
 }
 
 fn wide_arc_attack(
@@ -872,28 +883,9 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
     true
 }
 
-#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
-pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    target_identity: ShapeIdentity,
-    skill_level: u16,
-    properties: &CSkillBaseProperties,
-    now_ms: u32,
-    runtime: &mut Runtime,
-    dispatch: &mut Option<WideArcAttackDispatch>,
-) -> bool {
-    prepare_owned_wide_arc_attack(
-        game,
-        region,
-        monster_id,
-        target_identity,
-        MACHINERY_STOMP_SKILL_ID,
-        skill_level,
-        properties,
-        now_ms,
-        runtime,
-        dispatch,
-    )
+fn abort_monster_wide_arc_begin(region: &mut CServerRegion, monster_id: i32) -> MonsterSkillCallOutcome {
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.move_shape_mut().set_moveable(true);
+    }
+    MonsterSkillCallOutcome::BeginRejected
 }

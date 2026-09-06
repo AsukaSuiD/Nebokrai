@@ -224,10 +224,10 @@ use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
 use super::lordwiderangingattack::{
-    LORD_WIDERANGING_ATTACK_SKILL_ID, prepare_owned_lord_wideranging_attack,
+    LORD_WIDERANGING_ATTACK_SKILL_ID,
 };
 use super::machinerystomp::{
-    MACHINERY_STOMP_SKILL_ID, WideArcAttackDispatch, prepare_owned_machinery_stomp,
+    MACHINERY_STOMP_SKILL_ID, WideArcAttackDispatch, prepare_owned_wide_arc_attack,
 };
 use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
@@ -1529,32 +1529,22 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             runtime,
         );
     }
-    if skill_id == MACHINERY_STOMP_SKILL_ID {
+    if matches!(skill_id, MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID) {
         let skill_properties = skill_properties.clone();
-        return prepare_owned_machinery_stomp(
+        let outcome = prepare_owned_wide_arc_attack(
             game,
             region,
             monster_id,
             target,
+            skill_id,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
             wide_arc_dispatch,
         );
-    }
-    if skill_id == LORD_WIDERANGING_ATTACK_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return prepare_owned_lord_wideranging_attack(
-            game,
-            region,
-            monster_id,
-            target,
-            skill_level,
-            &skill_properties,
-            now_ms,
-            runtime,
-            wide_arc_dispatch,
+        return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
+            game, region, monster_id, outcome, runtime,
         );
     }
     if skill_id == BOSS_BLUE_FURY_SKILL_ID {
