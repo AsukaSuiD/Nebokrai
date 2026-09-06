@@ -18,7 +18,10 @@
 //! могут храниться, но расписание их целью не считает. Timestamp
 //! попытки атаки принадлежит расписанию ИИ и не подменяет отдельные reuse-таймеры
 //! установленных навыков; его DWORD deadline сохраняет исходное раннее
-//! срабатывание рядом с переполнением часов. Default-ветвь
+//! срабатывание рядом с переполнением часов. OnSchedule 0x005DD044 берёт
+//! только младшие 16 бит интервала; собственные расписания стационарных
+//! лучников, SmartGladiator, JiuMai и боссов не используют этот таймер.
+//! Общая политика допуска обслуживает все concrete навыки. Default-ветвь
 //! `CAIFactory::CreateAI` также проходит
 //! этот общий runtime как обычный `CMonsterAI`, сохраняя исходный `ai_type`.
 //! Остальные AI-ветви ниже остаются RAW.
@@ -103,10 +106,13 @@ impl MonsterAiScheduleState {
     }
 }
 
-/// `CVilCouGuardWithBow::OnSchedule`, `CBossBlue::OnSchedule` и
-/// `CBossFiend::OnSchedule` переходят от своей проверки дальности/`CheckCast`
-/// прямо к `ASA_ATTACK` и не имеют дополнительной проверки
-/// `CMonster::GetAttackSpeed`, присутствующей в обычном `CMonsterAI`.
+/// CMonsterAI::OnSchedule 0x005DD044 расширяет только AX из GetAttackSpeed,
+/// затем складывает его с DWORD timestamp. Обычные наследники сохраняют
+/// это усечение, включая значения setup больше 65535.
+/// Стационарное OnSchedule 0x0060B890 (AI5/8/11/13/17/100/101 и наследник
+/// CGBGuardWithSward AI103), SmartGladiator 0x006106E0, JiuMai 0x0060AB10
+/// и оба босса переходят от дальности/Tracing/CheckCast прямо к Begin:
+/// дополнительного GetAttackSpeed/timestamp у этих владельцев нет.
 /// Задержка повторного применения самого навыка остаётся отдельной проверкой.
 pub(crate) const fn schedule_attack_interval(
     ai_type: u32,
@@ -114,13 +120,21 @@ pub(crate) const fn schedule_attack_interval(
 ) -> Option<u32> {
     if matches!(
         MonsterAiKind::from_ai_type(ai_type),
-        MonsterAiKind::VillageCountyGuardWithBow
+        MonsterAiKind::FixedPositionArcher
+            | MonsterAiKind::GuardWithBow
+            | MonsterAiKind::CityGuardWithBow
+            | MonsterAiKind::VillageCountyGuardWithBow
+            | MonsterAiKind::GuardCountry
+            | MonsterAiKind::GuardCountry2
+            | MonsterAiKind::GodsBattleGuardWithSword
+            | MonsterAiKind::SmartGladiator
+            | MonsterAiKind::JiuMai
             | MonsterAiKind::BossBlue
             | MonsterAiKind::BossFiend
     ) {
         None
     } else {
-        Some(ordinary_interval_ms)
+        Some(ordinary_interval_ms & 0xffff)
     }
 }
 
