@@ -486,6 +486,10 @@ impl CPlayerAI {
         self.base_ai.stiffen_attack_pending()
     }
 
+    pub(crate) fn current_active_action(&self) -> Option<AiShapeAction> {
+        self.base_ai.current_active_action()
+    }
+
     pub(crate) fn finish_stiffen_attack(&mut self, release_target: bool) {
         self.base_ai.finish_stiffen_attack(release_target);
     }

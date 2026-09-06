@@ -7,6 +7,8 @@
 //! `AI_SHAPE_ACTION` `0..8`, `ASA_FORCE_DWROD = 0xFF`, layout `AI_EVENT`
 //! `action/begin/delay/handling +0/+4/+8/+C` и три очереди active/passive/
 //! war-soul.
+//! GetCurrentActiveAction (0x004C81B0) читает только action первого элемента,
+//! без проверки handling; пустая очередь представлена None вместо native -1.
 //!
 //! `VecDeque` заменяет внутренности `std::queue<std::deque<...>>`, сохраняя
 //! FIFO и `push_back`. Время среды выполнения передаётся точным `now_ms` в
@@ -298,9 +300,13 @@ impl CBaseAI {
         }
     }
 
+    pub(crate) fn current_active_action(&self) -> Option<AiShapeAction> {
+        self.active_actions.front().map(|event| event.action)
+    }
+
     /// OnStiffen (0x004C87C0) вызывает End(4) только для Attack с handling=0.
     pub(crate) fn stiffen_attack_pending(&self) -> bool {
-        self.active_actions.front().is_some_and(|event| event.action == AiShapeAction::Attack)
+        self.current_active_action() == Some(AiShapeAction::Attack)
     }
 
     pub(crate) fn stiffen_attack_needs_end(&self) -> bool {
@@ -823,19 +829,6 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 //
 //
 
-// ============================================================================
-// FUNCTION: CBaseAI::GetCurrentActiveAction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:252
-// RVA: 0x000C81B0
-// ADDRESS: 004c81b0
-// PROTOTYPE: AI_SHAPE_ACTION __thiscall GetCurrentActiveAction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBaseAI::ProcessActiveAction

@@ -12,7 +12,12 @@
 //! `OnCannotMove`, сброс эмоции и FIFO назначения в принадлежащем игроку
 //! `CPlayerAI`. Разрешение клиентской позиции читается из действующего
 //! `CGlobeSetup::bAllowClientChangePos`; исходный порядок проверки, поиска и
-//! payload сохранён. Полиморфный `SetTileXY` достигнутых игроков, монстров, NPC
+//! payload сохранён.
+//! Запрет шага 0x8F903 соответствует CMoveShape::OnMessage (0x004972D1):
+//! GetCurrentActiveAction == Attack (0x0049731B) и ID выбранного CSkill == 1
+//! (0x0049732F). Ни CAN_BE_BREAKED, ни IsEnded, ни handling здесь не читаются;
+//! ожидающая команда и фоновые навыки сами по себе движение не запрещают.
+//! Полиморфный `SetTileXY` достигнутых игроков, монстров, NPC
 //! и призванных форм применяется их каноническими владельцами региона после
 //! wire. Внешний resolve не сохраняется: все production-вызовы `add_object`
 //! принадлежат достигнутым owner-ам; виртуальные сериализаторы недостигнутых
@@ -28,7 +33,8 @@
 //! игрока и её разрешением через тот же региональный владелец.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity};
-use crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use crate::gameserver::appserver::ai::baseai::AiShapeAction;
+use crate::gameserver::appserver::skills::baseattack::BASE_ATTACK_SKILL_ID;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, colored_player_notice_message,
 };
@@ -242,17 +248,13 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameClockContext>(
                     return Some(Err(error));
                 }
             };
-            let blocked_by_breakable_attack = game
+            let blocked_by_base_attack = game
                 .find_player(player_id)
-                .and_then(|player| {
-                    let skill_id = player.current_skill_id()?;
-                    let level = player.learned_skill_level(skill_id);
-                    game.skill_base_properties(skill_id, level)
-                })
-                .is_some_and(|properties| {
-                    properties.query_property(SKILL_USAGE_CAN_BE_BREAKED) == 1
+                .is_some_and(|player| {
+                    player.player_ai().current_active_action() == Some(AiShapeAction::Attack)
+                        && player.current_skill_id() == Some(BASE_ATTACK_SKILL_ID)
                 });
-            if blocked_by_breakable_attack {
+            if blocked_by_base_attack {
                 match send_player_cannot_move(game, player_id) {
                     Ok(()) => {}
                     Err(error) => return Some(Err(error)),
