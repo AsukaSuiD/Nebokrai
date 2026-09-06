@@ -44,6 +44,9 @@
 //! SetMoveable(true) и общий End после сброса двухударных флагов. Их ID входят
 //! в единую политику завершения; очистку прогресса выполняет существующий
 //! MonsterAttackProgress, без отдельных ветвей для отмены и Stiffen.
+//! Fury/BossBlueFury/BossBlueQuake разделяют End 0x00546090: их cast также
+//! снимает один запрет движения. Это не End наложенных Fury/Cure/Quake-state:
+//! их контейнеры, сроки и собственные блокировки остаются у state-владельцев.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1705,7 +1708,10 @@ impl CMonster {
             super::skills::monsterrangeattack::MONSTER_RANGE_ATTACK_SKILL_ID
             | super::skills::monsterthorn::MONSTER_THORN_SKILL_ID
             | super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID
-            | super::skills::lordfastattack::LORD_FAST_ATTACK_SKILL_ID)
+            | super::skills::lordfastattack::LORD_FAST_ATTACK_SKILL_ID
+            | super::skills::fury::FURY_SKILL_ID
+            | super::skills::bossbluefury::BOSS_BLUE_FURY_SKILL_ID
+            | super::skills::bossbluequake::BOSS_BLUE_QUAKE_SKILL_ID)
     }
 
     fn finish_base_attack_cast_with_reuse(
