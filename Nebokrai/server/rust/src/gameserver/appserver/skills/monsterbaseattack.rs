@@ -1,4 +1,8 @@
 //! Базовая атака монстра и приручённого питомца (`CMonsterBaseAttack`).
+//! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
+//! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
+//! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
+//! владельца: неуспешно загруженный навык не участвует в выборе default.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -368,8 +372,6 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
 const BASE_ATTACK_SKILL_ID: u16 = 1;
 const BASE_ARCHERY_SKILL_ID: u16 = 2;
 const BASE_MAGIC_SKILL_ID: u16 = 3;
-const SKILL_TYPE_ATTACK: u32 = 0;
-const SKILL_TYPE_SUMMON: u32 = 3;
 
 fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
     matches!(
@@ -509,26 +511,6 @@ fn pet_combat_master_anchor(
     Some((master.tile_x, master.tile_y))
 }
 
-fn default_monster_attack_skill_id(game: &CGame, skills: &[MonsterSkill]) -> u16 {
-    if skills.iter().any(|skill| {
-        skill.id == BASE_ARCHERY_SKILL_ID
-            && game
-                .skill_base_properties(u32::from(skill.id), i32::from(skill.level))
-                .is_some_and(|properties| properties.skill_type() == SKILL_TYPE_ATTACK)
-    }) {
-        BASE_ARCHERY_SKILL_ID
-    } else if skills.iter().any(|skill| {
-        skill.id == BASE_MAGIC_SKILL_ID
-            && game
-                .skill_base_properties(u32::from(skill.id), i32::from(skill.level))
-                .is_some_and(|properties| properties.skill_type() == SKILL_TYPE_SUMMON)
-    }) {
-        BASE_MAGIC_SKILL_ID
-    } else {
-        BASE_ATTACK_SKILL_ID
-    }
-}
-
 fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -537,7 +519,8 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     monster_health: u32,
     runtime: &mut Runtime,
 ) -> Option<u16> {
-    let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
+    let default_skill_id = region.find_monster_by_id(monster_id)?
+        .move_shape().default_attack_skill_id() as u16;
     let roll = game.skill_random_below(10_000);
     let selected = if property.ai == 21 {
         choose_boss_blue_attack_skill(
@@ -651,11 +634,11 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     {
         return true;
     }
-    let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let default_skill_id = monster.move_shape().default_attack_skill_id();
         monster
             .move_shape_mut()
-            .set_current_skill_id(Some(u32::from(default_skill_id)));
+            .set_current_skill_id(Some(default_skill_id));
     }
     true
 }
