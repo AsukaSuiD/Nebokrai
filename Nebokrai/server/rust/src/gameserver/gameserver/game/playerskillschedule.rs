@@ -1,4 +1,8 @@
 //! Предварительный допуск навыков в CPlayerAI::OnSchedule.
+//! Подключённый owner регистрирует вариант Begin один раз: inherited вызывает
+//! общий OnBeginSkill здесь, owner сохраняет свой порядок в конкретной логике.
+//! Та же регистрация отличает ещё не начатое исполнение от неизвестного ID.
+//! Допуск CSkillFactory шире подключённых owners и не подменяет эту границу.
 //!
 //! Источник: gameserver.exe + GameServer.pdb, appserver/ai/playerai.cpp,
 //! VA 0x005098d0; CSkill::DoesTargetEffective — 0x004d82e0.
@@ -17,9 +21,8 @@
 //! не входят: повторная проверка изменила бы RNG и момент отказа его AI.
 //! Обычные материализованные атаки наследуют CSkill::DoesTargetEffective
 //! (IsAttackAble цели): подтверждено слотом vtable +0x6c классов из
-//! CSkillFactory::QuerySkill (0x00469870). Проверка наличия исполнения общая
-//! с маршрутом End; неизвестный этому маршруту навык не объявляется начатым
-//! или завершённым по одному current_skill_id.
+//! CSkillFactory::QuerySkill (0x00469870). Наличие исполнения читается из
+//! общего хранилища; один current_skill_id не доказывает начало или завершение.
 //! NonFun наследует тот же допуск, но его мгновенное исполнение хранится
 //! отдельно от владельцев с внешним End.
 //! Допуск, определение первого Begin и End используют единый запрос наличия
@@ -92,6 +95,12 @@ enum TargetRule {
     Monster,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PlayerSkillBeginPolicy {
+    Inherited,
+    Owner,
+}
+
 impl CGame {
     pub(super) fn player_skill_begin_pending(ai: &CPlayerAI, skill_id: u32) -> bool {
         Self::materialized_player_skill_active(ai, skill_id) == Some(false)
@@ -105,43 +114,9 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         let skill_id = dispatch.skill_id();
-        let inherited_begin = matches!(skill_id,
-            BASE_ATTACK_SKILL_ID | ARCHERY_SKILL_ID | HEARTLESS_ARROW_SKILL_ID | HEARTLESS_ARROW_2_SKILL_ID
-                | HEARTLESS_ARROW_3_SKILL_ID | LIGHTING_ARROW_SKILL_ID | RAIN_ARROW_SKILL_ID
-                | BASE_MAGIC_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID
-                | FIRE_WALL_SKILL_ID | SEVEN_SHOOTING_STAR_SKILL_ID | THUNDER_SLASH_SKILL_ID
-                | CHAIN_LIGHTNING_SKILL_ID | THUNDER_BLOW_SKILL_ID | PILLAR_SKILL_ID
-                | RUSH_SKILL_ID | RUSH_2_SKILL_ID | ROAR_SKILL_ID | ENERGY_HOLDING_SKILL_ID
-                | INVERSE_CHOPPED_SKILL_ID | INFERNOL_SKILL_ID | THUNDER_BLOW_2_SKILL_ID
-                | MOSOU_SKILL_ID | GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID
-                | GHOST_CUT_3_SKILL_ID | ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID
-                | RAGE_BREAK_SKILL_ID | FURY_SKILL_ID | FLASH_SKILL_ID | SWALLOW_SKILL_ID
-                | LEAF_CUT_SKILL_ID | LEAF_CUT_2_SKILL_ID | LEAF_CUT_3_SKILL_ID | JU_CUT_SKILL_ID
-                | LIGHTNING_SWORD_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
-                | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
-                | LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID | LITTLE_STAR_SKILL_ID
-                | ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID
-                | CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID | YUNSHENG_LIGHTNING_SKILL_ID
-                | CORPSE_PTOMAINE_SKILL_ID | MONSTER_THORN_SKILL_ID | SPIDER_MIST_SKILL_ID
-                | SPIDER_WEB_SKILL_ID | SPIDER_POISON_SKILL_ID | SUMMON_CORPSE_CANDLE_SKILL_ID
-                | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID
-                | BOSS_BLUE_FURY_SKILL_ID | BOSS_BLUE_QUAKE_SKILL_ID | BOSS_FIEND_PENETRATE_SKILL_ID
-                | SPRITE_BURN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID
-                | LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID
-                | MONSTER_BASE_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID
-                | CHAOS_SPHERE_SKILL_ID | LIGHTNING_SKILL_ID | SEAL_SKILL_ID
-                | YIN_YANG_SKILL_ID | YIN_YANG_2_SKILL_ID | GOD_PUNISHMENT_SKILL_ID
-                | GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID | SOUL_COLLECT_SKILL_ID
-                | SOUL_MIRROR_SKILL_ID | LIGHTING_ARROW_2_SKILL_ID | METEOR_ARROW_MASS_SKILL_ID
-                | METEOR_ARROW_SKILL_ID | POISON_MOTH_SKILL_ID | BLOOD_ROSE_SKILL_ID
-                | SCORPION_SKILL_ID | BOA_LOCK_SKILL_ID | FALLING_STAR_SKILL_ID
-                | EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID
-                | STRIKE_SKILL_ID | YAKSHA_SLASH_SKILL_ID | DAUB_POISON_SKILL_ID
-                | IGNITION_SKILL_ID | KEROSENE_SKILL_ID | BLIND_SKILL_ID | POISON_FOG_SKILL_ID
-                | SNOW_STORM_SKILL_ID | WEAK_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID
-                | GIBE_SKILL_ID
-        );
-        let needs_begin = (inherited_begin || is_non_fun_skill(skill_id))
+        let inherited_begin = Self::player_skill_begin_policy(skill_id)
+            == Some(PlayerSkillBeginPolicy::Inherited);
+        let needs_begin = inherited_begin
             && Self::player_skill_begin_pending(ai, skill_id);
         if needs_begin {
             ai.set_scheduled_skill_begin(Some((dispatch, runtime.now_milliseconds())));
@@ -197,11 +172,22 @@ impl CGame {
         rejected
     }
 
-    pub(super) fn materialized_player_skill_active(player_ai: &CPlayerAI, skill_id: u32) -> Option<bool> {
-        let known = matches!(skill_id,
-            FIRE_BALL_SKILL_ID
+    fn player_skill_begin_policy(skill_id: u32) -> Option<PlayerSkillBeginPolicy> {
+        match skill_id {
+            BASE_ATTACK_SKILL_ID
+            | ARCHERY_SKILL_ID
+            | HEARTLESS_ARROW_SKILL_ID
+            | HEARTLESS_ARROW_2_SKILL_ID
+            | HEARTLESS_ARROW_3_SKILL_ID
+            | LIGHTING_ARROW_SKILL_ID
+            | RAIN_ARROW_SKILL_ID
+            | BASE_MAGIC_SKILL_ID
+            | FIRE_BOLT_SKILL_ID
+            | FIRE_BALL_SKILL_ID
             | FIRE_WALL_SKILL_ID
+            | SEVEN_SHOOTING_STAR_SKILL_ID
             | THUNDER_SLASH_SKILL_ID
+            | CHAIN_LIGHTNING_SKILL_ID
             | THUNDER_BLOW_SKILL_ID
             | PILLAR_SKILL_ID
             | RUSH_SKILL_ID
@@ -212,17 +198,54 @@ impl CGame {
             | INFERNOL_SKILL_ID
             | THUNDER_BLOW_2_SKILL_ID
             | MOSOU_SKILL_ID
+            | GHOST_CUT_SKILL_ID
+            | GHOST_CUT_2_SKILL_ID
+            | GHOST_CUT_3_SKILL_ID
+            | ARMY_BREAK_SKILL_ID
+            | ARMY_BREAK_2_SKILL_ID
             | RAGE_BREAK_SKILL_ID
             | FURY_SKILL_ID
+            | FLASH_SKILL_ID
+            | SWALLOW_SKILL_ID
             | LEAF_CUT_SKILL_ID
             | LEAF_CUT_2_SKILL_ID
             | LEAF_CUT_3_SKILL_ID
             | JU_CUT_SKILL_ID
+            | LIGHTNING_SWORD_SKILL_ID
+            | LIGHTNING_SWORD_2_SKILL_ID
+            | LIGHTNING_SWORD_3_SKILL_ID
+            | LIGHTNING_SWORD_4_SKILL_ID
+            | LITTLE_FLASH_SKILL_ID
+            | LITTLE_FLASH_2_SKILL_ID
+            | LITTLE_STAR_SKILL_ID
+            | ENERGY_BOLT_SKILL_ID
+            | ZOMBIE_CLAW_SKILL_ID
+            | SNAKE_BOLT_SKILL_ID
+            | CHUCK_STONE_SKILL_ID
+            | SKELETON_ARCHERY_SKILL_ID
+            | YUNSHENG_LIGHTNING_SKILL_ID
             | CORPSE_PTOMAINE_SKILL_ID
+            | MONSTER_THORN_SKILL_ID
+            | SPIDER_MIST_SKILL_ID
+            | SPIDER_WEB_SKILL_ID
             | SPIDER_POISON_SKILL_ID
+            | SUMMON_CORPSE_CANDLE_SKILL_ID
+            | SUMMON_SKELETON_SKILL_ID
+            | SUMMON_SPORE_SKILL_ID
+            | BOSS_FIEND_SUMMON_SKILL_ID
             | BOSS_BLUE_FURY_SKILL_ID
+            | BOSS_BLUE_QUAKE_SKILL_ID
+            | BOSS_FIEND_PENETRATE_SKILL_ID
+            | SPRITE_BURN_SKILL_ID
+            | MACHINERY_STOMP_SKILL_ID
+            | LORD_WIDERANGING_ATTACK_SKILL_ID
+            | LORD_FAST_ATTACK_SKILL_ID
+            | MONSTER_FAST_ATTACK_SKILL_ID
             | MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID
+            | CHAOS_SPHERE_SKILL_ID
+            | LIGHTNING_SKILL_ID
+            | SEAL_SKILL_ID
             | YIN_YANG_SKILL_ID
             | YIN_YANG_2_SKILL_ID
             | GOD_PUNISHMENT_SKILL_ID
@@ -230,96 +253,57 @@ impl CGame {
             | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
             | SOUL_MIRROR_SKILL_ID
-            | DAUB_POISON_SKILL_ID
-            | IGNITION_SKILL_ID
-            | KEROSENE_SKILL_ID
-            | BLIND_SKILL_ID
-            | HEARTEN_SKILL_ID
-            | SNOW_STORM_SKILL_ID
-            | WEAK_SKILL_ID
-            | CURE_SKILL_ID
-            | PROMOTION_SKILL_ID
-            | PETS_CONTROL_SKILL_ID
-            | MONSTER_TAMING_SKILL_ID
-            | KNOCK_OUT_SKILL_ID
-            | GIBE_SKILL_ID
-            | BASE_ATTACK_SKILL_ID
-            | ITEM_SKILL_2_ID
-            | LIGHTNING_SWORD_SKILL_ID
-            | LIGHTNING_SWORD_2_SKILL_ID
-            | LIGHTNING_SWORD_3_SKILL_ID
-            | LIGHTNING_SWORD_4_SKILL_ID
-            | MACHINERY_STOMP_SKILL_ID
-            | LORD_WIDERANGING_ATTACK_SKILL_ID
-            | GOD_BLESS_SKILL_ID
-            | GOD_BLESS_2_SKILL_ID
-            | POISON_FOG_SKILL_ID
-            | ARCHERY_SKILL_ID
-            | HEARTLESS_ARROW_SKILL_ID
-            | LIGHTING_ARROW_SKILL_ID
             | LIGHTING_ARROW_2_SKILL_ID
             | METEOR_ARROW_MASS_SKILL_ID
             | METEOR_ARROW_SKILL_ID
-            | RAIN_ARROW_SKILL_ID
             | POISON_MOTH_SKILL_ID
             | BLOOD_ROSE_SKILL_ID
             | SCORPION_SKILL_ID
             | BOA_LOCK_SKILL_ID
             | FALLING_STAR_SKILL_ID
-            | STRIKE_SKILL_ID
-            | YAKSHA_SLASH_SKILL_ID
-            | BASE_MAGIC_SKILL_ID
-            | FIRE_BOLT_SKILL_ID
-            | CHAIN_LIGHTNING_SKILL_ID
-            | KNIGHT_CUT_SKILL_ID
-            | RAGE_SKILL_ID
-            | FLASH_SKILL_ID
-            | SWALLOW_SKILL_ID
-            | SEVEN_SHOOTING_STAR_SKILL_ID
-            | LITTLE_STAR_SKILL_ID
-            | YUNSHENG_LIGHTNING_SKILL_ID
-            | MONSTER_THORN_SKILL_ID
-            | SPIDER_MIST_SKILL_ID
-            | SPIDER_WEB_SKILL_ID
-            | BOSS_BLUE_QUAKE_SKILL_ID
-            | BOSS_FIEND_PENETRATE_SKILL_ID
-            | SPRITE_BURN_SKILL_ID
-            | CHAOS_SPHERE_SKILL_ID
-            | LIGHTNING_SKILL_ID
-            | SEAL_SKILL_ID
-            | GHOST_CUT_SKILL_ID
-            | GHOST_CUT_2_SKILL_ID
-            | GHOST_CUT_3_SKILL_ID
-            | ARMY_BREAK_SKILL_ID
-            | ARMY_BREAK_2_SKILL_ID
-            | LITTLE_FLASH_SKILL_ID
-            | LITTLE_FLASH_2_SKILL_ID
-            | ENERGY_BOLT_SKILL_ID
-            | ZOMBIE_CLAW_SKILL_ID
-            | SNAKE_BOLT_SKILL_ID
-            | CHUCK_STONE_SKILL_ID
-            | SKELETON_ARCHERY_SKILL_ID
-            | SUMMON_CORPSE_CANDLE_SKILL_ID
-            | SUMMON_SKELETON_SKILL_ID
-            | SUMMON_SPORE_SKILL_ID
-            | BOSS_FIEND_SUMMON_SKILL_ID
-            | LORD_FAST_ATTACK_SKILL_ID
-            | MONSTER_FAST_ATTACK_SKILL_ID
-            | HEARTLESS_ARROW_2_SKILL_ID
-            | HEARTLESS_ARROW_3_SKILL_ID
             | EXPLOSIVE_ARROW_SKILL_ID
             | EXPLOSIVE_ARROW_2_SKILL_ID
             | EXPLOSIVE_ARROW_3_SKILL_ID
+            | STRIKE_SKILL_ID
+            | YAKSHA_SLASH_SKILL_ID
+            | DAUB_POISON_SKILL_ID
+            | IGNITION_SKILL_ID
+            | KEROSENE_SKILL_ID
+            | BLIND_SKILL_ID
+            | POISON_FOG_SKILL_ID
+            | SNOW_STORM_SKILL_ID
+            | WEAK_SKILL_ID
+            | GOD_BLESS_SKILL_ID
+            | GOD_BLESS_2_SKILL_ID
+            | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
+            HEARTEN_SKILL_ID
+            | CURE_SKILL_ID
+            | PROMOTION_SKILL_ID
+            | PETS_CONTROL_SKILL_ID
+            | MONSTER_TAMING_SKILL_ID
+            | KNOCK_OUT_SKILL_ID
+            | ITEM_SKILL_2_ID
+            | KNIGHT_CUT_SKILL_ID
+            | RAGE_SKILL_ID
             | CALLOSITY_SKILL_ID
             | CALLOSITY_2_SKILL_ID
             | AGILITY_SKILL_ID
             | AGILITY_2_SKILL_ID
             | NATURAL_SKILL_ID
-            | RAPTURE_SKILL_ID
-        ) || is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
-            || is_non_fun_skill(skill_id) || is_heal_skill(skill_id)
-            || is_self_shield_skill(skill_id);
-        known.then(|| player_ai.player_skill_execution(skill_id).is_some())
+            | RAPTURE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
+            _ if is_non_fun_skill(skill_id) => Some(PlayerSkillBeginPolicy::Inherited),
+            _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
+                || is_heal_skill(skill_id) || is_self_shield_skill(skill_id) =>
+            {
+                Some(PlayerSkillBeginPolicy::Owner)
+            }
+            _ => None,
+        }
+    }
+
+    fn materialized_player_skill_active(player_ai: &CPlayerAI, skill_id: u32) -> Option<bool> {
+        Self::player_skill_begin_policy(skill_id)
+            .map(|_| player_ai.player_skill_execution(skill_id).is_some())
     }
 
     pub(super) fn reject_player_skill_schedule(
