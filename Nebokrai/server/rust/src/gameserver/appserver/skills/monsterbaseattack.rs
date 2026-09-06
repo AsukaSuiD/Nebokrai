@@ -29,6 +29,12 @@
 //! перечитывает максимум setup и не смешивает сохранённую цель с другим уровнем.
 //! WORD-уровень monster-dispatch проверяется до Begin без усечения; настройка
 //! монстра изначально хранит u16, а общий реестр CMoveShape допускает i32.
+//! Выбор не требует реализации всех записей setup: CMonsterAI::OnChangeSkill
+//! (0x005DCBC0) вызывает selector непосредственно, затем проверяет только
+//! выбранный объект. Пустой список также проходит исходный RNG/default.
+//! Предварительный запрет по всему списку удалён: второй внешней виртуальной
+//! ветви в CGame нет. Неподключённый выбранный skill всё ещё возвращает отказ
+//! перед Begin; это оставшийся конкретный owner, а не успешная атака.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -244,7 +250,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkil
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
-use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
+use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -393,8 +399,6 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     player_base_attack_outcome(QueuedSkillExecutionState::Completed)
 }
 
-const BASE_ATTACK_SKILL_ID: u16 = 1;
-const BASE_ARCHERY_SKILL_ID: u16 = 2;
 const BASE_MAGIC_SKILL_ID: u16 = 3;
 
 fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
@@ -437,33 +441,6 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | YAKSHA_SLASH_SKILL_ID
             | SNOW_STORM_SKILL_ID
     ) || MonsterImmediateSkill::from_skill_id(skill_id).is_some()
-}
-
-/// Rust-владелец выбирает навык только когда любой явно установленный результат
-/// броска уже имеет реального владельца исполнения. Иначе весь ход остаётся
-/// внешней виртуальной ветви, чтобы она не получила второй вызов исходного
-/// генератора случайных чисел после частичной диспетчеризации. Сумма `odds`
-/// намеренно не обязана покрывать `0..9999`: подтверждённый
-/// `SelectAttackSkill` возвращает `GetDefaultAttackSkillID` для оставшегося
-/// диапазона. Исключённые записи `2` синего босса и `1/2` демона-босса и
-/// владыки разрешены: их `odds` участвуют в накоплении, но сами ID специальные
-/// селекторы не возвращают до запасной ветви.
-fn owns_complete_skill_selection(skills: &[MonsterSkill], ai_type: u32) -> bool {
-    !skills.is_empty()
-        && skills.iter().all(|skill| {
-            is_owned_monster_attack_skill(u32::from(skill.id))
-                || (ai_type == 21 && skill.id == BASE_ARCHERY_SKILL_ID)
-                || (ai_type == 23
-                    && matches!(
-                        skill.id,
-                        BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
-                    ))
-                || (ai_type == 19
-                    && matches!(
-                        skill.id,
-                        BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
-                    ))
-        })
 }
 
 /// Точная встречная ветвь `CPet::OnStayingSchedule` и
@@ -615,9 +592,6 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    if !owns_complete_skill_selection(&property.skills, property.ai) {
-        return false;
-    }
     let selected = select_and_store_monster_attack_skill(
         game,
         region,
@@ -1043,9 +1017,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if property.ai == 20
         && !maintain_jiumai_twin(game, region, monster_id, &property, runtime)
     {
-        return false;
-    }
-    if !owns_complete_skill_selection(&property.skills, property.ai) {
         return false;
     }
     if matches!(property.ai, 10 | 12 | 16) {
