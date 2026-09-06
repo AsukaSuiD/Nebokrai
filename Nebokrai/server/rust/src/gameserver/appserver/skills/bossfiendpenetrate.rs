@@ -20,6 +20,8 @@
 //! клеточные задержки остаются elapsed-проверками.
 //! End (0x0052B410) освобождает пути и возвращает движение до оружейного
 //! AfterUseSkill. Callback игрока +0x158 пуст и не пересчитывает свойства.
+//! Выпуск игрока устанавливает prepared (0x0052C279) после эффекта 1;
+//! последующие клетки обходятся тем же экземпляром в общей фоновой очереди.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -70,7 +72,6 @@ pub(crate) struct PlayerBossFiendPenetrateExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
     destination: (i32, i32),
     condition_checked: bool,
-    attacking_started: bool,
     path: Vec<(i32, i32, u8)>,
     attack_cell_count: usize,
     current_cell: usize,
@@ -82,7 +83,6 @@ impl PlayerBossFiendPenetrateExecutionState {
             kernel: SkillExecutionKernel::begin(dispatch, now_ms),
             destination,
             condition_checked: false,
-            attacking_started: false,
             path: Vec::new(),
             attack_cell_count: 0,
             current_cell: 0,
@@ -546,7 +546,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         .unwrap_or_default();
     if player_ai
         .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
-        .is_some_and(|state| !state.attacking_started)
+        .is_some_and(|state| !state.kernel().is_prepared())
     {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
             return player_terminal(QueuedSkillExecutionState::Pending);
@@ -598,7 +598,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             state.path = path;
             state.attack_cell_count = attack_cell_count;
             state.current_cell = 0;
-            state.attacking_started = true;
+            state.kernel_mut().mark_prepared();
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         }

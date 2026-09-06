@@ -16,6 +16,9 @@
 //! до единственной записи в `float` и усекают критический множитель к нулю
 //! перед `int`. Физический RNG у всех трёх получает исходную DWORD-ширину
 //! `maximum - minimum + 1` без нормализации перевёрнутых границ.
+//! Выпуск устанавливает общий prepared-флаг после эффекта 1
+//! (варианты 1/2/3: 0x0059E348 / 0x00562638 / 0x00560EE8). Последующий AI продолжает тот же
+//! экземпляр в фоне; повторный Begin и отдельное хранилище не создаются.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -47,7 +50,6 @@ const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 pub(crate) struct GhostCutExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
     condition_checked: bool,
-    attacking_started: bool,
     path: Vec<(i32, i32, u8)>,
     current_position: usize,
     attacked: Vec<ShapeIdentity>,
@@ -55,7 +57,7 @@ pub(crate) struct GhostCutExecutionState {
 
 impl GhostCutExecutionState {
     fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), condition_checked: false, attacking_started: false, path: Vec::new(), current_position: 0, attacked: Vec::new() }
+        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), condition_checked: false, path: Vec::new(), current_position: 0, attacked: Vec::new() }
     }
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
@@ -179,7 +181,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
         if let Some(state) = player_ai.player_skill_state_mut::<GhostCutExecutionState>(dispatch.skill_id()) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started_at_ms = player_ai.player_skill_state::<GhostCutExecutionState>(dispatch.skill_id()).map(|state| state.kernel.started_at_ms()).unwrap_or_default();
-    if !player_ai.player_skill_state::<GhostCutExecutionState>(dispatch.skill_id()).is_some_and(|state| state.attacking_started) {
+    if !player_ai.player_skill_state::<GhostCutExecutionState>(dispatch.skill_id()).is_some_and(|state| state.kernel().is_prepared()) {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
         let Some((target_x, target_y)) = target_position(game, region_id, player_id, dispatch) else { finish_player_ghost_cut(game, player_id, player_ai, requested_skill, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
@@ -188,7 +190,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
         if maximum_distance != 0 && maximum_distance.wrapping_add(1) < path.len() as u32 { send_failure(game, player_id, 0x0b, mp_loss); finish_player_ghost_cut(game, player_id, player_ai, requested_skill, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         let endpoint_index = path.iter().position(|cell| cell.2 == 2).unwrap_or(path.len()); let endpoint = path.get(endpoint_index).or_else(|| path.last()).copied().unwrap_or((target_x, target_y, 2)); let total = missile_step_ms.wrapping_mul(endpoint_index as u32);
         send_visual(game, player_id, requested_skill, level, 2, Some((endpoint.0, endpoint.1, total)));
-        if let Some(state) = player_ai.player_skill_state_mut::<GhostCutExecutionState>(dispatch.skill_id()) { state.path = path; state.current_position = 1; state.attacking_started = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
+        if let Some(state) = player_ai.player_skill_state_mut::<GhostCutExecutionState>(dispatch.skill_id()) { state.path = path; state.current_position = 1; state.kernel_mut().mark_prepared(); let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
     }
     let Some((current_position, cell)) = player_ai.player_skill_state::<GhostCutExecutionState>(dispatch.skill_id()).map(|state| (state.current_position, state.path.get(state.current_position).copied())) else { return terminal(QueuedSkillExecutionState::Rejected) };
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms.wrapping_add(missile_step_ms.wrapping_mul(current_position as u32))) { return terminal(QueuedSkillExecutionState::Pending) }

@@ -13,6 +13,9 @@
 //! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
 //! сохранённой `f32`-константы, затем усекается к нулю. Восстановление
 //! использует абсолютный срок `CSkill::IsRestored`; cast и полёт остаются elapsed.
+//! Выпуск устанавливает общий prepared-флаг после эффекта 1
+//! (0x005AAB8D). Последующий AI продолжает тот же
+//! экземпляр в фоне; повторный Begin и отдельное хранилище не создаются.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::fightdefense::truncate_original;
@@ -56,7 +59,6 @@ pub(crate) struct SealExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
     target: ShapeIdentity,
     condition_checked: bool,
-    attacking_started: bool,
     missile_flying_time_ms: u32,
 }
 
@@ -66,7 +68,6 @@ impl SealExecutionState {
             kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
             target,
             condition_checked: false,
-            attacking_started: false,
             missile_flying_time_ms: 0,
         }
     }
@@ -377,7 +378,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
     }
 
     let started_at_ms = player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().map(|state| state.kernel().started_at_ms()).expect("выполнение печати создано или восстановлено");
-    if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_some_and(|state| !state.attacking_started) {
+    if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_some_and(|state| !state.kernel().is_prepared()) {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
@@ -408,7 +409,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         let missile_flying_time_ms = missile_per_cell_ms.wrapping_mul(path.len() as u32);
         send_fire(game, player_id, target, target_x, target_y, level, missile_flying_time_ms);
         if let Some(state) = player_ai.player_skill_state_mut::<SealExecutionState>(SEAL_SKILL_ID) {
-            state.attacking_started = true;
+            state.kernel_mut().mark_prepared();
             state.missile_flying_time_ms = missile_flying_time_ms;
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }

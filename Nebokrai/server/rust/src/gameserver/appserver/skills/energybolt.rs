@@ -21,6 +21,9 @@
 //! Множитель собранных душ также остаётся в x87: signed `souls` умножается на
 //! `0.7_f32`, к нему прибавляется `1.0_f32`, затем signed-база умножается без
 //! промежуточного `f32`; `__ftol2` отдаёт младшие 32 бита результата.
+//! Player-подготовка фиксируется после эффекта выпуска: EnergyBolt
+//! 0x0053CB9C, SnakeBolt 0x00534C82, ZombieClaw 0x0053842C. Общий kernel
+//! передаёт тот же путь в фон; progress.fired отдельно нужен monster-owner-у.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
@@ -605,6 +608,9 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         let progress = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).map(|state| state.progress.clone())
             .expect("projectile progress создан перед wire-эффектом");
         send_player_projectile_fire(game, player_id, spec.skill_id, level, target, &progress);
+        if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) {
+            state.kernel_mut().mark_prepared();
+        }
     }
 
     let mut progress = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).map(|state| state.progress.clone())

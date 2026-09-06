@@ -13,6 +13,10 @@
 //! Оба владельца вычисляют критический множитель в расширенной точности x87 и
 //! усекают его к нулю при записи в `int`.
 //! Reuse использует exact `CSkill::IsRestored`; cast и flight часы — elapsed.
+//! Только ChuckStone выставляет prepared после fire (0x0053DE95).
+//! SkeletonArchery::AI (0x005393A0) пишет fired в +0x58 (0x005396EF),
+//! но не prepared в +0x44: его полёт остаётся в активном AI. Поэтому
+//! одинаковая траектория не означает одинаковый переход в фон.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -273,6 +277,9 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
         send_fire(game, player_id, skill_id, level, visual_target, impact, flying_time_ms);
         if let Some(state) = ai.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()) {
             state.fired = true; state.destination = target_position; state.impact = impact; state.missile_flying_time_ms = flying_time_ms;
+            if skill_id == super::chuckstone::CHUCK_STONE_SKILL_ID {
+                state.kernel_mut().mark_prepared();
+            }
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }

@@ -14,6 +14,8 @@
 //! `End(false)` прекращает полёт без отката уже применённой атаки. Player и
 //! monster ветви используют абсолютный срок `CSkill::IsRestored`; cast и полёт
 //! остаются elapsed.
+//! После эффекта выпуска player-ветвь ставит prepared (0x005432FE).
+//! Этот флаг общего kernel сохраняет полёт при переходе из Attack в фон.
 
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -47,13 +49,12 @@ const BLOCK_UNFLY: u8 = 2;
 pub(crate) struct YakshaSlashExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
     condition_checked: bool,
-    attacking_started: bool,
     missile_flying_time_ms: u32,
 }
 
 impl YakshaSlashExecutionState {
     fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), condition_checked: false, attacking_started: false, missile_flying_time_ms: 0 }
+        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), condition_checked: false, missile_flying_time_ms: 0 }
     }
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
@@ -233,7 +234,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
         if let Some(state) = ai.player_skill_state_mut::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel.started_at_ms()).unwrap_or_default();
-    if !ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| state.attacking_started) {
+    if !ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| state.kernel().is_prepared()) {
         if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
         let Some(target_view) = target_view(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
@@ -242,7 +243,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
         let flying_time = missile_step.wrapping_mul(path.len() as u32);
         send_cast(game, player_id, level, target, position, Some(flying_time));
-        if let Some(state) = ai.player_skill_state_mut::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID) { state.missile_flying_time_ms = flying_time; state.attacking_started = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); }
+        if let Some(state) = ai.player_skill_state_mut::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID) { state.missile_flying_time_ms = flying_time; state.kernel_mut().mark_prepared(); let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); }
     }
     let flying_time = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map_or(0, |state| state.missile_flying_time_ms);
     if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(flying_time)) { return terminal(QueuedSkillExecutionState::Pending) }

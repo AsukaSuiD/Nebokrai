@@ -11,6 +11,8 @@
 //! первый `CMoveShape` клетки и затем проходит тот же объектный pipeline.
 //! Player и monster ветви используют абсолютный срок `CSkill::IsRestored`,
 //! сохраняя elapsed-сроки cast-delay и полёта.
+//! Player-выпуск ставит prepared после эффекта (0x0054046D); полёт
+//! продолжается тем же исполнением в общей фоновой очереди до End.
 //
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
@@ -474,6 +476,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         );
         if let Some(state) = player_ai.player_skill_state_mut::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID) {
             state.missile_flying_time_ms = Some(missile_flying_time_ms);
+            state.kernel_mut().mark_prepared();
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }
