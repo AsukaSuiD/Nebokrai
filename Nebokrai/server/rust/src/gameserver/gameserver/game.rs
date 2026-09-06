@@ -47368,8 +47368,14 @@ impl CGame {
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         if passive_death == PassiveDeathAction::WaitingForMove {
                             move_pending = monster.advance_active_ai_move(now_ms);
-                        } else if !death_started && monster.advance_handled_active_ai_action(now_ms) {
-                            active_action_completed = true;
+                        } else if !death_started
+                            && let Some(state) = monster.advance_handled_active_ai_action(|| runtime.now_milliseconds())
+                        {
+                            schedule_ready = state.is_idle()
+                                && !passive_action_executed
+                                && monster.primary_ai_queues_idle()
+                                && monster.ai_target().is_none();
+                            active_action_completed = !schedule_ready;
                         } else if !death_started {
                             monster.queue_search_after_active_move(ai_type, now_ms);
                             move_pending = monster.advance_active_ai_move(now_ms);
@@ -47394,7 +47400,8 @@ impl CGame {
                             {
                                 schedule_ready = monster.advance_active_ai_stand(now_ms)
                                     && monster.primary_ai_queues_idle()
-                                    && !passive_action_executed;
+                                    && !passive_action_executed
+                                    && monster.ai_target().is_none();
                             }
                         }
                     }

@@ -3,6 +3,10 @@
 //! Defense и первый OnStiffen возвращают EXEC даже после снятия последнего
 //! события: monster caller сохраняет результат passive-фазы отдельно от
 //! пустоты FIFO. EXEC разрешает active-фазу, но не последующий OnIdle.
+//! Общая проверка ненулевого handling сохраняет три результата фазы:
+//! истёкшая последняя запись даёт IDLE, оставшийся хвост — EXEC, ожидание
+//! не-Move — HUNG_UP. Ни один результат не запускает следующий handler.
+//! IDLE разрешает только хвостовой OnIdle без цели, а не второй OnSchedule.
 //! Базовый OnBeenHurted: EXE/PDB GameServer, appserver/ai/baseai.cpp:815,
 //! RVA 0x000C8700; discard_active_prefix сохраняет первую Attack/Move-границу.
 //! Defense в ProcessPassiveAction (0x004C84F0) вызывает производный
@@ -79,6 +83,19 @@
 use std::collections::VecDeque;
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AiPhaseState {
+    Idle,
+    Executing,
+    HungUp,
+}
+
+impl AiPhaseState {
+    pub(crate) const fn is_idle(self) -> bool {
+        matches!(self, Self::Idle)
+    }
+}
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,12 +264,8 @@ impl CBaseAI {
 
     /// None — требуется dispatch; Some — проход занят, значение блокирует active.
     pub(crate) fn advance_handled_passive_action(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
-        let event = self.passive_actions.front().filter(|event| event.handling != 0)?;
-        if event.handling == 1 && ai_event_deadline_reached(event, now()) {
-            self.passive_actions.pop_front();
-            return Some(false);
-        }
-        Some(event.action != AiShapeAction::Move)
+        Self::advance_handled_action(&mut self.passive_actions, now)
+            .map(|state| state == AiPhaseState::HungUp)
     }
 
     /// Выполняет материализованный `Defense`-участок `ProcessPassiveAction`.
@@ -552,22 +565,21 @@ impl CBaseAI {
         Self::finish_action(&mut self.active_war_soul_actions, AiShapeAction::Attack, now_ms);
     }
 
-    pub(crate) fn advance_handled_active_action(&mut self, now: impl FnOnce() -> u32) -> bool {
+    pub(crate) fn advance_handled_active_action(&mut self, now: impl FnOnce() -> u32) -> Option<AiPhaseState> {
         Self::advance_handled_action(&mut self.active_actions, now)
     }
 
-    pub(crate) fn advance_handled_war_soul_action(&mut self, now: impl FnOnce() -> u32) -> bool {
+    pub(crate) fn advance_handled_war_soul_action(&mut self, now: impl FnOnce() -> u32) -> Option<AiPhaseState> {
         Self::advance_handled_action(&mut self.active_war_soul_actions, now)
     }
 
-    fn advance_handled_action(queue: &mut VecDeque<AiEvent>, now: impl FnOnce() -> u32) -> bool {
-        let Some(event) = queue.front().filter(|event| event.handling == 1) else {
-            return false;
-        };
-        if ai_event_deadline_reached(event, now()) {
+    fn advance_handled_action(queue: &mut VecDeque<AiEvent>, now: impl FnOnce() -> u32) -> Option<AiPhaseState> {
+        let event = queue.front().filter(|event| event.handling != 0)?;
+        if event.handling == 1 && ai_event_deadline_reached(event, now()) {
             queue.pop_front();
+            return Some(if queue.is_empty() { AiPhaseState::Idle } else { AiPhaseState::Executing });
         }
-        true
+        Some(if event.action == AiShapeAction::Move { AiPhaseState::Executing } else { AiPhaseState::HungUp })
     }
 
     fn finish_action(queue: &mut VecDeque<AiEvent>, action: AiShapeAction, now_ms: u32) {

@@ -516,7 +516,7 @@ impl CPlayerAI {
     }
 
     pub(crate) fn advance_handled_active_action(&mut self, now: impl FnOnce() -> u32) -> bool {
-        self.base_ai.advance_handled_active_action(now)
+        self.base_ai.advance_handled_active_action(now).is_some()
     }
 
     pub(crate) fn advance_handled_passive_action(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
@@ -524,7 +524,7 @@ impl CPlayerAI {
     }
 
     pub(crate) fn advance_handled_war_soul_action(&mut self, now: impl FnOnce() -> u32) -> bool {
-        self.base_ai.advance_handled_war_soul_action(now)
+        self.base_ai.advance_handled_war_soul_action(now).is_some()
     }
 
     pub(crate) fn finish_stiffen_attack(&mut self, release_target: bool) {

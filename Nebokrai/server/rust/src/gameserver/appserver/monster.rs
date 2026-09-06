@@ -114,7 +114,7 @@ use std::collections::BTreeMap;
 
 use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
 use super::ai::baseai::{
-    AiShapeAction, CBaseAI, PassiveDeathAction, PassiveStiffenAction,
+    AiPhaseState, AiShapeAction, CBaseAI, PassiveDeathAction, PassiveStiffenAction,
 };
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
@@ -1369,8 +1369,8 @@ impl CMonster {
         self.base_ai.advance_active_stand(now_ms)
     }
 
-    pub(crate) fn advance_handled_active_ai_action(&mut self, now_ms: u32) -> bool {
-        self.base_ai.advance_handled_active_action(|| now_ms)
+    pub(crate) fn advance_handled_active_ai_action(&mut self, now: impl FnOnce() -> u32) -> Option<AiPhaseState> {
+        self.base_ai.advance_handled_active_action(now)
     }
 
     pub(crate) fn advance_handled_passive_ai_action(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
