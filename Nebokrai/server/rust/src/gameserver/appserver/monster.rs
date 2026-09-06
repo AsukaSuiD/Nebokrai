@@ -1745,7 +1745,11 @@ impl CMonster {
     }
 
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(now_ms, true)
+        self.finish_base_attack_cast_with_reuse(|| now_ms, true)
+    }
+
+    pub(crate) fn finish_base_attack_cast_with_clock(&mut self, now: impl FnOnce() -> u32) -> Option<MonsterBaseAttackCast> {
+        self.finish_base_attack_cast_with_reuse(now, true)
     }
 
     /// `CSkill::End(false)` завершает самостоятельное AI-действие, но не
@@ -1755,7 +1759,7 @@ impl CMonster {
         &mut self,
         now_ms: u32,
     ) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(now_ms, false)
+        self.finish_base_attack_cast_with_reuse(|| now_ms, false)
     }
 
     const fn attack_end_restores_movement(skill_id: u32) -> bool {
@@ -1809,7 +1813,7 @@ impl CMonster {
 
     fn finish_base_attack_cast_with_reuse(
         &mut self,
-        now_ms: u32,
+        now: impl FnOnce() -> u32,
         mark_reuse: bool,
     ) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast?;
@@ -1821,7 +1825,7 @@ impl CMonster {
         self.finish_attack_skill_resources(skill_id);
         let _ = execution.terminate(SkillTermination::Completed);
         if mark_reuse {
-            self.skill_last_used_ms.insert(skill_id, now_ms);
+            self.skill_last_used_ms.insert(skill_id, now());
         }
         self.base_attack_cast = Some(execution);
         Some(execution)

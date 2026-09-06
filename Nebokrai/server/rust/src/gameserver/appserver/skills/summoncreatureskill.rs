@@ -24,6 +24,9 @@
 //! один декремент движения, очистка cast и reuse для ненулевого End. Cancel
 //! без reuse также снимает запрет. End не вызывает Summon и не удаляет
 //! созданных существ; их сроки жизни принадлежат региональному владельцу.
+//! Reuse-clock monster-End читается после создания и публикации всех существ
+//! и очистки ресурсов, как CSkill::End (0x004D84C0), а не берётся из раннего
+//! now_ms, которым проверялся срок AI. End без reuse не читает эти часы.
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
@@ -267,7 +270,7 @@ fn send_fire(
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет идентификатор, цель и текущий такт исходного навыка")]
-pub(crate) fn execute_owned_summon_creature(
+pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -276,6 +279,7 @@ pub(crate) fn execute_owned_summon_creature(
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
+    runtime: &mut Runtime,
 ) -> bool {
     let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
@@ -348,7 +352,7 @@ pub(crate) fn execute_owned_summon_creature(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast(now_ms);
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
         }
         return true;
     }
