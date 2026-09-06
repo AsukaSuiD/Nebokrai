@@ -50,6 +50,15 @@
 //! End разделён вокруг синхронной доставки: очистка concrete owner-а → его
 //! эффект → reuse и снятие Attack → OnLoseTarget. LittleStar (0x005355F0)
 //! посылает action 3 на этой границе; это не отложенная очередь эффектов.
+//! Отказ Begin — отдельный результат owner-а, не ожидание и не End AI.
+//! Расписание после него вызывает virtual OnLoseTarget, затем ставит
+//! SearchEnemy с новым timestamp: CMonsterAI 0x005DD07F (и thunk
+//! 0x0060AF50), стационарный 0x0060B979, SmartGladiator 0x006107BF,
+//! JiuMai 0x0060ACDA, BossBlue 0x0060A0A4, BossFiend 0x00609643,
+//! CPet Stay/Attack 0x004E979A/0x004E9B94. Общая граница не повторяет End,
+//! не отменяет Move и не фильтрует SearchEnemy по наличию тела обработчика.
+//! Явный результат пока подключён к MonsterThorn; прежний bool других
+//! owners ещё не отличает отказ Begin от ожидания расписания.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
@@ -73,6 +82,33 @@ const SLIP_ORDER: [[usize; 8]; 8] = [
     [6, 5, 7, 4, 0, 3, 1, 2],
     [7, 6, 0, 5, 1, 4, 2, 3],
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterSkillCallOutcome {
+    NotHandled,
+    Handled,
+    BeginRejected,
+}
+
+pub(crate) fn finish_monster_skill_call<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    outcome: MonsterSkillCallOutcome,
+    runtime: &mut Runtime,
+) -> bool {
+    match outcome {
+        MonsterSkillCallOutcome::NotHandled => false,
+        MonsterSkillCallOutcome::Handled => true,
+        MonsterSkillCallOutcome::BeginRejected => {
+            release_owned_monster_target(game, region, monster_id, runtime);
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+            }
+            true
+        }
+    }
+}
 
 pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,

@@ -1592,7 +1592,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if skill_id == MONSTER_THORN_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_thorn(
+        let outcome = execute_owned_monster_thorn(
             game,
             region,
             monster_id,
@@ -1602,6 +1602,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
             runtime,
             deaths,
+        );
+        return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
+            game, region, monster_id, outcome, runtime,
         );
     }
     if skill_id == SPIDER_POISON_SKILL_ID {
