@@ -27,6 +27,9 @@
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
 //! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
 //! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! Monster End всех трёх вариантов (0x0053BF50) подключён к общей очистке
+//! CMonster: путь, SetMoveable(true), reuse ненулевого End и Stiffen=4.
+//! Отдельный пакет конца полёта остаётся у AI; сам End его не посылает.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};

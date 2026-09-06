@@ -56,6 +56,10 @@
 //! ChuckStone/SkeletonArchery::End (0x0056A330) сбрасывает полётные поля,
 //! снимает один запрет движения и вызывает общий End. Прогресс полёта хранится
 //! в MonsterAttackProgress; отмена и Stiffen используют ту же очистку.
+//! EnergyBolt/SnakeBolt/ZombieClaw::End (0x0053BF50) освобождает массив пути
+//! и полётные поля, затем вызывает SetMoveable(true) и общий End. Owned Vec
+//! пути освобождается с MonsterAttackProgress; нанесённые попадания и состояния
+//! целей не являются ресурсами этого исполнения и при End не откатываются.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1723,7 +1727,10 @@ impl CMonster {
             | super::skills::lordwiderangingattack::LORD_WIDERANGING_ATTACK_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | super::skills::chuckstone::CHUCK_STONE_SKILL_ID
-            | super::skills::skeletonarchery::SKELETON_ARCHERY_SKILL_ID)
+            | super::skills::skeletonarchery::SKELETON_ARCHERY_SKILL_ID
+            | super::skills::energybolt::ENERGY_BOLT_SKILL_ID
+            | super::skills::snakebolt::SNAKE_BOLT_SKILL_ID
+            | super::skills::zombieclaw::ZOMBIE_CLAW_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {
