@@ -1875,6 +1875,20 @@ impl CMonster {
         }
     }
 
+    /// Удаление CState из Cure не вызывает CSkill::End(int).
+    pub(crate) fn remove_curable_attack_cast(&mut self, skill_id: u32) -> bool {
+        if self.base_attack_cast.is_none_or(|cast| cast.dispatch().skill_id != skill_id) {
+            return false;
+        }
+        self.attack_progress = MonsterAttackProgress::default();
+        self.base_attack_cast = None;
+        self.move_shape.finish_curable_skill_state(skill_id);
+        if self.move_shape.current_skill_id() == Some(skill_id) {
+            self.move_shape.set_current_skill_id(None);
+        }
+        true
+    }
+
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32) -> u32 {
         self.skill_last_used_ms
             .get(&skill_id)

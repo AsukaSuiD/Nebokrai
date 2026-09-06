@@ -30,6 +30,12 @@
 //! в 0x005ADC58. На время очищения извлечённый AI публикуется в CPlayer:
 //! завершение собственного SpiderMist видит тот же экземпляр и возвращает
 //! изменённый AI, сохраняя Cure и остальные независимые исполнения.
+//! SpiderMist использует CState::End() 0x005DBCE0, а не End(int):
+//! RemoveState (0x004CDAB0) удаляет экземпляр и вызывает UpdateProperty.
+//! Деструкторы 0x005406D0 → 0x005E0F20 → 0x004D81A0 не возвращают
+//! движение и не фиксируют reuse. Rust удаляет только совпавшее исполнение
+//! и его state-запись; ссылку выбора на удалённый экземпляр обнуляет безопасно,
+//! не сохраняя native dangling pointer. Созданный phalanx остаётся независимым.
 
 use super::fightdefense::truncate_original;
 use super::bossbluequakestate::{
@@ -51,7 +57,7 @@ use super::knightcutstate::{
     send_knight_cut_state_visual,
 };
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
-use super::spidermist::{SPIDER_MIST_SKILL_ID, cancel_player_spider_mist};
+use super::spidermist::SPIDER_MIST_SKILL_ID;
 use super::spiderpoisonstate::{
     SpiderPoisonState, finish_player_spider_poison_state_on_cure,
     send_spider_poison_state_visual,
@@ -238,14 +244,25 @@ fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec
 fn finish_active_spider_mist_on_cure<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(mut player_ai) = game.find_player_mut(player_id).map(CPlayer::take_player_ai) else {
         return false;
     };
-    let finished = cancel_player_spider_mist(game, player_id, &mut player_ai, runtime);
+    let finished = player_ai.player_skill_execution(SPIDER_MIST_SKILL_ID)
+        .map(SkillExecutionKernel::dispatch)
+        .is_some_and(|dispatch| player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled));
     if let Some(player) = game.find_player_mut(player_id) {
         player.restore_player_ai(player_ai);
+        if finished {
+            player.finish_curable_skill_state(SPIDER_MIST_SKILL_ID);
+            if player.current_skill_id() == Some(SPIDER_MIST_SKILL_ID) {
+                player.set_current_skill_id(None);
+            }
+        }
+    }
+    if finished {
+        let _ = game.update_player_properties(player_id);
     }
     finished
 }
@@ -326,14 +343,9 @@ fn finish_monster_curable_state(
             }
             POISON_FOG_STATE_ID => RemovedMonsterCurableState::PoisonFog(monster.move_shape_mut().take_poison_fog_state()?),
             SPIDER_MIST_SKILL_ID => {
-                if monster
-                    .base_attack_cast()
-                    .is_none_or(|cast| cast.dispatch().skill_id != SPIDER_MIST_SKILL_ID)
-                {
+                if !monster.remove_curable_attack_cast(SPIDER_MIST_SKILL_ID) {
                     return None;
                 }
-                monster.move_shape_mut().set_moveable(true);
-                monster.cancel_base_attack_cast();
                 RemovedMonsterCurableState::ActiveSpiderMist
             }
             _ => return None,
