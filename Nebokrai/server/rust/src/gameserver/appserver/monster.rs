@@ -7,6 +7,9 @@
 //! CBaseAI::OnFighting 0x004C9320 проверяет IsEnded до AI навыка. End
 //! сохраняет terminated kernel до следующего active-прохода: только тот
 //! ставит completion FIFO и снимает Attack, читая часы каждого события.
+//! Установщик cast сохраняет переданную owner-ом фазу: MonsterThorn Begin
+//! (0x005416E0) не выполняет первый AI (0x00542232). Общая постановка Attack
+//! не подменяет этот переход; ранее достигнутые owners передают Check.
 //! Завершение immediate-cast без reuse не читает часы перед этим FIFO:
 //! `CSkill::End(0)` (0x004D84C0) пропускает timeGetTime. Отсутствие часов
 //! представлено явно, а не отдельным флагом рядом с неиспользуемым timestamp.
@@ -1685,6 +1688,12 @@ impl CMonster {
             skill_level,
         }, now_ms);
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+        self.install_base_attack_cast(execution);
+    }
+
+    pub(crate) fn install_base_attack_cast(&mut self, execution: MonsterBaseAttackCast) {
+        let skill_id = execution.dispatch().skill_id;
+        let now_ms = execution.started_at_ms();
         self.base_attack_cast = Some(execution);
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.register_curable_skill_state(skill_id);
