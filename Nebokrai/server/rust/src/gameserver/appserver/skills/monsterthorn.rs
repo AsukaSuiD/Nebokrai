@@ -13,6 +13,12 @@
 //! Player-критический множитель вычисляется в расширенной точности x87 и
 //! усекается к нулю перед записью `int`. Player и monster ветви используют
 //! абсолютный срок `CSkill::IsRestored`; cast-delay остаётся elapsed.
+//! AI различает отказы: мёртвая цель — End(0) (0x005421FA), слишком
+//! длинный путь — End(0) (0x00542314), BLOCK_UNFLY после задержки — End(1)
+//! без удара (0x00542386..0x0054239B). Последний сохраняет reuse и player
+//! AfterUseSkill. End живого cast не сбрасывает AI-цель и очередь движения.
+//! Ещё не согласованы исчезнувшая объектная цель (native использует fallback
+//! координаты), точный Begin монстра и момент проверки attackability в AI.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -122,6 +128,12 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         }
         return true;
     };
+    if target.dead && cast.is_some_and(|cast| cast.dispatch().skill_id == MONSTER_THORN_SKILL_ID) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            let _ = monster.finish_base_attack_cast_without_reuse();
+        }
+        return true;
+    }
     if target.dead
         || target.god
         || target.city_dead
@@ -212,6 +224,32 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     }
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     if !time_reached(now_ms, cast.started_at_ms(), delay_ms) {
+        return true;
+    }
+    let path_point = if target_identity.object_type == MONSTER_TYPE {
+        region.find_monster_by_id(target_identity.id).and_then(|monster| {
+            monster.be_attacked_point(target.monster_property.as_ref()?, source_x, source_y)
+        })
+    } else {
+        Some((target_x, target_y))
+    };
+    let Some((path_x, path_y)) = path_point else { return true };
+    let path = if target_identity.object_type == MONSTER_TYPE && target_identity.id == monster_id {
+        Vec::new()
+    } else {
+        region.straight_skill_path(source_x, source_y, path_x, path_y, None)
+    };
+    let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    if maximum != 0 && path.len() > maximum as usize {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            let _ = monster.finish_base_attack_cast_without_reuse();
+        }
+        return true;
+    }
+    if path.iter().any(|cell| cell.2 == 2) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        }
         return true;
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -333,6 +371,6 @@ pub(crate) fn execute_player_monster_thorn<Runtime: GameMainLoopRuntime>(game: &
     if ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).is_none() { if !skill_is_restored(ai.skill_last_used_ms(MONSTER_THORN_SKILL_ID), reuse, now) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } let Some(destination) = player_destination(game, region_id, dispatch, None) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(MONSTER_THORN_SKILL_ID)); } ai.begin_player_skill_execution(PlayerMonsterThornExecutionState::begin(dispatch, destination, now)); return player_terminal(QueuedSkillExecutionState::Begun); }
     let fallback = ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).map(|state| state.destination); let Some(destination) = player_destination(game, region_id, dispatch, fallback) else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }; if player_target(dispatch).is_some_and(|target| game.base_magic_target_view(region_id, target).is_some() && game.periodic_state_target_dead(region_id, target)) { send_player_failure(game, player_id, 10); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }
     if ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).is_some_and(|state| !state.condition_checked) { if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_visual(game, player_id, level, 1, None, destination); if let Some(state) = ai.player_skill_state_mut::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); } }
-    let started = ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default(); if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }
+    let started = ai.player_skill_state::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default(); if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); finish_player(game, player_id, ai, runtime); return player_terminal(QueuedSkillExecutionState::RejectedAfterUse) }
     let target = player_target(dispatch).filter(|target| game.base_magic_target_view(region_id, *target).is_some()); send_player_visual(game, player_id, level, 2, target, destination); if let Some(target) = target && game.find_player(player_id).map(master_info).is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)) { if let Some((master, attack)) = calculate_player_attack(game, player_id, level, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } } } if let Some(state) = ai.player_skill_state_mut::<PlayerMonsterThornExecutionState>(MONSTER_THORN_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, ai, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }
