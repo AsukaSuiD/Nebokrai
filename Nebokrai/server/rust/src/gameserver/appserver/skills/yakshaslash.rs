@@ -28,8 +28,8 @@ use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_H
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::monsterattack::{MonsterAttackDeath, owned_monster_attackable, resolve_owned_monster_attack_target};
-use super::monsterprojectile::{MonsterProjectileDispatch, execute_owned_monster_projectile_target, finish_owned_monster_projectile};
+use super::monsterattack::{MonsterAttackDeath, finish_owned_monster_attack_impact, owned_monster_attackable, resolve_owned_monster_attack_target};
+use super::monsterprojectile::{MonsterProjectileDispatch, execute_owned_monster_projectile_target};
 use super::poisonmoth::{master_info, MONSTER_TYPE, PLAYER_TYPE};
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -210,7 +210,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
     if !time_reached(now_ms, cast.started_at_ms(), delay.wrapping_add(progress.missile_flying_time_ms())) { return true; }
     let dispatch = MonsterProjectileDispatch::object_target(monster_id, YAKSHA_SLASH_SKILL_ID, target_x, target_y, skill_level, properties.clone(), property.clone(), master, tamed, now_ms);
     let _ = execute_owned_monster_projectile_target(game, region, &dispatch, target_identity, runtime, deaths);
-    finish_owned_monster_projectile(region, &dispatch, runtime);
+    finish_owned_monster_attack_impact(region, dispatch.monster_id, runtime);
     true
 }
 

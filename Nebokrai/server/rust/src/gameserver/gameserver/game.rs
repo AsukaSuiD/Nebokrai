@@ -1347,18 +1347,18 @@ use crate::gameserver::appserver::skills::monsterbaseattack::{
     search_owned_monster_enemy,
 };
 use crate::gameserver::appserver::skills::machinerystomp::{
-    execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
+    execute_owned_wide_arc_attack_target,
     wide_arc_attack_cell_candidates,
 };
 use crate::gameserver::appserver::skills::monsterattack::{
-    MonsterAttackDeath, monster_attack_cell_candidates,
+    MonsterAttackDeath, finish_owned_monster_attack_impact, monster_attack_cell_candidates,
 };
 use crate::gameserver::appserver::skills::monsterrangeattack::{
-    execute_owned_monster_range_target, finish_owned_monster_range_cast,
+    execute_owned_monster_range_target,
     range_attack_cell_candidates, range_attack_scope_cells,
 };
 use crate::gameserver::appserver::skills::monsterprojectile::{
-    execute_owned_monster_projectile_target, finish_owned_monster_projectile,
+    execute_owned_monster_projectile_target,
 };
 use crate::gameserver::appserver::skills::hearten::{
     cancel_player_hearten, execute_player_hearten, HEARTEN_SKILL_ID,
@@ -39404,7 +39404,7 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_wide_arc_attack(owner.base_mut(), &dispatch);
+                finish_owned_monster_attack_impact(owner.base_mut(), dispatch.monster_id, runtime);
                 self.restore_region_owner(owner);
             }
         }
@@ -39446,7 +39446,7 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_range_cast(owner.base_mut(), &dispatch);
+                finish_owned_monster_attack_impact(owner.base_mut(), dispatch.monster_id, runtime);
                 self.restore_region_owner(owner);
             }
         }
@@ -39483,7 +39483,7 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_projectile(owner.base_mut(), &dispatch, runtime);
+                finish_owned_monster_attack_impact(owner.base_mut(), dispatch.monster_id, runtime);
                 self.restore_region_owner(owner);
             }
         }

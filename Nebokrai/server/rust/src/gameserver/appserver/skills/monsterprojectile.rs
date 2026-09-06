@@ -496,16 +496,3 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
     );
     true
 }
-
-pub(crate) fn finish_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
-    region: &mut CServerRegion,
-    dispatch: &MonsterProjectileDispatch,
-    runtime: &mut Runtime,
-) {
-    if let Some(monster) = region.find_monster_by_id_mut(dispatch.monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
-    }
-}

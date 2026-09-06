@@ -872,18 +872,6 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
     true
 }
 
-pub(crate) fn finish_owned_wide_arc_attack(
-    region: &mut CServerRegion,
-    dispatch: &WideArcAttackDispatch,
-) {
-    if let Some(monster) = region.find_monster_by_id_mut(dispatch.monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast(dispatch.now_ms);
-    }
-}
-
 #[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
 pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,

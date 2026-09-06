@@ -436,15 +436,3 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     );
     true
 }
-
-pub(crate) fn finish_owned_monster_range_cast(
-    region: &mut CServerRegion,
-    dispatch: &MonsterRangeAttackDispatch,
-) {
-    if let Some(monster) = region.find_monster_by_id_mut(dispatch.monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast(dispatch.now_ms);
-    }
-}

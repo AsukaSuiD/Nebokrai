@@ -7,11 +7,16 @@
 //! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
 //! Производные hurt-owner-ы вызываются после освобождения mutation-заимствования;
 //! в частности AI19 сохраняет поиск summon-формы и принимает monster-attacker-а.
+//! Общий хвост кругового/дугового удара и прямого снаряда завершает cast после
+//! обхода целей. По `gameserver.exe + GameServer.pdb`, `CSkill::End` (0x4d84c0)
+//! читает часы reuse после производного cleanup: время попадания из dispatch
+//! здесь не используется. Различия End исходных навыков остаются в `CMonster`.
 
 use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
 };
 use super::knockoutstate::finish_blind_states_on_defense;
+use super::kernel::SkillStage;
 use crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt;
 use crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt;
 use crate::gameserver::appserver::ai::smartgladiator::apply_monster_hurt_response;
@@ -36,6 +41,19 @@ use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
+
+pub(crate) fn finish_owned_monster_attack_impact<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) {
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        monster.move_shape_mut().shape_mut().set_action(1);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+    }
+}
 
 struct MonsterAttackShapeResolver<'a> {
     game: &'a CGame,
