@@ -493,31 +493,30 @@ impl CBaseAI {
     /// поставил следующий `ASA_CHANGE_SKILL`. Нулевая исходная задержка
     /// сохраняет их относительный FIFO-порядок.
     pub(crate) fn finish_active_attack(&mut self, now_ms: u32) {
-        let Some(event) = self.active_actions.front_mut() else {
-            return;
-        };
-        if event.action != AiShapeAction::Attack || event.handling != 0 {
-            return;
-        }
-        event.handling = 1;
-        if ai_event_deadline_reached(event, now_ms) {
-            self.active_actions.pop_front();
-        }
+        Self::finish_action(&mut self.active_actions, AiShapeAction::Attack, now_ms);
     }
 
     /// Завершает один вызов `OnChangeSkill`: исходный обработчик возвращает
     /// единицу, поэтому событие с нулевой задержкой снимается в том же проходе,
     /// но `Run` всё равно не вызывает `OnSchedule` до следующего такта.
     pub(crate) fn finish_active_change_skill(&mut self, now_ms: u32) {
-        let Some(event) = self.active_actions.front_mut() else {
+        Self::finish_action(&mut self.active_actions, AiShapeAction::ChangeSkill, now_ms);
+    }
+
+    pub(crate) fn finish_war_soul_attack(&mut self, now_ms: u32) {
+        Self::finish_action(&mut self.active_war_soul_actions, AiShapeAction::Attack, now_ms);
+    }
+
+    fn finish_action(queue: &mut VecDeque<AiEvent>, action: AiShapeAction, now_ms: u32) {
+        let Some(event) = queue.front_mut() else {
             return;
         };
-        if event.action != AiShapeAction::ChangeSkill || event.handling != 0 {
+        if event.action != action || event.handling > 1 {
             return;
         }
         event.handling = 1;
         if ai_event_deadline_reached(event, now_ms) {
-            self.active_actions.pop_front();
+            queue.pop_front();
         }
     }
 

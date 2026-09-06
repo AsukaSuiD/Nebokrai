@@ -130,7 +130,10 @@
 //! хотя сам полёт не передаётся в фон.
 //! Владельцы WarSoul также возвращают Begun отдельно от первого AI; общий
 //! диспетчер не повторяет допуск при продолжении в том же Run. Очередь
-//! событий WarSoul и отложенная граница ChangeSkill ещё требуют замыкания.
+//! WarSoul Attack ставится после Begin и переживает собственный End навыка:
+//! следующий Run снимает событие без нового расписания и без ChangeSkill
+//! (OnFightingWithWarSoul, 0x00509230). Выбранный ID сохраняется после End.
+//! Подготовленная ветвь и явный caller ChangeSkill ещё требуют замыкания.
 //! Подготовленный kernel передаётся в общую фоновую очередь до ChangeSkill,
 //! без End и без повторного Begin. Достигнутые длительные prepared-навыки
 //! устанавливают общий флаг в своих подтверждённых точках выпуска. Сам по себе
@@ -750,13 +753,31 @@ impl CPlayerAI {
         &mut self,
         can_schedule: bool,
     ) -> Option<BattleFairySkillDispatch> {
-        if self.current_battle_fairy_skill.is_none() && can_schedule {
+        if self.current_battle_fairy_skill.is_none() && can_schedule
+            && self.base_ai.active_war_soul_actions().is_empty()
+        {
             self.current_battle_fairy_skill = self.battle_fairy_skills.pop_front();
             if let Some(dispatch) = self.current_battle_fairy_skill {
                 self.selected_battle_fairy_skill_id = dispatch.skill_id();
             }
         }
         self.current_battle_fairy_skill
+    }
+
+    pub(crate) fn begin_battle_fairy_fighting(&mut self, now_ms: u32) {
+        self.base_ai.add_ai_event(AiShapeAction::Attack, 0, 1, now_ms);
+    }
+
+    /// OnFightingWithWarSoul (0x00509230) проверяет IsEnded до вызова AI.
+    /// End внутри AI оставляет Attack до следующего Run, без ChangeSkill.
+    pub(crate) fn finish_ended_battle_fairy_attack(&mut self, now_ms: u32) -> bool {
+        let pending = self.base_ai.active_war_soul_actions().front()
+            .is_some_and(|event| event.action == AiShapeAction::Attack && event.handling <= 1);
+        if !pending || self.battle_fairy_execution(self.selected_battle_fairy_skill_id()).is_some() {
+            return false;
+        }
+        self.base_ai.finish_war_soul_attack(now_ms);
+        true
     }
 
     /// Исходный игрок сохраняет выбранный навык после его `End`; нулевое
@@ -1091,7 +1112,10 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnFightingWithWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: Begin ставит отдельный Attack; AI возвращает 0 даже после
+// собственного End. Следующий Run проверяет IsEnded и снимает Attack без
+// ChangeSkill. Prepared-перенос по virtual +0x88 остаётся ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:517
@@ -1106,9 +1130,10 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkillWithWarSoul
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// MATERIALIZED: scheduler завершает concrete owner, выполняет общий `End(1)`
-// и только затем выбирает базовую атаку `0x224`, не затрагивая ожидающий FIFO.
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: общий End(1) и выбор 0x224 доступны runtime-владельцам.
+// Явный caller ChangeSkill ещё не подключён: OnFightingWithWarSoul не
+// создаёт это событие после обычного End, выбранный навык сохраняется.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:629

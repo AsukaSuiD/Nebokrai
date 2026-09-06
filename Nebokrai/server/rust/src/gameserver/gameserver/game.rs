@@ -41717,6 +41717,11 @@ impl CGame {
         can_schedule: bool,
         runtime: &mut Runtime,
     ) -> usize {
+        // OnSchedule видит ещё занятый Attack. Его снятие в active-фазе
+        // не разрешает извлечь следующий запрос в оставшейся части Run.
+        if player_ai.finish_ended_battle_fairy_attack(runtime.now_milliseconds()) {
+            return 1;
+        }
         let mut execution_count = 0;
         if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule) {
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
@@ -41737,6 +41742,7 @@ impl CGame {
             player_ai.set_scheduled_fairy_skill_begin(None);
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
             let outcome = if begin_completed {
+                player_ai.begin_battle_fairy_fighting(runtime.now_milliseconds());
                 self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
             } else {
                 outcome
@@ -41793,7 +41799,7 @@ impl CGame {
                     runtime,
                 );
             }
-            if removed_from_queue {
+            if removed_from_queue && !materialized_end && !begin_completed {
                 player_ai.restore_battle_fairy_base_attack_after_end();
             }
             execution_count += 1;
