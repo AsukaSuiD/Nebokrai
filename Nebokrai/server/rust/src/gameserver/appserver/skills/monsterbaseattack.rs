@@ -1109,13 +1109,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
     if target.is_none() && cast.is_none() && tamed {
-        lose_pet_target_and_search(
-            region,
-            monster_id,
-            stop_frame,
-            runtime,
-        );
-        return true;
+        return queue_pet_idle(region, monster_id, stop_frame, runtime);
     }
     if cast.is_none() && let Some(target) = target {
         let Some(schedule_target) =

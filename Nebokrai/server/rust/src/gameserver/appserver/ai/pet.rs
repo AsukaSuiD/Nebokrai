@@ -10,6 +10,14 @@
 //! переводит действие в `FOLLOWING`.
 //! OnIdle (RVA 0x000E9580) проверяет GetCurrentSkill, а не один выбранный ID:
 //! если зарегистрированного навыка нет, ChangeSkill сохраняется в начале FIFO.
+//! OnFallowingSchedule (0x004E9BB0) требует пустые active/passive очереди и
+//! вызывается до background/passive. Ближняя ветвь +0x58 (0x004E9DA2) — общий
+//! MoveTo: один Slip-шаг с ASA_MOVE, а не прямой перенос к слоту хозяина.
+//! Дальний перенос остаётся отдельной ветвью; последующий OnIdle не повторяет
+//! следование и ставит собственные Stand/SearchEnemy.
+//! Секундный/lifecycle-хвост OnSchedule (0x004E9E4E) выполняется после ветви
+//! действия и до background/passive даже при занятых FIFO. Ожидание Move или
+//! атаки не останавливает проверку хозяина, одичание и срок жизни питомца.
 //! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
 //! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
 //! `GetPetMaster` разрешает игрока глобально, а остальные типы — только через
@@ -433,7 +441,9 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
     let Some((pet_shape, pet_health, master, moveable, property)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            if !monster.is_tamed() || monster.pet_action() != 1 {
+            if !monster.is_tamed() || monster.pet_action() != 1
+                || !monster.primary_ai_queues_idle()
+            {
                 return None;
             }
             let property = game
@@ -513,13 +523,15 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
     if (real_distance(pet_x, pet_y, master_x, master_y) as f32)
         <= game.globe_setup().pet_translate_distance()
     {
-        let _ = game.move_owned_pet_step(
-            region,
-            monster_id,
-            destination.x,
-            destination.y,
-            figure,
-        );
+        if let Some((direction, step)) = super::monsterai::find_slip_step(
+            game, region, ShapeAreaCoordinates { x: pet_x, y: pet_y }, destination, figure,
+        ) && game.move_owned_pet_step(region, monster_id, step.x, step.y, figure)
+            && let Some(pet) = region.find_monster_by_id_mut(monster_id)
+        {
+            pet.begin_active_ai_move(super::baseai::one_step_move_delay_ms(
+                direction, pet_shape.get_speed(), pet.stop_frame(&property)),
+                runtime.now_milliseconds());
+        }
         return true;
     }
     let Ok(position) = region.region.get_random_pos_in_range(

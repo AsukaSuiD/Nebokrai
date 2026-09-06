@@ -47242,24 +47242,27 @@ impl CGame {
                 {
                     continue;
                 }
-                let (ai_type, stop_frame, tamed) = self
+                let (ai_type, stop_frame, tamed, pet_action) = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .and_then(|monster| {
                         let property = self
                             .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-                        Some((property.ai, monster.stop_frame(property), monster.is_tamed()))
+                        Some((property.ai, monster.stop_frame(property), monster.is_tamed(), monster.pet_action()))
                     })
-                    .unwrap_or((0, 0, false));
+                    .unwrap_or((0, 0, false, 0));
                 let schedule_attempted = self.find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .is_some_and(|monster| monster.primary_ai_queues_idle()
                         && (monster.ai_target().is_some()
+                            || (tamed && pet_action == 1)
                             || (ai_type == 2 && !tamed
                                 && monster.smart_gladiator_ai().is_some_and(|state| state.has_queued_steps())))
                         && monster.base_attack_cast().is_none());
                 if schedule_attempted {
-                    if ai_type == 7 && !tamed {
+                    if tamed && pet_action == 1 {
+                        let _ = self.run_owned_pet_follow(region_id, monster_id, runtime);
+                    } else if ai_type == 7 && !tamed {
                         let _ = self.run_owned_puniness_creature(region_id, monster_id, runtime);
                     } else if ai_type == 2 && !tamed
                         && self.find_region(region_id)
@@ -47274,6 +47277,9 @@ impl CGame {
                     } else {
                         let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                     }
+                }
+                if tamed {
+                    let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = self.execute_owned_monster_back_stage_skills(
@@ -47472,8 +47478,7 @@ impl CGame {
                 if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
                     continue;
                 }
-                if !self.run_owned_pet_follow(region_id, monster_id, runtime)
-                    && self.find_region(region_id)
+                if self.find_region(region_id)
                         .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                         .is_some_and(|monster| monster.ai_target().is_none()
                             && monster.base_attack_cast().is_none())
@@ -47481,7 +47486,6 @@ impl CGame {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
                 let _ = self.run_owned_pet_active_search(region_id, monster_id, false);
-                let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
             }
             let skill_phalanx_ids: Vec<i32> = self
                 .find_region(region_id)
