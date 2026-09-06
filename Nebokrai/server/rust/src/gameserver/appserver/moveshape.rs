@@ -1,4 +1,8 @@
 //! Реализованная часть `CMoveShape` исторического GameServer.
+//! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
+//! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
+//! Поиск по общему реестру заменяет два прохода native-векторов: порядок
+//! элементов не влияет на этот результат, категории и их приоритет сохранены.
 //!
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! исходные владельцы `appserver/moveshape.h/.cpp`. Сохранены точный порядок
@@ -5320,6 +5324,17 @@ impl CMoveShape {
         self.current_skill_id
     }
 
+    /// GetDefaultAttackSkillID (0x004CE240): порядок категорий важнее порядка ID.
+    pub(crate) fn default_attack_skill_id(&self) -> u32 {
+        if self.skills.get(&2).is_some_and(|skill| skill.skill_type == SKILL_TYPE_ATTACK) {
+            2
+        } else if self.skills.get(&3).is_some_and(|skill| skill.skill_type == SKILL_TYPE_SUMMON) {
+            3
+        } else {
+            1
+        }
+    }
+
     /// Typed boundary для snapshot/skill caller-а. Полное semantic действие
     /// `SetCurrentSkill` (завершение прежнего concrete skill) не подменяется
     /// записью ID и остаётся у соответствующего owner-а.
@@ -6254,18 +6269,7 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::GetDefaultAttackSkillID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2464
-// RVA: 0x000CE240
-// ADDRESS: 004ce240
-// PROTOTYPE: tagSkillID __thiscall GetDefaultAttackSkillID(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// GetDefaultAttackSkillID материализован в default_attack_skill_id.
 
 // ============================================================================
 // FUNCTION: CMoveShape::GetSkill

@@ -1,4 +1,7 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! Stiffen после завершения Attack выбирает базовый default-навык через
+//! CMoveShape::GetDefaultAttackSkillID (0x004CE240). Выбранный ID отделён
+//! от исполнения: этот переход не вызывает Begin и не создаёт cast.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1357,6 +1360,8 @@ impl CMonster {
                     self.cancel_base_attack_cast();
                 }
                 self.base_ai.finish_stiffen_attack(release_target);
+                let default_skill = self.move_shape.default_attack_skill_id();
+                self.move_shape.set_current_skill_id(Some(default_skill));
                 self.base_ai.discard_active_prefix();
             }
         }
@@ -1413,7 +1418,9 @@ impl CMonster {
         let alive = !CMoveShape::is_died(self.hit_points);
         let pet_search = self.tamed
             && alive
-            && self.move_shape.current_skill_id().is_none();
+            && self.move_shape.current_skill_id()
+                .and_then(|skill_id| self.move_shape.skill(skill_id))
+                .is_none();
         let passive_gladiator_search = ai_type == 1
             && alive
             && self
