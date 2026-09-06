@@ -1070,22 +1070,18 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkill
-// STATUS: PARTIALLY_IMPLEMENTED
-// MATERIALIZED: ended/prepared исполняются отдельным событием ChangeSkill,
-// не продвигая следующую команду в том же такте и не завершая prepared kernel.
-// Вызов 0x0047B150 возвращает константу 1. RAW сохраняет полный порядок
-// виртуального OnLoseTarget и назначения default: пока выбранный default
-// остаётся отдельным idle-полем игрока, а не общим current-skill ID.
+// STATUS: IMPLEMENTED
+// MATERIALIZED: событие ChangeSkill вызывает общий OnLoseTarget до выбора
+// default и снятия события; End(1) нужен только живому неподготовленному
+// экземпляру. Prepared остаётся в фоне, следующая команда ждёт нового Run.
+// Вызов 0x0047B150 возвращает константу 1. Native повторно назначает default
+// после OnLoseTarget; Rust использует его общий завершающий шаг без side effects.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:608
 // RVA: 0x00108E40
 // ADDRESS: 00508e40
 // PROTOTYPE: int __thiscall OnChangeSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnMoving

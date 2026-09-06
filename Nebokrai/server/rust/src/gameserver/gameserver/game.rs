@@ -26,6 +26,9 @@
 //! Оба расписания проверяют CBaseAI::HasTarget (0x004C7DD0) до допуска
 //! Begin: пустая цель не вызывает Reject. Обычное расписание при этом
 //! продолжает движение к назначению; WarSoul не запускает навык.
+//! OnChangeSkill (0x00508E40) проходит общий OnLoseTarget до назначения
+//! default и завершения события. Он не подменяется сменой ID: если к этой
+//! границе выбран живой неподготовленный экземпляр, необходим его End(1).
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -47190,7 +47193,9 @@ impl CGame {
                                 && !active_stand_handled
                                 && player_ai.active_change_skill_pending();
                             if change_skill_handled {
-                                self.restore_player_default_attack_after_skill_end(player_id);
+                                self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                                    game.lose_player_skill_target(player_id, runtime)
+                                });
                                 player_ai.finish_active_change_skill(runtime.now_milliseconds());
                             }
                             let ended_attack_handled = !ai_hibernated
