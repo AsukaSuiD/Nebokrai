@@ -20,6 +20,10 @@
 //! Visual fire повторно разрешает объектную цель; если она исчезла, её
 //! fallback равен (0, 0), заданному CState::Begin (0x005dbd70), а не старой
 //! позиции. Движение возвращается после вызовов создания, в End.
+//! Monster End и End(4) достигнутого Stiffen проходят общую очистку CMonster:
+//! один декремент движения, очистка cast и reuse для ненулевого End. Cancel
+//! без reuse также снимает запрет. End не вызывает Summon и не удаляет
+//! созданных существ; их сроки жизни принадлежат региональному владельцу.
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
@@ -342,7 +346,6 @@ pub(crate) fn execute_owned_summon_creature(
             }
         }
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
             let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
             let _ = monster.finish_base_attack_cast(now_ms);
