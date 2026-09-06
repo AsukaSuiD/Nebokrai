@@ -40790,11 +40790,11 @@ impl CGame {
     /// `TaiJi`/`Origin`, `EnlargeFullMiss/MaxHp/MaxMp` и `Swordship`. Region временно
     /// извлекается только для согласованного доступа к canonical monster и
     /// around-публикации состояния.
-    fn execute_owned_monster_back_stage_skills(
+    fn execute_owned_monster_back_stage_skills<Runtime: GameMainLoopRuntime>(
         &self,
         region: &mut CServerRegion,
         monster_id: i32,
-        now_ms: u32,
+        runtime: &mut Runtime,
     ) -> usize {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().prepare_back_stage_skill_pass();
@@ -40824,7 +40824,7 @@ impl CGame {
                 continue;
             };
             let has_effect = owner.has_effect();
-            let executed = owner.execute(self, region, monster_id, skill_id, skill_level, now_ms);
+            let executed = owner.execute(self, region, monster_id, skill_id, skill_level, runtime);
             execution_count += usize::from(has_effect);
             tracing::trace!(
                 region_id = region.id,
@@ -47281,7 +47281,7 @@ impl CGame {
                     let _ = self.execute_owned_monster_back_stage_skills(
                         owner.base_mut(),
                         monster_id,
-                        now_ms,
+                        runtime,
                     );
                     let mut schedule_ready = false;
                     let mut attack_pending = false;

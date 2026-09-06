@@ -29,6 +29,10 @@
 //! поэтому CMonster отмечает ended и reuse даже для вариантов с обычным
 //! AI-End(0). Это завершение навыка, а не End наложенного state-объекта;
 //! состояние и порядок удаления записи фоновой очереди остаются независимыми.
+//! Публикация наложенного состояния предшествует End: EnlargeFullMiss
+//! вызывает UpdateProperty по 0x00516857 и End(1) по 0x00516863. Общий
+//! monster-owner фиксирует ended/reuse после публикации, читая свежие часы
+//! runtime, а не timestamp начала active/background-прохода.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
@@ -82,13 +86,13 @@ impl MonsterImmediateSkill {
         !matches!(self, Self::PlayerOnly)
     }
 
-    pub(crate) fn execute(
+    pub(crate) fn execute<Runtime: GameMainLoopRuntime>(
         self, game: &CGame, region: &mut CServerRegion, monster_id: i32,
-        skill_id: u32, skill_level: i32, now_ms: u32,
+        skill_id: u32, skill_level: i32, runtime: &mut Runtime,
     ) -> bool {
         match self {
             Self::State => execute_monster_immediate_state(
-                game, region, monster_id, skill_id, skill_level, now_ms,
+                game, region, monster_id, skill_id, skill_level, runtime,
             ),
             Self::Swordship => super::swordship::execute_monster_auto_start_swordship(
                 game, region, monster_id, skill_id, skill_level,
@@ -108,13 +112,13 @@ impl MonsterImmediateSkill {
 /// является sufferer-ом, поэтому состояние заменяется на самом монстре.
 /// `TaiJi/Origin` участвуют в monster combat getters; `601..603` сохраняют
 /// исходный player-only property gate, но остаются видимы в state snapshot.
-pub(crate) fn execute_monster_immediate_state(
+pub(crate) fn execute_monster_immediate_state<Runtime: GameMainLoopRuntime>(
     game: &CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     skill_id: u32,
     skill_level: i32,
-    now_ms: u32,
+    runtime: &mut Runtime,
 ) -> bool {
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
         return false;
@@ -155,8 +159,10 @@ pub(crate) fn execute_monster_immediate_state(
         }
         _ => return false,
     }
-    monster.mark_immediate_skill_used(skill_id, now_ms);
     let _ = game.publish_owned_monster_states(region, monster_id);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.mark_immediate_skill_used(skill_id, runtime.now_milliseconds());
+    }
     true
 }
 

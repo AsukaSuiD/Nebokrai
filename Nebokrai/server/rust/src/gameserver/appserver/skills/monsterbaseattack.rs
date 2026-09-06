@@ -1311,7 +1311,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let executed = owner.execute(
-            game, region, monster_id, skill_id, i32::from(skill_level), now_ms,
+            game, region, monster_id, skill_id, i32::from(skill_level), runtime,
         );
         return executed;
     }
