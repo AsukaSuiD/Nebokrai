@@ -10,7 +10,10 @@
 //! оставляет соседние исполнения и не удаляет cooldown. Владельцы с особыми
 //! данными переносятся в типизированные варианты того же хранилища. Туман
 //! сохраняет выбранную в Begin точку вместе с kernel до общего End; остальные
-//! особые владельцы пока сохраняют поля, их перенос ещё не завершён.
+//! подключённые особые владельцы используют типизированный доступ по ID.
+//! Перечень типов единственный; общие Begin и End не имеют ветки для каждого
+//! навыка. Базовая магия и FireBolt разделяют тип, но не запись исполнения.
+//! Оставшиеся семейства пока сохраняют поля, их перенос ещё не завершён.
 //! Варианты простых семейств, в том числе лечения, занимают отдельные ID.
 //! End-диспетчер передаёт выбранный ID владельцу; поиск первого занятого
 //! слота семейства не используется для выбора завершаемого исполнения.
@@ -191,27 +194,102 @@ use crate::gameserver::appserver::skills::kernel::{
 use crate::gameserver::appserver::skills::rage::RageExecutionState;
 use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum PlayerSkillExecution {
-    State(SkillExecutionKernel<PlayerSkillDispatch>),
-    PoisonFog {
-        kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-        destination: (i32, i32),
-    },
+// Типы игровых данных перечислены один раз: из них выводятся хранение,
+// доступ к kernel и безопасное извлечение конкретного состояния. Begin и End общие.
+macro_rules! player_skill_states {
+    ($($variant:ident($state:ty)),+ $(,)?) => {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub(crate) enum PlayerSkillExecution {
+            State(SkillExecutionKernel<PlayerSkillDispatch>),
+            PoisonFog {
+                kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+                destination: (i32, i32),
+            },
+            $($variant($state),)+
+        }
+
+        impl PlayerSkillExecution {
+            fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+                match self {
+                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
+                    $(Self::$variant(state) => state.kernel().clone(),)+
+                }
+            }
+
+            fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+                match self {
+                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
+                    $(Self::$variant(state) => state.kernel_mut(),)+
+                }
+            }
+        }
+
+        $(
+            impl From<$state> for PlayerSkillExecution {
+                fn from(state: $state) -> Self { Self::$variant(state) }
+            }
+
+            impl PlayerSkillState for $state {
+                fn from_execution(execution: &PlayerSkillExecution) -> Option<&Self> {
+                    match execution {
+                        PlayerSkillExecution::$variant(state) => Some(state),
+                        _ => None,
+                    }
+                }
+
+                fn from_execution_mut(execution: &mut PlayerSkillExecution) -> Option<&mut Self> {
+                    match execution {
+                        PlayerSkillExecution::$variant(state) => Some(state),
+                        _ => None,
+                    }
+                }
+            }
+        )+
+    };
 }
 
-impl PlayerSkillExecution {
-    fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-        match self {
-            Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
-        }
-    }
+pub(crate) trait PlayerSkillState {
+    fn from_execution(execution: &PlayerSkillExecution) -> Option<&Self>;
+    fn from_execution_mut(execution: &mut PlayerSkillExecution) -> Option<&mut Self>;
+}
 
-    fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        match self {
-            Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
-        }
-    }
+player_skill_states! {
+    Archery(ArcheryExecutionState),
+    HeartlessArrow(HeartlessArrowExecutionState),
+    LightingArrow(LightingArrowExecutionState),
+    LightingArrow2(LightingArrow2ExecutionState),
+    MeteorArrowMass(MeteorArrowMassExecutionState),
+    MeteorArrow(MeteorArrowExecutionState),
+    RainArrow(RainArrowExecutionState),
+    PoisonMoth(PoisonMothExecutionState),
+    BloodRose(BloodRoseExecutionState),
+    Scorpion(ScorpionExecutionState),
+    BoaLock(BoaLockExecutionState),
+    FallingStar(FallingStarExecutionState),
+    Strike(StrikeExecutionState),
+    YakshaSlash(YakshaSlashExecutionState),
+    BaseMagic(BaseMagicExecutionState),
+    ChainLightning(ChainLightningExecutionState),
+    KnightCut(KnightCutExecutionState),
+    Rage(RageExecutionState),
+    Flash(FlashExecutionState),
+    Swallow(SwallowExecutionState),
+    SevenShootingStar(SevenShootingStarExecutionState),
+    LittleStar(PlayerLittleStarExecutionState),
+    YunshengLightning(PlayerYunShengLightningExecutionState),
+    MonsterThorn(PlayerMonsterThornExecutionState),
+    SpiderMist(PlayerSpiderMistExecutionState),
+    SpiderWeb(PlayerSpiderWebExecutionState),
+    BossBlueQuake(PlayerBossBlueQuakeExecutionState),
+    BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState),
+    SpriteBurn(SpriteBurnExecutionState),
+    ChaosSphere(ChaosSphereExecutionState),
+    Lightning(LightningExecutionState),
+    Seal(SealExecutionState),
+}
+
+impl From<SkillExecutionKernel<PlayerSkillDispatch>> for PlayerSkillExecution {
+    fn from(state: SkillExecutionKernel<PlayerSkillDispatch>) -> Self { Self::State(state) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -262,49 +340,16 @@ pub(crate) struct CPlayerAI {
     selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
-    archery: Option<ArcheryExecutionState>,
-    heartless_arrow: Option<HeartlessArrowExecutionState>,
     heartless_arrow_area: Option<HeartlessArrowAreaExecutionState>,
-    lighting_arrow: Option<LightingArrowExecutionState>,
-    lighting_arrow_2: Option<LightingArrow2ExecutionState>,
-    meteor_arrow_mass: Option<MeteorArrowMassExecutionState>,
-    meteor_arrow: Option<MeteorArrowExecutionState>,
-    rain_arrow: Option<RainArrowExecutionState>,
-    poison_moth: Option<PoisonMothExecutionState>,
-    blood_rose: Option<BloodRoseExecutionState>,
-    scorpion: Option<ScorpionExecutionState>,
-    boa_lock: Option<BoaLockExecutionState>,
-    falling_star: Option<FallingStarExecutionState>,
     explosive_arrow: Option<ExplosiveArrowExecutionState>,
-    strike: Option<StrikeExecutionState>,
-    yaksha_slash: Option<YakshaSlashExecutionState>,
     agility_family: Option<AgilityFamilyExecutionState>,
-    base_magic: Option<BaseMagicExecutionState>,
-    fire_bolt: Option<BaseMagicExecutionState>,
-    chain_lightning: Option<ChainLightningExecutionState>,
     ghost_cut: Option<GhostCutExecutionState>,
-    knight_cut: Option<KnightCutExecutionState>,
     army_break: Option<ArmyBreakExecutionState>,
-    rage: Option<RageExecutionState>,
-    flash: Option<FlashExecutionState>,
-    swallow: Option<SwallowExecutionState>,
     little_flash: Option<LittleFlashExecutionState>,
-    seven_shooting_star: Option<SevenShootingStarExecutionState>,
-    little_star: Option<PlayerLittleStarExecutionState>,
     path_projectile: Option<PlayerPathProjectileExecutionState>,
     direct_projectile: Option<PlayerDirectProjectileExecutionState>,
-    yunsheng_lightning: Option<PlayerYunShengLightningExecutionState>,
-    monster_thorn: Option<PlayerMonsterThornExecutionState>,
-    spider_mist: Option<PlayerSpiderMistExecutionState>,
-    spider_web: Option<PlayerSpiderWebExecutionState>,
     summon_creature: Option<PlayerSummonCreatureExecutionState>,
-    boss_blue_quake: Option<PlayerBossBlueQuakeExecutionState>,
-    boss_fiend_penetrate: Option<PlayerBossFiendPenetrateExecutionState>,
-    sprite_burn: Option<SpriteBurnExecutionState>,
     lord_fast_attack: Option<LordFastAttackExecutionState>,
-    chaos_sphere: Option<ChaosSphereExecutionState>,
-    lightning: Option<LightningExecutionState>,
-    seal: Option<SealExecutionState>,
     battle_fairy_executions: BTreeMap<u32, BattleFairyExecution>,
     battle_fairy_last_used_ms: BTreeMap<u32, u32>,
     callosity: Option<CallosityExecutionState>,
@@ -361,8 +406,16 @@ impl CPlayerAI {
         self.player_skill_executions.insert(execution.kernel().dispatch().skill_id(), execution);
     }
 
-    pub(crate) fn begin_player_skill_execution(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
-        self.insert_player_skill_execution(PlayerSkillExecution::State(state));
+    pub(crate) fn begin_player_skill_execution(&mut self, state: impl Into<PlayerSkillExecution>) {
+        self.insert_player_skill_execution(state.into());
+    }
+
+    pub(crate) fn player_skill_state<State: PlayerSkillState>(&self, skill_id: u32) -> Option<&State> {
+        self.player_skill_executions.get(&skill_id).and_then(State::from_execution)
+    }
+
+    pub(crate) fn player_skill_state_mut<State: PlayerSkillState>(&mut self, skill_id: u32) -> Option<&mut State> {
+        self.player_skill_executions.get_mut(&skill_id).and_then(State::from_execution_mut)
     }
 
     pub(crate) fn set_scheduled_skill_begin(&mut self, begin: Option<(PlayerSkillDispatch, u32)>) {
@@ -592,126 +645,29 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
         }
-        if let Some(mut execution) = self.archery.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(
-                ?expected,
-                ?termination,
-                stage = ?execution.kernel().stage(),
-                "выполнение базовой стрельбы завершено"
-            );
-        }
-        if let Some(mut execution) = self.heartless_arrow.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бессердечной стрелы завершено");
-        }
         if let Some(mut execution) = self.heartless_arrow_area.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение региональной стрелы завершено");
-        }
-        if let Some(mut execution) = self.lighting_arrow.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение световой стрелы завершено");
-        }
-        if let Some(mut execution) = self.lighting_arrow_2.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение второй световой стрелы завершено");
-        }
-        if let Some(mut execution) = self.meteor_arrow_mass.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "накопление метеорных стрел завершено");
-        }
-        if let Some(mut execution) = self.meteor_arrow.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение метеорной стрелы завершено");
-        }
-        if let Some(mut execution) = self.rain_arrow.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение дождя стрел завершено");
-        }
-        if let Some(mut execution) = self.poison_moth.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение ядовитого мотылька завершено");
-        }
-        if let Some(mut execution) = self.blood_rose.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение кровавой розы завершено");
-        }
-        if let Some(mut execution) = self.scorpion.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение скорпиона завершено");
-        }
-        if let Some(mut execution) = self.boa_lock.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение связывания удава завершено");
-        }
-        if let Some(mut execution) = self.falling_star.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение падающей звезды завершено");
         }
         if let Some(mut execution) = self.explosive_arrow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей стрелы завершено");
         }
-        if let Some(mut execution) = self.strike.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение оглушающего снаряда завершено");
-        }
-        if let Some(mut execution) = self.yaksha_slash.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение удара якши завершено");
-        }
         if let Some(mut execution) = self.agility_family.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка ловкости завершено");
-        }
-        if let Some(mut execution) = self.base_magic.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
-        }
-        if let Some(mut execution) = self.fire_bolt.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной стрелы завершено");
-        }
-        if let Some(mut execution) = self.chain_lightning.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение цепной молнии завершено");
         }
         if let Some(mut execution) = self.ghost_cut.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бегущего удара завершено");
         }
-        if let Some(mut execution) = self.knight_cut.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рыцарского удара завершено");
-        }
         if let Some(mut execution) = self.army_break.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение армейского удара завершено");
         }
-        if let Some(mut execution) = self.rage.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение канала ярости завершено");
-        }
-        if let Some(mut execution) = self.flash.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рывка сквозь строй завершено");
-        }
-        if let Some(mut execution) = self.swallow.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение двойного направленного удара завершено");
-        }
         if let Some(mut execution) = self.little_flash.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малого рывка завершено");
-        }
-        if let Some(mut execution) = self.seven_shooting_star.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение семи падающих звёзд завершено");
-        }
-        if let Some(mut execution) = self.little_star.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малой звезды завершено");
         }
         if let Some(mut execution) = self.path_projectile.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
@@ -721,35 +677,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение прямого снаряда завершено");
         }
-        if let Some(mut execution) = self.yunsheng_lightning.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии Юньшэн завершено");
-        }
-        if let Some(mut execution) = self.monster_thorn.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение шипастой атаки завершено"); }
-        if let Some(mut execution) = self.spider_mist.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
-        if let Some(mut execution) = self.spider_web.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
         if let Some(mut execution) = self.summon_creature.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
-        if let Some(mut execution) = self.boss_blue_quake.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение землетрясения синего босса завершено"); }
-        if let Some(mut execution) = self.boss_fiend_penetrate.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей атаки демона-босса завершено"); }
-        if let Some(mut execution) = self.sprite_burn.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
-        }
         if let Some(mut execution) = self.lord_fast_attack.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение быстрой атаки владыки завершено");
-        }
-        if let Some(mut execution) = self.chaos_sphere.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
-        }
-        if let Some(mut execution) = self.lightning.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии завершено");
-        }
-        if let Some(mut execution) = self.seal.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение печати завершено");
         }
         if let Some(mut execution) = self.callosity.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
@@ -776,21 +707,6 @@ impl CPlayerAI {
         self.finish_player_skill(dispatch, SkillTermination::Cancelled)
     }
 
-
-    pub(crate) const fn archery(&self) -> Option<ArcheryExecutionState> {
-        self.archery
-    }
-
-    pub(crate) fn begin_archery(&mut self, mut state: ArcheryExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.archery = Some(state);
-    }
-
-    pub(crate) fn archery_mut(&mut self) -> Option<&mut ArcheryExecutionState> {
-        self.archery.as_mut()
-    }
-
-
     pub(crate) const fn agility_family(&self) -> Option<AgilityFamilyExecutionState> {
         self.agility_family
     }
@@ -802,137 +718,18 @@ impl CPlayerAI {
         self.agility_family.as_mut()
     }
 
-
-    pub(crate) const fn heartless_arrow(&self) -> Option<HeartlessArrowExecutionState> { self.heartless_arrow }
-    pub(crate) fn begin_heartless_arrow(&mut self, mut state: HeartlessArrowExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.heartless_arrow = Some(state);
-    }
-    pub(crate) fn heartless_arrow_mut(&mut self) -> Option<&mut HeartlessArrowExecutionState> { self.heartless_arrow.as_mut() }
     pub(crate) const fn heartless_arrow_area(&self) -> Option<HeartlessArrowAreaExecutionState> { self.heartless_arrow_area }
     pub(crate) fn begin_heartless_arrow_area(&mut self, mut state: HeartlessArrowAreaExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.heartless_arrow_area = Some(state);
     }
     pub(crate) fn heartless_arrow_area_mut(&mut self) -> Option<&mut HeartlessArrowAreaExecutionState> { self.heartless_arrow_area.as_mut() }
-    pub(crate) const fn lighting_arrow(&self) -> Option<LightingArrowExecutionState> { self.lighting_arrow }
-    pub(crate) fn begin_lighting_arrow(&mut self, mut state: LightingArrowExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.lighting_arrow = Some(state);
-    }
-    pub(crate) fn lighting_arrow_mut(&mut self) -> Option<&mut LightingArrowExecutionState> { self.lighting_arrow.as_mut() }
-    pub(crate) fn lighting_arrow_2(&self) -> Option<&LightingArrow2ExecutionState> { self.lighting_arrow_2.as_ref() }
-    pub(crate) fn begin_lighting_arrow_2(&mut self, mut state: LightingArrow2ExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.lighting_arrow_2 = Some(state);
-    }
-    pub(crate) fn lighting_arrow_2_mut(&mut self) -> Option<&mut LightingArrow2ExecutionState> { self.lighting_arrow_2.as_mut() }
-    pub(crate) const fn meteor_arrow_mass(&self) -> Option<MeteorArrowMassExecutionState> { self.meteor_arrow_mass }
-    pub(crate) fn begin_meteor_arrow_mass(&mut self, mut state: MeteorArrowMassExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.meteor_arrow_mass = Some(state);
-    }
-    pub(crate) fn meteor_arrow_mass_mut(&mut self) -> Option<&mut MeteorArrowMassExecutionState> { self.meteor_arrow_mass.as_mut() }
-    pub(crate) const fn meteor_arrow(&self) -> Option<MeteorArrowExecutionState> { self.meteor_arrow }
-    pub(crate) fn begin_meteor_arrow(&mut self, mut state: MeteorArrowExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.meteor_arrow = Some(state);
-    }
-    pub(crate) fn meteor_arrow_mut(&mut self) -> Option<&mut MeteorArrowExecutionState> { self.meteor_arrow.as_mut() }
-    pub(crate) fn rain_arrow(&self) -> Option<RainArrowExecutionState> { self.rain_arrow.clone() }
-    pub(crate) fn begin_rain_arrow(&mut self, mut state: RainArrowExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.rain_arrow = Some(state);
-    }
-    pub(crate) fn rain_arrow_mut(&mut self) -> Option<&mut RainArrowExecutionState> { self.rain_arrow.as_mut() }
-    pub(crate) fn poison_moth(&self) -> Option<&PoisonMothExecutionState> { self.poison_moth.as_ref() }
-    pub(crate) fn begin_poison_moth(&mut self, mut state: PoisonMothExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.poison_moth = Some(state);
-    }
-    pub(crate) fn poison_moth_mut(&mut self) -> Option<&mut PoisonMothExecutionState> { self.poison_moth.as_mut() }
-    pub(crate) fn blood_rose(&self) -> Option<&BloodRoseExecutionState> { self.blood_rose.as_ref() }
-    pub(crate) fn begin_blood_rose(&mut self, mut state: BloodRoseExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.blood_rose = Some(state);
-    }
-    pub(crate) fn blood_rose_mut(&mut self) -> Option<&mut BloodRoseExecutionState> { self.blood_rose.as_mut() }
-    pub(crate) fn scorpion(&self) -> Option<&ScorpionExecutionState> { self.scorpion.as_ref() }
-    pub(crate) fn begin_scorpion(&mut self, mut state: ScorpionExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.scorpion = Some(state);
-    }
-    pub(crate) fn scorpion_mut(&mut self) -> Option<&mut ScorpionExecutionState> { self.scorpion.as_mut() }
-    pub(crate) fn boa_lock(&self) -> Option<&BoaLockExecutionState> { self.boa_lock.as_ref() }
-    pub(crate) fn begin_boa_lock(&mut self, mut state: BoaLockExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.boa_lock = Some(state);
-    }
-    pub(crate) fn boa_lock_mut(&mut self) -> Option<&mut BoaLockExecutionState> { self.boa_lock.as_mut() }
-    pub(crate) fn falling_star(&self) -> Option<&FallingStarExecutionState> { self.falling_star.as_ref() }
-    pub(crate) fn begin_falling_star(&mut self, mut state: FallingStarExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.falling_star = Some(state);
-    }
-    pub(crate) fn falling_star_mut(&mut self) -> Option<&mut FallingStarExecutionState> { self.falling_star.as_mut() }
     pub(crate) fn explosive_arrow(&self) -> Option<&ExplosiveArrowExecutionState> { self.explosive_arrow.as_ref() }
     pub(crate) fn begin_explosive_arrow(&mut self, mut state: ExplosiveArrowExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.explosive_arrow = Some(state);
     }
     pub(crate) fn explosive_arrow_mut(&mut self) -> Option<&mut ExplosiveArrowExecutionState> { self.explosive_arrow.as_mut() }
-    pub(crate) const fn strike(&self) -> Option<StrikeExecutionState> { self.strike }
-    pub(crate) fn begin_strike(&mut self, mut state: StrikeExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.strike = Some(state);
-    }
-    pub(crate) fn strike_mut(&mut self) -> Option<&mut StrikeExecutionState> { self.strike.as_mut() }
-
-    pub(crate) const fn yaksha_slash(&self) -> Option<YakshaSlashExecutionState> { self.yaksha_slash }
-    pub(crate) fn begin_yaksha_slash(&mut self, mut state: YakshaSlashExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.yaksha_slash = Some(state);
-    }
-    pub(crate) fn yaksha_slash_mut(&mut self) -> Option<&mut YakshaSlashExecutionState> { self.yaksha_slash.as_mut() }
-
-    pub(crate) const fn base_magic(&self) -> Option<BaseMagicExecutionState> {
-        self.base_magic
-    }
-
-    pub(crate) fn begin_base_magic(&mut self, mut state: BaseMagicExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.base_magic = Some(state);
-    }
-
-    pub(crate) fn base_magic_mut(&mut self) -> Option<&mut BaseMagicExecutionState> {
-        self.base_magic.as_mut()
-    }
-
-    pub(crate) const fn fire_bolt(&self) -> Option<BaseMagicExecutionState> {
-        self.fire_bolt
-    }
-
-    pub(crate) fn begin_fire_bolt(&mut self, mut state: BaseMagicExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.fire_bolt = Some(state);
-    }
-
-    pub(crate) fn fire_bolt_mut(&mut self) -> Option<&mut BaseMagicExecutionState> {
-        self.fire_bolt.as_mut()
-    }
-
-    pub(crate) const fn chain_lightning(&self) -> Option<ChainLightningExecutionState> {
-        self.chain_lightning
-    }
-
-    pub(crate) fn begin_chain_lightning(&mut self, mut state: ChainLightningExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.chain_lightning = Some(state);
-    }
-
-    pub(crate) fn chain_lightning_mut(&mut self) -> Option<&mut ChainLightningExecutionState> {
-        self.chain_lightning.as_mut()
-    }
 
     pub(crate) const fn ghost_cut(&self) -> Option<&GhostCutExecutionState> { self.ghost_cut.as_ref() }
     pub(crate) fn begin_ghost_cut(&mut self, mut state: GhostCutExecutionState) {
@@ -941,36 +738,12 @@ impl CPlayerAI {
     }
     pub(crate) fn ghost_cut_mut(&mut self) -> Option<&mut GhostCutExecutionState> { self.ghost_cut.as_mut() }
 
-    pub(crate) const fn knight_cut(&self) -> Option<&KnightCutExecutionState> { self.knight_cut.as_ref() }
-    pub(crate) fn begin_knight_cut(&mut self, mut state: KnightCutExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.knight_cut = Some(state);
-    }
-    pub(crate) fn knight_cut_mut(&mut self) -> Option<&mut KnightCutExecutionState> { self.knight_cut.as_mut() }
     pub(crate) const fn army_break(&self) -> Option<&ArmyBreakExecutionState> { self.army_break.as_ref() }
     pub(crate) fn begin_army_break(&mut self, mut state: ArmyBreakExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.army_break = Some(state);
     }
     pub(crate) fn army_break_mut(&mut self) -> Option<&mut ArmyBreakExecutionState> { self.army_break.as_mut() }
-    pub(crate) const fn rage(&self) -> Option<&RageExecutionState> { self.rage.as_ref() }
-    pub(crate) fn begin_rage(&mut self, mut state: RageExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.rage = Some(state);
-    }
-    pub(crate) fn rage_mut(&mut self) -> Option<&mut RageExecutionState> { self.rage.as_mut() }
-    pub(crate) const fn flash(&self) -> Option<&FlashExecutionState> { self.flash.as_ref() }
-    pub(crate) fn begin_flash(&mut self, mut state: FlashExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.flash = Some(state);
-    }
-    pub(crate) fn flash_mut(&mut self) -> Option<&mut FlashExecutionState> { self.flash.as_mut() }
-    pub(crate) const fn swallow(&self) -> Option<&SwallowExecutionState> { self.swallow.as_ref() }
-    pub(crate) fn begin_swallow(&mut self, mut state: SwallowExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.swallow = Some(state);
-    }
-    pub(crate) fn swallow_mut(&mut self) -> Option<&mut SwallowExecutionState> { self.swallow.as_mut() }
     pub(crate) const fn little_flash(&self) -> Option<&LittleFlashExecutionState> { self.little_flash.as_ref() }
     pub(crate) fn begin_little_flash(&mut self, mut state: LittleFlashExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -986,39 +759,8 @@ impl CPlayerAI {
         use crate::gameserver::appserver::skills::poisonfog::POISON_FOG_SKILL_ID;
         match self.player_skill_executions.get(&POISON_FOG_SKILL_ID)? {
             PlayerSkillExecution::PoisonFog { destination, .. } => Some(*destination),
-            PlayerSkillExecution::State(_) => None,
+            _ => None,
         }
-    }
-
-    pub(crate) const fn seven_shooting_star(&self) -> Option<&SevenShootingStarExecutionState> {
-        self.seven_shooting_star.as_ref()
-    }
-
-    pub(crate) fn begin_seven_shooting_star(
-        &mut self,
-        mut state: SevenShootingStarExecutionState,
-    ) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.seven_shooting_star = Some(state);
-    }
-
-    pub(crate) fn seven_shooting_star_mut(
-        &mut self,
-    ) -> Option<&mut SevenShootingStarExecutionState> {
-        self.seven_shooting_star.as_mut()
-    }
-
-    pub(crate) const fn little_star(&self) -> Option<&PlayerLittleStarExecutionState> {
-        self.little_star.as_ref()
-    }
-
-    pub(crate) fn begin_little_star(&mut self, mut state: PlayerLittleStarExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.little_star = Some(state);
-    }
-
-    pub(crate) fn little_star_mut(&mut self) -> Option<&mut PlayerLittleStarExecutionState> {
-        self.little_star.as_mut()
     }
 
     pub(crate) const fn path_projectile(&self) -> Option<&PlayerPathProjectileExecutionState> {
@@ -1047,61 +789,12 @@ impl CPlayerAI {
         self.direct_projectile.as_mut()
     }
 
-    pub(crate) const fn yunsheng_lightning(&self) -> Option<&PlayerYunShengLightningExecutionState> { self.yunsheng_lightning.as_ref() }
-    pub(crate) fn begin_yunsheng_lightning(&mut self, mut state: PlayerYunShengLightningExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.yunsheng_lightning = Some(state);
-    }
-    pub(crate) fn yunsheng_lightning_mut(&mut self) -> Option<&mut PlayerYunShengLightningExecutionState> { self.yunsheng_lightning.as_mut() }
-    pub(crate) const fn monster_thorn(&self) -> Option<&PlayerMonsterThornExecutionState> { self.monster_thorn.as_ref() }
-    pub(crate) fn begin_monster_thorn(&mut self, mut state: PlayerMonsterThornExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.monster_thorn = Some(state);
-    }
-    pub(crate) fn monster_thorn_mut(&mut self) -> Option<&mut PlayerMonsterThornExecutionState> { self.monster_thorn.as_mut() }
-    pub(crate) const fn spider_mist(&self) -> Option<&PlayerSpiderMistExecutionState> { self.spider_mist.as_ref() }
-    pub(crate) fn begin_spider_mist(&mut self, mut state: PlayerSpiderMistExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.spider_mist = Some(state);
-    }
-    pub(crate) fn spider_mist_mut(&mut self) -> Option<&mut PlayerSpiderMistExecutionState> { self.spider_mist.as_mut() }
-    pub(crate) const fn spider_web(&self) -> Option<&PlayerSpiderWebExecutionState> { self.spider_web.as_ref() }
-    pub(crate) fn begin_spider_web(&mut self, mut state: PlayerSpiderWebExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.spider_web = Some(state);
-    }
-    pub(crate) fn spider_web_mut(&mut self) -> Option<&mut PlayerSpiderWebExecutionState> { self.spider_web.as_mut() }
     pub(crate) const fn summon_creature(&self) -> Option<&PlayerSummonCreatureExecutionState> { self.summon_creature.as_ref() }
     pub(crate) fn begin_summon_creature(&mut self, mut state: PlayerSummonCreatureExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.summon_creature = Some(state);
     }
     pub(crate) fn summon_creature_mut(&mut self) -> Option<&mut PlayerSummonCreatureExecutionState> { self.summon_creature.as_mut() }
-    pub(crate) const fn boss_blue_quake(&self) -> Option<PlayerBossBlueQuakeExecutionState> { self.boss_blue_quake }
-    pub(crate) fn begin_boss_blue_quake(&mut self, mut state: PlayerBossBlueQuakeExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.boss_blue_quake = Some(state);
-    }
-    pub(crate) fn boss_blue_quake_mut(&mut self) -> Option<&mut PlayerBossBlueQuakeExecutionState> { self.boss_blue_quake.as_mut() }
-    pub(crate) fn boss_fiend_penetrate(&self) -> Option<&PlayerBossFiendPenetrateExecutionState> { self.boss_fiend_penetrate.as_ref() }
-    pub(crate) fn begin_boss_fiend_penetrate(&mut self, mut state: PlayerBossFiendPenetrateExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.boss_fiend_penetrate = Some(state);
-    }
-    pub(crate) fn boss_fiend_penetrate_mut(&mut self) -> Option<&mut PlayerBossFiendPenetrateExecutionState> { self.boss_fiend_penetrate.as_mut() }
-
-    pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
-        self.sprite_burn.as_ref()
-    }
-
-    pub(crate) fn begin_sprite_burn(&mut self, mut state: SpriteBurnExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.sprite_burn = Some(state);
-    }
-
-    pub(crate) fn sprite_burn_mut(&mut self) -> Option<&mut SpriteBurnExecutionState> {
-        self.sprite_burn.as_mut()
-    }
 
     pub(crate) const fn lord_fast_attack(&self) -> Option<&LordFastAttackExecutionState> {
         self.lord_fast_attack.as_ref()
@@ -1114,45 +807,6 @@ impl CPlayerAI {
 
     pub(crate) fn lord_fast_attack_mut(&mut self) -> Option<&mut LordFastAttackExecutionState> {
         self.lord_fast_attack.as_mut()
-    }
-
-    pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {
-        self.chaos_sphere.as_ref()
-    }
-
-    pub(crate) fn begin_chaos_sphere(&mut self, mut state: ChaosSphereExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.chaos_sphere = Some(state);
-    }
-
-    pub(crate) fn chaos_sphere_mut(&mut self) -> Option<&mut ChaosSphereExecutionState> {
-        self.chaos_sphere.as_mut()
-    }
-
-    pub(crate) const fn lightning(&self) -> Option<LightningExecutionState> {
-        self.lightning
-    }
-
-    pub(crate) fn begin_lightning(&mut self, mut state: LightningExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.lightning = Some(state);
-    }
-
-    pub(crate) fn lightning_mut(&mut self) -> Option<&mut LightningExecutionState> {
-        self.lightning.as_mut()
-    }
-
-    pub(crate) const fn seal(&self) -> Option<SealExecutionState> {
-        self.seal
-    }
-
-    pub(crate) fn begin_seal(&mut self, mut state: SealExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.seal = Some(state);
-    }
-
-    pub(crate) fn seal_mut(&mut self) -> Option<&mut SealExecutionState> {
-        self.seal.as_mut()
     }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {
@@ -1478,7 +1132,6 @@ impl CPlayerAI {
 // ADDRESS: 00508ed0
 // PROTOTYPE: int __thiscall OnStanding(void)
 
-
 // ============================================================================
 // FUNCTION: CPlayerAI::OnLoseTarget
 // STATUS: PARTIALLY_IMPLEMENTED, VERIFIED_DISASSEMBLY
@@ -1558,7 +1211,6 @@ impl CPlayerAI {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // ============================================================================
 // FUNCTION: CPlayerAI::Run

@@ -158,7 +158,7 @@ pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.rage().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = player_ai.player_skill_state::<RageExecutionState>(RAGE_SKILL_ID).map(|state| state.kernel().dispatch()) else {
         return false;
     };
     let level = game
@@ -185,11 +185,11 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
 
-    if ai.rage().is_none() {
+    if ai.player_skill_state::<RageExecutionState>(RAGE_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        ai.begin_rage(RageExecutionState::begin(dispatch, started_at_ms));
+        ai.begin_player_skill_execution(RageExecutionState::begin(dispatch, started_at_ms));
     } else if ai
-        .rage()
+        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -207,7 +207,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if ai
-        .rage()
+        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let now_ms = runtime.now_milliseconds();
@@ -236,17 +236,17 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     }
 
     if ai
-        .rage()
+        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         send_cast_visual(game, player_id, level, 1, frequency_ms);
-        if let Some(state) = ai.rage_mut() {
+        if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = ai
-        .rage()
+        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -254,11 +254,11 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     }
 
     let last_using_time_ms = ai
-        .rage()
+        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
         .map_or(0, |state| state.last_using_time_ms());
     if last_using_time_ms == 0 {
         send_cast_visual(game, player_id, level, 2, frequency_ms);
-        if let Some(state) = ai.rage_mut() {
+        if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         }
@@ -286,7 +286,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .is_none_or(|player| player.maximum_rp() <= player.rp());
     if reached_maximum {
-        if let Some(state) = ai.rage_mut() {
+        if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
         finish_player_rage(game, player_id, level, ai, runtime);
@@ -296,7 +296,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         player.set_rp(player.rp().wrapping_add(rp_gain as u16));
     }
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-    if let Some(state) = ai.rage_mut() {
+    if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
         state.mark_used(runtime.now_milliseconds());
     }
     terminal(QueuedSkillExecutionState::Pending)

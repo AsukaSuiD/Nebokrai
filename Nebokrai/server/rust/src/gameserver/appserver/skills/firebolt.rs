@@ -115,7 +115,7 @@ pub(crate) fn cancel_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.fire_bolt().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = player_ai.player_skill_state::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     finish_player_fire_bolt(game, player_id, player_ai, runtime);
@@ -182,7 +182,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.fire_bolt().is_none() {
+    if player_ai.player_skill_state::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if target.object_type == PLAYER_TYPE && target.id == player_id {
             send_failure(game, player_id, 10);
@@ -222,10 +222,10 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(FIRE_BOLT_SKILL_ID));
         }
-        player_ai.begin_fire_bolt(BaseMagicExecutionState::begin(
+        player_ai.begin_player_skill_execution(BaseMagicExecutionState::begin(
             dispatch, target, started_at_ms,
         ));
-    } else if player_ai.fire_bolt().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+    } else if player_ai.player_skill_state::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -235,7 +235,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         finish_player_fire_bolt(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.fire_bolt().is_some_and(|state| !state.condition_checked()) {
+    if player_ai.player_skill_state::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID).copied().is_some_and(|state| !state.condition_checked()) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -257,14 +257,14 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_start(game, player_id, level);
-        if let Some(state) = player_ai.fire_bolt_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID) {
             state.mark_condition_checked();
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .fire_bolt()
+        .player_skill_state::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID).copied()
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение огненной стрелы создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -374,7 +374,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд огненной стрелы");
     }
 
-    if let Some(state) = player_ai.fire_bolt_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<BaseMagicExecutionState>(FIRE_BOLT_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

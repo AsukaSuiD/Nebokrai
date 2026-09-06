@@ -204,7 +204,7 @@ pub(crate) fn cancel_player_spider_mist<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.spider_mist().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = player_ai.player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     abort_player_spider_mist(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -234,7 +234,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(SPIDER_MIST_SKILL_ID, skill_level).cloned() else {
-        if player_ai.spider_mist().is_some() {
+        if player_ai.player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID).is_some() {
             abort_player_spider_mist(game, player_id);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -249,7 +249,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
 
-    if player_ai.spider_mist().is_none() {
+    if player_ai.player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID).is_none() {
         if !skill_is_restored(player_ai.skill_last_used_ms(SPIDER_MIST_SKILL_ID), reuse_delay_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -281,24 +281,24 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
             // снять `CCure` до создания phalanx.
             player.register_curable_skill_state(SPIDER_MIST_SKILL_ID);
         }
-        player_ai.begin_spider_mist(PlayerSpiderMistExecutionState::begin(
+        player_ai.begin_player_skill_execution(PlayerSpiderMistExecutionState::begin(
             dispatch,
             destination,
             now_ms,
         ));
     } else if player_ai
-        .spider_mist()
+        .player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
 
     let destination = player_ai
-        .spider_mist()
+        .player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID)
         .map(|state| state.destination)
         .expect("выполнение паучьего тумана хранит координаты призыва");
     if player_ai
-        .spider_mist()
+        .player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         if let Some(player) = game.find_player_mut(player_id) {
@@ -311,12 +311,12 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_visual(game, player_id, skill_level, 1, destination);
-        if let Some(state) = player_ai.spider_mist_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
     let started_at_ms = player_ai
-        .spider_mist()
+        .player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение паучьего тумана хранит время начала");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -356,7 +356,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
     } else {
         false
     };
-    if let Some(state) = player_ai.spider_mist_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

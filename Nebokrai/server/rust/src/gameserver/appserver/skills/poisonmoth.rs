@@ -73,12 +73,12 @@ fn finish_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, pla
 }
 fn abort_player_poison_moth(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
 pub(crate) fn complete_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.poison_moth().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     finish_player_poison_moth(game, player_id, ai, runtime);
     ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 pub(crate) fn cancel_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.poison_moth().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     abort_player_poison_moth(game, player_id);
     ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -128,9 +128,9 @@ fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
 pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_poison_moth_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(POISON_MOTH_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(POISON_MOTH_SKILL_ID, level) else { if player_ai.poison_moth().is_none() { send_failure(game, player_id, 2, 0) } else { abort_player_poison_moth(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(POISON_MOTH_SKILL_ID, level) else { if player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_none() { send_failure(game, player_id, 2, 0) } else { abort_player_poison_moth(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum_distance = properties.query_property(TARGET_MAX_DISTANCE); let missile_step_ms = properties.query_property(MISSILE_FLYING_TIME); let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let target_damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR); let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if player_ai.poison_moth().is_none() {
+    if player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
         let reject = |game: &CGame, code| { send_failure(game, player_id, code, mp_loss); send_failure(game, player_id, 2, mp_loss); };
         let targets_self = match dispatch {
@@ -148,32 +148,32 @@ pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mu
         if !weapon_is_crossbow(game, player) { reject(game, 0x0e); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { reject(game, 7); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(POISON_MOTH_SKILL_ID)); }
-        player_ai.begin_poison_moth(PoisonMothExecutionState::begin(dispatch, now_ms, destination));
-    } else if player_ai.poison_moth().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    if player_ai.poison_moth().is_some_and(|state| !state.condition_checked) {
+        player_ai.begin_player_skill_execution(PoisonMothExecutionState::begin(dispatch, now_ms, destination));
+    } else if player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    if player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_some_and(|state| !state.condition_checked) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); abort_player_poison_moth(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         if game.find_player(player_id).is_none_or(|player| !weapon_is_crossbow(game, player)) { send_failure(game, player_id, 0x0e, mp_loss); abort_player_poison_moth(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
-        let destination = player_ai.poison_moth().map(|state| state.destination).unwrap_or_default(); if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } send_start(game, player_id, level); if let Some(state) = player_ai.poison_moth_mut() { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
+        let destination = player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).map(|state| state.destination).unwrap_or_default(); if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } send_start(game, player_id, level); if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = player_ai.poison_moth().map(|state| state.kernel.started_at_ms()).unwrap_or_default();
-    if !player_ai.poison_moth().is_some_and(|state| state.attacking_started) {
+    let started_at_ms = player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default();
+    if !player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).is_some_and(|state| state.attacking_started) {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true) }
         let Some(destination) = target_position(game, region_id, player_id, dispatch) else { abort_player_poison_moth(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
         if maximum_distance != 0 && path.len() as u32 > maximum_distance.wrapping_add(1) { send_failure(game, player_id, 0x0b, mp_loss); abort_player_poison_moth(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
         let missile_index = path.iter().position(|cell| cell.2 == 2).unwrap_or(path.len()); let endpoint = path.get(missile_index).or_else(|| path.last()).copied().unwrap_or((destination.0, destination.1, 2)); let flying_time = missile_step_ms.wrapping_mul(missile_index as u32); send_fire(game, player_id, level, (endpoint.0, endpoint.1), flying_time);
-        if let Some(state) = player_ai.poison_moth_mut() { state.path = path; state.current_position = 0; state.destination = (endpoint.0, endpoint.1); state.attacking_started = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
+        if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { state.path = path; state.current_position = 0; state.destination = (endpoint.0, endpoint.1); state.attacking_started = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
     }
-    let Some((position, path_len, cell, end_sent)) = player_ai.poison_moth().map(|state| (state.current_position, state.path.len(), state.path.get(state.current_position).copied(), state.end_sent)) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((position, path_len, cell, end_sent)) = player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).map(|state| (state.current_position, state.path.len(), state.path.get(state.current_position).copied(), state.end_sent)) else { return terminal(QueuedSkillExecutionState::Rejected) };
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms.wrapping_add(missile_step_ms.wrapping_mul(position as u32))) { return terminal(QueuedSkillExecutionState::Pending) }
-    let Some((x, y, _)) = cell else { if !end_sent { send_end(game, player_id, level, player_ai.poison_moth().map(|state| state.end_tile).unwrap_or_default(), player_ai.poison_moth().and_then(|state| state.visual_target)); } if let Some(state) = player_ai.poison_moth_mut() { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_poison_moth(game, player_id, player_ai, runtime); return terminal(QueuedSkillExecutionState::Completed) };
-    let live_block = game.find_region(region_id).map_or(2, |owner| owner.base().skill_cell_block(x, y)); if let Some(state) = player_ai.poison_moth_mut() { state.end_tile = (x, y) }
-    if live_block == 3 { let target = attack_cell(game, player_id, region_id, level, target_damage_factor, hit_modifier, x, y, runtime); if target.is_some() { send_end(game, player_id, level, (x, y), target); if let Some(state) = player_ai.poison_moth_mut() { state.visual_target = target; state.end_sent = true; state.current_position = path_len.wrapping_add(1); } return terminal(QueuedSkillExecutionState::Pending) } }
-    else if live_block == 2 { send_end(game, player_id, level, (x, y), None); if let Some(state) = player_ai.poison_moth_mut() { state.end_sent = true; state.current_position = path_len; } }
-    if let Some(state) = player_ai.poison_moth_mut() { state.current_position = state.current_position.wrapping_add(1) }
+    let Some((x, y, _)) = cell else { if !end_sent { send_end(game, player_id, level, player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).map(|state| state.end_tile).unwrap_or_default(), player_ai.player_skill_state::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID).and_then(|state| state.visual_target)); } if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_poison_moth(game, player_id, player_ai, runtime); return terminal(QueuedSkillExecutionState::Completed) };
+    let live_block = game.find_region(region_id).map_or(2, |owner| owner.base().skill_cell_block(x, y)); if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { state.end_tile = (x, y) }
+    if live_block == 3 { let target = attack_cell(game, player_id, region_id, level, target_damage_factor, hit_modifier, x, y, runtime); if target.is_some() { send_end(game, player_id, level, (x, y), target); if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { state.visual_target = target; state.end_sent = true; state.current_position = path_len.wrapping_add(1); } return terminal(QueuedSkillExecutionState::Pending) } }
+    else if live_block == 2 { send_end(game, player_id, level, (x, y), None); if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { state.end_sent = true; state.current_position = path_len; } }
+    if let Some(state) = player_ai.player_skill_state_mut::<PoisonMothExecutionState>(POISON_MOTH_SKILL_ID) { state.current_position = state.current_position.wrapping_add(1) }
     terminal(QueuedSkillExecutionState::Pending)
 }

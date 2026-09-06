@@ -93,7 +93,7 @@ pub(crate) fn complete_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.chaos_sphere().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     finish_player_chaos_sphere(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
@@ -105,7 +105,7 @@ pub(crate) fn cancel_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .chaos_sphere()
+        .player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -184,7 +184,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(CHAOS_SPHERE_SKILL_ID), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CHAOS_SPHERE_SKILL_ID, level) else {
-        if player_ai.chaos_sphere().is_some() {
+        if player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).is_some() {
             abort_player_chaos_sphere(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected)
@@ -200,7 +200,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
 
-    if player_ai.chaos_sphere().is_none() {
+    if player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
@@ -226,8 +226,8 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(CHAOS_SPHERE_SKILL_ID));
         }
-        player_ai.begin_chaos_sphere(ChaosSphereExecutionState::begin(dispatch, started_at_ms));
-    } else if player_ai.chaos_sphere().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(ChaosSphereExecutionState::begin(dispatch, started_at_ms));
+    } else if player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -237,7 +237,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         abort_player_chaos_sphere(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if player_ai.chaos_sphere().is_some_and(|state| !state.condition_checked()) {
+    if player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).is_some_and(|state| !state.condition_checked()) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -251,12 +251,12 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_start(game, player_id, level);
-        if let Some(state) = player_ai.chaos_sphere_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID) {
             state.mark_condition_checked();
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-    let started_at_ms = player_ai.chaos_sphere().map(|state| state.kernel().started_at_ms()).unwrap_or_default();
+    let started_at_ms = player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
@@ -303,7 +303,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
             let _ = game.send_chaos_sphere_phalanx_entry(region_id, summon_id, runtime);
         }
     }
-    if let Some(state) = player_ai.chaos_sphere_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

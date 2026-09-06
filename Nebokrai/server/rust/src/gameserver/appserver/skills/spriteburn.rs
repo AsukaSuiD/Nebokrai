@@ -136,7 +136,7 @@ pub(crate) fn cancel_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .sprite_burn()
+        .player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -202,7 +202,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
         ))
     }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SPRITE_BURN_SKILL_ID, level) else {
-        if player_ai.sprite_burn().is_some() {
+        if player_ai.player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID).is_some() {
             finish_player_sprite_burn(game, player_id, player_ai, runtime);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -215,7 +215,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     let constant = properties.query_property(SKILL_USAGE_CONST);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.sprite_burn().is_none() {
+    if player_ai.player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(player_ai.skill_last_used_ms(SPRITE_BURN_SKILL_ID), reuse_delay_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d);
@@ -229,12 +229,12 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPRITE_BURN_SKILL_ID));
         }
-        player_ai.begin_sprite_burn(SpriteBurnExecutionState::begin(dispatch, now_ms));
-    } else if player_ai.sprite_burn().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SpriteBurnExecutionState::begin(dispatch, now_ms));
+    } else if player_ai.player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.sprite_burn().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+    if player_ai.player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_player_failure(game, player_id, 7);
@@ -246,12 +246,12 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_start(game, player_id, level);
-        if let Some(state) = player_ai.sprite_burn_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai.sprite_burn()
+    let started_at_ms = player_ai.player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение огненной области хранит время начала");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -264,14 +264,14 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     send_player_fire(game, player_id, level, center_x, center_y);
-    if let Some(state) = player_ai.sprite_burn_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
     }
     apply_player_scope(
         game, player_id, region_id, center_x, center_y, lifetime_ms, frequency_ms, constant, runtime,
     );
-    if let Some(state) = player_ai.sprite_burn_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_sprite_burn(game, player_id, player_ai, runtime);

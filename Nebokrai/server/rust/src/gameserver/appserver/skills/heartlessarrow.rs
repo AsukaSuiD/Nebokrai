@@ -91,12 +91,12 @@ fn abort_player_heartless_arrow(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_or_release_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some((dispatch, releases_charge)) = player_ai.heartless_arrow().map(|state| (
+    let Some((dispatch, releases_charge)) = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().map(|state| (
         state.kernel().dispatch(),
         state.condition_checked && !state.attacking_started,
     )) else { return false };
     if releases_charge {
-        if let Some(state) = player_ai.heartless_arrow_mut() { state.attacking_started = true; }
+        if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) { state.attacking_started = true; }
         tracing::trace!(player_id, "ненулевой End выпустил удерживаемую стрелу");
         return true;
     }
@@ -105,7 +105,7 @@ pub(crate) fn complete_or_release_player_heartless_arrow<Runtime: GameMainLoopRu
 }
 
 pub(crate) fn cancel_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.heartless_arrow().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
     abort_player_heartless_arrow(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -232,7 +232,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
     let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(HEARTLESS_ARROW_SKILL_ID), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(HEARTLESS_ARROW_SKILL_ID, level) else {
-        if player_ai.heartless_arrow().is_some() { abort_player_heartless_arrow(game, player_id); }
+        if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some() { abort_player_heartless_arrow(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -244,7 +244,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
     let factors = TARGET_DAMAGE_FACTORS.map(|id| properties.query_property(id));
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.heartless_arrow().is_none() {
+    if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_none() {
         let Some((target_x, target_y, _)) = target_snapshot(game, region_id, target) else { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0286"); return terminal(QueuedSkillExecutionState::Rejected) };
         if !skill_is_restored(
             player_ai.skill_last_used_ms(HEARTLESS_ARROW_SKILL_ID),
@@ -261,14 +261,14 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
         if mp_loss != 0 && (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
         let started_at_ms = runtime.now_milliseconds();
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(HEARTLESS_ARROW_SKILL_ID)); }
-        player_ai.begin_heartless_arrow(HeartlessArrowExecutionState::begin(dispatch, target, started_at_ms));
-    } else if player_ai.heartless_arrow().is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
+        player_ai.begin_player_skill_execution(HeartlessArrowExecutionState::begin(dispatch, target, started_at_ms));
+    } else if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 
-    let target = player_ai.heartless_arrow().expect("выполнение выстрела создано").target;
+    let target = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().expect("выполнение выстрела создано").target;
     let Some((target_x, target_y, dead)) = target_snapshot(game, region_id, target) else { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0286"); abort_player_heartless_arrow(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
     if dead || (target.object_type == PLAYER_TYPE && target.id == player_id) { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, if dead { b"GS0285" } else { b"GS0286" }); abort_player_heartless_arrow(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
 
-    if player_ai.heartless_arrow().is_some_and(|state| !state.condition_checked) {
+    if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); abort_player_heartless_arrow(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
@@ -276,20 +276,20 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
         if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) { game.send_base_magic_failure(player_id, 0x0e); game.send_skill_system_info(player_id, b"GS0292"); abort_player_heartless_arrow(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
         send_start(game, player_id, level);
-        if let Some(state) = player_ai.heartless_arrow_mut() { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
 
     let now_ms = runtime.now_milliseconds();
-    if let Some(state) = player_ai.heartless_arrow_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) {
         if !state.attacking_started {
             state.hold_time_ms = now_ms.wrapping_sub(state.kernel().started_at_ms());
             if state.hold_time_ms >= action_interval_ms.wrapping_mul(2) { state.hold_time_ms = action_interval_ms.wrapping_mul(2); state.attacking_started = true; }
         }
     }
-    if player_ai.heartless_arrow().is_some_and(|state| !state.attacking_started) { return terminal(QueuedSkillExecutionState::Pending); }
+    if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some_and(|state| !state.attacking_started) { return terminal(QueuedSkillExecutionState::Pending); }
 
-    if player_ai.heartless_arrow().is_some_and(|state| !state.skill_casted) {
-        let state = player_ai.heartless_arrow().expect("удержание выстрела существует");
+    if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some_and(|state| !state.skill_casted) {
+        let state = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().expect("удержание выстрела существует");
         let unit = action_interval_ms / 2;
         let hold_time_ms = if unit != 0 && state.hold_time_ms % unit != 0 { state.hold_time_ms.wrapping_div(unit).wrapping_add(1).wrapping_mul(unit) } else { state.hold_time_ms };
         if !time_reached(now_ms, state.kernel().started_at_ms(), hold_time_ms) { return terminal(QueuedSkillExecutionState::Pending); }
@@ -298,10 +298,10 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
         if path.iter().any(|cell| cell.2 == 2) { game.send_base_magic_failure(player_id, 0x0f); game.send_skill_system_info_with_text(player_id, b"GS0307", target_name(game, region_id, target)); abort_player_heartless_arrow(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         let flying_time_ms = missile_step_ms.wrapping_mul(path.len() as u32);
         send_fire(game, player_id, level, target, target_x, target_y, flying_time_ms);
-        if let Some(state) = player_ai.heartless_arrow_mut() { state.hold_time_ms = hold_time_ms; state.missile_flying_time_ms = flying_time_ms; state.skill_casted = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); }
+        if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) { state.hold_time_ms = hold_time_ms; state.missile_flying_time_ms = flying_time_ms; state.skill_casted = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); }
     }
 
-    let state = player_ai.heartless_arrow().expect("снаряд выстрела сохраняется до попадания");
+    let state = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().expect("снаряд выстрела сохраняется до попадания");
     if !time_reached(runtime.now_milliseconds(), state.kernel().started_at_ms(), state.hold_time_ms.wrapping_add(state.missile_flying_time_ms)) { return terminal(QueuedSkillExecutionState::Pending); }
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     let factor = damage_factor(state.hold_time_ms, action_interval_ms, factors);
@@ -309,7 +309,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
         match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} }
     }
     apply_daub_poison(game, player_id, region_id, target, runtime.now_milliseconds());
-    if let Some(state) = player_ai.heartless_arrow_mut() { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(state) = player_ai.player_skill_state_mut::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_heartless_arrow(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

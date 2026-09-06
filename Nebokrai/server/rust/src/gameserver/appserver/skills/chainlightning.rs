@@ -90,7 +90,7 @@ pub(crate) fn cancel_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .chain_lightning()
+        .player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied()
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -272,7 +272,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let damage_modifier = properties.query_property(TARGET_FINAL_DAMAGE_MODIFIER) as i32;
 
-    if player_ai.chain_lightning().is_none() {
+    if player_ai.player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied().is_none() {
         if !skill_is_restored(
             player_ai.skill_last_used_ms(CHAIN_LIGHTNING_SKILL_ID),
             cooldown_ms,
@@ -289,13 +289,13 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(CHAIN_LIGHTNING_SKILL_ID));
         }
-        player_ai.begin_chain_lightning(ChainLightningExecutionState::begin(dispatch, started_at_ms, x, y));
-    } else if player_ai.chain_lightning().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(ChainLightningExecutionState::begin(dispatch, started_at_ms, x, y));
+    } else if player_ai.player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.chain_lightning().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
-        let state = player_ai.chain_lightning().expect("выполнение цепной молнии создано");
+    if player_ai.player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+        let state = player_ai.player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied().expect("выполнение цепной молнии создано");
         let (target_x, target_y) = dispatch_destination(game, region_id, dispatch)
             .unwrap_or((state.fallback_x, state.fallback_y));
         if let Some(player) = game.find_player_mut(player_id) {
@@ -348,7 +348,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
                 attacked.push(target);
             }
         }
-        if let Some(state) = player_ai.chain_lightning_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID) {
             state.attacked = true;
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
@@ -356,7 +356,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    let state = player_ai.chain_lightning().expect("выполнение цепной молнии сохраняется до интервала");
+    let state = player_ai.player_skill_state::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID).copied().expect("выполнение цепной молнии сохраняется до интервала");
     if !state.attacked
         || runtime.now_milliseconds().wrapping_sub(state.kernel().started_at_ms()) <= action_interval_ms
     {
@@ -364,7 +364,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     }
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     send_visual(game, player_id, level, 3, None);
-    if let Some(state) = player_ai.chain_lightning_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<ChainLightningExecutionState>(CHAIN_LIGHTNING_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_chain_lightning(game, player_id, player_ai, runtime);

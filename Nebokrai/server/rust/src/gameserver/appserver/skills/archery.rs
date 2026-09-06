@@ -401,7 +401,7 @@ pub(crate) fn cancel_player_archery<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.archery().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = player_ai.player_skill_state::<ArcheryExecutionState>(ARCHERY_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     finish_player_archery(game, player_id, player_ai, runtime);
@@ -465,7 +465,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
         }
     };
 
-    if player_ai.archery().is_none() {
+    if player_ai.player_skill_state::<ArcheryExecutionState>(ARCHERY_SKILL_ID).copied().is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
             player_ai.skill_last_used_ms(ARCHERY_SKILL_ID),
@@ -530,7 +530,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
                 return rejected();
             }
         }
-        player_ai.begin_archery(ArcheryExecutionState::begin(dispatch, target, now_ms));
+        player_ai.begin_player_skill_execution(ArcheryExecutionState::begin(dispatch, target, now_ms));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
         }
@@ -539,7 +539,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
             ..pending()
         };
     }
-    let Some(execution) = player_ai.archery() else {
+    let Some(execution) = player_ai.player_skill_state::<ArcheryExecutionState>(ARCHERY_SKILL_ID).copied() else {
         return rejected();
     };
     if execution.kernel().dispatch() != dispatch {
@@ -596,7 +596,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
         }
-        if let Some(execution) = player_ai.archery_mut() {
+        if let Some(execution) = player_ai.player_skill_state_mut::<ArcheryExecutionState>(ARCHERY_SKILL_ID) {
             let _ = execution.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
@@ -702,7 +702,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
         );
         tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой стрельбы");
     }
-    if let Some(state) = player_ai.archery_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<ArcheryExecutionState>(ARCHERY_SKILL_ID) {
         let _ = state
             .kernel_mut()
             .advance(SkillStage::Check, SkillStage::Calculate);

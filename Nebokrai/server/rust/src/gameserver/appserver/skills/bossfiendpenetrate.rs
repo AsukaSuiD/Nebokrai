@@ -232,7 +232,7 @@ pub(crate) fn complete_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -248,7 +248,7 @@ pub(crate) fn cancel_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -426,7 +426,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(BOSS_FIEND_PENETRATE_SKILL_ID, skill_level)
         .cloned()
     else {
-        if player_ai.boss_fiend_penetrate().is_some() {
+        if player_ai.player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID).is_some() {
             finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -440,7 +440,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.boss_fiend_penetrate().is_none() {
+    if player_ai.player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID).is_none() {
         let Some(destination) = target_position(game, region_id, player_id, dispatch) else {
             return player_terminal(QueuedSkillExecutionState::Rejected);
         };
@@ -480,13 +480,13 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BOSS_FIEND_PENETRATE_SKILL_ID));
         }
-        player_ai.begin_boss_fiend_penetrate(PlayerBossFiendPenetrateExecutionState::begin(
+        player_ai.begin_player_skill_execution(PlayerBossFiendPenetrateExecutionState::begin(
             dispatch,
             destination,
             now_ms,
         ));
     } else if player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -494,7 +494,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
 
     let destination = target_position(game, region_id, player_id, dispatch).unwrap_or_else(|| {
         player_ai
-            .boss_fiend_penetrate()
+            .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
             .map(|state| state.destination)
             .unwrap_or((source_x, source_y))
     });
@@ -505,7 +505,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     }
 
     if player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .is_some_and(|state| !state.condition_checked)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -534,18 +534,18 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             player.movement_shape_mut().set_direction(direction);
         }
         send_player_start(game, player_id, skill_level);
-        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID) {
             state.condition_checked = true;
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .unwrap_or_default();
     if player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .is_some_and(|state| !state.attacking_started)
     {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
@@ -594,7 +594,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             visual_destination,
             missile_flying_time,
         );
-        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID) {
             state.path = path;
             state.attack_cell_count = attack_cell_count;
             state.current_cell = 0;
@@ -605,7 +605,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     }
 
     let Some((current_cell, attack_cell_count, cell)) = player_ai
-        .boss_fiend_penetrate()
+        .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .map(|state| {
             (
                 state.current_cell,
@@ -617,7 +617,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     if current_cell >= attack_cell_count {
-        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
         finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, true);
@@ -631,7 +631,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     }
     if let Some((cell_x, cell_y, _)) = cell {
         let mut attacked = player_ai
-            .boss_fiend_penetrate_mut()
+            .player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
             .map(|state| std::mem::take(&mut state.attacked))
             .unwrap_or_default();
         attack_player_cell(
@@ -646,7 +646,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             &mut attacked,
             runtime,
         );
-        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID) {
             state.attacked = attacked;
             state.current_cell = state.current_cell.wrapping_add(1);
         }

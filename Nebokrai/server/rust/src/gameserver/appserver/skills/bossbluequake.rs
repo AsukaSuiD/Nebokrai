@@ -238,7 +238,7 @@ pub(crate) fn cancel_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .boss_blue_quake()
+        .player_skill_state::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID).copied()
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -415,7 +415,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(BOSS_BLUE_QUAKE_SKILL_ID, level)
         .cloned()
     else {
-        if player_ai.boss_blue_quake().is_some() {
+        if player_ai.player_skill_state::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID).copied().is_some() {
             finish_player_boss_blue_quake(game, player_id, player_ai, runtime, false);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -431,7 +431,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
 
-    if player_ai.boss_blue_quake().is_none() {
+    if player_ai.player_skill_state::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID).copied().is_none() {
         if !skill_is_restored(
             player_ai.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID),
             reuse_delay,
@@ -459,18 +459,18 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BOSS_BLUE_QUAKE_SKILL_ID));
         }
-        player_ai.begin_boss_blue_quake(PlayerBossBlueQuakeExecutionState::begin(
+        player_ai.begin_player_skill_execution(PlayerBossBlueQuakeExecutionState::begin(
             dispatch, now_ms,
         ));
     } else if player_ai
-        .boss_blue_quake()
+        .player_skill_state::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if player_ai
-        .boss_blue_quake()
+        .player_skill_state::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID).copied()
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -509,14 +509,14 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.movement_shape_mut().set_direction(direction);
         }
-        if let Some(state) = player_ai.boss_blue_quake_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID) {
             state.set_direction(direction);
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
         send_player_visual(game, player_id, level, direction, true);
     }
 
-    let Some(execution) = player_ai.boss_blue_quake() else {
+    let Some(execution) = player_ai.player_skill_state::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID).copied() else {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     if !time_reached(
@@ -528,7 +528,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     }
     let direction = execution.direction();
     send_player_visual(game, player_id, level, direction, false);
-    if let Some(state) = player_ai.boss_blue_quake_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -595,7 +595,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             runtime,
         );
     }
-    if let Some(state) = player_ai.boss_blue_quake_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<PlayerBossBlueQuakeExecutionState>(BOSS_BLUE_QUAKE_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_boss_blue_quake(game, player_id, player_ai, runtime, true);

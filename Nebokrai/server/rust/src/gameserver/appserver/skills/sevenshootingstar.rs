@@ -140,7 +140,7 @@ pub(crate) fn cancel_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .seven_shooting_star()
+        .player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -290,7 +290,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.seven_shooting_star().is_none() {
+    if player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
@@ -314,14 +314,14 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SEVEN_SHOOTING_STAR_SKILL_ID));
         }
-        player_ai.begin_seven_shooting_star(SevenShootingStarExecutionState::begin(dispatch, started_at_ms));
-    } else if player_ai.seven_shooting_star()
+        player_ai.begin_player_skill_execution(SevenShootingStarExecutionState::begin(dispatch, started_at_ms));
+    } else if player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.seven_shooting_star()
+    if player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let Some((target_x, target_y)) = target_position(game, region_id, dispatch) else {
@@ -341,19 +341,19 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, 1, None);
-        if let Some(state) = player_ai.seven_shooting_star_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai.seven_shooting_star()
+    let started_at_ms = player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение семи падающих звёзд создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
-    if player_ai.seven_shooting_star().is_some_and(SevenShootingStarExecutionState::needs_path_refresh) {
-        let destination = player_ai.seven_shooting_star()
+    if player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID).is_some_and(SevenShootingStarExecutionState::needs_path_refresh) {
+        let destination = player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID)
             .and_then(SevenShootingStarExecutionState::destination)
             .or_else(|| target_position(game, region_id, dispatch));
         let Some((target_x, target_y)) = destination else {
@@ -365,15 +365,15 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
         path.truncate(maximum_distance as usize);
         let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
         send_visual(game, player_id, level, 2, Some(endpoint));
-        if let Some(state) = player_ai.seven_shooting_star_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID) {
             state.set_path(path, endpoint);
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }
 
     let attack_now_ms = runtime.now_milliseconds();
-    if player_ai.seven_shooting_star().is_some_and(|state| state.attack_due(attack_now_ms, frequency_ms)) {
-        let path = player_ai.seven_shooting_star().and_then(SevenShootingStarExecutionState::path)
+    if player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID).is_some_and(|state| state.attack_due(attack_now_ms, frequency_ms)) {
+        let path = player_ai.player_skill_state::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID).and_then(SevenShootingStarExecutionState::path)
             .unwrap_or_default().to_vec();
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         for target in path_targets(game, region_id, &path) {
@@ -394,7 +394,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             }
         }
         let recorded_at_ms = runtime.now_milliseconds();
-        if let Some(state) = player_ai.seven_shooting_star_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID) {
             state.record_attack(recorded_at_ms);
             if state.kernel().stage() == SkillStage::Calculate {
                 let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
@@ -405,7 +405,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     let expiration_now_ms = runtime.now_milliseconds();
     if started_at_ms.wrapping_add(delay_ms).wrapping_add(persist_ms) < expiration_now_ms {
         send_visual(game, player_id, level, 3, None);
-        if let Some(state) = player_ai.seven_shooting_star_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<SevenShootingStarExecutionState>(SEVEN_SHOOTING_STAR_SKILL_ID) {
             if state.kernel().stage() == SkillStage::Calculate {
                 let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
             }

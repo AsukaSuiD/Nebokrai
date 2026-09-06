@@ -244,79 +244,71 @@ impl CGame {
             | LIGHTNING_SWORD_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
             | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID
-            | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | POISON_FOG_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
-            BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
-            FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
-
-            SEVEN_SHOOTING_STAR_SKILL_ID => player_ai.seven_shooting_star().is_some(),
-
-            CHAIN_LIGHTNING_SKILL_ID => player_ai.chain_lightning().is_some(),
-
+            | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | POISON_FOG_SKILL_ID
+            | ARCHERY_SKILL_ID
+            | HEARTLESS_ARROW_SKILL_ID
+            | LIGHTING_ARROW_SKILL_ID
+            | LIGHTING_ARROW_2_SKILL_ID
+            | METEOR_ARROW_MASS_SKILL_ID
+            | METEOR_ARROW_SKILL_ID
+            | RAIN_ARROW_SKILL_ID
+            | POISON_MOTH_SKILL_ID
+            | BLOOD_ROSE_SKILL_ID
+            | SCORPION_SKILL_ID
+            | BOA_LOCK_SKILL_ID
+            | FALLING_STAR_SKILL_ID
+            | STRIKE_SKILL_ID
+            | YAKSHA_SLASH_SKILL_ID
+            | BASE_MAGIC_SKILL_ID
+            | FIRE_BOLT_SKILL_ID
+            | CHAIN_LIGHTNING_SKILL_ID
+            | KNIGHT_CUT_SKILL_ID
+            | RAGE_SKILL_ID
+            | FLASH_SKILL_ID
+            | SWALLOW_SKILL_ID
+            | SEVEN_SHOOTING_STAR_SKILL_ID
+            | LITTLE_STAR_SKILL_ID
+            | YUNSHENG_LIGHTNING_SKILL_ID
+            | MONSTER_THORN_SKILL_ID
+            | SPIDER_MIST_SKILL_ID
+            | SPIDER_WEB_SKILL_ID
+            | BOSS_BLUE_QUAKE_SKILL_ID
+            | BOSS_FIEND_PENETRATE_SKILL_ID
+            | SPRITE_BURN_SKILL_ID
+            | CHAOS_SPHERE_SKILL_ID
+            | LIGHTNING_SKILL_ID
+            | SEAL_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
 
             GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
                 player_ai.ghost_cut().is_some()
             }
-            KNIGHT_CUT_SKILL_ID => player_ai.knight_cut().is_some(),
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => player_ai.army_break().is_some(),
-            RAGE_SKILL_ID => player_ai.rage().is_some(),
-
-            FLASH_SKILL_ID => player_ai.flash().is_some(),
-            SWALLOW_SKILL_ID => player_ai.swallow().is_some(),
 
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
                 player_ai.little_flash().is_some()
             }
-            LITTLE_STAR_SKILL_ID => player_ai.little_star().is_some(),
             ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
                 player_ai.path_projectile().is_some()
             }
             CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
                 player_ai.direct_projectile().is_some()
             }
-            YUNSHENG_LIGHTNING_SKILL_ID => player_ai.yunsheng_lightning().is_some(),
-
-            MONSTER_THORN_SKILL_ID => player_ai.monster_thorn().is_some(),
-            SPIDER_MIST_SKILL_ID => player_ai.spider_mist().is_some(),
-            SPIDER_WEB_SKILL_ID => player_ai.spider_web().is_some(),
 
             SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => player_ai.summon_creature().is_some(),
 
-            BOSS_BLUE_QUAKE_SKILL_ID => player_ai.boss_blue_quake().is_some(),
-            BOSS_FIEND_PENETRATE_SKILL_ID => player_ai.boss_fiend_penetrate().is_some(),
-            SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
 
-            CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
-            LIGHTNING_SKILL_ID => player_ai.lightning().is_some(),
-            SEAL_SKILL_ID => player_ai.seal().is_some(),
-
-            ARCHERY_SKILL_ID => player_ai.archery().is_some(),
-            HEARTLESS_ARROW_SKILL_ID => player_ai.heartless_arrow().is_some(),
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 player_ai.heartless_arrow_area().is_some()
             }
-            LIGHTING_ARROW_SKILL_ID => player_ai.lighting_arrow().is_some(),
-            LIGHTING_ARROW_2_SKILL_ID => player_ai.lighting_arrow_2().is_some(),
-            METEOR_ARROW_MASS_SKILL_ID => player_ai.meteor_arrow_mass().is_some(),
-            METEOR_ARROW_SKILL_ID => player_ai.meteor_arrow().is_some(),
-            RAIN_ARROW_SKILL_ID => player_ai.rain_arrow().is_some(),
-            POISON_MOTH_SKILL_ID => player_ai.poison_moth().is_some(),
-            BLOOD_ROSE_SKILL_ID => player_ai.blood_rose().is_some(),
-            SCORPION_SKILL_ID => player_ai.scorpion().is_some(),
-            BOA_LOCK_SKILL_ID => player_ai.boa_lock().is_some(),
-            FALLING_STAR_SKILL_ID => player_ai.falling_star().is_some(),
             EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => {
                 player_ai.explosive_arrow().is_some()
             }
-            STRIKE_SKILL_ID => player_ai.strike().is_some(),
-            YAKSHA_SLASH_SKILL_ID => player_ai.yaksha_slash().is_some(),
 
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
             }
-
-
 
             _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
                 || is_non_fun_skill(skill_id) || is_heal_skill(skill_id) => {

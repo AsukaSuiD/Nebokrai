@@ -184,7 +184,7 @@ pub(crate) fn complete_player_lightning<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.lightning().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = player_ai.player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
     finish_player_lightning(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
@@ -195,7 +195,7 @@ pub(crate) fn cancel_player_lightning<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.lightning().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = player_ai.player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     abort_player_lightning(game, player_id);
@@ -350,7 +350,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(LIGHTNING_SKILL_ID, level) else {
-        if player_ai.lightning().is_some() {
+        if player_ai.player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied().is_some() {
             abort_player_lightning(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -366,7 +366,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
     let damage_modifier = properties.query_property(TARGET_FINAL_DAMAGE_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.lightning().is_none() {
+    if player_ai.player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if !skill_is_restored(
             player_ai.skill_last_used_ms(LIGHTNING_SKILL_ID),
@@ -409,21 +409,21 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(LIGHTNING_SKILL_ID));
         }
-        player_ai.begin_lightning(LightningExecutionState::begin(
+        player_ai.begin_player_skill_execution(LightningExecutionState::begin(
             dispatch,
             target,
             destination,
             started_at_ms,
         ));
     } else if player_ai
-        .lightning()
+        .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch || state.target != target)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if player_ai
-        .lightning()
+        .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
         .is_some_and(|state| !state.condition_checked())
     {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -441,7 +441,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             (target_view.tile_x, target_view.tile_y)
         } else {
             player_ai
-                .lightning()
+                .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
                 .map(|state| state.destination)
                 .expect("выполнение молнии хранит координатную цель")
         };
@@ -460,18 +460,18 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             GamePlayerFightStatePhase::MoveShapeAi,
         );
         send_start(game, player_id, level);
-        if let Some(state) = player_ai.lightning_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<LightningExecutionState>(LIGHTNING_SKILL_ID) {
             state.mark_condition_checked();
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .lightning()
+        .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение молнии создано или восстановлено");
     if player_ai
-        .lightning()
+        .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
         .is_some_and(|state| !state.attacking_started())
     {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -492,7 +492,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         } else {
             (
                 player_ai
-                    .lightning()
+                    .player_skill_state::<LightningExecutionState>(LIGHTNING_SKILL_ID).copied()
                     .map(|state| state.destination)
                     .expect("выполнение молнии хранит координатную цель"),
                 None,
@@ -531,7 +531,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             destination.1,
             level,
         );
-        if let Some(state) = player_ai.lightning_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<LightningExecutionState>(LIGHTNING_SKILL_ID) {
             state.destination = destination;
             state.mark_attacking_started();
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
@@ -586,7 +586,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         ),
         _ => {}
     }
-    if let Some(state) = player_ai.lightning_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<LightningExecutionState>(LIGHTNING_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
