@@ -35,6 +35,11 @@
 //! CSkill::End (0x004D84C0): любой ненулевой аргумент, включая Stiffen=4,
 //! обновляет reuse даже у уже завершённого навыка. OnLoseTarget видит прежний
 //! выбранный навык; default назначается только после возврата из callback.
+//! CMonsterRangeAttack/CMonsterThorn::End (0x00546090) дополнительно вызывает
+//! SetMoveable(true) перед общей очисткой и reuse. Этот callback обслуживает
+//! обычный End, отмену и Stiffen. У RangeAttack non-player CheckCastCondition
+//! (0x00511DE7) пропускает SetMoveable(false), поэтому счётчик может стать
+//! отрицательным; искусственная парная блокировка при Begin не добавляется.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1356,10 +1361,13 @@ impl CMonster {
         let release_target = self.base_ai.stiffen_attack_needs_end()
             && self.base_attack_cast().is_some();
         if release_target {
-            if self.base_attack_cast.is_some_and(|cast| {
-                cast.dispatch().skill_id == super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID
-            }) {
-                let skill_id = super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID;
+            let skill_id = self.base_attack_cast.expect("проверенный cast Stiffen").dispatch().skill_id;
+            if skill_id == super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID
+                || Self::attack_end_restores_movement(skill_id)
+            {
+                if Self::attack_end_restores_movement(skill_id) {
+                    self.move_shape.set_moveable(true);
+                }
                 self.attack_progress = MonsterAttackProgress::default();
                 self.skill_last_used_ms.insert(skill_id, now());
                 self.base_attack_cast = None;
@@ -1665,6 +1673,12 @@ impl CMonster {
         self.finish_base_attack_cast_with_reuse(now_ms, false)
     }
 
+    const fn attack_end_restores_movement(skill_id: u32) -> bool {
+        matches!(skill_id,
+            super::skills::monsterrangeattack::MONSTER_RANGE_ATTACK_SKILL_ID
+            | super::skills::monsterthorn::MONSTER_THORN_SKILL_ID)
+    }
+
     fn finish_base_attack_cast_with_reuse(
         &mut self,
         now_ms: u32,
@@ -1675,6 +1689,9 @@ impl CMonster {
             return None;
         }
         let skill_id = execution.dispatch().skill_id;
+        if Self::attack_end_restores_movement(skill_id) {
+            self.move_shape.set_moveable(true);
+        }
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.finish_curable_skill_state(skill_id);
         }
@@ -1727,6 +1744,9 @@ impl CMonster {
         self.attack_progress = MonsterAttackProgress::default();
         if let Some(mut execution) = self.base_attack_cast.take() {
             let skill_id = execution.dispatch().skill_id;
+            if execution.termination().is_none() && Self::attack_end_restores_movement(skill_id) {
+                self.move_shape.set_moveable(true);
+            }
             if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
                 self.move_shape.finish_immediate_skill(skill_id);
             }

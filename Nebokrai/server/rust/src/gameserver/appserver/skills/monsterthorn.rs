@@ -118,11 +118,6 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            if cast.is_some_and(|execution| {
-                execution.dispatch().skill_id == MONSTER_THORN_SKILL_ID
-            }) {
-                monster.move_shape_mut().set_moveable(true);
-            }
             monster.clear_ai_target();
         }
         return true;
@@ -141,11 +136,6 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         )
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            if cast.is_some_and(|execution| {
-                execution.dispatch().skill_id == MONSTER_THORN_SKILL_ID
-            }) {
-                monster.move_shape_mut().set_moveable(true);
-            }
             monster.clear_ai_target();
         }
         return true;
@@ -322,7 +312,6 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
-        monster.move_shape_mut().set_moveable(true);
         let _ = monster.finish_base_attack_cast(now_ms);
     }
     true
