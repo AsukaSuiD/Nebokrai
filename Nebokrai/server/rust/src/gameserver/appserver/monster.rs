@@ -53,6 +53,9 @@
 //! SpiderMist::End (0x00540890) вызывает SetMoveable(true) и CSummonSkill::End,
 //! обновляющий reuse при ненулевом аргументе. Общая очистка снимает регистрацию
 //! curable-навыка; созданная CSpiderMistPhalanx ей не принадлежит и сохраняется.
+//! ChuckStone/SkeletonArchery::End (0x0056A330) сбрасывает полётные поля,
+//! снимает один запрет движения и вызывает общий End. Прогресс полёта хранится
+//! в MonsterAttackProgress; отмена и Stiffen используют ту же очистку.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1718,7 +1721,9 @@ impl CMonster {
             | super::skills::bossbluequake::BOSS_BLUE_QUAKE_SKILL_ID
             | super::skills::machinerystomp::MACHINERY_STOMP_SKILL_ID
             | super::skills::lordwiderangingattack::LORD_WIDERANGING_ATTACK_SKILL_ID
-            | SPIDER_MIST_SKILL_ID)
+            | SPIDER_MIST_SKILL_ID
+            | super::skills::chuckstone::CHUCK_STONE_SKILL_ID
+            | super::skills::skeletonarchery::SKELETON_ARCHERY_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {

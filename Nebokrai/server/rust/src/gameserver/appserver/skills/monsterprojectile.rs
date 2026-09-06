@@ -149,9 +149,6 @@ pub(crate) fn prepare_owned_monster_projectile(
     let target = resolve_owned_monster_attack_target(game, region, target_identity);
     if target.is_none() && detached_impact.is_none() {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            if cast.is_some() {
-                monster.move_shape_mut().set_moveable(true);
-            }
             monster.clear_ai_target();
         }
         return true;
@@ -163,7 +160,6 @@ pub(crate) fn prepare_owned_monster_projectile(
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_some() {
-                monster.move_shape_mut().set_moveable(true);
                 let _ = monster.finish_base_attack_cast(now_ms);
             }
             monster.clear_ai_target();
@@ -199,9 +195,6 @@ pub(crate) fn prepare_owned_monster_projectile(
         && path.len() > maximum_distance.wrapping_add(1) as usize
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            if cast.is_some() {
-                monster.move_shape_mut().set_moveable(true);
-            }
             monster.clear_ai_target();
         }
         return true;
