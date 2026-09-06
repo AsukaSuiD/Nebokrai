@@ -22,8 +22,9 @@
 //! Monster End (0x005355F0) освобождает путь до SetMoveable(true), затем
 //! публикует action 3 и вызывает CAttackSkill::End; часы reuse читаются после
 //! доставки, отдельно от проверки длительности. Обычное завершение сохраняет
-//! этот порядок. Внешнее прерывание через CMonster пока требует runtime-End
-//! с доставкой action 3 и не покрывается простой политикой снятия движения.
+//! этот порядок, как и End(4) достигнутого Stiffen через monsterai runtime.
+//! Прочие расширенные отмены cast пока не доставляют action 3; они требуют
+//! такой же runtime-границы и не покрываются простой политикой снятия движения.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -411,7 +412,7 @@ fn send_fire(
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
-fn send_end(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
+pub(crate) fn send_end(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(3);
     message.add_long(LITTLE_STAR_SKILL_ID as i32);
@@ -690,8 +691,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     if expired {
         drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_little_star_progress(None);
-            monster.move_shape_mut().set_moveable(true);
+            monster.prepare_little_star_end();
         }
         send_end(game, region, &source, skill_level);
         let end_now_ms = runtime.now_milliseconds();

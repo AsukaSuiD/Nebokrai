@@ -46,6 +46,9 @@
 //! выполняет конкретную очистку, не снимая наложенные состояния. Остальные навыки пока используют
 //! достигнутую отмену CMonster. Их concrete End(4), включая сохранение
 //! IsEnded=false и освобождение блокировок движения, ещё не восстановлен.
+//! End разделён вокруг синхронной доставки: очистка concrete owner-а → его
+//! эффект → reuse и снятие Attack → OnLoseTarget. LittleStar (0x005355F0)
+//! посылает action 3 на этой границе; это не отложенная очередь эффектов.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
@@ -81,9 +84,20 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
     };
     let action = monster.begin_reached_stiffen_action();
     if action.interrupts_attack() {
-        while let Some(release_target) = region.find_monster_by_id_mut(monster_id)
-            .and_then(|monster| monster.take_stiffen_attack(|| runtime.now_milliseconds()))
+        while let Some((release_target, ended_skill)) = region.find_monster_by_id_mut(monster_id)
+            .and_then(CMonster::prepare_stiffen_attack)
         {
+            if ended_skill == Some(crate::gameserver::appserver::skills::littlestar::LITTLE_STAR_SKILL_ID)
+                && let Some(monster) = region.find_monster_by_id(monster_id)
+                && let Some(skill) = monster.move_shape().current_skill()
+            {
+                crate::gameserver::appserver::skills::littlestar::send_end(
+                    game, region, monster.move_shape().shape(), skill.level() as u16,
+                );
+            }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.finish_stiffen_attack(ended_skill, || runtime.now_milliseconds());
+            }
             if release_target {
                 release_owned_monster_target(game, region, monster_id, runtime);
             }

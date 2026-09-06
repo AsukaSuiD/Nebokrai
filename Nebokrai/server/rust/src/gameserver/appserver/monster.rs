@@ -1394,13 +1394,15 @@ impl CMonster {
         self.base_ai.begin_reached_stiffen_action()
     }
 
-    pub(crate) fn take_stiffen_attack(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
+    /// Очистка concrete End до доставки эффекта; Attack пока остаётся в FIFO.
+    pub(crate) fn prepare_stiffen_attack(&mut self) -> Option<(bool, Option<u32>)> {
         if !self.base_ai.stiffen_attack_pending() {
             return None;
         }
         let current_skill = self.move_shape.current_skill().map(|skill| skill.id());
         let release_target = self.base_ai.stiffen_attack_needs_end()
             && current_skill.is_some();
+        let mut ended_skill = None;
         if release_target {
             let skill_id = current_skill.expect("разрешённый текущий навык Stiffen");
             let owns_cast = self.base_attack_cast.is_some_and(|cast| cast.dispatch().skill_id == skill_id);
@@ -1409,18 +1411,19 @@ impl CMonster {
                 super::skills::baseattack::BASE_ATTACK_SKILL_ID
                 | super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID)
                 || Self::attack_end_restores_movement(skill_id)
+                || skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID
                 || immediate
             {
-                self.finish_attack_skill_resources(skill_id);
+                if skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID {
+                    self.prepare_little_star_end();
+                } else {
+                    self.finish_attack_skill_resources(skill_id);
+                }
                 if owns_cast {
                     self.attack_progress = MonsterAttackProgress::default();
                     self.base_attack_cast = None;
                 }
-                if immediate {
-                    self.mark_immediate_skill_used(skill_id, now());
-                } else {
-                    self.skill_last_used_ms.insert(skill_id, now());
-                }
+                ended_skill = Some(skill_id);
             } else if owns_cast {
                 self.cancel_base_attack_cast();
             } else {
@@ -1430,8 +1433,18 @@ impl CMonster {
             let default_skill = self.move_shape.default_attack_skill_id();
             self.move_shape.set_current_skill_id(Some(default_skill));
         }
+        Some((release_target, ended_skill))
+    }
+
+    pub(crate) fn finish_stiffen_attack(&mut self, ended_skill: Option<u32>, now: impl FnOnce() -> u32) {
+        if let Some(skill_id) = ended_skill {
+            if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
+                self.mark_immediate_skill_used(skill_id, now());
+            } else {
+                self.skill_last_used_ms.insert(skill_id, now());
+            }
+        }
         self.base_ai.finish_stiffen_attack(false);
-        Some(release_target)
     }
 
     pub(crate) fn resume_stiffen_after_target_release(&mut self, released: bool) {
@@ -1682,6 +1695,11 @@ impl CMonster {
 
     pub(crate) fn set_little_star_progress(&mut self, progress: Option<LittleStarProgress>) {
         self.attack_progress.little_star_progress = progress;
+    }
+
+    pub(crate) fn prepare_little_star_end(&mut self) {
+        self.attack_progress.little_star_progress = None;
+        self.move_shape.set_moveable(true);
     }
 
     pub(crate) const fn spider_web_progress(&self) -> Option<SpiderWebProgress> {
