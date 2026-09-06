@@ -47333,7 +47333,7 @@ impl CGame {
                         if let Some(monster) =
                             owner.base_mut().find_monster_by_id_mut(monster_id)
                         {
-                            passive_death = monster.finish_reached_death_action();
+                            passive_death = monster.reached_death_action_state();
                         }
                     }
                     if handled_passive_action.unwrap_or(false) || passive_stiffen.blocks_active() {
@@ -47379,6 +47379,11 @@ impl CGame {
                             monster_id,
                             runtime,
                         );
+                        if let Some(monster) = self.find_region_mut(region_id)
+                            .and_then(|owner| owner.base_mut().find_monster_by_id_mut(monster_id))
+                        {
+                            monster.finish_reached_death_action(runtime.now_milliseconds());
+                        }
                         continue;
                     }
                     if passive_death == PassiveDeathAction::WaitingForMove {

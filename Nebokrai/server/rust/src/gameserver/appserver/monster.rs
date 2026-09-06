@@ -1374,8 +1374,12 @@ impl CMonster {
         self.base_ai.lose_target();
     }
 
-    pub(crate) fn finish_reached_death_action(&mut self) -> PassiveDeathAction {
-        self.base_ai.finish_reached_death_action()
+    pub(crate) fn reached_death_action_state(&self) -> PassiveDeathAction {
+        self.base_ai.reached_death_action_state()
+    }
+
+    pub(crate) fn finish_reached_death_action(&mut self, now_ms: u32) {
+        self.base_ai.finish_reached_death_action(now_ms);
     }
 
     pub(crate) fn advance_active_ai_stand(&mut self, now_ms: u32) -> bool {

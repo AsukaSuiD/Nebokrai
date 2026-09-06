@@ -14,6 +14,9 @@
 //! Passive-фаза также сначала проверяет ненулевой handling: снятие головы
 //! завершает только passive-проход, а ожидание любого action, кроме Move,
 //! возвращает блокировку active-фазы. Следующий passive-handler не вызывается.
+//! OnBeenKilled (0x004C9220) проверяет active FIFO после OnLoseTarget,
+//! затем вызывает owner OnDied. Died остаётся в passive FIFO до возврата
+//! owner-а; только после него ProcessPassiveAction фиксирует handling и deadline.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -363,7 +366,7 @@ impl CBaseAI {
     /// отбрасывает все active-события до первого Move, сохраняет только этот
     /// Move со всеми его часами/handling и повторяет обработчик, пока движение
     /// не завершится. Снятие Died после virtual `OnLoseTarget` выполняет
-    /// парный `finish_reached_death_action`.
+    /// парный `finish_reached_death_action` после обработчика смерти owner-а.
     pub(crate) fn begin_reached_death_action(&mut self) -> bool {
         if !self.passive_actions.front().is_some_and(|event| {
             event.action == AiShapeAction::Died && event.handling == 0
@@ -383,21 +386,22 @@ impl CBaseAI {
         true
     }
 
-    /// Завершает тот же virtual-handler после того, как concrete AI owner
-    /// выполнил свой `OnLoseTarget`. Производный обработчик вправе изменить
-    /// active FIFO, поэтому исходная проверка пустоты находится именно здесь.
-    pub(crate) fn finish_reached_death_action(&mut self) -> PassiveDeathAction {
+    /// Проверяет готовность после OnLoseTarget, не снимая Died до owner OnDied.
+    pub(crate) fn reached_death_action_state(&self) -> PassiveDeathAction {
         if !self.passive_actions.front().is_some_and(|event| {
             event.action == AiShapeAction::Died && event.handling == 0
         }) {
             return PassiveDeathAction::None;
         }
         if self.active_actions.is_empty() {
-            self.passive_actions.pop_front();
             PassiveDeathAction::Ready
         } else {
             PassiveDeathAction::WaitingForMove
         }
+    }
+
+    pub(crate) fn finish_reached_death_action(&mut self, now_ms: u32) {
+        Self::finish_action(&mut self.passive_actions, AiShapeAction::Died, now_ms);
     }
 
     /// Выполняет достигнутую `Stand`-ветвь `ProcessActiveAction` и сообщает,
