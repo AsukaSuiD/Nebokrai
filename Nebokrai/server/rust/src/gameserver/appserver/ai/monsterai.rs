@@ -160,11 +160,9 @@ pub(crate) fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
     };
     match ai {
         ActiveMonsterAi::Pet => super::pet::release_pet_target(region, monster_id),
-        ActiveMonsterAi::Primary(
-            MonsterAiKind::CityGuardWithSword
-            | MonsterAiKind::VillageCountyGuardWithSword
-            | MonsterAiKind::NationCountyGuardWithSword,
-        ) => super::cityguardwithsword::release_guard_sword_target(game, region, monster_id, runtime),
+        ActiveMonsterAi::Primary(kind) if kind.has_guard_station() => {
+            super::cityguardwithsword::release_guard_sword_target(game, region, monster_id, runtime)
+        }
         ActiveMonsterAi::Primary(MonsterAiKind::JiuMai) => {
             let _ = super::jiumai::release_jiumai_target(region, monster_id);
         }

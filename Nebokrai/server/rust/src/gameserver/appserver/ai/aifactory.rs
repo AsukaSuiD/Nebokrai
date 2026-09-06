@@ -54,6 +54,12 @@ pub(crate) enum MonsterAiKind {
 }
 
 impl MonsterAiKind {
+    /// Общий пост и виртуальные методы семейства CGuardWithSword.
+    pub(crate) const fn has_guard_station(self) -> bool {
+        matches!(self, Self::GuardWithSword | Self::CityGuardWithSword
+            | Self::VillageCountyGuardWithSword | Self::NationCountyGuardWithSword)
+    }
+
     pub(crate) const fn from_ai_type(ai_type: u32) -> Self {
         match ai_type {
             0 => Self::Gladiator,

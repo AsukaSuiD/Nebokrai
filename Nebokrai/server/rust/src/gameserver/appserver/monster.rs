@@ -1029,13 +1029,7 @@ impl CMonster {
             matches!(primary, MonsterAiKind::PassiveGladiator).then(PassiveGladiatorState::default);
         self.smart_gladiator_ai =
             matches!(primary, MonsterAiKind::SmartGladiator).then(SmartGladiatorState::default);
-        self.guard_station_ai = matches!(
-            primary,
-            MonsterAiKind::CityGuardWithSword
-                | MonsterAiKind::VillageCountyGuardWithSword
-                | MonsterAiKind::NationCountyGuardWithSword
-        )
-        .then(GuardStationState::default);
+        self.guard_station_ai = primary.has_guard_station().then(GuardStationState::default);
         self.jiu_mai_ai = matches!(primary, MonsterAiKind::JiuMai).then(JiuMaiAiState::default);
     }
 

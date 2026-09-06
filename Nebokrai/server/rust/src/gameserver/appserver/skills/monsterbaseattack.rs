@@ -1061,12 +1061,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    if !tamed && matches!(property.ai, 10 | 12 | 16) {
+    if !tamed && MonsterAiKind::from_ai_type(property.ai).has_guard_station() {
+        if target.is_none() && cast.is_none()
+            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+            && monster.primary_ai_queues_idle()
+            && let Some(state) = monster.guard_station_ai_mut()
+            && state.station().is_none()
+        {
+            state.record_station(monster_view);
+            monster.begin_active_ai_change_skill(runtime.now_milliseconds());
+        }
         let left_chase_range = region
             .find_monster_by_id_mut(monster_id)
             .and_then(|monster| {
                 let state = monster.guard_station_ai_mut()?;
-                state.record_station(monster_view);
                 Some(
                     target.is_some()
                         && state.left_chase_range(monster_view, property.chase_range as i32),
@@ -1779,7 +1787,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    if !tamed && matches!(property.ai, 10 | 12 | 16)
+    if !tamed && MonsterAiKind::from_ai_type(property.ai).has_guard_station()
         && cast.is_none()
         && trace_city_sword_target(
             game,
