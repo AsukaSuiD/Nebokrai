@@ -32,6 +32,9 @@
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
 //! SearchEnemy, если перед ним нет сохраняемой границы Attack/Move.
+//! У CPet слот OnBeenHurted (+0x34 таблицы 0x00652D0C) указывает на
+//! CBaseAI::OnBeenHurted (0x004C8700): приручение исключает добавочный
+//! SearchEnemy сохранённого CPassiveGladiator, но сохраняет базовую очистку.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
 //! исходный владелец `server/gameserver/appserver/monster.h/.cpp` подтверждают
@@ -1327,7 +1330,7 @@ impl CMonster {
         &mut self,
         mut now_ms: impl FnMut() -> u32,
     ) -> usize {
-        let passive_gladiator = self.passive_gladiator_ai.is_some();
+        let passive_gladiator = !self.is_tamed() && self.passive_gladiator_ai.is_some();
         self.base_ai.process_reached_defense_actions(|ai| {
             if passive_gladiator {
                 ai.begin_active_search_enemy(now_ms());
