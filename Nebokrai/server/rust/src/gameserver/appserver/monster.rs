@@ -1,4 +1,8 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! Обычное завершение cast/немедленного навыка не стирает выбранный ID:
+//! CBaseAI::OnFighting (0x004C9320) лишь ставит ChangeSkill после IsEnded.
+//! Выбор меняется отдельным обработчиком очереди; освобождение исполнения
+//! и фиксация reuse не подменяют этот переход.
 //! Stiffen после завершения Attack выбирает базовый default-навык через
 //! CMoveShape::GetDefaultAttackSkillID (0x004CE240). Выбранный ID отделён
 //! от исполнения: этот переход не вызывает Begin и не создаёт cast.
@@ -1629,9 +1633,6 @@ impl CMonster {
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
         self.yunsheng_lightning_progress = None;
-        if self.attack_completion_action == AiShapeAction::ChangeSkill {
-            self.move_shape.set_current_skill_id(None);
-        }
         let _ = execution.terminate(SkillTermination::Completed);
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
@@ -1651,9 +1652,6 @@ impl CMonster {
     /// но отметка восстановления остаётся прежней. Фоновый вызов сюда не идёт.
     pub(crate) fn finish_active_immediate_skill(&mut self, now_ms: u32) {
         self.move_shape.shape_mut().set_action(1);
-        if self.attack_completion_action == AiShapeAction::ChangeSkill {
-            self.move_shape.set_current_skill_id(None);
-        }
         self.base_ai
             .add_ai_event(self.attack_completion_action, 0, 0, now_ms);
     }
