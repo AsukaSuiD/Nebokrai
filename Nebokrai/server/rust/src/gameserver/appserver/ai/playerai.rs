@@ -4,11 +4,13 @@
 //! записи означает нулевой срок; End обновляет только свой ID, очистка
 //! execution срок не удаляет. Коллекция не определяет порядок исполнения.
 //! У подключённых семейств каждый вариант сохраняет собственный срок.
-//! Простые исполнения игрока без дополнительных игровых данных хранятся по
+//! Подключённые исполнения игрока хранятся по
 //! ID в одной BTreeMap: Begin наследует ранний отсчёт один раз при установке,
 //! доступ и завершение не перечисляют навыки. End сверяет полный dispatch,
 //! оставляет соседние исполнения и не удаляет cooldown. Владельцы с особыми
-//! данными пока сохраняют типизированные поля; их перенос ещё не завершён.
+//! данными переносятся в типизированные варианты того же хранилища. Туман
+//! сохраняет выбранную в Begin точку вместе с kernel до общего End; остальные
+//! особые владельцы пока сохраняют поля, их перенос ещё не завершён.
 //! Варианты простых семейств, в том числе лечения, занимают отдельные ID.
 //! End-диспетчер передаёт выбранный ID владельцу; поиск первого занятого
 //! слота семейства не используется для выбора завершаемого исполнения.
@@ -189,6 +191,29 @@ use crate::gameserver::appserver::skills::kernel::{
 use crate::gameserver::appserver::skills::rage::RageExecutionState;
 use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PlayerSkillExecution {
+    State(SkillExecutionKernel<PlayerSkillDispatch>),
+    PoisonFog {
+        kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+        destination: (i32, i32),
+    },
+}
+
+impl PlayerSkillExecution {
+    fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+        match self {
+            Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
+        }
+    }
+
+    fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        match self {
+            Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BattleFairyExecution {
     State(SkillExecutionKernel<BattleFairySkillDispatch>),
@@ -227,7 +252,7 @@ pub(crate) enum BattleFairySkillQueueOutcome {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerAI {
     skill_last_used_ms: BTreeMap<u32, u32>,
-    player_skill_executions: BTreeMap<u32, SkillExecutionKernel<PlayerSkillDispatch>>,
+    player_skill_executions: BTreeMap<u32, PlayerSkillExecution>,
     base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
@@ -264,8 +289,6 @@ pub(crate) struct CPlayerAI {
     flash: Option<FlashExecutionState>,
     swallow: Option<SwallowExecutionState>,
     little_flash: Option<LittleFlashExecutionState>,
-    poison_fog: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    poison_fog_destination: Option<(i32, i32)>,
     seven_shooting_star: Option<SevenShootingStarExecutionState>,
     little_star: Option<PlayerLittleStarExecutionState>,
     path_projectile: Option<PlayerPathProjectileExecutionState>,
@@ -326,16 +349,20 @@ impl CPlayerAI {
     }
 
     pub(crate) fn player_skill_execution(&self, skill_id: u32) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.player_skill_executions.get(&skill_id).copied()
+        self.player_skill_executions.get(&skill_id).map(PlayerSkillExecution::kernel)
     }
 
     pub(crate) fn player_skill_execution_mut(&mut self, skill_id: u32) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.player_skill_executions.get_mut(&skill_id)
+        self.player_skill_executions.get_mut(&skill_id).map(PlayerSkillExecution::kernel_mut)
     }
 
-    pub(crate) fn begin_player_skill_execution(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.player_skill_executions.insert(state.dispatch().skill_id(), state);
+    fn insert_player_skill_execution(&mut self, mut execution: PlayerSkillExecution) {
+        execution.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
+        self.player_skill_executions.insert(execution.kernel().dispatch().skill_id(), execution);
+    }
+
+    pub(crate) fn begin_player_skill_execution(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+        self.insert_player_skill_execution(PlayerSkillExecution::State(state));
     }
 
     pub(crate) fn set_scheduled_skill_begin(&mut self, begin: Option<(PlayerSkillDispatch, u32)>) {
@@ -562,8 +589,8 @@ impl CPlayerAI {
         if self.player_skill_execution(skill_id).is_some_and(|state| state.dispatch() == expected)
             && let Some(mut execution) = self.player_skill_executions.remove(&skill_id)
         {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
         }
         if let Some(mut execution) = self.archery.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
@@ -678,7 +705,6 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малого рывка завершено");
         }
-        if let Some(mut execution) = self.poison_fog.take_if(|state| state.dispatch() == expected) { self.poison_fog_destination = None; let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитого тумана завершено"); }
         if let Some(mut execution) = self.seven_shooting_star.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение семи падающих звёзд завершено");
@@ -952,13 +978,17 @@ impl CPlayerAI {
     }
     pub(crate) fn little_flash_mut(&mut self) -> Option<&mut LittleFlashExecutionState> { self.little_flash.as_mut() }
 
-    pub(crate) const fn poison_fog(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.poison_fog }
-    pub(crate) fn begin_poison_fog(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.poison_fog = Some(state); self.poison_fog_destination = Some(destination);
+    pub(crate) fn begin_poison_fog(&mut self, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) {
+        self.insert_player_skill_execution(PlayerSkillExecution::PoisonFog { kernel, destination });
     }
-    pub(crate) fn poison_fog_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.poison_fog.as_mut() }
-    pub(crate) const fn poison_fog_destination(&self) -> Option<(i32, i32)> { self.poison_fog_destination }
+
+    pub(crate) fn poison_fog_destination(&self) -> Option<(i32, i32)> {
+        use crate::gameserver::appserver::skills::poisonfog::POISON_FOG_SKILL_ID;
+        match self.player_skill_executions.get(&POISON_FOG_SKILL_ID)? {
+            PlayerSkillExecution::PoisonFog { destination, .. } => Some(*destination),
+            PlayerSkillExecution::State(_) => None,
+        }
+    }
 
     pub(crate) const fn seven_shooting_star(&self) -> Option<&SevenShootingStarExecutionState> {
         self.seven_shooting_star.as_ref()

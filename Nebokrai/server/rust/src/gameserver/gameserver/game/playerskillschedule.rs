@@ -244,7 +244,7 @@ impl CGame {
             | LIGHTNING_SWORD_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
             | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID
-            | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
+            | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | POISON_FOG_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
 
@@ -316,7 +316,6 @@ impl CGame {
                 player_ai.agility_family().is_some()
             }
 
-            POISON_FOG_SKILL_ID => player_ai.poison_fog().is_some(),
 
 
             _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
