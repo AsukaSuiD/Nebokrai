@@ -1680,6 +1680,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    if skill_id == COMMON_BASE_ATTACK_SKILL_ID && cast.is_some()
+        && super::baseattack::handle_owned_monster_base_target_loss(
+            game, region, monster_id, monster_view, &skill_properties, runtime,
+        )
+    {
+        return true;
+    }
     let target_snapshot = match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).and_then(|player| {
             let target_view = player.shape_view()?;
@@ -1856,7 +1863,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if cast.dispatch().skill_id == COMMON_BASE_ATTACK_SKILL_ID
             && cast.stage() == SkillStage::Begin
             && !super::baseattack::start_owned_monster_base_attack_ai(
-                game, region, monster_id, monster_view, target_view, maximum_distance,
+                game, region, monster_id, monster_view, Some(target_view), maximum_distance,
             )
         {
             return true;

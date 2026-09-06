@@ -31,8 +31,13 @@
 //! Первый AI (0x005B39B0) проверяет unsigned RealDistance, при отказе
 //! выполняет End(0), иначе поворачивает и публикует старт до delay.
 //! Расписание сохраняет отдельный GetAttackSpeed; пропуск reuse навыка
-//! не пропускает этот таймер. Исчезновение/смерть цели в общем monster-caller
-//! ещё требуют точного разделения End(0)/End(1) и fallback.
+//! не пропускает этот таймер. AI (0x005B39B0) завершает мёртвую цель
+//! через End(1); failure 2 message-owner-а адресован только player-источнику.
+//! При исчезновении объекта использует нулевой fallback CState::Begin:
+//! первый AI проверяет его дальность, после delay отправляет fire с нулевой
+//! identity/координатами (CBaseAttackEffect, 0x005B3100) и выполняет End(1)
+//! без RNG/Attack. Эти ветви не отменяют AI-цель или движение. Поздний
+//! IsAttackAble живой цели ещё отделён от AI недостаточно точно в caller-е.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -62,18 +67,25 @@ pub(crate) fn start_owned_monster_base_attack_ai(
     region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
     monster_id: i32,
     source: crate::gameserver::appserver::shape::ShapeView,
-    target: crate::gameserver::appserver::shape::ShapeView,
+    target: Option<crate::gameserver::appserver::shape::ShapeView>,
     maximum_distance: u32,
 ) -> bool {
     use super::kernel::SkillStage;
-    if maximum_distance != 0 && source.real_distance(Some(target)) as u32 > maximum_distance {
+    let distance = if let Some(target) = target {
+        source.real_distance(Some(target))
+    } else {
+        let Some(monster) = region.find_monster_by_id(monster_id) else { return false };
+        monster.move_shape().shape().real_distance_to_point(0, 0)
+    };
+    if maximum_distance != 0 && distance as u32 > maximum_distance {
         let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, BASE_ATTACK_SKILL_ID);
         return false;
     }
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
     let Some(cast) = monster.base_attack_cast() else { return false };
+    let (target_x, target_y) = target.map_or((0, 0), |target| (target.tile_x, target.tile_y));
     monster.move_shape_mut().shape_mut().set_direction(crate::public::tools::get_line_direction(
-        source.tile_x, source.tile_y, target.tile_x, target.tile_y,
+        source.tile_x, source.tile_y, target_x, target_y,
     ));
     let shape = monster.move_shape().shape().clone();
     let mut start = crate::nets::netserver::message::CMessage::new(0x000b_fe01);
@@ -86,6 +98,48 @@ pub(crate) fn start_owned_monster_base_attack_ai(
     let _ = game.send_game_shape_around(region, &shape, None, &start);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+    }
+    true
+}
+
+pub(crate) fn handle_owned_monster_base_target_loss<Runtime: GameMainLoopRuntime>(
+    game: &CGame,
+    region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
+    monster_id: i32,
+    source: crate::gameserver::appserver::shape::ShapeView,
+    properties: &super::skillbaseproperties::CSkillBaseProperties,
+    runtime: &mut Runtime,
+) -> bool {
+    use super::kernel::SkillStage;
+    let Some(cast) = region.find_monster_by_id(monster_id).and_then(|monster| monster.base_attack_cast()) else { return false };
+    if cast.dispatch().skill_id != BASE_ATTACK_SKILL_ID { return false }
+    let target = super::monsterattack::resolve_owned_monster_attack_target(game, region, cast.dispatch().target);
+    if let Some(target) = target {
+        if !target.dead { return false }
+    } else {
+        if cast.stage() == SkillStage::Begin && !start_owned_monster_base_attack_ai(
+            game, region, monster_id, source, None,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+        ) {
+            return true;
+        }
+        if !super::kernel::skill_is_restored(
+            cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME), runtime.now_milliseconds(),
+        ) {
+            return true;
+        }
+        let Some(monster) = region.find_monster_by_id(monster_id) else { return true };
+        let mut fire = crate::nets::netserver::message::CMessage::new(0x000b_fe01);
+        fire.add_byte(2);
+        fire.add_long(BASE_ATTACK_SKILL_ID as i32);
+        fire.add_short(cast.dispatch().skill_level as i16);
+        fire.add_long(600);
+        fire.add_long(monster_id);
+        for _ in 0..4 { fire.add_long(0); }
+        let _ = game.send_game_shape_around(region, monster.move_shape().shape(), None, &fire);
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }
