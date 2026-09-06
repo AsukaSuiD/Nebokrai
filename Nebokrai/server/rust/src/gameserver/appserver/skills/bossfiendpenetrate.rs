@@ -1,4 +1,7 @@
 //! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`) для игрока и монстра.
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/bossfiendpenetrate.cpp`. Навык проверяет задержку повторного применения,
@@ -216,9 +219,6 @@ fn finish_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     restore_player_movement(game, player_id);
     if successful {
         game.damage_player_weapon(player_id, runtime);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
     if successful {
         player_ai.mark_skill_used(BOSS_FIEND_PENETRATE_SKILL_ID, runtime.now_milliseconds());

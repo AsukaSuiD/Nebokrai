@@ -1,4 +1,7 @@
 //! Базовая атака монстра и приручённого питомца (`CMonsterBaseAttack`).
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/monsterbaseattack.cpp`. Модуль навыка хранит выбор цели,
@@ -234,9 +237,6 @@ fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
 ) {
     if success {
         game.damage_player_weapon(player_id, runtime);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
     if success {
         ai.mark_skill_used(MONSTER_BASE_ATTACK_SKILL_ID, runtime.now_milliseconds());

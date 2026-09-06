@@ -1,4 +1,7 @@
 //! Землетрясение синего босса `CBossBlueQuake` (`0x1f8`) для игрока и монстра.
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/bossbluequake.cpp`. Путь игрока требует меч категории `1`,
@@ -222,9 +225,6 @@ fn finish_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     }
     if successful {
         game.damage_player_weapon(player_id, runtime);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
     if successful {
         player_ai.mark_skill_used(BOSS_BLUE_QUAKE_SKILL_ID, runtime.now_milliseconds());

@@ -1,4 +1,7 @@
 //! Быстрая атака владыки `CLordFastAttack` (`0x1f5`) для игрока и монстра.
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/lordfastattack.cpp`. Объектный путь сохраняет проверку
@@ -17,7 +20,7 @@
 //! `End(0)` без износа, обновления свойств и cooldown. Player и monster ветви
 //! используют абсолютный срок `CSkill::IsRestored`; сроки двух ударов остаются elapsed.
 //! Player-вариант `CMonsterFastAttack` (`0x2d1`, owner `monsterfastattack.cpp`)
-//! использует тот же execution-slot и отдельный cooldown: ненулевой MP-cost
+//! использует тот же тип исполнения, но отдельный ID и cooldown: ненулевой MP-cost
 //! проверяется в `CheckCastCondition` (VA `0x005133c2`), списывается перед
 //! направлением/визуализацией в AI; нулевой cost означает отказ. Его сроки
 //! абсолютные, разброс `max(max-min, 0)+1`, критический множитель принадлежит
@@ -159,16 +162,12 @@ fn finish_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
     player_ai.mark_skill_used(skill_id, runtime.now_milliseconds());
 }
 
 fn abort_player_lord_fast_attack(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
 }
 

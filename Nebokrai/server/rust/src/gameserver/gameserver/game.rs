@@ -39782,7 +39782,6 @@ impl CGame {
     pub(crate) fn finish_self_shield_movement(&mut self, player_id: i32) {
         if let Some(player) = self.find_player_mut(player_id) {
             player.set_skill_moveable(true);
-            player.set_current_skill_id(None);
         }
     }
 
@@ -40504,8 +40503,6 @@ impl CGame {
                 cancel_player_knock_out(self, player_id, &mut player_ai, runtime)
             }
             GIBE_SKILL_ID => cancel_player_gibe(
-                self,
-                player_id,
                 &mut player_ai,
                 cause.uses_nonzero_end(),
                 runtime,

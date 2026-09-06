@@ -1,4 +1,7 @@
 //! Базовая атака GameServer (`SKILL_BASE_ATTACK == 1`).
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/baseattack.cpp`. Первый такт AI проверяет дальность,
@@ -9,7 +12,7 @@
 //! тактами. Формулы PvP, RNG и построение пакетов находятся в соседнем
 //! модуле исполнения навыка; `CGame` разрешает владельцев и применяет урон.
 //! Общий хвост подтверждённых `CAttackSkill::End` сохраняет восстановление
-//! движения, `AfterUseSkill`, время восстановления и очистку текущего навыка;
+//! движения, `AfterUseSkill`, время восстановления и очистку исполнения;
 //! конкретный владелец явно выбирает задержанный или немедленный вариант.
 //! CSkill::End (0x004D84C0) вызывает virtual +0x158, у CPlayer это пустой
 //! 0x00485540, а не UpdateProperty. Дополнительного пересчёта свойств нет;
@@ -17,7 +20,7 @@
 //! Luvinia EndSkill освобождает CBaseModule нового движка: этот lifecycle
 //! не является соответствием нашим CSkill/AfterUseSkill.
 //! При входе в другой регион исходный `OnChangeRegion` выполняет `End(false)`:
-//! движение и текущий навык освобождаются без износа оружия и фиксации
+//! движение возвращается и исполнение освобождается без износа оружия и фиксации
 //! времени восстановления. Координатный `Begin` разрешает первый `CMoveShape`
 //! клетки через точный `CState::GetSufferer` без fallback к заклинателю.
 //! Объектное исполнение навыка монстром проходит `monsterbaseattack`: ID `1`
@@ -146,7 +149,6 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     };
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }

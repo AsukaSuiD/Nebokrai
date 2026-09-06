@@ -1,4 +1,7 @@
 //! Круговая атака `CMonsterRangeAttack` (ID `0x2ef`) для игрока и монстра.
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/skills/monsterrangeattack.cpp`. Player-диспетчер хранит отдельный
@@ -62,7 +65,6 @@ fn end_player_range_attack<Runtime: GameMainLoopRuntime>(
 ) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     if success { game.damage_player_weapon(player_id, runtime); }
-    if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(None); }
     if success { ai.mark_skill_used(MONSTER_RANGE_ATTACK_SKILL_ID, runtime.now_milliseconds()); }
 }
 

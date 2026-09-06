@@ -1,4 +1,7 @@
 //! Общее исполнение пустых навыков `CNonFun`.
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/nonfun.cpp`. Семейство `900..946` и `960..962` принимает
@@ -65,9 +68,6 @@ pub(crate) fn execute_player_non_fun<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
     terminal(QueuedSkillExecutionState::Completed)
 }

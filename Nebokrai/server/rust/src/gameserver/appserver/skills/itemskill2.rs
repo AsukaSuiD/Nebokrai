@@ -1,4 +1,7 @@
 //! Предметный навык громового огня `CItemSkill_2` (`0x322`).
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/itemskill2.cpp`. Владелец сохраняет whitelist цели,
@@ -96,9 +99,6 @@ fn finish_player_item_skill_2<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.mark_skill_item_used(item_index, item_used_at_ms);
         }
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
     player_ai.mark_skill_used(ITEM_SKILL_2_ID, runtime.now_milliseconds());
 }

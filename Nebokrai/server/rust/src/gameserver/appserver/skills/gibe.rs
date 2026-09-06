@@ -1,4 +1,7 @@
 //! Провокация питомцами `CGibe` (`0xD8`).
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/gibe.cpp`. Навык обходит девять клеток области в исходном
@@ -208,19 +211,14 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     }
     game.restore_region_owner(region);
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
     player_ai.mark_skill_used(GIBE_SKILL_ID, runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)
 }
 
 /// Общий `CSkill::End(bool)` для полностью материализованной провокации:
-/// current skill снимается до очистки kernel-а, а ненулевой End фиксирует
+/// выбор игрока сохраняется, а ненулевой End фиксирует
 /// тот же realtime cooldown, что и нормальное синхронное завершение.
 pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
     player_ai: &mut CPlayerAI,
     record_reuse: bool,
     runtime: &mut Runtime,
@@ -228,9 +226,6 @@ pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
     let Some(dispatch) = player_ai.player_skill_execution(GIBE_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
     if record_reuse {
         player_ai.mark_skill_used(GIBE_SKILL_ID, runtime.now_milliseconds());
     }

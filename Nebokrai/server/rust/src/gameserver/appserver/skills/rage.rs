@@ -1,4 +1,7 @@
 //! Канальный навык ярости `CRage` (`0x6D`).
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/rage.cpp`. После задержки навык публикует начало канала,
@@ -126,17 +129,15 @@ fn send_cast_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-/// Выполняет общий хвост `CRage::End`: свойства и состояние игрока обновляются
-/// до визуального завершения. Оружейный `AfterUseSkill` и отметка cooldown
+/// CRage::End (0x005A0790): движение, OnChangeStates (+0x164), затем visual 3.
+/// Оружейный `AfterUseSkill` и отметка cooldown
 /// остаются у успешного AI-owner-а, поскольку только он знает значение
 /// `useRestoreTime` исходного вызова.
 pub(crate) fn end_player_rage(game: &mut CGame, player_id: i32, level: i32) {
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
-    let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+    let _ = game.publish_player_states(player_id);
     send_cast_visual(game, player_id, level, 3, 0);
 }
 
@@ -147,8 +148,8 @@ fn finish_player_rage<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    game.damage_player_weapon(player_id, runtime);
     end_player_rage(game, player_id, level);
+    game.damage_player_weapon(player_id, runtime);
     player_ai.mark_skill_used(RAGE_SKILL_ID, runtime.now_milliseconds());
 }
 

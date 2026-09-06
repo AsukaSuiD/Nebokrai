@@ -1,4 +1,7 @@
 //! Семь падающих звёзд `CSevenShootingStar` (`0x136`).
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/sevenshootingstar.cpp`. Навык один раз фиксирует
@@ -126,9 +129,6 @@ fn finish<Runtime: GameMainLoopRuntime>(
     }
     if successful {
         game.damage_player_weapon(player_id, runtime);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
 }
 

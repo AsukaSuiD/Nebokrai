@@ -1,4 +1,7 @@
 //! Механический топот `CMachineryStomp` (`0x1a7`) для объектного пути игрока и монстра.
+//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
+//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
+//! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/machinerystomp.cpp`. Владелец сохраняет полную маску 5×5,
@@ -136,16 +139,12 @@ fn finish_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
     player_ai.mark_skill_used(skill_id, runtime.now_milliseconds());
 }
 
 fn abort_player_wide_arc_attack(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
 }
 
