@@ -802,11 +802,10 @@ impl CMonster {
     }
 
     pub(crate) fn set_pet_action(&mut self, action: i32) {
-        if self.pet_behavior.set_action(action) {
-            self.base_ai.lose_target();
-            self.cancel_base_attack_cast();
-            self.base_ai.cancel_active_move();
+        if action == 1 && self.ai_target().is_some() {
+            self.release_pet_ai_target();
         }
+        self.pet_behavior.set_action(action);
     }
 
     pub(crate) const fn pet_action(&self) -> i32 {
@@ -829,8 +828,6 @@ impl CMonster {
     pub(crate) fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_behavior.begin_target();
         self.base_ai.set_object_target(target);
-        self.cancel_base_attack_cast();
-        self.base_ai.cancel_active_move();
     }
 
     pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {

@@ -11,6 +11,13 @@
 //! и пишет FOLLOWING. Это не OnIdle (+0x48): новых событий здесь нет.
 //! Базовый переход обнуляет цель, поэтому повторный вызов не требуется.
 //! Исполнение навыка и Move сохраняются; внешний SearchEnemy ставит caller.
+//! SetTarget (0x004E9630) меняет FOLLOWING на ATTACKING и передаёт пару цели
+//! в CBaseAI::SetTarget (0x004C7C60). Текущий cast и Move не отменяются:
+//! цель уже начатого навыка остаётся в его dispatch, новая цель принадлежит
+//! расписанию AI. Команда атаки не является вызовом End.
+//! SetPetCurrentAction (0x004E94B0) вызывает OnLoseTarget только для нового
+//! FOLLOWING при HasTarget, затем записывает действие. STAYING не очищает
+//! цель; ни одна из этих команд не отменяет cast или активное движение.
 //! OnIdle (RVA 0x000E9580) проверяет GetCurrentSkill, а не один выбранный ID:
 //! если зарегистрированного навыка нет, ChangeSkill сохраняется в начале FIFO.
 //! OnFallowingSchedule (0x004E9BB0) требует пустые active/passive очереди и
@@ -148,9 +155,8 @@ impl PetBehaviorState {
         self.action
     }
 
-    pub(crate) const fn set_action(&mut self, action: i32) -> bool {
+    pub(crate) const fn set_action(&mut self, action: i32) {
         self.action = action;
-        action != 0
     }
 
     pub(crate) const fn begin_target(&mut self) {

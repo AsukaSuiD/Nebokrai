@@ -2193,6 +2193,8 @@ impl CServerRegion {
     /// `CMoveShape`, а питомцы обходятся в порядке canonical `m_vPet` игрока.
     /// Повторная проверка master-а отсутствует и в исходнике: принадлежность
     /// выражает сама запись списка, stale/non-monster элементы пропускаются.
+    /// CPet::SetTarget не прерывает текущий навык и не снимает Move;
+    /// новая цель AI не подменяет цель сохранённого исполнения.
     pub(crate) fn set_listed_pets_target(
         &mut self,
         pets: &[super::moveshape::MoveShapePet],
