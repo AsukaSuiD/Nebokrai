@@ -26,6 +26,13 @@
 //! Объектное исполнение навыка монстром проходит `monsterbaseattack`: ID `1`
 //! сохраняется, физический разброс исключает верхнюю границу, а critical-roll
 //! выполняется и при нулевом monster `GetCCH`. Это не подмена навыком `0x2bd`.
+//! CheckCastCondition (0x005B2E40) требует только источник и свойства,
+//! не проверяя reuse. Monster Begin сохраняет Begin-фазу без поворота/пакета.
+//! Первый AI (0x005B39B0) проверяет unsigned RealDistance, при отказе
+//! выполняет End(0), иначе поворачивает и публикует старт до delay.
+//! Расписание сохраняет отдельный GetAttackSpeed; пропуск reuse навыка
+//! не пропускает этот таймер. Исчезновение/смерть цели в общем monster-caller
+//! ещё требуют точного разделения End(0)/End(1) и fallback.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -34,6 +41,54 @@ use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillTe
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) const BASE_ATTACK_SKILL_ID: u32 = 1;
+
+pub(crate) fn begin_owned_monster_base_attack(
+    region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
+    monster_id: i32,
+    target: crate::gameserver::appserver::shape::ShapeIdentity,
+    skill_level: u16,
+    started_at_ms: u32,
+) {
+    use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
+            target, skill_id: BASE_ATTACK_SKILL_ID, skill_level,
+        }, started_at_ms));
+    }
+}
+
+pub(crate) fn start_owned_monster_base_attack_ai(
+    game: &CGame,
+    region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
+    monster_id: i32,
+    source: crate::gameserver::appserver::shape::ShapeView,
+    target: crate::gameserver::appserver::shape::ShapeView,
+    maximum_distance: u32,
+) -> bool {
+    use super::kernel::SkillStage;
+    if maximum_distance != 0 && source.real_distance(Some(target)) as u32 > maximum_distance {
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, BASE_ATTACK_SKILL_ID);
+        return false;
+    }
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
+    let Some(cast) = monster.base_attack_cast() else { return false };
+    monster.move_shape_mut().shape_mut().set_direction(crate::public::tools::get_line_direction(
+        source.tile_x, source.tile_y, target.tile_x, target.tile_y,
+    ));
+    let shape = monster.move_shape().shape().clone();
+    let mut start = crate::nets::netserver::message::CMessage::new(0x000b_fe01);
+    start.add_byte(1);
+    start.add_long(BASE_ATTACK_SKILL_ID as i32);
+    start.add_short(cast.dispatch().skill_level as i16);
+    start.add_long(600);
+    start.add_long(monster_id);
+    start.add_long(shape.get_direction());
+    let _ = game.send_game_shape_around(region, &shape, None, &start);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+    }
+    true
+}
 pub(crate) const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5003;
 pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
 pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;

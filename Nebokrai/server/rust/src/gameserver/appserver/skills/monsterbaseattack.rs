@@ -14,6 +14,9 @@
 //! MonsterThorn AI без свойств (0x005423E2), MachineryStomp (0x00532836)
 //! и LordWiderangingAttack (0x00530366), MonsterRangeAttack (0x00512900)
 //! вызывают owner End(0).
+//! CBaseAttack (0x005B2E40) не проверяет reuse в Begin: общий хвост
+//! не добавляет его сверх таймера OnSchedule. Поворот/старт и проверка
+//! дальности перенесены в первый AI его owner-а (0x005B39B0).
 //! Общий lookup не поглощает этот отказ живого cast; до Begin свойства
 //! по-прежнему необходимы расписанию для расчёта диапазона.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
@@ -1273,7 +1276,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
     else {
-        if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID)
+        if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID | COMMON_BASE_ATTACK_SKILL_ID)
             && cast.is_some()
         {
             return super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id);
@@ -1850,11 +1853,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
 
     if let Some(cast) = cast {
+        if cast.dispatch().skill_id == COMMON_BASE_ATTACK_SKILL_ID
+            && cast.stage() == SkillStage::Begin
+            && !super::baseattack::start_owned_monster_base_attack_ai(
+                game, region, monster_id, monster_view, target_view, maximum_distance,
+            )
+        {
+            return true;
+        }
         let delay_reached = if matches!(
             cast.dispatch().skill_id,
             COMMON_BASE_ATTACK_SKILL_ID | MONSTER_BASE_ATTACK_SKILL_ID,
         ) {
-            cast.started_at_ms().wrapping_add(delay_ms) <= now_ms
+            cast.started_at_ms().wrapping_add(delay_ms) <= runtime.now_milliseconds()
         } else {
             time_reached(now_ms, cast.started_at_ms(), delay_ms)
         };
@@ -2097,6 +2108,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
             game, region, monster_id, outcome, runtime,
         );
+    }
+    if skill_id == COMMON_BASE_ATTACK_SKILL_ID {
+        super::baseattack::begin_owned_monster_base_attack(region, monster_id, target, skill_level, now_ms);
+        return true;
     }
     let last_used_ms = region
         .find_monster_by_id(monster_id)
