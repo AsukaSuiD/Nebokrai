@@ -1,4 +1,14 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Повторный Attack проверяет requested CSkill: IsEnded и prepared (+0x44),
+//! не равенство выбранному ID. Object (0x00509FF0) и point (0x0050A230)
+//! при наличии prepared в фоне сначала дают Reject, затем OnLoseTarget.
+//! До переноса в фон оба вызывают End(0), но object затем отклоняется
+//! (0x0050A0B3..0x0050A0ED), а point продолжает постановку новой команды
+//! (0x0050A2E2..0x0050A2E9). Завершённый либо неподготовленный экземпляр
+//! не отклоняется этим guard. Фоновый поиск использует существующий FIFO.
+//! Rider-guard OnSchedule (0x00509927) применяется к новой команде независимо
+//! от выбранного default. GetTarget использует уже выбранную OnSchedule
+//! объектную команду, не ожидающий элемент FIFO с тем же ID навыка.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -37153,35 +37163,31 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let current_skill_id = self
+                    let player = self
                         .players
                         .get(&player_id)
-                        .expect("skill dispatch сохраняет canonical player")
-                        .current_skill_id();
-                    if current_skill_id == Some(dispatch.skill_id()) {
-                        let ended = self.end_materialized_player_skill(
+                        .expect("skill dispatch сохраняет canonical player");
+                    let prepared = player.player_ai().player_skill_execution(dispatch.skill_id())
+                        .is_some_and(|execution| execution.is_prepared());
+                    let in_background = prepared && (0..)
+                        .map_while(|index| player.back_stage_skill_id(index))
+                        .any(|skill_id| skill_id == dispatch.skill_id());
+                    if in_background {
+                        let _ = self.send_base_attack_failure(player_id, 2);
+                        self.lose_player_skill_target(player_id, runtime);
+                        continue;
+                    }
+                    if prepared {
+                        let _ = self.end_materialized_player_skill(
                             player_id,
                             dispatch.skill_id(),
                             MaterializedSkillEndCause::Interruption,
                             runtime,
                         );
-                        if let Some(player) = self.players.get_mut(&player_id) {
-                            if ended != Some(PlayerSkillEndRuntimeOutcome::Ended) {
-                                let _ = player
-                                    .player_ai_mut()
-                                    .finish_player_skill(dispatch, SkillTermination::Cancelled);
-                            }
+                        if matches!(dispatch, PlayerSkillDispatch::Object { .. }) {
+                            let _ = self.send_base_attack_failure(player_id, 2);
+                            continue;
                         }
-                        self.restore_player_default_attack_after_skill_end(player_id);
-                        let delivery = self.send_base_attack_failure(player_id, 2);
-                        trace!(
-                            player_id,
-                            ?dispatch,
-                            ?ended,
-                            delivery,
-                            "Повторный запрос активного навыка завершён и отклонён"
-                        );
-                        continue;
                     }
                     let rejected = self
                         .players
@@ -37984,12 +37990,12 @@ impl CGame {
         }
     }
 
-    /// Материализует `OnBeenKilled → OnLoseTarget` перед уже достигнутым
-    /// синхронным `CPlayer::OnDied`. Начатый обычный навык получает исходный
-    /// `End(1)`; без активного навыка ожидающая команда остаётся в FIFO до
-    /// оживления, но default attack назначается в обоих случаях. Независимая
+    /// Общий `OnLoseTarget` из смерти и повторного prepared Attack.
+    /// Начатый обычный навык получает исходный
+    /// `End(1)`; ожидающая команда остаётся в FIFO, а текущая освобождается.
+    /// Default attack назначается в обоих случаях. Независимая
     /// очередь боевой феи принадлежит отдельной war-soul ветви ИИ.
-    fn interrupt_active_player_skill_after_death<Runtime: GameMainLoopRuntime>(
+    fn lose_player_skill_target<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
@@ -41445,9 +41451,6 @@ impl CGame {
         }
         let mut execution_count: usize = 0;
         let mut player_execution_count = 0;
-        let active_player_skill = self
-            .find_player(player_id)
-            .is_some_and(|player| player.current_skill_id().is_some());
         let _ = player_ai.begin_next_player_skill(true);
         if let Some(dispatch) = player_ai.current_player_skill()
         {
@@ -41461,7 +41464,7 @@ impl CGame {
                     )
                 })
                 .unwrap_or((false, false, None));
-            let blocked_by_ride = !active_player_skill && is_rider;
+            let blocked_by_ride = is_rider;
             if blocked_by_ride || !can_fight {
                 // OnSchedule: Reject (0x0050998E/0x005099C3) предшествует
                 // OnLoseTarget; его End(1) добавляет собственный Reject.
@@ -42720,7 +42723,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<()> {
         let interrupted_skill =
-            self.interrupt_active_player_skill_after_death(blow.victim_id, runtime);
+            self.lose_player_skill_target(blow.victim_id, runtime);
         self.player_on_been_murdered(blow, runtime)?;
         let mut world_deliveries = 0usize;
         let mut drops = 0usize;
@@ -43999,7 +44002,7 @@ impl CGame {
             return false;
         };
         let Some(PlayerSkillDispatch::Object { skill_id, target }) =
-            player.player_ai().next_player_skill()
+            player.player_ai().current_player_skill()
         else {
             return false;
         };

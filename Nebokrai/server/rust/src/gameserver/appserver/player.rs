@@ -1,4 +1,7 @@
 //! Достигнутая send-family проекция `CPlayer` исторического GameServer.
+//! OnChangeSkill (0x00508E6A..0x00508E7E) выбирает GetDefaultAttackSkillID
+//! через обычный SetCurrentSkill. Выбранный ID сохраняется после End;
+//! живое исполнение отдельно принадлежит CPlayerAI, дополнительного idle-ID нет.
 //!
 //! PDB `GameServer/GameServer.pdb` подтверждает base `CMoveShape +0x0` и signed
 //! `m_lTeamID +0xB20`, а также unsigned byte `m_btCountry +0xA5C`. Exact
@@ -1920,10 +1923,6 @@ pub(crate) enum PlayerTalkChannel {
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     player_ai: CPlayerAI,
-    /// Завершённый default skill, на который native `SetCurrentSkill`
-    /// возвращает игрока после потери цели. Активное выполнение по-прежнему
-    /// хранится отдельно в `CMoveShape::current_skill_id` и concrete AI owner-е.
-    idle_attack_skill_id: u32,
     figure: ShapeFigure,
     faction_id: i32,
     faction_logo_id: i32,
@@ -2451,7 +2450,6 @@ impl CPlayer {
         let mut player = Self {
             move_shape,
             player_ai: CPlayerAI::default(),
-            idle_attack_skill_id: BASE_ATTACK_SKILL_ID,
             figure,
             faction_id: 0,
             faction_logo_id: 0,
@@ -11274,14 +11272,13 @@ impl CPlayer {
     }
 
     /// Native `OnChangeSkill` и `OnLoseTarget` назначают вычисленный после
-    /// concrete `End` default skill. Rust хранит active execution отдельно,
-    /// поэтому ended-состояние выражается `None`, а выбранный ID — idle-полем.
+    /// concrete `End` default skill. Наличие выбранного ID не означает
+    /// незавершённое исполнение: оно хранится отдельно в CPlayerAI.
     pub(crate) const fn restore_default_attack_skill_after_end(
         &mut self,
         default_attack_skill_id: u32,
     ) {
-        self.move_shape.set_current_skill_id(None);
-        self.idle_attack_skill_id = default_attack_skill_id;
+        self.move_shape.set_current_skill_id(Some(default_attack_skill_id));
     }
 
     pub(crate) const fn war_soul_state(&self) -> u32 {
