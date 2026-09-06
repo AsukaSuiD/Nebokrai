@@ -50,6 +50,9 @@
 //! MachineryStomp/LordWiderangingAttack также используют End 0x00546090.
 //! Семейный wide-arc owner оставляет отдельный End(0) до создания cast;
 //! завершение существующего исполнения проходит через эту общую политику.
+//! SpiderMist::End (0x00540890) вызывает SetMoveable(true) и CSummonSkill::End,
+//! обновляющий reuse при ненулевом аргументе. Общая очистка снимает регистрацию
+//! curable-навыка; созданная CSpiderMistPhalanx ей не принадлежит и сохраняется.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1390,9 +1393,7 @@ impl CMonster {
                 || Self::attack_end_restores_movement(skill_id)
                 || immediate
             {
-                if Self::attack_end_restores_movement(skill_id) {
-                    self.move_shape.set_moveable(true);
-                }
+                self.finish_attack_skill_resources(skill_id);
                 if owns_cast {
                     self.attack_progress = MonsterAttackProgress::default();
                     self.base_attack_cast = None;
@@ -1716,7 +1717,17 @@ impl CMonster {
             | super::skills::bossbluefury::BOSS_BLUE_FURY_SKILL_ID
             | super::skills::bossbluequake::BOSS_BLUE_QUAKE_SKILL_ID
             | super::skills::machinerystomp::MACHINERY_STOMP_SKILL_ID
-            | super::skills::lordwiderangingattack::LORD_WIDERANGING_ATTACK_SKILL_ID)
+            | super::skills::lordwiderangingattack::LORD_WIDERANGING_ATTACK_SKILL_ID
+            | SPIDER_MIST_SKILL_ID)
+    }
+
+    fn finish_attack_skill_resources(&mut self, skill_id: u32) {
+        if Self::attack_end_restores_movement(skill_id) {
+            self.move_shape.set_moveable(true);
+        }
+        if skill_id == SPIDER_MIST_SKILL_ID {
+            self.move_shape.finish_curable_skill_state(skill_id);
+        }
     }
 
     fn finish_base_attack_cast_with_reuse(
@@ -1729,12 +1740,7 @@ impl CMonster {
             return None;
         }
         let skill_id = execution.dispatch().skill_id;
-        if Self::attack_end_restores_movement(skill_id) {
-            self.move_shape.set_moveable(true);
-        }
-        if skill_id == SPIDER_MIST_SKILL_ID {
-            self.move_shape.finish_curable_skill_state(skill_id);
-        }
+        self.finish_attack_skill_resources(skill_id);
         self.attack_progress = MonsterAttackProgress::default();
         let _ = execution.terminate(SkillTermination::Completed);
         if mark_reuse {
@@ -1784,14 +1790,11 @@ impl CMonster {
         self.attack_progress = MonsterAttackProgress::default();
         if let Some(mut execution) = self.base_attack_cast.take() {
             let skill_id = execution.dispatch().skill_id;
-            if execution.termination().is_none() && Self::attack_end_restores_movement(skill_id) {
-                self.move_shape.set_moveable(true);
+            if execution.termination().is_none() {
+                self.finish_attack_skill_resources(skill_id);
             }
             if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
                 self.move_shape.finish_immediate_skill(skill_id);
-            }
-            if skill_id == SPIDER_MIST_SKILL_ID {
-                self.move_shape.finish_curable_skill_state(skill_id);
             }
             self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);

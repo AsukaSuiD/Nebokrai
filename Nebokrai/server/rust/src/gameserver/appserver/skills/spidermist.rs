@@ -12,6 +12,10 @@
 //! `CGame` только разрешает владельцев, выполняет dispatch и доставку. Player
 //! и monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
 //! и lifetime области остаются elapsed.
+//! AI (0x00540A64) снимает запрет движения перед выпуском области, затем
+//! End (0x00540890) снимает ещё один. Счётчик не нормализуется. Второй вызов,
+//! очистку регистрации навыка и Stiffen-End выполняет общий CMonster;
+//! область тумана остаётся независимой от завершённого навыка.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -410,7 +414,6 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         }
         let Some(progress) = progress else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.move_shape_mut().set_moveable(true);
                 monster.cancel_base_attack_cast();
             }
             return true;
