@@ -6,6 +6,9 @@
 //! и обрабатывает реакцию на урон. CGame участвует только в разрешении
 //! владельцев и фактическом пространственном перемещении; наблюдаемый порядок
 //! обхода, пороги здоровья и момент потребления очереди сохранены здесь.
+//! OnSchedule без цели (0x006107EF) вызывает MoveTo до pop сохранённого шага;
+//! даже неуспешное движение потребляет запись. CGame проводит это до background
+//! и passive. OnIdle (0x00610660) при непустой очереди не вызывает базовый idle.
 
 use std::collections::VecDeque;
 
@@ -15,7 +18,8 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
 };
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use super::baseai::one_step_move_delay_ms;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -36,6 +40,10 @@ impl SmartGladiatorState {
         self.queued_steps.pop_front()
     }
 
+    pub(crate) fn first_step(&self) -> Option<ShapeAreaCoordinates> {
+        self.queued_steps.front().copied()
+    }
+
     pub(crate) fn has_queued_steps(&self) -> bool {
         !self.queued_steps.is_empty()
     }
@@ -43,6 +51,45 @@ impl SmartGladiatorState {
     pub(crate) fn clear(&mut self) {
         self.queued_steps.clear();
     }
+}
+
+/// Один шаг schedule-фазы; очередь доступна callback-ам до завершения движения.
+pub(crate) fn execute_smart_gladiator_retreat<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((property, origin, speed, stop_frame, destination)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            if property.ai != 2 || monster.is_tamed() || monster.ai_target().is_some()
+                || !monster.primary_ai_queues_idle()
+            {
+                return None;
+            }
+            Some((property.clone(), monster.shape_view(property)?,
+                monster.move_shape().shape().get_speed(), monster.stop_frame(property),
+                monster.smart_gladiator_ai()?.first_step()?))
+        })
+    else {
+        return false;
+    };
+    if game.move_owned_monster_step(region, monster_id, destination.x, destination.y,
+        CMonster::figure(&property))
+        && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+    {
+        let direction = get_line_direction(origin.tile_x, origin.tile_y, destination.x, destination.y);
+        monster.begin_active_ai_move(one_step_move_delay_ms(direction, speed, stop_frame),
+            runtime.now_milliseconds());
+    }
+    if let Some(state) = region.find_monster_by_id_mut(monster_id)
+        .and_then(CMonster::smart_gladiator_ai_mut)
+    {
+        let _ = state.take_step();
+    }
+    true
 }
 
 #[derive(Clone, Copy, Debug)]

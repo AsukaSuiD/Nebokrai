@@ -47254,11 +47254,23 @@ impl CGame {
                 let schedule_attempted = self.find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .is_some_and(|monster| monster.primary_ai_queues_idle()
-                        && monster.ai_target().is_some()
+                        && (monster.ai_target().is_some()
+                            || (ai_type == 2 && !tamed
+                                && monster.smart_gladiator_ai().is_some_and(|state| state.has_queued_steps())))
                         && monster.base_attack_cast().is_none());
                 if schedule_attempted {
                     if ai_type == 7 && !tamed {
                         let _ = self.run_owned_puniness_creature(region_id, monster_id, runtime);
+                    } else if ai_type == 2 && !tamed
+                        && self.find_region(region_id)
+                            .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+                            .is_some_and(|monster| monster.ai_target().is_none())
+                    {
+                        if let Some(mut owner) = self.take_region_owner(region_id) {
+                            let _ = crate::gameserver::appserver::ai::smartgladiator::execute_smart_gladiator_retreat(
+                                self, owner.base_mut(), monster_id, runtime);
+                            self.restore_region_owner(owner);
+                        }
                     } else {
                         let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                     }
@@ -47460,7 +47472,9 @@ impl CGame {
                 if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
                     continue;
                 }
-                if !self.run_owned_pet_follow(region_id, monster_id, runtime) && !schedule_attempted {
+                if !self.run_owned_pet_follow(region_id, monster_id, runtime)
+                    && (!schedule_attempted || (ai_type == 2 && !tamed))
+                {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
                 let _ = self.run_owned_pet_active_search(region_id, monster_id, false);

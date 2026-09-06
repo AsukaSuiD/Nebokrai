@@ -244,7 +244,6 @@ use crate::gameserver::appserver::ai::monsterai::{
     hibernates_without_nearby_players,
     queue_monster_idle, schedule_attack_interval, select_attack_skill,
 };
-use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::{
     PetMasterRef, lose_pet_target_and_search, pet_master_ref, queue_pet_idle,
@@ -1082,39 +1081,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
     }
-    if target.is_none() && cast.is_none() && !tamed && property.ai == 2 {
-        let destination = region
-            .find_monster_by_id_mut(monster_id)
-            .and_then(CMonster::smart_gladiator_ai_mut)
-            .and_then(|state| state.take_step());
-        if let Some(destination) = destination {
-            let moved = game.move_owned_monster_step(
-                region,
-                monster_id,
-                destination.x,
-                destination.y,
-                CMonster::figure(&property),
-            );
-            if moved {
-                let direction = get_line_direction(
-                    monster_view.tile_x,
-                    monster_view.tile_y,
-                    destination.x,
-                    destination.y,
-                );
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.begin_active_ai_move(
-                        one_step_move_delay_ms(
-                            direction,
-                            monster_shape.get_speed(),
-                            stop_frame,
-                        ),
-                        runtime.now_milliseconds(),
-                    );
-                }
-            }
-            return true;
-        }
+    if target.is_none() && cast.is_none() && !tamed && property.ai == 2
+        && region.find_monster_by_id(monster_id)
+            .and_then(CMonster::smart_gladiator_ai)
+            .is_some_and(|state| state.has_queued_steps())
+    {
+        return true;
     }
     if target.is_none()
         && cast.is_none()
