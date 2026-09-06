@@ -11,6 +11,11 @@
 //! `0x0050FECB/0x0051037B/0x00510828/0x00510F5B/0x00511418`.
 //! Для монстра это `End(0)` без состояния, восстановления HP/MP и reuse;
 //! его фоновая очередь снимает такие навыки без исполнения player-ветви.
+//! Обычный и автоматический player-входы используют один AI. Успешный
+//! End(1), например Earth 0x0050FFE4, проходит 0x005AFA40 → 0x005DFBD0:
+//! оружейный AfterUseSkill предшествует записи cooldown и в фоновом вызове.
+//! Begin возвращает Begun до применения; auto-start уже создал kernel,
+//! поэтому при фоновом исполнении Begin и reuse-gate не повторяются.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
@@ -109,33 +114,6 @@ fn state_from_properties(
     }))
 }
 
-pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    runtime: &mut Runtime,
-) -> bool {
-    let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
-    let state = game
-        .skill_base_properties(skill_id, skill_level)
-        .and_then(|properties| state_from_properties(skill_id, properties));
-    let Some(state) = state else {
-        return false;
-    };
-    if let Some(player) = game.find_player_mut(player_id) {
-        let _ = player.replace_wuxing_state(state);
-    }
-    if game.update_player_properties(player_id).is_some() {
-        let _ = game.restore_player_hp_mp_states(player_id);
-    }
-    let used_at_ms = runtime.now_milliseconds();
-    if let Some(player) = game.find_player_mut(player_id) {
-        player
-            .player_ai_mut()
-            .mark_skill_used(skill_id, used_at_ms);
-    }
-    true
-}
 
 pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -162,8 +140,6 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
-        if player_ai.player_skill_execution(skill_id).is_some() {
-        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -182,6 +158,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(skill_id).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

@@ -13,9 +13,12 @@
 //! и завершает навык через `End(0)`. Поэтому фон не меняет reuse-clock и
 //! очередь завершения активной атаки. Monster attack getters применяют
 //! прибавки из canonical состояния при чтении свойств.
+//! Player-вход также всегда заканчивает AI через End(0), в том числе
+//! 0x00580947/0x0055893A: нет AfterUseSkill, износа оружия и записи cooldown.
+//! Фоновый и активный вызовы используют одно тело AI; успешный Begin
+//! возвращает Begun до применения, не добавляя отдельного игрового такта.
 
 use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::stateskill::finish_state_skill;
 use super::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -65,33 +68,6 @@ pub(crate) fn execute_monster_auto_start_swordship(
     true
 }
 
-pub(crate) fn execute_player_auto_start_swordship<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    _runtime: &mut Runtime,
-) -> bool {
-    if !is_swordship_skill(skill_id) {
-        return false;
-    }
-    let skill_level = game
-        .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id));
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return false;
-    };
-    let state = SwordshipState::new(
-        skill_id,
-        properties.query_property(SKILL_USAGE_TARGET_MIN_ATK_GAIN) as i32,
-        properties.query_property(SKILL_USAGE_TARGET_MAX_ATK_GAIN) as i32,
-    );
-    if let Some(player) = game.find_player_mut(player_id) {
-        let _ = player.replace_swordship_state(state);
-    }
-    let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id);
-    true
-}
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
@@ -126,6 +102,7 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(skill_id)
         .is_none_or(|state| state.dispatch() != dispatch)
@@ -154,6 +131,5 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_state_skill(game, player_id, player_ai, runtime, |_, _| {});
     terminal(QueuedSkillExecutionState::Completed)
 }

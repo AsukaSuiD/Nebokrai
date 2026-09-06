@@ -1308,7 +1308,7 @@ use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::immediatestate::{
-    execute_monster_immediate_state, execute_player_auto_start_immediate_state,
+    execute_monster_immediate_state,
     execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
@@ -1400,7 +1400,7 @@ use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
 use crate::gameserver::appserver::skills::swordship::{
-    execute_monster_auto_start_swordship, execute_player_auto_start_swordship,
+    execute_monster_auto_start_swordship,
     execute_player_swordship, is_swordship_skill,
 };
 use crate::gameserver::appserver::skills::lifeshield::{
@@ -40838,46 +40838,25 @@ impl CGame {
                 index += 1;
                 continue;
             };
-            let executed = if is_immediate_state_skill(skill_id) {
-                execute_player_auto_start_immediate_state(
-                    self, player_id, skill_id, runtime,
-                )
-            } else if is_swordship_skill(skill_id) {
-                execute_player_auto_start_swordship(self, player_id, skill_id, runtime)
-            } else {
-                let Some(player) = self.find_player_mut(player_id) else { break };
-                let mut player_ai = player.take_player_ai();
-                let outcome = self.execute_player_skill_owner(
-                    player_id, execution.dispatch(), &mut player_ai, runtime,
-                );
-                self.apply_player_skill_contacts(player_id, execution.dispatch(), &outcome, runtime);
-                let termination = match outcome.state {
-                    QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => None,
-                    QueuedSkillExecutionState::Completed => Some(SkillTermination::Completed),
-                    QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => Some(SkillTermination::Rejected),
-                };
-                if let Some(termination) = termination {
-                    player_ai.finish_player_skill_execution(execution.dispatch(), termination);
-                }
-                if let Some(player) = self.find_player_mut(player_id) {
-                    player.restore_player_ai(player_ai);
-                }
-                execution_count += 1;
-                index += 1;
-                continue;
+            let Some(player) = self.find_player_mut(player_id) else { break };
+            let mut player_ai = player.take_player_ai();
+            let outcome = self.execute_player_skill_owner(
+                player_id, execution.dispatch(), &mut player_ai, runtime,
+            );
+            self.apply_player_skill_contacts(player_id, execution.dispatch(), &outcome, runtime);
+            let termination = match outcome.state {
+                QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => None,
+                QueuedSkillExecutionState::Completed => Some(SkillTermination::Completed),
+                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => Some(SkillTermination::Rejected),
             };
+            if let Some(termination) = termination {
+                player_ai.finish_player_skill_execution(execution.dispatch(), termination);
+            }
             if let Some(player) = self.find_player_mut(player_id) {
-                player.player_ai_mut().finish_player_skill_execution(execution.dispatch(),
-                    if executed { SkillTermination::Completed } else { SkillTermination::Rejected });
+                player.restore_player_ai(player_ai);
             }
             execution_count += 1;
             index += 1;
-            tracing::trace!(
-                player_id,
-                skill_id,
-                executed,
-                "исполнен background-навык игрока"
-            );
         }
         execution_count
     }

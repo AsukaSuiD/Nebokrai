@@ -15,6 +15,12 @@
 //! timestamp нового экземпляра навыка.
 //! `End(1)` записывает reuse, но не создаёт событие активного ИИ: оно
 //! принадлежит вызывающему `OnFighting`, а не фоновой очереди состояний.
+//! Автоматический и активный входы используют один AI. End (0x005AFA40)
+//! передаёт аргумент в CStateSkill::End; успешный Enlarge/TaiJi/Origin
+//! вызывает End(1), включая AfterUseSkill (0x0053CF30) до записи cooldown.
+//! Поэтому фоновое применение не пропускает оружейный эффект завершения.
+//! Успешный Begin возвращает Begun до наложения состояния; авто-вход уже
+//! имеет kernel от AddObject и не повторяет Begin или его reuse-проверку.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
@@ -112,51 +118,6 @@ pub(crate) const fn is_immediate_state_skill(skill_id: u32) -> bool {
     ) || is_wuxing_skill(skill_id)
 }
 
-pub(crate) fn execute_player_auto_start_immediate_state<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    runtime: &mut Runtime,
-) -> bool {
-    if is_wuxing_skill(skill_id) {
-        return super::wuxing::execute_player_auto_start_wuxing(
-            game, player_id, skill_id, runtime,
-        );
-    }
-    let skill_level = game
-        .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id));
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return false;
-    };
-    let (usage, state_kind) = match skill_id {
-        TAIJI_SKILL_ID => (SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN, ImmediateStateKind::TaiJi),
-        ENLARGE_FULL_MISS_SKILL_ID => (SKILL_USAGE_FULL_MISS_GAIN, ImmediateStateKind::EnlargeFullMiss),
-        ENLARGE_MAX_HP_SKILL_ID => (SKILL_USAGE_MAX_HP_GAIN, ImmediateStateKind::EnlargeMaxHp),
-        ENLARGE_MAX_MP_SKILL_ID => (SKILL_USAGE_MAX_MP_GAIN, ImmediateStateKind::EnlargeMaxMp),
-        ORIGIN_SKILL_ID => (SKILL_USAGE_ELEMENT_MODIFY_GAIN, ImmediateStateKind::Origin),
-        _ => return false,
-    };
-    let gain = properties.query_property(usage) as i32;
-    if let Some(player) = game.find_player_mut(player_id) {
-        match state_kind {
-            ImmediateStateKind::TaiJi => { let _ = player.replace_taiji_state(TaiJiState::new(gain)); }
-            ImmediateStateKind::EnlargeFullMiss => { let _ = player.replace_enlarge_full_miss_state(EnlargeFullMissState::new(gain)); }
-            ImmediateStateKind::EnlargeMaxHp => { let _ = player.replace_enlarge_max_hp_state(EnlargeMaxHpState::new(gain)); }
-            ImmediateStateKind::EnlargeMaxMp => { let _ = player.replace_enlarge_max_mp_state(EnlargeMaxMpState::new(gain)); }
-            ImmediateStateKind::Origin => { let _ = player.replace_origin_state(OriginState::new(gain)); }
-        }
-    }
-    let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id);
-    let used_at_ms = runtime.now_milliseconds();
-    if let Some(player) = game.find_player_mut(player_id) {
-        player
-            .player_ai_mut()
-            .mark_skill_used(skill_id, used_at_ms);
-    }
-    true
-}
 
 pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -193,8 +154,6 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
-        if player_ai.player_skill_execution(skill_id).is_some() {
-        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -213,6 +172,7 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(skill_id)
         .is_none_or(|state| state.dispatch() != dispatch)
