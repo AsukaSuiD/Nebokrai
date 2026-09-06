@@ -27,6 +27,9 @@
 //! второй перечень полей CPlayerAI. Общий запрос учитывает также NonFun,
 //! Swordship и немедленные состояния; поддержка внешнего End проверяется
 //! отдельно его dispatcher-ом.
+//! Наличие исполнения читается только из общего хранилища CPlayerAI по ID,
+//! в том числе для особых состояний семейств. Перечень ниже ограничивает
+//! известные подключённые owners, но не выбирает поле или тип состояния.
 //! Cure (0x005ad590) допускает цель того же типа, что источник, либо монстра-
 //! повозку: вызов 0x004e6d30 — CMonster::IsCarriage, не IsTamed. Promotion
 //! (0x00568680) требует только ненулевые источник/цель; Seal (0x005a9b00)
@@ -195,7 +198,7 @@ impl CGame {
     }
 
     pub(super) fn materialized_player_skill_active(player_ai: &CPlayerAI, skill_id: u32) -> Option<bool> {
-        Some(match skill_id {
+        let known = matches!(skill_id,
             FIRE_BALL_SKILL_ID
             | FIRE_WALL_SKILL_ID
             | THUNDER_SLASH_SKILL_ID
@@ -240,11 +243,17 @@ impl CGame {
             | MONSTER_TAMING_SKILL_ID
             | KNOCK_OUT_SKILL_ID
             | GIBE_SKILL_ID
-            | BASE_ATTACK_SKILL_ID | ITEM_SKILL_2_ID
-            | LIGHTNING_SWORD_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
-            | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
-            | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID
-            | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | POISON_FOG_SKILL_ID
+            | BASE_ATTACK_SKILL_ID
+            | ITEM_SKILL_2_ID
+            | LIGHTNING_SWORD_SKILL_ID
+            | LIGHTNING_SWORD_2_SKILL_ID
+            | LIGHTNING_SWORD_3_SKILL_ID
+            | LIGHTNING_SWORD_4_SKILL_ID
+            | MACHINERY_STOMP_SKILL_ID
+            | LORD_WIDERANGING_ATTACK_SKILL_ID
+            | GOD_BLESS_SKILL_ID
+            | GOD_BLESS_2_SKILL_ID
+            | POISON_FOG_SKILL_ID
             | ARCHERY_SKILL_ID
             | HEARTLESS_ARROW_SKILL_ID
             | LIGHTING_ARROW_SKILL_ID
@@ -277,48 +286,40 @@ impl CGame {
             | SPRITE_BURN_SKILL_ID
             | CHAOS_SPHERE_SKILL_ID
             | LIGHTNING_SKILL_ID
-            | SEAL_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
-
-            GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
-                player_ai.ghost_cut().is_some()
-            }
-            ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => player_ai.army_break().is_some(),
-
-            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
-                player_ai.little_flash().is_some()
-            }
-            ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
-                player_ai.path_projectile().is_some()
-            }
-            CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
-                player_ai.direct_projectile().is_some()
-            }
-
-            SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => player_ai.summon_creature().is_some(),
-
-            LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
-
-            HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
-                player_ai.heartless_arrow_area().is_some()
-            }
-            EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => {
-                player_ai.explosive_arrow().is_some()
-            }
-
-            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
-            AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
-                player_ai.agility_family().is_some()
-            }
-
-            _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
-                || is_non_fun_skill(skill_id) || is_heal_skill(skill_id) => {
-                player_ai.player_skill_execution(skill_id).is_some()
-            }
-            _ if is_self_shield_skill(skill_id) => {
-                materialized_self_shield_active(player_ai, skill_id)
-            }
-            _ => return None,
-        })
+            | SEAL_SKILL_ID
+            | GHOST_CUT_SKILL_ID
+            | GHOST_CUT_2_SKILL_ID
+            | GHOST_CUT_3_SKILL_ID
+            | ARMY_BREAK_SKILL_ID
+            | ARMY_BREAK_2_SKILL_ID
+            | LITTLE_FLASH_SKILL_ID
+            | LITTLE_FLASH_2_SKILL_ID
+            | ENERGY_BOLT_SKILL_ID
+            | ZOMBIE_CLAW_SKILL_ID
+            | SNAKE_BOLT_SKILL_ID
+            | CHUCK_STONE_SKILL_ID
+            | SKELETON_ARCHERY_SKILL_ID
+            | SUMMON_CORPSE_CANDLE_SKILL_ID
+            | SUMMON_SKELETON_SKILL_ID
+            | SUMMON_SPORE_SKILL_ID
+            | BOSS_FIEND_SUMMON_SKILL_ID
+            | LORD_FAST_ATTACK_SKILL_ID
+            | MONSTER_FAST_ATTACK_SKILL_ID
+            | HEARTLESS_ARROW_2_SKILL_ID
+            | HEARTLESS_ARROW_3_SKILL_ID
+            | EXPLOSIVE_ARROW_SKILL_ID
+            | EXPLOSIVE_ARROW_2_SKILL_ID
+            | EXPLOSIVE_ARROW_3_SKILL_ID
+            | CALLOSITY_SKILL_ID
+            | CALLOSITY_2_SKILL_ID
+            | AGILITY_SKILL_ID
+            | AGILITY_2_SKILL_ID
+            | NATURAL_SKILL_ID
+            | RAPTURE_SKILL_ID
+        ) || is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
+            || is_non_fun_skill(skill_id) || is_heal_skill(skill_id)
+            || is_self_shield_skill(skill_id);
+        known.then(|| player_ai.player_skill_execution(skill_id).is_some())
     }
 
     pub(super) fn reject_player_skill_schedule(

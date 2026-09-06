@@ -150,10 +150,11 @@ fn send_fire(
 fn finish_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    execution_skill_id: u32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    let Some(skill_id) = player_ai.lord_fast_attack().map(|state| state.kernel().dispatch().skill_id()) else { return };
+    let Some(skill_id) = player_ai.player_skill_state::<LordFastAttackExecutionState>(execution_skill_id).map(|state| state.kernel().dispatch().skill_id()) else { return };
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
@@ -174,22 +175,24 @@ fn abort_player_lord_fast_attack(game: &mut CGame, player_id: i32) {
 pub(crate) fn complete_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    execution_skill_id: u32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.lord_fast_attack().map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+    let Some(dispatch) = player_ai.player_skill_state::<LordFastAttackExecutionState>(execution_skill_id).map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_lord_fast_attack(game, player_id, dispatch.skill_id(), player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    execution_skill_id: u32,
     player_ai: &mut CPlayerAI,
     _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .lord_fast_attack()
+        .player_skill_state::<LordFastAttackExecutionState>(execution_skill_id)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -392,7 +395,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
-        if monster_variant || player_ai.lord_fast_attack().is_some() {
+        if monster_variant || player_ai.player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id()).is_some() {
             abort_player_lord_fast_attack(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -406,7 +409,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
 
-    if player_ai.lord_fast_attack().is_none() {
+    if player_ai.player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id()).is_none() {
         let now_ms = runtime.now_milliseconds();
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             return begin_failed(game);
@@ -458,9 +461,9 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_lord_fast_attack(LordFastAttackExecutionState::begin(dispatch, now_ms));
+        player_ai.begin_player_skill_execution(LordFastAttackExecutionState::begin(dispatch, now_ms));
     } else if player_ai
-        .lord_fast_attack()
+        .player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id())
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -481,7 +484,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai
-        .lord_fast_attack()
+        .player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id())
         .is_some_and(|state| !state.condition_checked)
     {
         if monster_variant {
@@ -514,14 +517,14 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             ));
         }
         send_start(game, player_id, skill_id, level);
-        if let Some(state) = player_ai.lord_fast_attack_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<LordFastAttackExecutionState>(dispatch.skill_id()) {
             state.condition_checked = true;
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .lord_fast_attack()
+        .player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id())
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение быстрой атаки владыки хранит время начала");
     let reached = |now, delay| {
@@ -532,7 +535,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         }
     };
     if player_ai
-        .lord_fast_attack()
+        .player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id())
         .is_some_and(|state| !state.fire_started)
     {
         if !reached(runtime.now_milliseconds(), delay_ms) {
@@ -546,14 +549,14 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             target_view.tile_x,
             target_view.tile_y,
         );
-        if let Some(state) = player_ai.lord_fast_attack_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<LordFastAttackExecutionState>(dispatch.skill_id()) {
             state.fire_started = true;
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }
 
     if player_ai
-        .lord_fast_attack()
+        .player_skill_state::<LordFastAttackExecutionState>(dispatch.skill_id())
         .is_some_and(|state| !state.first_attack_done)
     {
         if !reached(
@@ -572,7 +575,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             hit_modifier,
             runtime,
         );
-        if let Some(state) = player_ai.lord_fast_attack_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<LordFastAttackExecutionState>(dispatch.skill_id()) {
             state.first_attack_done = true;
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         }
@@ -596,9 +599,9 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         hit_modifier,
         runtime,
     );
-    if let Some(state) = player_ai.lord_fast_attack_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<LordFastAttackExecutionState>(dispatch.skill_id()) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+    finish_player_lord_fast_attack(game, player_id, dispatch.skill_id(), player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

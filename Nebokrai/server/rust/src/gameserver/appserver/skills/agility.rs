@@ -91,11 +91,12 @@ fn finish_player_agility<Runtime: GameMainLoopRuntime>(
 pub(crate) fn cancel_player_agility_family<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    execution_skill_id: u32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
-        .agility_family()
+        .player_skill_state::<AgilityFamilyExecutionState>(execution_skill_id).copied()
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -137,7 +138,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     let initial_mana = player.mana();
     let Some(properties) = game.skill_base_properties(skill_id, skill_level)
     else {
-        if player_ai.agility_family().is_some() {
+        if player_ai.player_skill_state::<AgilityFamilyExecutionState>(dispatch.skill_id()).copied().is_some() {
             abort_player_agility(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -171,7 +172,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.agility_family().is_none() {
+    if player_ai.player_skill_state::<AgilityFamilyExecutionState>(dispatch.skill_id()).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
@@ -198,12 +199,12 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_agility_family(AgilityFamilyExecutionState::begin(
+        player_ai.begin_player_skill_execution(AgilityFamilyExecutionState::begin(
             dispatch,
             started_at_ms,
         ));
     } else if player_ai
-        .agility_family()
+        .player_skill_state::<AgilityFamilyExecutionState>(dispatch.skill_id()).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -216,7 +217,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     }
 
     if player_ai
-        .agility_family()
+        .player_skill_state::<AgilityFamilyExecutionState>(dispatch.skill_id()).copied()
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -249,13 +250,13 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
             skill_level,
             1,
         );
-        if let Some(state) = player_ai.agility_family_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<AgilityFamilyExecutionState>(dispatch.skill_id()) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .agility_family()
+        .player_skill_state::<AgilityFamilyExecutionState>(dispatch.skill_id()).copied()
         .map(|state| state.kernel().started_at_ms())
         .expect("исполнение семейства ловкости создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -322,7 +323,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     send_agility_family_state_visual(game, player_id, skill_id, true, client_time);
     let _ = game.publish_player_states(player_id);
     let _ = game.update_player_properties(player_id);
-    if let Some(state) = player_ai.agility_family_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<AgilityFamilyExecutionState>(dispatch.skill_id()) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

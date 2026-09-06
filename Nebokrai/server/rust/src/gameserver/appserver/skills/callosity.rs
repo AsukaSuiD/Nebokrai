@@ -91,10 +91,11 @@ fn finish_player_callosity<Runtime: GameMainLoopRuntime>(
 pub(crate) fn cancel_player_callosity<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    execution_skill_id: u32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.callosity().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = player_ai.player_skill_state::<CallosityExecutionState>(execution_skill_id).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     let skill_id = dispatch.skill_id();
@@ -137,7 +138,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     let initial_rp = player.rp();
     let Some(properties) = game.skill_base_properties(skill_id, skill_level)
     else {
-        if player_ai.callosity().is_some() {
+        if player_ai.player_skill_state::<CallosityExecutionState>(dispatch.skill_id()).copied().is_some() {
             abort_player_callosity(game, player_id);
         }
         return rejected();
@@ -150,7 +151,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     let state_persist_time = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.callosity().is_none() {
+    if player_ai.player_skill_state::<CallosityExecutionState>(dispatch.skill_id()).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
@@ -175,9 +176,9 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         };
         player.set_skill_moveable(false);
         player.set_current_skill_id(Some(skill_id));
-        player_ai.begin_callosity(CallosityExecutionState::begin(dispatch, started_at_ms));
+        player_ai.begin_player_skill_execution(CallosityExecutionState::begin(dispatch, started_at_ms));
     } else if player_ai
-        .callosity()
+        .player_skill_state::<CallosityExecutionState>(dispatch.skill_id()).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return rejected();
@@ -190,7 +191,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     }
 
     if player_ai
-        .callosity()
+        .player_skill_state::<CallosityExecutionState>(dispatch.skill_id()).copied()
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let current_mp = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -214,13 +215,13 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
             player.set_rp(current_rp.wrapping_sub(rp_loss as u16));
         }
         game.send_self_state_skill_cast(CALLOSITY_EFFECT_MESSAGE, player_id, skill_id, skill_level, 1);
-        if let Some(state) = player_ai.callosity_mut() {
+        if let Some(state) = player_ai.player_skill_state_mut::<CallosityExecutionState>(dispatch.skill_id()) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .callosity()
+        .player_skill_state::<CallosityExecutionState>(dispatch.skill_id()).copied()
         .map(|state| state.kernel().started_at_ms())
         .expect("исполнение закалки создано или восстановлено");
     let delay_now_ms = runtime.now_milliseconds();
@@ -250,7 +251,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     send_callosity_state_begin(game, player_id, state);
     let _ = game.publish_player_states(player_id);
     let _ = game.update_player_properties(player_id);
-    if let Some(state) = player_ai.callosity_mut() {
+    if let Some(state) = player_ai.player_skill_state_mut::<CallosityExecutionState>(dispatch.skill_id()) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

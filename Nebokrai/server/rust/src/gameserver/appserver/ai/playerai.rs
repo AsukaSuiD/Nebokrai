@@ -13,7 +13,8 @@
 //! подключённые особые владельцы используют типизированный доступ по ID.
 //! Перечень типов единственный; общие Begin и End не имеют ветки для каждого
 //! навыка. Базовая магия и FireBolt разделяют тип, но не запись исполнения.
-//! Оставшиеся семейства пока сохраняют поля, их перенос ещё не завершён.
+//! Особые состояния семейств также разделены по исходным ID. End получает
+//! ID выбранного варианта от CGame; тип состояния не определяет идентичность.
 //! Варианты простых семейств, в том числе лечения, занимают отдельные ID.
 //! End-диспетчер передаёт выбранный ID владельцу; поиск первого занятого
 //! слота семейства не используется для выбора завершаемого исполнения.
@@ -254,6 +255,17 @@ pub(crate) trait PlayerSkillState {
 }
 
 player_skill_states! {
+    HeartlessArrowArea(HeartlessArrowAreaExecutionState),
+    ExplosiveArrow(ExplosiveArrowExecutionState),
+    AgilityFamily(AgilityFamilyExecutionState),
+    GhostCut(GhostCutExecutionState),
+    ArmyBreak(ArmyBreakExecutionState),
+    LittleFlash(LittleFlashExecutionState),
+    PathProjectile(PlayerPathProjectileExecutionState),
+    DirectProjectile(PlayerDirectProjectileExecutionState),
+    SummonCreature(PlayerSummonCreatureExecutionState),
+    LordFastAttack(LordFastAttackExecutionState),
+    Callosity(CallosityExecutionState),
     Archery(ArcheryExecutionState),
     HeartlessArrow(HeartlessArrowExecutionState),
     LightingArrow(LightingArrowExecutionState),
@@ -340,19 +352,8 @@ pub(crate) struct CPlayerAI {
     selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
-    heartless_arrow_area: Option<HeartlessArrowAreaExecutionState>,
-    explosive_arrow: Option<ExplosiveArrowExecutionState>,
-    agility_family: Option<AgilityFamilyExecutionState>,
-    ghost_cut: Option<GhostCutExecutionState>,
-    army_break: Option<ArmyBreakExecutionState>,
-    little_flash: Option<LittleFlashExecutionState>,
-    path_projectile: Option<PlayerPathProjectileExecutionState>,
-    direct_projectile: Option<PlayerDirectProjectileExecutionState>,
-    summon_creature: Option<PlayerSummonCreatureExecutionState>,
-    lord_fast_attack: Option<LordFastAttackExecutionState>,
     battle_fairy_executions: BTreeMap<u32, BattleFairyExecution>,
     battle_fairy_last_used_ms: BTreeMap<u32, u32>,
-    callosity: Option<CallosityExecutionState>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -645,47 +646,6 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
         }
-        if let Some(mut execution) = self.heartless_arrow_area.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение региональной стрелы завершено");
-        }
-        if let Some(mut execution) = self.explosive_arrow.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей стрелы завершено");
-        }
-        if let Some(mut execution) = self.agility_family.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка ловкости завершено");
-        }
-        if let Some(mut execution) = self.ghost_cut.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бегущего удара завершено");
-        }
-        if let Some(mut execution) = self.army_break.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение армейского удара завершено");
-        }
-        if let Some(mut execution) = self.little_flash.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малого рывка завершено");
-        }
-        if let Some(mut execution) = self.path_projectile.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение пошагового снаряда завершено");
-        }
-        if let Some(mut execution) = self.direct_projectile.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение прямого снаряда завершено");
-        }
-        if let Some(mut execution) = self.summon_creature.take_if(|state| state.kernel().dispatch() == expected) { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
-        if let Some(mut execution) = self.lord_fast_attack.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение быстрой атаки владыки завершено");
-        }
-        if let Some(mut execution) = self.callosity.take_if(|state| state.kernel().dispatch() == expected) {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
-        }
     }
 
     /// Fallback встречного `CPlayerAI::OnLoseTarget`, когда concrete execution
@@ -707,50 +667,6 @@ impl CPlayerAI {
         self.finish_player_skill(dispatch, SkillTermination::Cancelled)
     }
 
-    pub(crate) const fn agility_family(&self) -> Option<AgilityFamilyExecutionState> {
-        self.agility_family
-    }
-    pub(crate) fn begin_agility_family(&mut self, mut state: AgilityFamilyExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.agility_family = Some(state);
-    }
-    pub(crate) fn agility_family_mut(&mut self) -> Option<&mut AgilityFamilyExecutionState> {
-        self.agility_family.as_mut()
-    }
-
-    pub(crate) const fn heartless_arrow_area(&self) -> Option<HeartlessArrowAreaExecutionState> { self.heartless_arrow_area }
-    pub(crate) fn begin_heartless_arrow_area(&mut self, mut state: HeartlessArrowAreaExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.heartless_arrow_area = Some(state);
-    }
-    pub(crate) fn heartless_arrow_area_mut(&mut self) -> Option<&mut HeartlessArrowAreaExecutionState> { self.heartless_arrow_area.as_mut() }
-    pub(crate) fn explosive_arrow(&self) -> Option<&ExplosiveArrowExecutionState> { self.explosive_arrow.as_ref() }
-    pub(crate) fn begin_explosive_arrow(&mut self, mut state: ExplosiveArrowExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.explosive_arrow = Some(state);
-    }
-    pub(crate) fn explosive_arrow_mut(&mut self) -> Option<&mut ExplosiveArrowExecutionState> { self.explosive_arrow.as_mut() }
-
-    pub(crate) const fn ghost_cut(&self) -> Option<&GhostCutExecutionState> { self.ghost_cut.as_ref() }
-    pub(crate) fn begin_ghost_cut(&mut self, mut state: GhostCutExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.ghost_cut = Some(state);
-    }
-    pub(crate) fn ghost_cut_mut(&mut self) -> Option<&mut GhostCutExecutionState> { self.ghost_cut.as_mut() }
-
-    pub(crate) const fn army_break(&self) -> Option<&ArmyBreakExecutionState> { self.army_break.as_ref() }
-    pub(crate) fn begin_army_break(&mut self, mut state: ArmyBreakExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.army_break = Some(state);
-    }
-    pub(crate) fn army_break_mut(&mut self) -> Option<&mut ArmyBreakExecutionState> { self.army_break.as_mut() }
-    pub(crate) const fn little_flash(&self) -> Option<&LittleFlashExecutionState> { self.little_flash.as_ref() }
-    pub(crate) fn begin_little_flash(&mut self, mut state: LittleFlashExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.little_flash = Some(state);
-    }
-    pub(crate) fn little_flash_mut(&mut self) -> Option<&mut LittleFlashExecutionState> { self.little_flash.as_mut() }
-
     pub(crate) fn begin_poison_fog(&mut self, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) {
         self.insert_player_skill_execution(PlayerSkillExecution::PoisonFog { kernel, destination });
     }
@@ -761,65 +677,6 @@ impl CPlayerAI {
             PlayerSkillExecution::PoisonFog { destination, .. } => Some(*destination),
             _ => None,
         }
-    }
-
-    pub(crate) const fn path_projectile(&self) -> Option<&PlayerPathProjectileExecutionState> {
-        self.path_projectile.as_ref()
-    }
-
-    pub(crate) fn begin_path_projectile(&mut self, mut state: PlayerPathProjectileExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.path_projectile = Some(state);
-    }
-
-    pub(crate) fn path_projectile_mut(&mut self) -> Option<&mut PlayerPathProjectileExecutionState> {
-        self.path_projectile.as_mut()
-    }
-
-    pub(crate) const fn direct_projectile(&self) -> Option<&PlayerDirectProjectileExecutionState> {
-        self.direct_projectile.as_ref()
-    }
-
-    pub(crate) fn begin_direct_projectile(&mut self, mut state: PlayerDirectProjectileExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.direct_projectile = Some(state);
-    }
-
-    pub(crate) fn direct_projectile_mut(&mut self) -> Option<&mut PlayerDirectProjectileExecutionState> {
-        self.direct_projectile.as_mut()
-    }
-
-    pub(crate) const fn summon_creature(&self) -> Option<&PlayerSummonCreatureExecutionState> { self.summon_creature.as_ref() }
-    pub(crate) fn begin_summon_creature(&mut self, mut state: PlayerSummonCreatureExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.summon_creature = Some(state);
-    }
-    pub(crate) fn summon_creature_mut(&mut self) -> Option<&mut PlayerSummonCreatureExecutionState> { self.summon_creature.as_mut() }
-
-    pub(crate) const fn lord_fast_attack(&self) -> Option<&LordFastAttackExecutionState> {
-        self.lord_fast_attack.as_ref()
-    }
-
-    pub(crate) fn begin_lord_fast_attack(&mut self, mut state: LordFastAttackExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.lord_fast_attack = Some(state);
-    }
-
-    pub(crate) fn lord_fast_attack_mut(&mut self) -> Option<&mut LordFastAttackExecutionState> {
-        self.lord_fast_attack.as_mut()
-    }
-
-    pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {
-        self.callosity
-    }
-
-    pub(crate) fn begin_callosity(&mut self, mut state: CallosityExecutionState) {
-        state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.callosity = Some(state);
-    }
-
-    pub(crate) fn callosity_mut(&mut self) -> Option<&mut CallosityExecutionState> {
-        self.callosity.as_mut()
     }
 
     /// Продвигает ровно одну ожидающую команду только после конечного состояния

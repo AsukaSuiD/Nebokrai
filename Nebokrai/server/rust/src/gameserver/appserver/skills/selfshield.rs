@@ -64,10 +64,6 @@ pub(crate) const fn is_self_shield_skill(skill_id: u32) -> bool {
     matches!(skill_id, MANA_SHIELD_SKILL_ID | MACHINE_SHIELD_SKILL_ID)
 }
 
-pub(crate) fn materialized_self_shield_active(player_ai: &CPlayerAI, skill_id: u32) -> bool {
-    is_self_shield_skill(skill_id) && player_ai.player_skill_execution(skill_id).is_some()
-}
-
 fn finish_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,

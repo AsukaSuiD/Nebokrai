@@ -1503,7 +1503,7 @@ use crate::gameserver::appserver::skills::lingzhishu::{
 };
 use crate::gameserver::appserver::skills::selfshield::{
     cancel_player_self_shield_dispatch, execute_player_self_shield_dispatch,
-    is_self_shield_skill, materialized_self_shield_active,
+    is_self_shield_skill,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::{
@@ -39961,6 +39961,7 @@ impl CGame {
                     Some(complete_player_heartless_arrow_area(
                         self,
                         player_id,
+                        skill_id,
                         &mut player_ai,
                         runtime,
                     ))
@@ -40036,6 +40037,7 @@ impl CGame {
                 | EXPLOSIVE_ARROW_3_SKILL_ID => Some(complete_player_explosive_arrow(
                     self,
                     player_id,
+                    skill_id,
                     &mut player_ai,
                     runtime,
                 )),
@@ -40142,6 +40144,7 @@ impl CGame {
                 LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
                     self,
                     player_id,
+                    skill_id,
                     &mut player_ai,
                     runtime,
                 )),
@@ -40278,13 +40281,13 @@ impl CGame {
             }
             MOSOU_SKILL_ID => cancel_player_mosou(self, player_id, &mut player_ai, runtime),
             GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
-                cancel_player_ghost_cut(self, player_id, &mut player_ai, runtime)
+                cancel_player_ghost_cut(self, player_id, skill_id, &mut player_ai, runtime)
             }
             KNIGHT_CUT_SKILL_ID => {
                 cancel_player_knight_cut(self, player_id, &mut player_ai, runtime)
             }
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => {
-                cancel_player_army_break(self, player_id, &mut player_ai, runtime)
+                cancel_player_army_break(self, player_id, skill_id, &mut player_ai, runtime)
             }
             RAGE_SKILL_ID => cancel_player_rage(self, player_id, &mut player_ai, runtime),
             RAGE_BREAK_SKILL_ID => {
@@ -40308,16 +40311,16 @@ impl CGame {
                 cancel_player_lightning_sword(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
-                cancel_player_little_flash(self, player_id, &mut player_ai, runtime)
+                cancel_player_little_flash(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LITTLE_STAR_SKILL_ID => {
                 cancel_player_little_star(self, player_id, &mut player_ai, runtime)
             }
             ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
-                cancel_player_path_projectile(self, player_id, &mut player_ai, runtime)
+                cancel_player_path_projectile(self, player_id, skill_id, &mut player_ai, runtime)
             }
             CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
-                cancel_player_direct_projectile(self, player_id, &mut player_ai, runtime)
+                cancel_player_direct_projectile(self, player_id, skill_id, &mut player_ai, runtime)
             }
             YUNSHENG_LIGHTNING_SKILL_ID => {
                 cancel_player_yunsheng_lightning(self, player_id, &mut player_ai, runtime)
@@ -40338,7 +40341,7 @@ impl CGame {
                 cancel_player_spider_poison(self, player_id, &mut player_ai, runtime)
             }
             SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => {
-                cancel_player_summon_creature(self, player_id, &mut player_ai, runtime)
+                cancel_player_summon_creature(self, player_id, skill_id, &mut player_ai, runtime)
             }
             BOSS_BLUE_FURY_SKILL_ID => {
                 cancel_player_boss_blue_fury(self, player_id, &mut player_ai, runtime)
@@ -40356,7 +40359,7 @@ impl CGame {
                 cancel_player_wide_arc_attack(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => {
-                cancel_player_lord_fast_attack(self, player_id, &mut player_ai, runtime)
+                cancel_player_lord_fast_attack(self, player_id, skill_id, &mut player_ai, runtime)
             }
             MONSTER_BASE_ATTACK_SKILL_ID => {
                 finish_player_monster_base_attack(self, player_id, &mut player_ai, runtime, false)
@@ -40413,7 +40416,7 @@ impl CGame {
                 cancel_player_heartless_arrow(self, player_id, &mut player_ai, runtime)
             }
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
-                cancel_player_heartless_arrow_area(self, player_id, &mut player_ai, runtime)
+                cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LIGHTING_ARROW_SKILL_ID => {
                 cancel_player_lighting_arrow(self, player_id, &mut player_ai, runtime)
@@ -40448,7 +40451,7 @@ impl CGame {
             EXPLOSIVE_ARROW_SKILL_ID
             | EXPLOSIVE_ARROW_2_SKILL_ID
             | EXPLOSIVE_ARROW_3_SKILL_ID => {
-                cancel_player_explosive_arrow(self, player_id, &mut player_ai, runtime)
+                cancel_player_explosive_arrow(self, player_id, skill_id, &mut player_ai, runtime)
             }
             STRIKE_SKILL_ID => {
                 cancel_player_strike(self, player_id, &mut player_ai, runtime)
@@ -40469,10 +40472,10 @@ impl CGame {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
-                cancel_player_callosity(self, player_id, &mut player_ai, runtime)
+                cancel_player_callosity(self, player_id, skill_id, &mut player_ai, runtime)
             }
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
-                cancel_player_agility_family(self, player_id, &mut player_ai, runtime)
+                cancel_player_agility_family(self, player_id, skill_id, &mut player_ai, runtime)
             }
             HEARTEN_SKILL_ID => {
                 cancel_player_hearten(self, player_id, &mut player_ai, runtime)

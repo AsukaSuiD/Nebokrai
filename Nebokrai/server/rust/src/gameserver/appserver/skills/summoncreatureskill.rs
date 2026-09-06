@@ -123,8 +123,8 @@ fn abort_player_summon_creature(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
-pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.summon_creature().map(|state| state.kernel().dispatch()) else { return false };
+pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, execution_skill_id: u32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.player_skill_state::<PlayerSummonCreatureExecutionState>(execution_skill_id).map(|state| state.kernel().dispatch()) else { return false };
     abort_player_summon_creature(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -140,7 +140,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
-    if player_ai.summon_creature().is_none() {
+    if player_ai.player_skill_state::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()).is_none() {
         if !skill_is_restored(
             player_ai.skill_last_used_ms(skill_id),
             reuse_delay_ms,
@@ -152,12 +152,12 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         }
         let Some(destination) = player_destination(game, region_id, dispatch, (source_x, source_y)) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        player_ai.begin_summon_creature(PlayerSummonCreatureExecutionState::begin(dispatch, destination, now_ms));
-    } else if player_ai.summon_creature().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(PlayerSummonCreatureExecutionState::begin(dispatch, destination, now_ms));
+    } else if player_ai.player_skill_state::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    let destination = player_ai.summon_creature().map(|state| state.destination).expect("выполнение призыва хранит координаты эффекта");
-    if player_ai.summon_creature().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+    let destination = player_ai.player_skill_state::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()).map(|state| state.destination).expect("выполнение призыва хранит координаты эффекта");
+    if player_ai.player_skill_state::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
         if let Some(player) = game.find_player_mut(player_id) {
             player.movement_shape_mut().set_direction(get_line_direction(
                 source_x,
@@ -168,9 +168,9 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_visual(game, player_id, skill_id, skill_level, 1, destination);
-        if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = player_ai.player_skill_state_mut::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()) { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = player_ai.summon_creature().map(|state| state.kernel().started_at_ms()).expect("выполнение призыва хранит время начала");
+    let started_at_ms = player_ai.player_skill_state::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()).map(|state| state.kernel().started_at_ms()).expect("выполнение призыва хранит время начала");
     if !skill_is_restored(started_at_ms, delay_ms, runtime.now_milliseconds()) { return player_terminal(QueuedSkillExecutionState::Pending) }
     let fire_destination = player_destination(game, region_id, dispatch, (source_x, source_y))
         .unwrap_or((0, 0));
@@ -193,7 +193,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         }
         game.restore_region_owner(owner);
     }
-    if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(state) = player_ai.player_skill_state_mut::<PlayerSummonCreatureExecutionState>(dispatch.skill_id()) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_summon_creature(game, player_id, player_ai, skill_id, runtime);
     player_terminal(QueuedSkillExecutionState::Completed)
 }
