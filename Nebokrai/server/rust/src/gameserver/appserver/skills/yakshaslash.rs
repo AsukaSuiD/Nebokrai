@@ -19,6 +19,10 @@
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
 //! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
 //! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! End (0x0057B810, общий со SpiderWeb) очищает полёт и снимает один запрет
+//! движения перед CAttackSkill::End. Monster-путь использует общую очистку
+//! CMonster при успехе, отмене и Stiffen; отдельное снятие запрета перед
+//! выпуском сохраняется, а End не откатывает удар и не отправляет эффект.
 
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -142,11 +146,21 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, deaths: &mut Vec<MonsterAttackDeath>) -> bool {
     let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.base_attack_cast(), monster.monster_projectile_progress()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); monster.clear_ai_target(); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
+            monster.clear_ai_target();
+        }
         return true;
     };
     if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, property, tamed, master, target_identity, &target) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); monster.clear_ai_target(); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
+            monster.clear_ai_target();
+        }
         return true;
     }
     let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (source.get_tile_x(), source.get_tile_y(), target.shape.get_tile_x(), target.shape.get_tile_y()) else { return true };
@@ -182,7 +196,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
     if !progress.fired() {
         if !time_reached(now_ms, cast.started_at_ms(), delay) { return true; }
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); monster.clear_ai_target(); }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
             return true;
         }
         let flying_time = properties.query_property(MISSILE_FLYING_TIME).wrapping_mul(path.len() as u32);

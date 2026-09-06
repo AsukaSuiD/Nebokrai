@@ -25,6 +25,10 @@
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
 //! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
 //! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! Monster End и Stiffen используют общую очистку CMonster: путь и список
+//! поражённых целей освобождаются до SetMoveable(true), затем завершается
+//! cast. Отдельное снятие запрета перед выпуском остаётся у AI; End не
+//! публикует пакет и не повторяет уже применённые удары.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -906,7 +910,9 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         .or_else(|| progress.as_ref().map(BossFiendPenetrateProgress::destination))
     else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
+            if cast.is_none_or(|execution| execution.termination().is_some()) {
+                monster.move_shape_mut().set_moveable(true);
+            }
             monster.clear_ai_target();
         }
         return true;
@@ -979,7 +985,6 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     if !progress.fired {
         if target.as_ref().is_some_and(|target| target.dead) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.move_shape_mut().set_moveable(true);
                 monster.clear_ai_target();
             }
             return true;

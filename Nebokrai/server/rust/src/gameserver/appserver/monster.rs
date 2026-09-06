@@ -76,6 +76,9 @@
 //! cast не затрагивает уже созданных существ и не выполняет новый призыв.
 //! Archery/BaseMagic/SnowStorm используют тот же End 0x005AE7A0;
 //! их самостоятельные phalanx не удаляются вместе с исполнением навыка.
+//! YakshaSlash разделяет End 0x0057B810. BossFiendPenetrate::End
+//! (0x0052B410) освобождает путь и список поражённых целей до возврата движения;
+//! оба завершают CAttackSkill без повторного урона и без пакета End.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1777,10 +1780,15 @@ impl CMonster {
             | super::skills::bossfiendsummon::BOSS_FIEND_SUMMON_SKILL_ID
             | super::skills::archery::ARCHERY_SKILL_ID
             | super::skills::basemagic::BASE_MAGIC_SKILL_ID
-            | super::skills::snowstorm::SNOW_STORM_SKILL_ID)
+            | super::skills::snowstorm::SNOW_STORM_SKILL_ID
+            | super::skills::yakshaslash::YAKSHA_SLASH_SKILL_ID
+            | super::skills::bossfiendpenetrate::BOSS_FIEND_PENETRATE_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {
+        if skill_id == super::skills::bossfiendpenetrate::BOSS_FIEND_PENETRATE_SKILL_ID {
+            self.attack_progress.boss_fiend_penetrate_progress = None;
+        }
         if Self::attack_end_restores_movement(skill_id) {
             self.move_shape.set_moveable(true);
         }
