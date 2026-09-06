@@ -835,7 +835,7 @@ impl CMonster {
         }
         let outcome = self.pet_behavior.tick(facts, self.ai_target().is_some());
         if outcome.clear_target {
-            self.clear_ai_target();
+            self.release_pet_ai_target();
         }
         outcome
     }

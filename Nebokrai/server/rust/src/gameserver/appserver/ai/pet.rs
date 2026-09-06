@@ -18,6 +18,11 @@
 //! SetPetCurrentAction (0x004E94B0) вызывает OnLoseTarget только для нового
 //! FOLLOWING при HasTarget, затем записывает действие. STAYING не очищает
 //! цель; ни одна из этих команд не отменяет cast или активное движение.
+//! Числовой PET_MODE: 0 — активный (OnSearchEnemy 0x004E98CD), 1 —
+//! защитный, 2 — пассивный (OnBeenHurted 0x004E94F9). OnSchedule при потере
+//! хозяина в безопасной клетке выбирает 2, вне неё — 1; прежний режим 0
+//! вызывает OnLoseTarget (0x004EA134). Возврат хозяина также проверяет 0
+//! (0x004E9FB2). Эти переходы сохраняют текущие cast и Move.
 //! OnIdle (RVA 0x000E9580) проверяет GetCurrentSkill, а не один выбранный ID:
 //! если зарегистрированного навыка нет, ChangeSkill сохраняется в начале FIFO.
 //! OnFallowingSchedule (0x004E9BB0) требует пустые active/passive очереди и
@@ -54,6 +59,9 @@ use crate::public::guid::CGuid;
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
+const PET_MODE_ACTIVE: i32 = 0;
+const PET_MODE_DEFENSIVE: i32 = 1;
+const PET_MODE_PASSIVE: i32 = 2;
 
 const SEEK_MASTER_INTERVAL_MS: u32 = 1_000;
 const LIFE_CYCLE_INTERVAL_MS: u32 = 21_600_000;
@@ -135,7 +143,7 @@ pub(crate) struct PetBehaviorState {
 impl Default for PetBehaviorState {
     fn default() -> Self {
         Self {
-            mode: 0,
+            mode: PET_MODE_ACTIVE,
             action: 1,
             lifecycle: PetLifecycleState::default(),
         }
@@ -166,7 +174,7 @@ impl PetBehaviorState {
     }
 
     pub(crate) fn retarget_passive(&mut self, tamed: bool, has_target: bool) -> bool {
-        if !tamed || self.mode != 1 || has_target {
+        if !tamed || self.mode != PET_MODE_DEFENSIVE || has_target {
             return false;
         }
         if self.action == 1 {
@@ -180,7 +188,7 @@ impl PetBehaviorState {
         current_target: Option<ShapeIdentity>,
         attacker: ShapeIdentity,
     ) -> bool {
-        let replace = self.mode != 0
+        let replace = self.mode != PET_MODE_PASSIVE
             && (current_target.is_none()
                 || current_target.is_some_and(|target| {
                     target.object_type != PLAYER_TYPE && attacker.object_type == PLAYER_TYPE
@@ -260,17 +268,17 @@ impl PetLifecycleState {
             self.master_logout = true;
             if self.invalid_master_ms == 0 {
                 outcome.action = Some(2);
-                outcome.clear_target = facts.safe_cell || current_mode == 2;
-                outcome.mode = Some(if facts.safe_cell { 0 } else { 1 });
+                outcome.clear_target = facts.safe_cell || current_mode == PET_MODE_ACTIVE;
+                outcome.mode = Some(if facts.safe_cell { PET_MODE_PASSIVE } else { PET_MODE_DEFENSIVE });
                 self.seek_master_ms = 0;
                 self.invalid_master_ms = facts.now_ms;
             }
         } else {
             if self.master_logout && facts.reclaimable {
-                outcome.clear_target = current_mode == 2 || has_target;
+                outcome.clear_target = current_mode == PET_MODE_ACTIVE || has_target;
                 self.invalid_master_ms = 0;
                 self.seek_master_ms = 0;
-                outcome.mode = Some(1);
+                outcome.mode = Some(PET_MODE_DEFENSIVE);
                 outcome.action = Some(1);
                 self.master_logout = false;
                 outcome.reclaim = true;
@@ -305,7 +313,7 @@ pub(crate) fn execute_owned_pet_active_search(
 ) -> bool {
     let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
         (pet.is_tamed()
-            && pet.pet_mode() == 2
+            && pet.pet_mode() == PET_MODE_ACTIVE
             && pet.ai_target().is_none())
             .then_some(pet.master_info())
     }) else {
