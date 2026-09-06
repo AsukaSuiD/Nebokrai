@@ -31,7 +31,7 @@
 //! OnStiffen (0x004C880D) вызывает virtual OnLoseTarget после снятия Attack
 //! и до выбора default. Координатор освобождает заимствование CMonster на
 //! этой границе, чтобы производный AI мог обратиться к региону и близнецу.
-//! CMonsterBaseAttack::End (0x005B3010) через 0x005DFBD0 вызывает
+//! CBaseAttack/CMonsterBaseAttack::End (0x005B3010) через 0x005DFBD0 вызывает
 //! CSkill::End (0x004D84C0): любой ненулевой аргумент, включая Stiffen=4,
 //! обновляет reuse даже у уже завершённого навыка. OnLoseTarget видит прежний
 //! выбранный навык; default назначается только после возврата из callback.
@@ -40,6 +40,10 @@
 //! обычный End, отмену и Stiffen. У RangeAttack non-player CheckCastCondition
 //! (0x00511DE7) пропускает SetMoveable(false), поэтому счётчик может стать
 //! отрицательным; искусственная парная блокировка при Begin не добавляется.
+//! CMonsterFastAttack/CLordFastAttack::End (0x00512B50) используют тот же
+//! SetMoveable(true) и общий End после сброса двухударных флагов. Их ID входят
+//! в единую политику завершения; очистку прогресса выполняет существующий
+//! MonsterAttackProgress, без отдельных ветвей для отмены и Stiffen.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1362,7 +1366,9 @@ impl CMonster {
             && self.base_attack_cast().is_some();
         if release_target {
             let skill_id = self.base_attack_cast.expect("проверенный cast Stiffen").dispatch().skill_id;
-            if skill_id == super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID
+            if matches!(skill_id,
+                super::skills::baseattack::BASE_ATTACK_SKILL_ID
+                | super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID)
                 || Self::attack_end_restores_movement(skill_id)
             {
                 if Self::attack_end_restores_movement(skill_id) {
@@ -1676,7 +1682,9 @@ impl CMonster {
     const fn attack_end_restores_movement(skill_id: u32) -> bool {
         matches!(skill_id,
             super::skills::monsterrangeattack::MONSTER_RANGE_ATTACK_SKILL_ID
-            | super::skills::monsterthorn::MONSTER_THORN_SKILL_ID)
+            | super::skills::monsterthorn::MONSTER_THORN_SKILL_ID
+            | super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID
+            | super::skills::lordfastattack::LORD_FAST_ATTACK_SKILL_ID)
     }
 
     fn finish_base_attack_cast_with_reuse(
