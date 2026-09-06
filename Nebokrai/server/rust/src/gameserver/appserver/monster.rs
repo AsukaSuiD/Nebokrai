@@ -63,6 +63,10 @@
 //! SpiderPoison/SpriteBurn/CorpsePtomaine/Promotion/KnockOut разделяют
 //! End 0x00546090. Общая политика завершает их cast, не снимая наложенные
 //! poison/burn/control-состояния; отдельные player-only эффекты сюда не входят.
+//! Их runtime читает часы reuse через общий End после очистки cast и возврата
+//! движения (`CSkill::End`, 0x004D84C0), отдельно от времени попадания,
+//! создания/перезапуска состояния и его публикации. Отказ без reuse часов
+//! завершения не читает; сроки наложенных состояний этим End не меняются.
 //! SpiderWeb::End (0x0057B810) сбрасывает поля полёта и вызывает
 //! SetMoveable(true) перед общим End. SpiderWebProgress освобождается с cast,
 //! а SpiderWebState на цели остаётся у собственного state-owner-а.

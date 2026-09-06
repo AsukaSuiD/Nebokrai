@@ -1337,6 +1337,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             skill_level,
             &skill_properties,
             now_ms,
+            runtime,
         );
     }
     if skill_id == KNOCK_OUT_SKILL_ID {

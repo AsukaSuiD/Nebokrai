@@ -239,7 +239,7 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
         let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }
