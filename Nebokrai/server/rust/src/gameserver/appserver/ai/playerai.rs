@@ -488,7 +488,7 @@ impl CPlayerAI {
     }
 
     pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
-        self.base_ai.process_reached_defense_actions()
+        self.base_ai.process_reached_defense_actions(|_| {})
     }
 
     pub(crate) fn begin_reached_stiffen_action(&mut self) -> PassiveStiffenAction {

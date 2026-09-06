@@ -1,4 +1,7 @@
 //! Достигнутая event-queue часть `CBaseAI` исторического GameServer.
+//! Defense в ProcessPassiveAction (0x004C84F0) вызывает производный
+//! OnBeenHurted для каждого элемента до его pop. Callback находится внутри
+//! FIFO-прохода: следующий Defense видит мутации active-очереди предыдущего.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -222,7 +225,10 @@ impl CBaseAI {
     /// Выполняет материализованный `Defense`-участок `ProcessPassiveAction`.
     /// Последовательные события снимаются FIFO; `OnBeenHurted` удаляет только
     /// префикс `active_actions` до первого `Attack` либо `Move`.
-    pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
+    pub(crate) fn process_reached_defense_actions(
+        &mut self,
+        mut after_base_handler: impl FnMut(&mut Self),
+    ) -> usize {
         let mut processed = 0usize;
         while self
             .passive_actions
@@ -230,6 +236,7 @@ impl CBaseAI {
             .is_some_and(|event| event.action == AiShapeAction::Defense && event.handling == 0)
         {
             self.discard_active_prefix();
+            after_base_handler(self);
             self.passive_actions.pop_front();
             processed = processed.wrapping_add(1);
         }

@@ -1,4 +1,8 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
+//! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
+//! не откладываются на конец пачки: следующий Defense очищает новый
+//! SearchEnemy, если перед ним нет сохраняемой границы Attack/Move.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
 //! исходный владелец `server/gameserver/appserver/monster.h/.cpp` подтверждают
@@ -1332,15 +1336,12 @@ impl CMonster {
         &mut self,
         mut now_ms: impl FnMut() -> u32,
     ) -> usize {
-        let processed = self.base_ai.process_reached_defense_actions();
-        if self.passive_gladiator_ai.is_some() {
-            for _ in 0..processed {
-                // `CPassiveGladiator::OnBeenHurted` RVA `0x00210E40` после
-                // успешного base-handler ставит отдельный SearchEnemy.
-                self.base_ai.begin_active_search_enemy(now_ms());
+        let passive_gladiator = self.passive_gladiator_ai.is_some();
+        self.base_ai.process_reached_defense_actions(|ai| {
+            if passive_gladiator {
+                ai.begin_active_search_enemy(now_ms());
             }
-        }
-        processed
+        })
     }
 
     pub(crate) fn process_reached_stiffen_action(
