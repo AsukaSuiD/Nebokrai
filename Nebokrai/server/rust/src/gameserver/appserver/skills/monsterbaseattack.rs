@@ -80,6 +80,9 @@
 //! не расходуя RNG выбора навыка и не затрагивая уже начатое исполнение.
 //! Мёртвая цель CPet теряется до IsAttackable: уведомление об уровне и
 //! встречный OnLoseTarget относятся только к отказу живой цели от атаки.
+//! Обычный virtual OnLoseTarget (0x005DCC30 → 0x004C7DA0) очищает только
+//! цель, не вызывает End и не снимает Move. Общий release использует эту
+//! узкую операцию; полная отмена монстра остаётся отдельным lifecycle-действием.
 //! Отказ базового Begin по reuse (CheckCastCondition 0x00514340) для CPet
 //! завершает попытку через OnLoseTarget → SearchEnemy, а не оставляет цель
 //! в ожидании. Проверка идёт после Tracing; движение не считается отказом.
@@ -542,7 +545,7 @@ fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
     } else if ai_type == 20 {
         let _ = release_jiumai_target(region, target_id);
     } else if let Some(target) = region.find_monster_by_id_mut(target_id) {
-        target.clear_ai_target();
+        target.release_ai_target_for_death();
     }
 }
 
