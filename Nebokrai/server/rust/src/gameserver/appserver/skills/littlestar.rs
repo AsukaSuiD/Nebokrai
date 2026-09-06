@@ -19,6 +19,11 @@
 //! и сохранённой `f32`-константы, затем усекается к нулю. Player и monster
 //! ветви используют абсолютный срок `CSkill::IsRestored`; периодические тики
 //! и общая длительность остаются elapsed.
+//! Monster End (0x005355F0) освобождает путь до SetMoveable(true), затем
+//! публикует action 3 и вызывает CAttackSkill::End; часы reuse читаются после
+//! доставки, отдельно от проверки длительности. Обычное завершение сохраняет
+//! этот порядок. Внешнее прерывание через CMonster пока требует runtime-End
+//! с доставкой action 3 и не покрывается простой политикой снятия движения.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -683,14 +688,19 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         .wrapping_add(properties.query_property(SKILL_USAGE_SKILL_PERSIST_TIME))
         < expiration_now_ms;
     if expired {
+        drop(progress);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.set_little_star_progress(None);
+            monster.move_shape_mut().set_moveable(true);
+        }
         send_end(game, region, &source, skill_level);
+        let end_now_ms = runtime.now_milliseconds();
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            monster.move_shape_mut().set_moveable(true);
-            let _ = monster.finish_base_attack_cast(expiration_now_ms);
+            let _ = monster.finish_base_attack_cast(end_now_ms);
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_little_star_progress(progress);
+        monster.set_little_star_progress(Some(progress));
     }
     true
 }

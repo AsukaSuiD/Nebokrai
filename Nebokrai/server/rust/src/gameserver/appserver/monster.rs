@@ -1680,8 +1680,8 @@ impl CMonster {
         self.attack_progress.little_star_progress.as_ref()
     }
 
-    pub(crate) fn set_little_star_progress(&mut self, progress: LittleStarProgress) {
-        self.attack_progress.little_star_progress = Some(progress);
+    pub(crate) fn set_little_star_progress(&mut self, progress: Option<LittleStarProgress>) {
+        self.attack_progress.little_star_progress = progress;
     }
 
     pub(crate) const fn spider_web_progress(&self) -> Option<SpiderWebProgress> {
