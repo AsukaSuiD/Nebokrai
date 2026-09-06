@@ -12,6 +12,11 @@
 //! Замена команды и потеря цели вызывают тот же owner-`End` до очистки AI.
 //! Восстановление использует абсолютный срок `CSkill::IsRestored`; интервал
 //! канального списания сохраняет elapsed-семантику.
+//! Объектный Begin (0x005A0830) проверяет CheckCastCondition до успешной
+//! инициализации флагов (0x005A08C8), а при отказе вызывает End(0) и возвращает
+//! false. Kernel создаётся только после допуска; возврат Begun отделяет
+//! первый AI от Begin, сохраняя ранний отсчёт. Это позволяет расписанию
+//! отличить отказ Begin от ошибки уже начатого канала.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -186,12 +191,11 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
 
-    if ai.player_skill_state::<RageExecutionState>(RAGE_SKILL_ID).is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        ai.begin_player_skill_execution(RageExecutionState::begin(dispatch, started_at_ms));
-    } else if ai
+    let beginning_at_ms = ai.player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
+        .is_none().then(|| runtime.now_milliseconds());
+    if ai
         .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
-        .is_none_or(|state| state.kernel().dispatch() != dispatch)
+        .is_some_and(|state| state.kernel().dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
@@ -207,9 +211,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     let reuse_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai
-        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
-        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
+    if let Some(started_at_ms) = beginning_at_ms
     {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(ai.skill_last_used_ms(RAGE_SKILL_ID), reuse_ms, now_ms) {
@@ -228,6 +230,8 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(RAGE_SKILL_ID));
         }
+        ai.begin_player_skill_execution(RageExecutionState::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     }
 
     if game.find_player(player_id).is_none_or(|player| player.health() == 0) {

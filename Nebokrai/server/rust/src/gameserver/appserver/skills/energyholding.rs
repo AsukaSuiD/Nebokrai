@@ -1,4 +1,6 @@
 //! Накопление энергии `CEnergyHolding` (`0x89`).
+//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
+//! первого AI исполняются после постановки Attack в том же Run.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/energyholding.cpp`. Здесь находятся проверка лука,
@@ -115,6 +117,7 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: 
         if u32::try_from(level).is_ok_and(|level| level <= energy_count) { game.send_skill_system_info(player_id, b"GS0299"); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(ENERGY_HOLDING_SKILL_ID)); }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {

@@ -1,4 +1,6 @@
 //! Сбор душ `CSoulCollect` (`0x13B`).
+//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
+//! первого AI исполняются после постановки Attack в том же Run.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/soulcollect.cpp`. Здесь находятся проверка владельца-
@@ -166,6 +168,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(SOUL_COLLECT_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(SOUL_COLLECT_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

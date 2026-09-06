@@ -1,4 +1,6 @@
 //! Защитная стойка `CPillar` (`0x74`).
+//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
+//! первого AI исполняются после постановки Attack в том же Run.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/pillar.cpp`. Навык проверяет только восстановление при
@@ -96,6 +98,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
         if !skill_is_restored(ai.skill_last_used_ms(PILLAR_SKILL_ID), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(PILLAR_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); finish_player_pillar(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
     if ai.player_skill_execution(PILLAR_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {

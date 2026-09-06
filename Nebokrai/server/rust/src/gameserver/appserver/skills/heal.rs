@@ -18,6 +18,9 @@
 //! заклинателя, поэтому точечный клиентский dispatch проходит как self-target.
 //! Семейный reuse-gate использует exact `CSkill::IsRestored`; cast delay и
 //! частота периодического лечения сохраняют elapsed-семантику.
+//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
+//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
+//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
 
 use super::baseattack::time_reached;
 use super::heal2::HEAL_2_SKILL_ID;
@@ -336,6 +339,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(skill_id)
         .is_none_or(|execution| execution.dispatch() != dispatch)

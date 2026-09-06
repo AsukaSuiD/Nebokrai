@@ -4,8 +4,10 @@
 //! `appserver/skills/hearten.cpp`. Навык `324` сохраняет две проверки MP,
 //! расход перед началом каста, задержку, направление на цель, замену состояния,
 //! публикацию `OnChangeStates` и отдельное время восстановления. Клиентская
-//! отмена снимает движение и текущий навык, но не возвращает уже списанную MP.
+//! отмена снимает запрет движения, но не возвращает уже списанную MP.
 //! Reuse использует exact `CSkill::IsRestored`; cast delay остаётся elapsed.
+//! Begin возвращает Begun до повторной проверки MP и начала каста;
+//! первый AI выполняется после постановки Attack в том же Run.
 
 pub(crate) const HEARTEN_SKILL_ID: u32 = 324;
 pub(crate) const HEARTEN_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -201,6 +203,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(HEARTEN_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(HEARTEN_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)

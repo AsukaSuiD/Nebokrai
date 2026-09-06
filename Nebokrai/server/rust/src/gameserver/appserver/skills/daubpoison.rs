@@ -1,4 +1,6 @@
 //! Самонакладываемая смазка оружия ядом `CDaubPoison` (`0xDF`).
+//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
+//! первого AI исполняются после постановки Attack в том же Run.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/daubpoison.cpp`. Все перегрузки `Begin` подтверждённо
@@ -135,6 +137,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(DAUB_POISON_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(DAUB_POISON_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

@@ -13,6 +13,9 @@
 //! откатывает уже выполненный расход MP.
 //! Reuse каждого ID проверяется общим absolute deadline `CSkill::IsRestored`;
 //! задержка исполнения остаётся отдельным elapsed-интервалом.
+//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
+//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
+//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
 
 use super::agility2::begin_agility_2_state;
 pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
@@ -201,6 +204,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
             dispatch,
             started_at_ms,
         ));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_state::<AgilityFamilyExecutionState>(dispatch.skill_id()).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

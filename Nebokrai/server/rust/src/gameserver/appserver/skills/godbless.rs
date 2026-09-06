@@ -10,6 +10,9 @@
 //! чего x87 усекает итог к нулю перед созданием состояния.
 //! Семейный reuse-gate использует exact `CSkill::IsRestored`, отдельно от
 //! elapsed-задержки каста.
+//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
+//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
+//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
 
 use super::baseattack::time_reached;
 use super::godblessstate::GodBlessState;
@@ -132,6 +135,7 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
         if requested_target(game, region_id, player_id, skill_id, dispatch).is_none() { return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(skill_id).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(target) = requested_target(game, region_id, player_id, skill_id, dispatch) else { abort_player_god_bless(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
     if player_ai.player_skill_execution(skill_id).is_some_and(|execution| execution.stage() == SkillStage::Begin) {

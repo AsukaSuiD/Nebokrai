@@ -9,6 +9,9 @@
 //! `CSummonSkill::End(1)`: возврат движения, обновление свойств, очистку и cooldown.
 //! Восстановление использует абсолютный срок `CSkill::IsRestored`; установка
 //! состояния сохраняет elapsed-задержку.
+//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
+//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
+//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
@@ -159,6 +162,7 @@ pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(ROAR_SKILL_ID)); }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(ROAR_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {

@@ -1,4 +1,6 @@
 //! Ярость `CFury` (`0x1a3`) для игрока и монстра.
+//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
+//! первого AI исполняются после постановки Attack в том же Run.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает задержку и
 //! повторное использование, пакеты `0xBFE01`, накопление `CFuryState`, порядок
@@ -390,6 +392,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(FURY_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(FURY_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

@@ -11,6 +11,9 @@
 //! завершается до Begin нового, а после установки вызывается UpdateProperty.
 //! Проверка MP внутри AI использует знак 32-битной разности (`sub/js`),
 //! а не беззнаковое сравнение исходных значений.
+//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
+//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
+//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
 
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
@@ -221,6 +224,7 @@ where
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(Owner::SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

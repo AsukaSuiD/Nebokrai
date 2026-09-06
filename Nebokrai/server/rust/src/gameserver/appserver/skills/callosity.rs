@@ -16,6 +16,9 @@
 //! Сохранённый ниже псевдокод относится к `CCallosity`; `CCallosity2` имеет
 //! тот же контракт с идентификатором `0x7d` и собственным временем
 //! восстановления.
+//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
+//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
+//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
 
 use super::baseattack::time_reached;
 use super::callosity2::create_callosity_2_state;
@@ -175,6 +178,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(false);
         player.set_current_skill_id(Some(skill_id));
         player_ai.begin_player_skill_execution(CallosityExecutionState::begin(dispatch, started_at_ms));
+        return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Begun, ..pending() };
     } else if player_ai
         .player_skill_state::<CallosityExecutionState>(dispatch.skill_id()).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

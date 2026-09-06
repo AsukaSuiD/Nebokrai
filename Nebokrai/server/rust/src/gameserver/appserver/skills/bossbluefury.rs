@@ -1,4 +1,6 @@
 //! Ярость синего босса `CBossBlueFury` (`0x1f7`) для игрока и монстра.
+//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
+//! первого AI исполняются после постановки Attack в том же Run.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/bossbluefury.cpp`. Владелец сохраняет обе проверки RP
@@ -237,6 +239,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(BOSS_BLUE_FURY_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        return player_terminal(QueuedSkillExecutionState::Begun);
     }
     if dead {
         send_player_failure(game, player_id, 2, rp_loss);
