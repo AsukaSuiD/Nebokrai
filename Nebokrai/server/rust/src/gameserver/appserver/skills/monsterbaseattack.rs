@@ -33,6 +33,10 @@
 //! завершает OnSearchEnemy до разрешения региона и обхода целей. Уже заданная
 //! цель не заменяется; новый шаг отхода и передача цели близнецу не выполняются.
 //! Общий caller по-прежнему завершает достигнутое FIFO-событие после возврата.
+//! Фабричный CMonsterAI наследует пустой CBaseAI::OnSearchEnemy (0x0047B150,
+//! mov eax,1; ret), а не проверку смерти/области/навыка. Этот dispatch
+//! завершается до разрешения ShapeView и area_index; его прежняя проверка
+//! в конце общего поиска ошибочно зависела от инфраструктуры региона.
 //! Начало атаки получает ID/уровень из этого же реестра; после Begin источником
 //! обоих значений является MonsterBaseAttackDispatch. Повторный проход не
 //! перечитывает максимум setup и не смешивает сохранённую цель с другим уровнем.
@@ -685,7 +689,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    if matches!(property.ai, 2 | 20) && has_target {
+    if MonsterAiKind::is_generic_ai_type(property.ai)
+        || (matches!(property.ai, 2 | 20) && has_target)
+    {
         return true;
     }
     if property.ai == 7 {
@@ -953,7 +959,6 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 minimum_skill_distance,
             )
         }
-        _ if MonsterAiKind::is_generic_ai_type(property.ai) => None,
         _ => return false,
     };
     if let Some(selected) = selected
