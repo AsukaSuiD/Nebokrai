@@ -262,7 +262,7 @@ use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_batt
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
 use crate::gameserver::appserver::ai::jiumai::{
-    assign_jiumai_target, ensure_jiumai_twin, select_jiumai_enemy,
+    assign_jiumai_target, ensure_jiumai_twin, release_jiumai_target, select_jiumai_enemy,
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
@@ -539,6 +539,8 @@ fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
         }
     } else if matches!(ai_type, 10 | 12 | 16) {
         release_guard_sword_target(game, region, target_id, runtime);
+    } else if ai_type == 20 {
+        let _ = release_jiumai_target(region, target_id);
     } else if let Some(target) = region.find_monster_by_id_mut(target_id) {
         target.clear_ai_target();
     }
@@ -1147,11 +1149,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 );
             } else if matches!(property.ai, 10 | 12 | 16) {
                 lose_guard_sword_target(game, region, monster_id, runtime);
-            } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                if has_owned_search_enemy(property.ai, tamed) {
-                    monster.lose_ai_target_and_search(runtime.now_milliseconds());
-                } else {
-                    monster.clear_ai_target();
+            } else {
+                release_owned_monster_target(game, region, monster_id, runtime);
+                if has_owned_search_enemy(property.ai, tamed)
+                    && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+                {
+                    monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
                 }
             }
             return true;
@@ -1209,11 +1212,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 );
             } else if matches!(property.ai, 10 | 12 | 16) {
                 lose_guard_sword_target(game, region, monster_id, runtime);
-            } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                if has_owned_search_enemy(property.ai, tamed) {
-                    monster.lose_ai_target_and_search(runtime.now_milliseconds());
-                } else {
-                    monster.clear_ai_target();
+            } else {
+                release_owned_monster_target(game, region, monster_id, runtime);
+                if has_owned_search_enemy(property.ai, tamed)
+                    && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+                {
+                    monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
                 }
             }
             return true;

@@ -11,6 +11,8 @@
 //! который очищает только цель. Передача потери цели близнецу не отменяет
 //! его исполнение навыка и Move FIFO; дальнейший AI самостоятельно завершает
 //! навык. Отложенная синхронизация ниже пока сохраняет метку связанной цели.
+//! Общий schedule-OnLoseTarget и death FIFO вызывают один переход пары
+//! непосредственно; наличие старой linked-метки ему не требуется.
 
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -279,11 +281,11 @@ pub(crate) fn synchronize_jiumai_target_loss(
     true
 }
 
-/// Материализует виртуальный `CJiuMai::OnLoseTarget` из death FIFO. Сначала
+/// Материализует виртуальный `CJiuMai::OnLoseTarget` для расписания и death FIFO. Сначала
 /// общий monster-owner отпускает цель погибшей половины, затем тот же базовый
 /// переход получает живой сражающийся близнец. Оба перехода сохраняют уже
 /// поставленный `ASA_MOVE`, как исходный `CMonsterAI::OnLoseTarget`.
-pub(crate) fn release_jiumai_target_for_death(
+pub(crate) fn release_jiumai_target(
     region: &mut CServerRegion,
     monster_id: i32,
 ) -> bool {

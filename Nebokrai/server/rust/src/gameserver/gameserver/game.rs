@@ -1336,7 +1336,7 @@ use crate::gameserver::appserver::ai::baseai::{
 };
 use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target_for_death;
 use crate::gameserver::appserver::ai::jiumai::{
-    release_jiumai_target_for_death, retarget_jiumai_after_hurt,
+    release_jiumai_target, retarget_jiumai_after_hurt,
     synchronize_jiumai_target_loss,
 };
 use crate::gameserver::appserver::ai::pet::release_pet_target_for_death;
@@ -47376,7 +47376,7 @@ impl CGame {
                                 runtime,
                             );
                         } else if jiumai_target_release {
-                            release_jiumai_target_for_death(owner.base_mut(), monster_id);
+                            release_jiumai_target(owner.base_mut(), monster_id);
                         } else if let Some(monster) =
                             owner.base_mut().find_monster_by_id_mut(monster_id)
                         {
