@@ -491,11 +491,16 @@ impl CPlayerAI {
         self.base_ai.process_reached_defense_actions()
     }
 
-    pub(crate) fn process_reached_stiffen_action(
+    pub(crate) fn begin_reached_stiffen_action(&mut self) -> PassiveStiffenAction {
+        self.base_ai.begin_reached_stiffen_action()
+    }
+
+    pub(crate) fn finish_reached_stiffen_action(
         &mut self,
+        begun: PassiveStiffenAction,
         now_ms: u32,
     ) -> PassiveStiffenAction {
-        self.base_ai.process_reached_stiffen_action(now_ms)
+        self.base_ai.finish_reached_stiffen_action(begun, now_ms)
     }
 
     pub(crate) fn stiffen_attack_needs_end(&self) -> bool {

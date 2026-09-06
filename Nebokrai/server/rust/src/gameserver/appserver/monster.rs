@@ -1347,7 +1347,7 @@ impl CMonster {
         &mut self,
         now_ms: u32,
     ) -> PassiveStiffenAction {
-        let action = self.base_ai.process_reached_stiffen_action(now_ms);
+        let action = self.base_ai.begin_reached_stiffen_action();
         if action.interrupts_attack() {
             while self.base_ai.stiffen_attack_pending() {
                 let release_target = self.base_ai.stiffen_attack_needs_end()
@@ -1359,7 +1359,7 @@ impl CMonster {
                 self.base_ai.discard_active_prefix();
             }
         }
-        action
+        self.base_ai.finish_reached_stiffen_action(action, now_ms)
     }
 
     pub(crate) fn begin_reached_death_action(&mut self) -> bool {

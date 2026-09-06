@@ -240,52 +240,46 @@ impl CBaseAI {
     /// `ProcessPassiveAction`. До первой атаки/движения active-префикс
     /// отбрасывается; движение сохраняется, атака остаётся в FIFO до ответа
     /// concrete owner-а на `CSkill::End(4)` и проверку `IsEnded`.
-    pub(crate) fn process_reached_stiffen_action(
-        &mut self,
-        now_ms: u32,
-    ) -> PassiveStiffenAction {
+    pub(crate) fn begin_reached_stiffen_action(&mut self) -> PassiveStiffenAction {
         let Some(event) = self.passive_actions.front() else {
             return PassiveStiffenAction::None;
         };
         if event.action != AiShapeAction::Stiffen {
             return PassiveStiffenAction::None;
         }
-
-        let mut started = false;
-        let mut interrupt_attack = false;
-        if event.handling == 0 {
-            started = true;
-            self.discard_active_prefix();
-            if self
-                .active_actions
-                .front()
-                .is_some_and(|event| event.action == AiShapeAction::Attack)
-            {
-                interrupt_attack = true;
-            }
-            self.passive_actions
-                .front_mut()
-                .expect("Stiffen остаётся первым passive-событием")
-                .handling = 1;
+        if event.handling != 0 {
+            return PassiveStiffenAction::Waiting;
         }
+        self.discard_active_prefix();
+        if self.stiffen_attack_pending() {
+            PassiveStiffenAction::InterruptAttack
+        } else {
+            PassiveStiffenAction::StartedWaiting
+        }
+    }
 
-        let event = self
-            .passive_actions
-            .front()
-            .expect("Stiffen остаётся первым passive-событием");
+    /// ProcessPassiveAction фиксирует результат OnStiffen и срок после callback.
+    pub(crate) fn finish_reached_stiffen_action(
+        &mut self,
+        begun: PassiveStiffenAction,
+        now_ms: u32,
+    ) -> PassiveStiffenAction {
+        if begun == PassiveStiffenAction::None {
+            return PassiveStiffenAction::None;
+        }
+        let Some(event) = self.passive_actions.front_mut()
+            .filter(|event| event.action == AiShapeAction::Stiffen)
+        else {
+            return PassiveStiffenAction::None;
+        };
+        event.handling = 1;
         if !ai_event_deadline_reached(event, now_ms) {
-            return if interrupt_attack {
-                PassiveStiffenAction::InterruptAttack
-            } else if started {
-                PassiveStiffenAction::StartedWaiting
-            } else {
-                PassiveStiffenAction::Waiting
-            };
+            return begun;
         }
         self.passive_actions.pop_front();
-        if interrupt_attack {
+        if begun.interrupts_attack() {
             PassiveStiffenAction::InterruptAttackFinished
-        } else if started {
+        } else if begun == PassiveStiffenAction::StartedWaiting {
             PassiveStiffenAction::StartedFinished
         } else {
             PassiveStiffenAction::Finished

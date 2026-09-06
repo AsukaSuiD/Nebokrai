@@ -43,6 +43,9 @@
 //! OnStiffen (0x004C8770) после подтверждённого IsEnded снимает Attack,
 //! вызывает виртуальный OnLoseTarget, назначает default и лишь затем
 //! продолжает удаление служебного префикса. Хвост FIFO виден callback-у.
+//! ProcessPassiveAction (0x004C84F0) записывает handling и проверяет deadline
+//! после OnStiffen. Игрок читает часы после End/OnLoseTarget; до этого
+//! callback видит исходное passive-событие даже при уже наступившем сроке.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -46819,11 +46822,8 @@ impl CGame {
                             let passive_stiffen = if ai_hibernated || defense_processed {
                                 PassiveStiffenAction::None
                             } else {
-                                player_ai.process_reached_stiffen_action(
-                                    runtime.now_milliseconds(),
-                                )
+                                player_ai.begin_reached_stiffen_action()
                             };
-                            let passive_action_hung_up = passive_stiffen.blocks_active();
                             if passive_stiffen.interrupts_attack() {
                                 while player_ai.stiffen_attack_pending() {
                                     let current_skill = self.find_player(player_id)
@@ -46854,6 +46854,14 @@ impl CGame {
                                     player_ai.discard_active_prefix();
                                 }
                             }
+                            let passive_stiffen = if passive_stiffen == PassiveStiffenAction::None {
+                                passive_stiffen
+                            } else {
+                                player_ai.finish_reached_stiffen_action(
+                                    passive_stiffen, runtime.now_milliseconds(),
+                                )
+                            };
+                            let passive_action_hung_up = passive_stiffen.blocks_active();
                             let moving_started =
                                 !ai_hibernated
                                     && !passive_action_hung_up
