@@ -1,4 +1,10 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! На границах End, первого контакта, смерти и OnStandOnSwitchPoint
+//! временно извлечённый AI возвращается в CPlayer до callback. После вызова
+//! извлекается изменённый владелец, чтобы вложенный End/ChangeRegion видел
+//! текущие исполнения и не терял изменения очередей. Это адаптация Rust
+//! заимствований, не новая игровая очередь. Вложенные callbacks внутри
+//! конкретных skill-owner-ов требуют отдельного проведения через эту границу.
 //! Player Run следует CBaseAI::Run (0x004C7D10): OnSchedule/Begin до фона,
 //! затем passive и active. Первый AI не вызывается из Begin; фон может
 //! завершить навык, а passive — прервать Attack до его первого исполнения.
@@ -37884,10 +37890,29 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
-        self.find_player_mut(player_id)?
-            .restore_player_ai(std::mem::take(player_ai));
-        let outcome = self.end_materialized_player_skill(player_id, skill_id, cause, runtime);
-        if let Some(player) = self.find_player_mut(player_id) {
+        self.find_player(player_id)?;
+        self.with_published_player_ai(player_id, player_ai, |game| {
+            game.end_materialized_player_skill(player_id, skill_id, cause, runtime)
+        })
+    }
+
+    /// На границе callback возвращает настоящий AI в CPlayer. Вложенные
+    /// вызовы читают и меняют того же владельца; обратно извлекается уже
+    /// обновлённый AI, без слияния копий, новых очередей и сырых указателей.
+    fn with_published_player_ai<R>(
+        &mut self,
+        player_id: i32,
+        player_ai: &mut CPlayerAI,
+        callback: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let published = if let Some(player) = self.find_player_mut(player_id) {
+            player.restore_player_ai(std::mem::take(player_ai));
+            true
+        } else {
+            false
+        };
+        let outcome = callback(self);
+        if published && let Some(player) = self.find_player_mut(player_id) {
             *player_ai = player.take_player_ai();
         }
         outcome
@@ -40851,14 +40876,14 @@ impl CGame {
                 let outcome = self.execute_player_skill_owner(
                     player_id, execution.dispatch(), &mut player_ai, runtime,
                 );
-                self.apply_player_skill_contacts(player_id, execution.dispatch(), &outcome, runtime);
+                self.apply_player_skill_contacts(player_id, execution.dispatch(), &mut player_ai, &outcome, runtime);
                 outcome
             } else {
                 let dispatch = fairy_execution.expect("проверен фоновый экземпляр WarSoul").dispatch();
                 let outcome = self.execute_battle_fairy_skill_owner(
                     player_id, dispatch, &mut player_ai, runtime,
                 );
-                self.apply_battle_fairy_skill_contacts(player_id, dispatch, &outcome, runtime);
+                self.apply_battle_fairy_skill_contacts(player_id, dispatch, &mut player_ai, &outcome, runtime);
                 outcome
             };
             let termination = match outcome.state {
@@ -41375,21 +41400,24 @@ impl CGame {
         &mut self,
         player_id: i32,
         dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
         outcome: &QueuedSkillExecutionOutcome,
         runtime: &mut Runtime,
     ) {
-        if outcome.first_contact {
-            match dispatch {
-                PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
-                    .find_player(player_id)
-                    .and_then(CPlayer::server_region_id)
-                    .and_then(|region_id| {
-                        self.player_on_first_skill(player_id, target.id, Some(region_id), runtime)
-                    }),
-                _ => None,
-            };
-        }
-        let _death = outcome.killing_blow.and_then(|blow| self.player_on_death(blow, runtime));
+        self.with_published_player_ai(player_id, player_ai, |game| {
+            if outcome.first_contact {
+                match dispatch {
+                    PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => game
+                        .find_player(player_id)
+                        .and_then(CPlayer::server_region_id)
+                        .and_then(|region_id| {
+                            game.player_on_first_skill(player_id, target.id, Some(region_id), runtime)
+                        }),
+                    _ => None,
+                };
+            }
+            let _death = outcome.killing_blow.and_then(|blow| game.player_on_death(blow, runtime));
+        });
     }
 
     /// OnSchedule до background: выбирает одну команду и выполняет только Begin.
@@ -41550,7 +41578,7 @@ impl CGame {
         outcome: &QueuedSkillExecutionOutcome,
         runtime: &mut Runtime,
     ) -> bool {
-        self.apply_player_skill_contacts(player_id, dispatch, outcome, runtime);
+        self.apply_player_skill_contacts(player_id, dispatch, player_ai, outcome, runtime);
         match outcome.state {
             QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
             QueuedSkillExecutionState::Completed =>
@@ -41564,31 +41592,34 @@ impl CGame {
         &mut self,
         player_id: i32,
         dispatch: BattleFairySkillDispatch,
+        player_ai: &mut CPlayerAI,
         outcome: &QueuedSkillExecutionOutcome,
         runtime: &mut Runtime,
     ) {
-        if outcome.first_contact {
-            match dispatch {
-                BattleFairySkillDispatch::Object { target, .. }
-                    if target.object_type == 400 =>
-                {
-                    self.find_player(player_id)
-                        .and_then(CPlayer::server_region_id)
-                        .and_then(|region_id| {
-                            self.player_on_first_skill(
-                                player_id,
-                                target.id,
-                                Some(region_id),
-                                runtime,
-                            )
-                        })
-                }
-                _ => None,
-            };
-        }
-        let _death = outcome
-            .killing_blow
-            .and_then(|blow| self.player_on_death(blow, runtime));
+        self.with_published_player_ai(player_id, player_ai, |game| {
+            if outcome.first_contact {
+                match dispatch {
+                    BattleFairySkillDispatch::Object { target, .. }
+                        if target.object_type == 400 =>
+                    {
+                        game.find_player(player_id)
+                            .and_then(CPlayer::server_region_id)
+                            .and_then(|region_id| {
+                                game.player_on_first_skill(
+                                    player_id,
+                                    target.id,
+                                    Some(region_id),
+                                    runtime,
+                                )
+                            })
+                    }
+                    _ => None,
+                };
+            }
+            let _death = outcome
+                .killing_blow
+                .and_then(|blow| game.player_on_death(blow, runtime));
+        });
     }
 
     /// Единственный выбор concrete WarSoul owner для Begin и последующего AI.
@@ -41817,7 +41848,7 @@ impl CGame {
             {
                 self.send_battle_fairy_skill_failure(player_id, 2);
             }
-            self.apply_battle_fairy_skill_contacts(player_id, dispatch, &outcome, runtime);
+            self.apply_battle_fairy_skill_contacts(player_id, dispatch, player_ai, &outcome, runtime);
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
                 QueuedSkillExecutionState::Completed => player_ai.finish_battle_fairy_skill(
@@ -47304,7 +47335,9 @@ impl CGame {
                                 && !passive_action_hung_up
                                 && player_ai.advance_active_move(runtime.now_milliseconds());
                             if moving_started {
-                                let _ = self.on_player_stand_on_switch_point(player_id);
+                                let _ = self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                                    game.on_player_stand_on_switch_point(player_id)
+                                });
                             }
                             let active_stand_handled = if !ai_hibernated
                                 && !passive_action_hung_up
@@ -47315,8 +47348,9 @@ impl CGame {
                                 let _ =
                                     player_ai.advance_active_stand(runtime.now_milliseconds());
                                 if standing_started {
-                                    let _ =
-                                        self.on_player_stand_on_switch_point(player_id);
+                                    let _ = self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                                        game.on_player_stand_on_switch_point(player_id)
+                                    });
                                 }
                                 true
                             } else {
