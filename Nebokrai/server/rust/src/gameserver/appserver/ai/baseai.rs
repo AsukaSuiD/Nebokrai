@@ -2,6 +2,9 @@
 //! Defense в ProcessPassiveAction (0x004C84F0) вызывает производный
 //! OnBeenHurted для каждого элемента до его pop. Callback находится внутри
 //! FIFO-прохода: следующий Defense видит мутации active-очереди предыдущего.
+//! ProcessPassiveAction различает ноль, единицу и прочие знаковые handling:
+//! только единица допускает снятие по deadline. Иное ненулевое значение
+//! не вызывает обработчик снова и не нормализуется в успешное завершение.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -279,7 +282,13 @@ impl CBaseAI {
         else {
             return PassiveStiffenAction::None;
         };
-        event.handling = 1;
+        if begun == PassiveStiffenAction::Waiting {
+            if event.handling != 1 {
+                return PassiveStiffenAction::Waiting;
+            }
+        } else {
+            event.handling = 1;
+        }
         if !ai_event_deadline_reached(event, now_ms) {
             return begun;
         }
