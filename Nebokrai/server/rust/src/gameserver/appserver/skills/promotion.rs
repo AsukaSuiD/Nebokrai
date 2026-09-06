@@ -1,4 +1,6 @@
 //! Усиление `CPromotion` (`0x142`) для игрока и монстра.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/promotion.cpp`. Подключённые пути `SelfTarget` и `Object` сохраняют
@@ -535,6 +537,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(PROMOTION_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(PROMOTION_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

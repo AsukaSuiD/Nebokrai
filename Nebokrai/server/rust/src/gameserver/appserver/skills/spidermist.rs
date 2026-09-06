@@ -1,4 +1,6 @@
 //! Паучий туман `CSpiderMist` (`0x198`) для игрока, монстра и питомца.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spidermist.cpp`. Владелец сохраняет координаты цели в
@@ -285,6 +287,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
             destination,
             now_ms,
         ));
+        return player_terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_state::<PlayerSpiderMistExecutionState>(SPIDER_MIST_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

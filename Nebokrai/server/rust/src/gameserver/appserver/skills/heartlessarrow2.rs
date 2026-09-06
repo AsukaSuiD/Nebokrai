@@ -1,4 +1,6 @@
 //! Семейство региональных стрел `CHeartLessArrow2/3` (`0xE5/0xE6`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
 //! `appserver/skills/heartlessarrow2.cpp` и `heartlessarrow3.cpp`. Общий owner
@@ -334,6 +336,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(id));
         }
         player_ai.begin_player_skill_execution(HeartlessArrowAreaExecutionState::begin(dispatch, destination_x, destination_y, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<HeartlessArrowAreaExecutionState>(dispatch.skill_id()).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

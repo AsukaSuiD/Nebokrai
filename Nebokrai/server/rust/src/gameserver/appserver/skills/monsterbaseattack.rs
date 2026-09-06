@@ -1,4 +1,6 @@
 //! Базовая атака монстра и приручённого питомца (`CMonsterBaseAttack`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
 //! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
 //! callback CPlayer +0x158 (0x00485540).
@@ -282,6 +284,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(MONSTER_BASE_ATTACK_SKILL_ID));
         }
+        return player_base_attack_outcome(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(MONSTER_BASE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return rejected();
     }

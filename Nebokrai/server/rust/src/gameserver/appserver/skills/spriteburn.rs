@@ -1,4 +1,6 @@
 //! Огненная область `CSpriteBurn` (`0x1a6`) для игрока и монстра.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spriteburn.cpp`. Владелец сохраняет повторную проверку и
@@ -230,6 +232,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(SPRITE_BURN_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SpriteBurnExecutionState::begin(dispatch, now_ms));
+        return player_terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<SpriteBurnExecutionState>(SPRITE_BURN_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }

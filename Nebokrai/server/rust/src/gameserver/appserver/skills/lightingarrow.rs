@@ -1,4 +1,6 @@
 //! Световая стрела `CLightingArrow` (`0xCB`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/lightingarrow.cpp`. Модуль хранит execution pipeline,
@@ -138,6 +140,7 @@ pub(crate) fn execute_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: 
         let now_ms = runtime.now_milliseconds();
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(LIGHTING_ARROW_SKILL_ID)); }
         player_ai.begin_player_skill_execution(LightingArrowExecutionState::begin(dispatch, destination, target, now_ms));
+        return outcome(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<LightingArrowExecutionState>(LIGHTING_ARROW_SKILL_ID).copied().is_none_or(|s| s.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected); }
 
     let state = player_ai.player_skill_state::<LightingArrowExecutionState>(LIGHTING_ARROW_SKILL_ID).copied().expect("выполнение световой стрелы создано");

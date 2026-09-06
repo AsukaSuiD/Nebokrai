@@ -1,4 +1,6 @@
 //! Предметный навык громового огня `CItemSkill_2` (`0x322`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
 //! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
 //! callback CPlayer +0x158 (0x00485540).
@@ -155,6 +157,7 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
         if !skill_is_restored(player_ai.skill_last_used_ms(ITEM_SKILL_2_ID), reuse, runtime.now_milliseconds()) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
         let path=game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if maximum!=0 && path.len()>maximum as usize { send_failure(game, player_id, 0x0b, b"GS1185", None); return terminal(QueuedSkillExecutionState::Rejected); } if path.iter().any(|cell| cell.2==2) { send_failure(game, player_id, 0x0f, b"GS1186", None); return terminal(QueuedSkillExecutionState::Rejected); } if mp_loss!=0 && !has_mana(mana, mp_loss) { send_failure(game, player_id, 7, b"GS1187", Some(mp_loss)); return terminal(QueuedSkillExecutionState::Rejected); }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(ITEM_SKILL_2_ID).is_none_or(|execution| execution.dispatch()!=dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     if player_ai.player_skill_execution(ITEM_SKILL_2_ID).is_some_and(|execution| execution.stage()==SkillStage::Begin) {
         let current=game.find_player(player_id).map_or(0,CPlayer::mana); if !has_mana(current,mp_loss) { send_failure(game,player_id,7,b"GS1187",Some(mp_loss)); finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); return terminal(QueuedSkillExecutionState::Rejected); } if target_dead { send_failure(game,player_id,10,b"GS1188",None); finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); return terminal(QueuedSkillExecutionState::Rejected); }

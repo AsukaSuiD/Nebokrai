@@ -1,4 +1,6 @@
 //! Ослепление `CBlind` (`0x76`) для игрока.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/blind.cpp`. Навык дважды проверяет MP и оружие категории
@@ -246,6 +248,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(BLIND_SKILL_ID));
         }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(BLIND_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

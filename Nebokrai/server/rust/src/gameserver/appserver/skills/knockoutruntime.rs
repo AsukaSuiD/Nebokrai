@@ -1,4 +1,6 @@
 //! Рабочий владелец исполнения `CKnockOut` (`0x192`) с объектом-целью.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
 //! `appserver/skills/knockout.cpp` и `knockoutstate.cpp`. Контактные атаки
@@ -422,6 +424,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
             player.movement_shape_mut().set_direction(get_line_direction(sx, sy, target.x, target.y));
         }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        return result(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(KNOCK_OUT_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected); }
     if target.dead { failure(game, player_id, 10); abort_player_knock_out(game, player_id); return result(QueuedSkillExecutionState::Rejected); }
     if ai.player_skill_execution(KNOCK_OUT_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {

@@ -1,4 +1,6 @@
 //! Трёхлучевой выстрел `CRainArrow` (`0xCE`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/rainarrow.cpp`. Модуль владеет проверками, MP, углом,
@@ -121,6 +123,7 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
         if mp != 0 && (player.mana().wrapping_sub(mp) as i32) < 0 { game.send_base_magic_failure(id, 7); game.send_skill_system_info_with_unsigned(id, b"GS0288", mp); return outcome(QueuedSkillExecutionState::Rejected) }
         if let Some(p) = game.find_player_mut(id) { p.set_skill_moveable(false); p.set_current_skill_id(Some(RAIN_ARROW_SKILL_ID)); }
         ai.begin_player_skill_execution(RainArrowExecutionState::begin(dispatch, destination, target, runtime.now_milliseconds()));
+        return outcome(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<RainArrowExecutionState>(RAIN_ARROW_SKILL_ID).cloned().is_none_or(|s| s.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
     let mut state = ai.player_skill_state::<RainArrowExecutionState>(RAIN_ARROW_SKILL_ID).cloned().expect("выполнение дождя стрел создано"); if let Some(target) = state.target { match target_snapshot(game, region, target) { Some((x, y, false)) => state.destination = (x, y), _ => { game.send_base_magic_failure(id, 10); game.send_skill_system_info(id, b"GS0285"); abort_player_rain_arrow(game, id); return outcome(QueuedSkillExecutionState::Rejected) } } }
     if !state.condition_checked { let mana = game.find_player(id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp) as i32) < 0 { game.send_base_magic_failure(id, 7); game.send_skill_system_info_with_unsigned(id, b"GS0288", mp); abort_player_rain_arrow(game, id); return outcome(QueuedSkillExecutionState::Rejected) }

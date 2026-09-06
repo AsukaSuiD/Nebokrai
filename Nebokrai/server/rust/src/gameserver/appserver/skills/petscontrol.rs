@@ -1,4 +1,6 @@
 //! Управление целью всех питомцев игрока (`CPetsControl`, навык `0xd7`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/petscontrol.cpp`. Навык сохраняет двойную проверку MP,
@@ -172,6 +174,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(PETS_CONTROL_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(PETS_CONTROL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

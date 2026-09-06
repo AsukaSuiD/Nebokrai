@@ -1,4 +1,6 @@
 //! Общее исполнение пустых навыков `CNonFun`.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
 //! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
 //! callback CPlayer +0x158 (0x00485540).
@@ -57,6 +59,7 @@ pub(crate) fn execute_player_non_fun<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(skill_id));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_execution(skill_id)
         .is_none_or(|state| state.dispatch() != dispatch)

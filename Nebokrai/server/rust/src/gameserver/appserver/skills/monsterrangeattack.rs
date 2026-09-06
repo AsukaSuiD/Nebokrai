@@ -1,4 +1,6 @@
 //! Круговая атака `CMonsterRangeAttack` (ID `0x2ef`) для игрока и монстра.
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
 //! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
 //! callback CPlayer +0x158 (0x00485540).
@@ -150,6 +152,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(MONSTER_RANGE_ATTACK_SKILL_ID));
         }
         ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        return player_range_outcome(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_execution(MONSTER_RANGE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return rejected();
     }

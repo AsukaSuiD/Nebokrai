@@ -1,4 +1,6 @@
 //! Очищение `CCure` (`0x131`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/cure.cpp`. Модуль сохраняет двойную проверку MP,
@@ -539,6 +541,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(CURE_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(CURE_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

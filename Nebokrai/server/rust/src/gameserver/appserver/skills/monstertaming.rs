@@ -1,4 +1,6 @@
 //! Приручение обычного монстра (`CMonsterTaming`, навык `0xd4`).
+//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
+//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/monstertaming.cpp`. Владелец навыка сохраняет проверки
@@ -297,6 +299,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(MONSTER_TAMING_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_execution(MONSTER_TAMING_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
