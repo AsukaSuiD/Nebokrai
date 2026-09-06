@@ -11,6 +11,9 @@
 //! `f32`. Оба остальных исходных `CalculateAttackPower` берут elemental damage из virtual
 //! `CMonster::GetAddElementAtk == 0`, поэтому ресурсный element range здесь не
 //! участвует и между physical и critical roll нет дополнительного RNG.
+//! Общий хвост `End` сохраняет отдельные часы: `dispatch.now_ms` относится к
+//! попаданию, а reuse читает runtime после очистки ресурсов и освобождения
+//! движения, как `CSkill::End` (0x4d84c0). Часы попадания не подменяют часы End.
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
@@ -494,14 +497,15 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
     true
 }
 
-pub(crate) fn finish_owned_monster_projectile(
+pub(crate) fn finish_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,
     dispatch: &MonsterProjectileDispatch,
+    runtime: &mut Runtime,
 ) {
     if let Some(monster) = region.find_monster_by_id_mut(dispatch.monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast(dispatch.now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
 }

@@ -39483,7 +39483,7 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_projectile(owner.base_mut(), &dispatch);
+                finish_owned_monster_projectile(owner.base_mut(), &dispatch, runtime);
                 self.restore_region_owner(owner);
             }
         }

@@ -210,7 +210,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
     if !time_reached(now_ms, cast.started_at_ms(), delay.wrapping_add(progress.missile_flying_time_ms())) { return true; }
     let dispatch = MonsterProjectileDispatch::object_target(monster_id, YAKSHA_SLASH_SKILL_ID, target_x, target_y, skill_level, properties.clone(), property.clone(), master, tamed, now_ms);
     let _ = execute_owned_monster_projectile_target(game, region, &dispatch, target_identity, runtime, deaths);
-    finish_owned_monster_projectile(region, &dispatch);
+    finish_owned_monster_projectile(region, &dispatch, runtime);
     true
 }
 
