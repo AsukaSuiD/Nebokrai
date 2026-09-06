@@ -5,6 +5,9 @@
 //! ProcessPassiveAction различает ноль, единицу и прочие знаковые handling:
 //! только единица допускает снятие по deadline. Иное ненулевое значение
 //! не вызывает обработчик снова и не нормализуется в успешное завершение.
+//! То же различие сохраняют ProcessActiveAction (0x004C81D0) и WarSoul
+//! (0x004C8390): общий завершитель принимает только handling 0 или 1,
+//! а не весь знаковый диапазон до единицы.
 //!
 //! `AddAIEvent` RVA `0x000C8F90` имеет статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
@@ -525,7 +528,7 @@ impl CBaseAI {
         let Some(event) = queue.front_mut() else {
             return;
         };
-        if event.action != action || event.handling > 1 {
+        if event.action != action || !matches!(event.handling, 0 | 1) {
             return;
         }
         event.handling = 1;

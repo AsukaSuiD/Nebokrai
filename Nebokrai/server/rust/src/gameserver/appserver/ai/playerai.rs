@@ -794,7 +794,7 @@ impl CPlayerAI {
         now_ms: u32,
     ) -> bool {
         let Some(handling) = self.base_ai.active_war_soul_actions().front()
-            .filter(|event| event.action == AiShapeAction::Attack && event.handling <= 1)
+            .filter(|event| event.action == AiShapeAction::Attack && matches!(event.handling, 0 | 1))
             .map(|event| event.handling)
         else {
             return false;
