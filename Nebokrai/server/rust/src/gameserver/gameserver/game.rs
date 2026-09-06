@@ -12,6 +12,11 @@
 //! После rider-guard выбор ID (0x0050994C) предшествует CanFight и IsEnded:
 //! отказ завершает запрошенный экземпляр, а не прежний default. Живой
 //! экземпляр сохраняет выбор без повторного Begin и AddAIEvent (0x00509A6F).
+//! Riding-отказ относится только к новой голове FIFO: Reject и общий
+//! OnLoseTarget видят прежнюю цель, затем запрос удаляется. CanFight после
+//! выбора новой цели использует тот же обработчик завершения, что и потеря цели.
+//! CBaseAI::OnLoseTarget (0x004C7DA0) очищает цель до concrete End;
+//! очистка команды не зависит от совпадения её dispatch с живым экземпляром.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -38006,10 +38011,12 @@ impl CGame {
             self.find_player(player_id)
                 .is_some_and(|player| player.player_ai().player_skill_requires_target_end(skill_id))
         });
+        let previous_dispatch = self.find_player_mut(player_id).and_then(|player| {
+            let dispatch = player.player_ai().current_player_skill();
+            player.player_ai_mut().release_current_player_command();
+            dispatch
+        });
         if !needs_end {
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.player_ai_mut().release_current_player_command();
-            }
             self.restore_player_default_attack_after_skill_end(player_id);
             return false;
         }
@@ -38026,8 +38033,7 @@ impl CGame {
                 return true;
             }
             self.find_player_mut(player_id).is_some_and(|player| {
-                let dispatch = player.player_ai().current_player_skill();
-                let released = dispatch.is_some_and(|dispatch| {
+                let released = previous_dispatch.is_some_and(|dispatch| {
                     player
                         .player_ai_mut()
                         .finish_player_skill(dispatch, SkillTermination::Cancelled)
@@ -41445,77 +41451,31 @@ impl CGame {
         {
             return 0;
         }
-        let mut execution_count: usize = 0;
-        let mut player_execution_count = 0;
-        let _ = player_ai.begin_next_player_skill(true);
-        if let Some(dispatch) = player_ai.current_player_skill()
+        if !player_ai.player_skills().is_empty()
+            && self.find_player(player_id).is_some_and(CPlayer::is_rider)
         {
-            let (is_rider, can_fight, current_skill_id) = self
-                .find_player_mut(player_id)
-                .map(|player| {
-                    if !player.is_rider() {
-                        player.set_current_skill_id(Some(dispatch.skill_id()));
-                    }
-                    (
-                        player.is_rider(),
-                        player.can_fight(),
-                        player.current_skill_id(),
-                    )
-                })
-                .unwrap_or((false, false, None));
-            let blocked_by_ride = is_rider;
-            if blocked_by_ride || !can_fight {
-                // OnSchedule: Reject (0x0050998E/0x005099C3) предшествует
-                // OnLoseTarget; его End(1) добавляет собственный Reject.
-                let delivery = self.send_base_attack_failure(player_id, 2);
-                let current_skill_id = current_skill_id.filter(|skill_id| {
-                    player_ai.player_skill_requires_target_end(*skill_id)
-                });
-                let ended = if let Some(skill_id) = current_skill_id {
-                    self.end_detached_player_skill(
-                        player_id,
-                        skill_id,
-                        MaterializedSkillEndCause::ClientRequest,
-                        player_ai,
-                        runtime,
-                    ) == Some(PlayerSkillEndRuntimeOutcome::Ended)
-                } else {
-                    player_ai.release_current_player_command();
-                    false
-                };
-                if !ended && current_skill_id.is_some() {
-                    let released = player_ai.finish_player_skill(
-                        dispatch,
-                        SkillTermination::Cancelled,
-                    );
-                    if released
-                        && let Some(player) = self.find_player_mut(player_id)
-                    {
-                        player.set_skill_moveable(true);
-                        player.set_current_skill_id(None);
-                    }
-                }
-                if ended && current_skill_id.is_some() {
-                    let _ = self.send_base_attack_failure(player_id, 2);
-                }
-                self.restore_player_default_attack_after_skill_end(player_id);
-                tracing::trace!(
-                    player_id,
-                    ?dispatch,
-                    blocked_by_ride,
-                    can_fight,
-                    ended,
-                    delivery,
-                    "очередь навыка игрока отклонена общим владельцем расписания"
-                );
-                execution_count = execution_count.wrapping_add(1);
-                player_execution_count = 1;
-            }
+            let _ = self.send_base_attack_failure(player_id, 2);
+            self.with_published_player_ai(player_id, player_ai, |game| {
+                game.lose_player_skill_target(player_id, runtime)
+            });
+            let _ = player_ai.take_pending_player_skill();
+            return 1;
         }
-        // После отказа следующий элемент FIFO ждёт следующего Run.
-        if player_execution_count == 0
-            && let Some(dispatch) = player_ai.current_player_skill()
-        {
+        if let Some(dispatch) = player_ai.take_pending_player_skill() {
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_current_skill_id(Some(dispatch.skill_id()));
+            }
+            player_ai.select_player_skill(dispatch);
+        }
+        let mut execution_count: usize = 0;
+        if let Some(dispatch) = player_ai.current_player_skill() {
+            if self.find_player(player_id).is_some_and(|player| !player.can_fight()) {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                self.with_published_player_ai(player_id, player_ai, |game| {
+                    game.lose_player_skill_target(player_id, runtime)
+                });
+                return 1;
+            }
             // Native IsEnded перед Begin: живой экземпляр, в том числе
             // уже переданный в фон, не получает лишний AI из OnSchedule.
             if Self::materialized_player_skill_active(player_ai, dispatch.skill_id()) == Some(true) {

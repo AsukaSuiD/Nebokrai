@@ -3,6 +3,9 @@
 //! End/OnLoseTarget не подменяют текущую команду головой pending FIFO.
 //! Повторное завершение отсутствующего исполнения не удаляет будущий запрос
 //! с тем же dispatch. Выбор, исполнение и очередь остаются разными состояниями.
+//! При свободных очередях действий новый запрос заменяет текущую цель, даже
+//! если прежняя команда ещё сохранена. Riding-отказ вызывает OnLoseTarget
+//! до pop и не устанавливает цель отклоняемого запроса (0x0050998E..0x0050999D).
 //! Встречный OnLoseTarget питомца (0x004E96DC..0x004E970E) сравнивает
 //! установленные OnSchedule type/id цели, не ожидающий запрос и не GUID.
 //! Fallback освобождает только текущую команду; pending FIFO не затрагивается.
@@ -679,13 +682,13 @@ impl CPlayerAI {
             && self.finish_player_skill(expected, termination)
     }
 
-    /// OnSchedule извлекает команду до проверок допуска и Begin. Продолжение
-    /// текущего выполнения не извлекает следующую, даже если владелец умер.
-    pub(crate) fn begin_next_player_skill(&mut self, can_schedule: bool) -> Option<PlayerSkillDispatch> {
-        if self.current_player_skill.is_none() && can_schedule {
-            self.current_player_skill = self.player_skills.pop_front();
-        }
-        self.current_player_skill
+    /// Pop не меняет текущую цель: riding-отказ выполняется до этой границы.
+    pub(crate) fn take_pending_player_skill(&mut self) -> Option<PlayerSkillDispatch> {
+        self.player_skills.pop_front()
+    }
+
+    pub(crate) fn select_player_skill(&mut self, dispatch: PlayerSkillDispatch) {
+        self.current_player_skill = Some(dispatch);
     }
 
     pub(crate) fn finish_player_skill(
