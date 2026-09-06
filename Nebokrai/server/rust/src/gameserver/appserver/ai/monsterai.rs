@@ -217,7 +217,7 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
                 },
                 shape.get_speed(),
                 monster.stop_frame(property),
-                monster.move_shape().current_skill_id().is_some(),
+                monster.move_shape().current_skill().is_some(),
             ))
         })
     else {

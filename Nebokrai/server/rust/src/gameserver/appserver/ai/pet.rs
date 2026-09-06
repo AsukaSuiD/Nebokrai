@@ -8,6 +8,8 @@
 //! `OnIdle` сохраняет `ChangeSkill? → Stand → SearchEnemy`, а `OnLoseTarget`
 //! для атакующего питомца ставит эту очередь до внешнего повторного поиска и
 //! переводит действие в `FOLLOWING`.
+//! OnIdle (RVA 0x000E9580) проверяет GetCurrentSkill, а не один выбранный ID:
+//! если зарегистрированного навыка нет, ChangeSkill сохраняется в начале FIFO.
 //! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
 //! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
 //! `GetPetMaster` разрешает игрока глобально, а остальные типы — только через
@@ -356,7 +358,7 @@ pub(crate) fn queue_pet_idle<Runtime: GameMainLoopRuntime>(
     let Some((alive, has_skill)) = region.find_monster_by_id(monster_id).map(|pet| {
         (
             !CMoveShape::is_died(pet.hit_points()),
-            pet.move_shape().current_skill_id().is_some(),
+            pet.move_shape().current_skill().is_some(),
         )
     }) else {
         return false;

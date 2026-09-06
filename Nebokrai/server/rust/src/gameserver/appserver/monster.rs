@@ -1396,9 +1396,7 @@ impl CMonster {
         let alive = !CMoveShape::is_died(self.hit_points);
         let pet_search = self.tamed
             && alive
-            && self.move_shape.current_skill_id()
-                .and_then(|skill_id| self.move_shape.skill(skill_id))
-                .is_none();
+            && self.move_shape.current_skill().is_none();
         let passive_gladiator_search = ai_type == 1
             && alive
             && self

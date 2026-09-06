@@ -13,6 +13,10 @@
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
 //! Поиск по общему реестру заменяет два прохода native-векторов: порядок
 //! элементов не влияет на этот результат, категории и их приоритет сохранены.
+//! Выбранный ID не доказывает наличие навыка: GetCurrentSkill (RVA 0x000CDC10,
+//! moveshape.cpp:1720) разрешает его через реестр. OnIdle монстра/питомца и
+//! OnMoving питомца проверяют эту проекцию; отсутствующий default ID не
+//! подавляет ChangeSkill/SearchEnemy и самопроизвольно не сбрасывается.
 //!
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! исходные владельцы `appserver/moveshape.h/.cpp`. Сохранены точный порядок
@@ -5340,11 +5344,14 @@ impl CMoveShape {
         true
     }
 
-    /// Достигнутый ID-view `GetCurrentSkill`: concrete `CSkill` execution и
-    /// его `End` остаются у ещё не перенесённого skill owner-а, но caller-ы
-    /// могут точно отличить запретный active skill `0xD4`.
+    /// Выбранный ID независимо от наличия зарегистрированного навыка.
     pub(crate) const fn current_skill_id(&self) -> Option<u32> {
         self.current_skill_id
+    }
+
+    /// Проекция GetCurrentSkill в реестр; execution и End остаются у skill-owner.
+    pub(crate) fn current_skill(&self) -> Option<&MoveShapeSkill> {
+        self.current_skill_id.and_then(|skill_id| self.skill(skill_id))
     }
 
     /// GetDefaultAttackSkillID (0x004CE240): порядок категорий важнее порядка ID.
