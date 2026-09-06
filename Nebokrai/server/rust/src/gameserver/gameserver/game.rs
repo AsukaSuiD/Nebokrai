@@ -38671,7 +38671,6 @@ impl CGame {
         &mut self,
         region_id: i32,
         monster_id: i32,
-        from_fifo: bool,
     ) -> bool {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -38681,7 +38680,6 @@ impl CGame {
             owner.base_mut(),
             region_id,
             monster_id,
-            from_fifo,
         );
         self.restore_region_owner(owner);
         selected
@@ -39543,7 +39541,7 @@ impl CGame {
             .is_some_and(CMonster::is_tamed);
         if tamed {
             self.restore_region_owner(owner);
-            let searched = self.run_owned_pet_active_search(region_id, monster_id, true);
+            let searched = self.run_owned_pet_active_search(region_id, monster_id);
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 return searched;
             };
@@ -47485,7 +47483,6 @@ impl CGame {
                 {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
-                let _ = self.run_owned_pet_active_search(region_id, monster_id, false);
             }
             let skill_phalanx_ids: Vec<i32> = self
                 .find_region(region_id)

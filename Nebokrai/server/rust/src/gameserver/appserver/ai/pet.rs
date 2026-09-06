@@ -18,6 +18,9 @@
 //! Секундный/lifecycle-хвост OnSchedule (0x004E9E4E) выполняется после ветви
 //! действия и до background/passive даже при занятых FIFO. Ожидание Move или
 //! атаки не останавливает проверку хозяина, одичание и срок жизни питомца.
+//! OnSearchEnemy вызывается только достигнутым active-событием: OnIdle
+//! ставит SearchEnemy после Stand, но не выполняет поиск немедленно. Отдельной
+//! idle-ветви поиска в CPet::OnSchedule (0x004E9DC0) нет; Rust не обходит FIFO.
 //! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
 //! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
 //! `GetPetMaster` разрешает игрока глобально, а остальные типы — только через
@@ -290,14 +293,11 @@ pub(crate) fn execute_owned_pet_active_search(
     region: &mut CServerRegion,
     region_id: i32,
     monster_id: i32,
-    from_fifo: bool,
 ) -> bool {
     let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
         (pet.is_tamed()
             && pet.pet_mode() == 2
-            && pet.ai_target().is_none()
-            && (from_fifo
-                || (pet.pet_action() == 1 && pet.primary_ai_queues_idle())))
+            && pet.ai_target().is_none())
             .then_some(pet.master_info())
     }) else {
         return false;
