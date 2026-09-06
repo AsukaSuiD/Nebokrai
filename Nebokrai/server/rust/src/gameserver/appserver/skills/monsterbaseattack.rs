@@ -16,6 +16,10 @@
 //! не разрешает выбранный ID, выполняется полный OnChangeSkill с IsRestored,
 //! затем повторный поиск в реестре. Его отказ вызывает только виртуальный
 //! OnLoseTarget, без внешнего SearchEnemy; FIFO-обёртка здесь не исполняется.
+//! IsRestored в OnChangeSkill читает уровень зарегистрированного CSkill,
+//! как CMonsterAI::OnChangeSkill (0x005DCBC0), а не максимум уровней в setup.
+//! Неудачный AddSkill может удалить прежнюю запись: наличие ID в настройках
+//! после этого не означает ни восстановленного навыка, ни допустимого cooldown.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -636,11 +640,12 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
-    } else if installed_monster_skill(&property.skills, selected_skill_id)
+    } else if region.find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().current_skill())
         .and_then(|skill| {
             let properties = game.skill_base_properties(
-                u32::from(selected_skill_id),
-                i32::from(skill.level),
+                skill.id(),
+                skill.level(),
             )?;
             let last_used_ms = region
                 .find_monster_by_id(monster_id)?

@@ -13,6 +13,9 @@
 //! хвост FIFO. Стационарный idle сам по себе не означает наследование этого
 //! метода: например, exact constructor `CVilCouGuardWithBow` напрямую строит
 //! `CMonsterAI`.
+//! Проверка восстановления разрешает выбранный навык через реестр CMoveShape:
+//! его фактический уровень задаёт restore delay. Оставшаяся setup-запись после
+//! отказа AddSkill не создаёт фиктивного навыка и не ставит ожидание в FIFO.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -84,23 +87,20 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     if !inherits_fixed_archer_change_skill(property.ai) {
         return false;
     }
-    let Some(skill) = property
-        .skills
-        .iter()
-        .filter(|skill| skill.id == selected_skill_id)
-        .max_by_key(|skill| skill.level)
+    let Some(skill) = region.find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().skill(u32::from(selected_skill_id)))
     else {
         return false;
     };
     let Some(skill_properties) =
-        game.skill_base_properties(u32::from(skill.id), i32::from(skill.level))
+        game.skill_base_properties(skill.id(), skill.level())
     else {
         return false;
     };
     let delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let last_used_ms = region
         .find_monster_by_id(monster_id)
-        .map(|monster| monster.skill_last_used_ms(u32::from(skill.id)))
+        .map(|monster| monster.skill_last_used_ms(skill.id()))
         .unwrap_or_default();
     let restored_at_ms = runtime.now_milliseconds();
     if skill_is_restored(last_used_ms, delay_ms, restored_at_ms) {
