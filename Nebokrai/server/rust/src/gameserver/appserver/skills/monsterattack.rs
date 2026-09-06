@@ -11,6 +11,9 @@
 //! обхода целей. По `gameserver.exe + GameServer.pdb`, `CSkill::End` (0x4d84c0)
 //! читает часы reuse после производного cleanup: время попадания из dispatch
 //! здесь не используется. Различия End исходных навыков остаются в `CMonster`.
+//! Отказ живого навыка без reuse проверяет identity исполнения и вызывает
+//! тот же cleanup CMonster; он не отменяет AI-цель, Move и не ставит FIFO.
+//! Конкретный owner определяет, требует ли его причина End(0).
 
 use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
@@ -41,6 +44,19 @@ use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
+
+pub(crate) fn end_owned_monster_skill_without_reuse(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    skill_id: u32,
+) -> bool {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
+    if !monster.base_attack_cast().is_some_and(|cast| cast.dispatch().skill_id == skill_id) {
+        return false;
+    }
+    let _ = monster.finish_base_attack_cast_without_reuse();
+    true
+}
 
 pub(crate) fn finish_owned_monster_attack_impact<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,

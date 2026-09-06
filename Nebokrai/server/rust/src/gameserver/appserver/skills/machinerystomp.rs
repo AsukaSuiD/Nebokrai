@@ -40,8 +40,12 @@
 //! RealDistance до цели при ненулевом максимуме, затем BLOCK_UNFLY.
 //! Эти отказы обоих навыков выполняют End(0) и возвращают BeginRejected;
 //! общий schedule-caller вызывает OnLoseTarget → SearchEnemy. Ожидание
-//! Tracing/интервала не является отказом Begin. Раннее исчезновение/смерть
-//! цели и граница первого AI у monster-пути ещё требуют согласования.
+//! Tracing/интервала не является отказом Begin. Begin (0x00531520)
+//! оставляет +0x50 = 0: поворот и стартовый пакет выполняет первый AI
+//! (0x00532440/0x0052FF70) после проверки цели и до свежих часов delay.
+//! Смерть цели, отсутствие цели или свойств после Begin ведут в End(0)
+//! (0x00532425/0x00532836 и 0x0052FF55/0x00530366), не отменяя AI-цель
+//! и Move. До Begin ранние отказы общего schedule ещё требуют согласования.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -61,7 +65,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::{CMonster, PetAttackProperties};
+use crate::gameserver::appserver::monster::{CMonster, MonsterBaseAttackCast, MonsterBaseAttackDispatch, PetAttackProperties};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -628,17 +632,17 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     else {
         return MonsterSkillCallOutcome::NotHandled;
     };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
-        .filter(|target| !target.dead)
-    else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            if cast.is_none_or(|execution| execution.termination().is_some()) {
-                monster.move_shape_mut().set_moveable(true);
-            }
-            monster.clear_ai_target();
-        }
+    if cast.is_some_and(|cast| cast.dispatch().skill_id != skill_id
+        || cast.dispatch().target != target_identity)
+    {
+        return MonsterSkillCallOutcome::NotHandled;
+    }
+    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    if cast.is_some() && target.as_ref().is_none_or(|target| target.dead) {
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id);
         return MonsterSkillCallOutcome::Handled;
-    };
+    }
+    let Some(target) = target else { return MonsterSkillCallOutcome::NotHandled };
     let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (
         source.get_tile_x(),
         source.get_tile_y(),
@@ -703,35 +707,35 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             drop(path);
             return abort_monster_wide_arc_begin(region, monster_id);
         }
-        let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(
-                target_identity,
+            monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
+                target: target_identity,
                 skill_id,
                 skill_level,
-                now_ms,
-            );
+            }, now_ms));
         }
-        let source = region
-            .find_monster_by_id(monster_id)
-            .map(|monster| monster.move_shape().shape())
-            .unwrap_or(&source);
-        send_start(game, region, source, skill_id, skill_level);
         return MonsterSkillCallOutcome::Handled;
     }
 
     let cast = cast.expect("выполнение механического топота проверено выше");
-    if cast.dispatch().skill_id != skill_id
-        || cast.dispatch().target != target_identity
-    {
-        return MonsterSkillCallOutcome::NotHandled;
+    if cast.stage() == SkillStage::Begin {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().shape_mut().set_direction(get_line_direction(
+                source_x, source_y, target_x, target_y,
+            ));
+        }
+        let source = region.find_monster_by_id(monster_id)
+            .map(|monster| monster.move_shape().shape()).unwrap_or(&source);
+        send_start(game, region, source, skill_id, skill_level);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+        }
     }
     if !skill_is_restored(
         cast.started_at_ms(),
         properties.query_property(SKILL_USAGE_DELAY_TIME),
-        now_ms,
+        runtime.now_milliseconds(),
     ) {
         return MonsterSkillCallOutcome::Handled;
     }

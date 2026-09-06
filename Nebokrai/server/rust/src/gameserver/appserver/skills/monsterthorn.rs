@@ -163,15 +163,6 @@ fn reject_monster_begin(region: &mut CServerRegion, monster_id: i32) {
     }
 }
 
-pub(crate) fn end_monster_thorn_without_reuse(region: &mut CServerRegion, monster_id: i32) -> bool {
-    let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
-    if !monster.base_attack_cast().is_some_and(|cast| cast.dispatch().skill_id == MONSTER_THORN_SKILL_ID) {
-        return false;
-    }
-    let _ = monster.finish_base_attack_cast_without_reuse();
-    true
-}
-
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -239,7 +230,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         return MonsterSkillCallOutcome::Handled;
     };
     if target.dead && cast.is_some_and(|cast| cast.dispatch().skill_id == MONSTER_THORN_SKILL_ID) {
-        let _ = end_monster_thorn_without_reuse(region, monster_id);
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID);
         return MonsterSkillCallOutcome::Handled;
     }
     if cast.is_none()
@@ -334,7 +325,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     };
     let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if maximum != 0 && path.len() > maximum as usize {
-        let _ = end_monster_thorn_without_reuse(region, monster_id);
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID);
         return MonsterSkillCallOutcome::Handled;
     }
     if path.iter().any(|cell| cell.2 == 2) {
