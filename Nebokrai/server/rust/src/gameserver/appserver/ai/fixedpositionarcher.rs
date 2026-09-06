@@ -43,15 +43,18 @@ pub(crate) struct FixedArcherTarget {
 /// OnFighting 0x0060FA70 сначала вызывает CBaseAI 0x004C9320 (ChangeSkill),
 /// затем добавляет SearchEnemy. Вариант 0x0060D930 добавляет поиск только
 /// живому владельцу; StupidArcher 0x0060F6F0 не вызывает базовый обработчик.
-pub(crate) const fn attack_completion_actions(ai_type: u32, alive: bool) -> &'static [AiShapeAction] {
+/// Без текущего навыка базовое событие отсутствует; производный поиск
+/// стационарных владельцев сохраняется, но StupidArcher ничего не ставит.
+pub(crate) const fn attack_completion_actions(ai_type: u32, alive: bool, skill_ended: bool) -> &'static [AiShapeAction] {
     if ai_type == 6 {
-        &[AiShapeAction::SearchEnemy]
+        if skill_ended { &[AiShapeAction::SearchEnemy] } else { &[] }
     } else if matches!(ai_type, 5 | 103)
         || (alive && super::monsterai::uses_stationary_attack_schedule(ai_type))
     {
-        &[AiShapeAction::ChangeSkill, AiShapeAction::SearchEnemy]
+        if skill_ended { &[AiShapeAction::ChangeSkill, AiShapeAction::SearchEnemy] }
+        else { &[AiShapeAction::SearchEnemy] }
     } else {
-        &[AiShapeAction::ChangeSkill]
+        if skill_ended { &[AiShapeAction::ChangeSkill] } else { &[] }
     }
 }
 

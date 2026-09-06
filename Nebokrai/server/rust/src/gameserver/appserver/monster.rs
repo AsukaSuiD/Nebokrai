@@ -7,6 +7,8 @@
 //! CBaseAI::OnFighting 0x004C9320 проверяет IsEnded до AI навыка. End
 //! сохраняет terminated kernel до следующего active-прохода: только тот
 //! ставит completion FIFO и снимает Attack, читая часы каждого события.
+//! OnFighting без GetCurrentSkill не исполняет старый kernel и не ставит
+//! базовый ChangeSkill; производный SearchEnemy учитывается независимо.
 //! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
 //! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
 //! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
@@ -1462,23 +1464,26 @@ impl CMonster {
     }
 
     pub(crate) fn finish_active_ai_attack(&mut self, mut now: impl FnMut() -> u32) {
-        if self.active_ai_attack_ended()
+        let has_skill = self.move_shape.current_skill().is_some();
+        if has_skill && self.active_ai_attack_ended()
             && self.base_attack_cast.is_some_and(|cast| cast.termination().is_none())
         {
             self.finish_active_immediate_skill(now());
         }
-        if self.base_attack_cast.is_some_and(|cast| cast.termination().is_some()) {
+        let skill_ended = has_skill && self.base_attack_cast.is_some_and(|cast| cast.termination().is_some());
+        if skill_ended || !has_skill {
             self.base_attack_cast = None;
-            let completion_ai_type = if self.is_tamed() {
-                0
-            } else {
-                self.ai_binding.map_or(0, MonsterAiBinding::ai_type)
-            };
-            for &action in crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_actions(
-                completion_ai_type, !CMoveShape::is_died(self.hit_points),
-            ) {
-                self.base_ai.add_ai_event(action, 0, 0, now());
-            }
+            self.attack_progress = MonsterAttackProgress::default();
+        }
+        let completion_ai_type = if self.is_tamed() {
+            0
+        } else {
+            self.ai_binding.map_or(0, MonsterAiBinding::ai_type)
+        };
+        for &action in crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_actions(
+            completion_ai_type, !CMoveShape::is_died(self.hit_points), skill_ended,
+        ) {
+            self.base_ai.add_ai_event(action, 0, 0, now());
         }
         self.base_ai.finish_active_attack(now());
     }
