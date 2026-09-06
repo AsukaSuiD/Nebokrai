@@ -1,4 +1,8 @@
 //! Достигнутая часть очередей и исполнения `CPlayerAI` GameServer.
+//! OnSchedule (0x0050993E..0x0050999D) извлекает обычный запрос до Begin;
+//! End/OnLoseTarget не подменяют текущую команду головой pending FIFO.
+//! Повторное завершение отсутствующего исполнения не удаляет будущий запрос
+//! с тем же dispatch. Выбор, исполнение и очередь остаются разными состояниями.
 //! Встречный OnLoseTarget питомца (0x004E96DC..0x004E970E) сравнивает
 //! установленные OnSchedule type/id цели, не ожидающий запрос и не GUID.
 //! Fallback освобождает только текущую команду; pending FIFO не затрагивается.
@@ -662,10 +666,6 @@ impl CPlayerAI {
         &self.player_skills
     }
 
-    pub(crate) fn next_player_skill(&self) -> Option<PlayerSkillDispatch> {
-        self.current_player_skill.or_else(|| self.player_skills.front().copied())
-    }
-
     pub(crate) const fn current_player_skill(&self) -> Option<PlayerSkillDispatch> {
         self.current_player_skill
     }
@@ -696,14 +696,6 @@ impl CPlayerAI {
         let finished_execution = self.finish_player_skill_execution(expected, termination);
         if self.current_player_skill == Some(expected) {
             self.current_player_skill = None;
-            return true;
-        }
-        // Ещё не начатый запрос может быть отклонён прямо из FIFO. End уже
-        // существующего экземпляра не поглощает такой же повторный запрос.
-        if !finished_execution && self.current_player_skill.is_none()
-            && self.player_skills.front().copied() == Some(expected)
-        {
-            self.player_skills.pop_front();
             return true;
         }
         finished_execution

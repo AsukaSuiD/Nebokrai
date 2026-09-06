@@ -38023,7 +38023,7 @@ impl CGame {
                 return true;
             }
             self.find_player_mut(player_id).is_some_and(|player| {
-                let dispatch = player.player_ai().next_player_skill();
+                let dispatch = player.player_ai().current_player_skill();
                 let released = dispatch.is_some_and(|dispatch| {
                     player
                         .player_ai_mut()
