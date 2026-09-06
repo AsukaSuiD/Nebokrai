@@ -7,6 +7,10 @@
 //! только для живого владельца с пустыми active/passive очередями. CGame
 //! вызывает его до background/passive; OnFighting и поздний OnIdle не
 //! повторяют ForceMove/RNG. Создание пары остаётся отдельным OnIdle.
+//! OnLoseTarget 0x0060A990 вызывает базовый переход 0x005DCC30 → 0x004C7DA0,
+//! который очищает только цель. Передача потери цели близнецу не отменяет
+//! его исполнение навыка и Move FIFO; дальнейший AI самостоятельно завершает
+//! навык. Отложенная синхронизация ниже пока сохраняет метку связанной цели.
 
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -270,7 +274,7 @@ pub(crate) fn synchronize_jiumai_target_loss(
         && !CMoveShape::is_died(twin.hit_points())
         && twin.ai_target().is_some()
     {
-        twin.clear_ai_target();
+        twin.release_ai_target_for_death();
     }
     true
 }
