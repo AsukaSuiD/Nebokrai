@@ -9,6 +9,8 @@
 //! только диапазон текущего навыка допускает атаку, а miss сбрасывает цель и
 //! повторяет поиск. `OnSearch` завершён проходом вражеских повозок `603` с
 //! теми же faction/union-фильтрами владельца города.
+//! Диапазон OnSchedule 0x0060B890 теперь проверяется общим dispatcher-ом
+//! стационарной семьи до Begin; проверка прямого пути принадлежит навыку.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -49,34 +51,8 @@
 
 use super::cityguardwithsword::select_city_guard_enemy;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::ShapeView;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
-
-/// Exact `OnSchedule` стационарных AI11/AI13: лучник не двигается к цели.
-/// Нижняя и верхняя границы включительны; заблокированная прямая сохраняет
-/// отказ `CheckCast`, после которого caller ставит новый `SearchEnemy`.
-pub(crate) fn stationary_bow_target_ready(
-    region: &CServerRegion,
-    owner: ShapeView,
-    target: ShapeView,
-    minimum_distance: i32,
-    maximum_distance: i32,
-) -> bool {
-    let distance = owner.real_distance(Some(target));
-    minimum_distance <= distance
-        && distance <= maximum_distance
-        && !region
-            .straight_skill_path(
-                owner.tile_x,
-                owner.tile_y,
-                target.tile_x,
-                target.tile_y,
-                None,
-            )
-            .iter()
-            .any(|cell| cell.2 == 2)
-}
 
 /// `WhenBeenHurted` AI11 не принимает атакующего напрямую: вне боя он заново
 /// выполняет общий городской поиск игроков и питомцев текущим навыком.

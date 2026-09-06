@@ -31,6 +31,9 @@
 //! CPet::OnStayingSchedule (0x004E9650) не вызывает Tracing: его диапазон
 //! проверяет общий dispatcher перед Begin. Поэтому помощник преследования
 //! в Stay ничего не делает и не добавляет проверку прямого пути вместо Begin.
+//! Та же форма без Tracing у стационарного OnSchedule 0x0060B890:
+//! общий признак владельца задаёт диапазон перед Begin, отсутствие движения
+//! и дополнительного таймера; CheckCast конкретного навыка остаётся отдельным.
 
 use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
@@ -106,6 +109,18 @@ impl MonsterAiScheduleState {
     }
 }
 
+/// Общий OnSchedule 0x0060B890 и его наследник CGBGuardWithSward.
+pub(crate) const fn uses_stationary_attack_schedule(ai_type: u32) -> bool {
+    matches!(MonsterAiKind::from_ai_type(ai_type),
+        MonsterAiKind::FixedPositionArcher
+            | MonsterAiKind::GuardWithBow
+            | MonsterAiKind::CityGuardWithBow
+            | MonsterAiKind::VillageCountyGuardWithBow
+            | MonsterAiKind::GuardCountry
+            | MonsterAiKind::GuardCountry2
+            | MonsterAiKind::GodsBattleGuardWithSword)
+}
+
 /// CMonsterAI::OnSchedule 0x005DD044 расширяет только AX из GetAttackSpeed,
 /// затем складывает его с DWORD timestamp. Обычные наследники сохраняют
 /// это усечение, включая значения setup больше 65535.
@@ -118,16 +133,9 @@ pub(crate) const fn schedule_attack_interval(
     ai_type: u32,
     ordinary_interval_ms: u32,
 ) -> Option<u32> {
-    if matches!(
+    if uses_stationary_attack_schedule(ai_type) || matches!(
         MonsterAiKind::from_ai_type(ai_type),
-        MonsterAiKind::FixedPositionArcher
-            | MonsterAiKind::GuardWithBow
-            | MonsterAiKind::CityGuardWithBow
-            | MonsterAiKind::VillageCountyGuardWithBow
-            | MonsterAiKind::GuardCountry
-            | MonsterAiKind::GuardCountry2
-            | MonsterAiKind::GodsBattleGuardWithSword
-            | MonsterAiKind::SmartGladiator
+        MonsterAiKind::SmartGladiator
             | MonsterAiKind::JiuMai
             | MonsterAiKind::BossBlue
             | MonsterAiKind::BossFiend
@@ -341,7 +349,7 @@ pub(crate) fn approach_attack_range(
         return false;
     };
 
-    if tamed && pet_action == 2 {
+    if (tamed && pet_action == 2) || (!tamed && uses_stationary_attack_schedule(property.ai)) {
         return true;
     }
     let target_coordinates = target.coordinates();

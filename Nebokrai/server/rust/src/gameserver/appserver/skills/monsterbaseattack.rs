@@ -69,6 +69,11 @@
 //! текущего навыка до любого concrete Begin, включая immediate-навыки.
 //! При выходе за диапазон выполняется OnLoseTarget → SearchEnemy; Tracing
 //! в Stay не вызывается. Проверки самого Begin этим не подменяются.
+//! Стационарное OnSchedule 0x0060B890 проходит ту же проверку диапазона
+//! до диспетчеризации всех навыков, без Tracing и общей проверки прямого пути.
+//! Отказ вызывает virtual OnLoseTarget и затем ставит SearchEnemy.
+//! Этот OnSchedule проверяет существование/смерть цели, но не IsAttackable;
+//! исключение относится ко всей стационарной семье, не только AI13.
 //! OnAttackingSchedule (0x004E9A20) ограничивает дистанцию цели от хозяина
 //! (при его отсутствии — от питомца) до GetCurrentSkill/OnChangeSkill/Begin.
 //! Граница distance >= MaxPetTracingDistance сбрасывает цель и ставит поиск,
@@ -246,7 +251,6 @@ use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, lose_guard_sword_target, release_guard_sword_target,
     select_city_guard_enemy, trace_city_sword_target,
 };
-use crate::gameserver::appserver::ai::cityguardwithbow::stationary_bow_target_ready;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     inherits_fixed_archer_change_skill, queue_fixed_archer_skill_delay,
@@ -264,7 +268,7 @@ use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lo
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, has_owned_search_enemy,
     hibernates_without_nearby_players,
-    queue_monster_idle, schedule_attack_interval, select_attack_skill,
+    queue_monster_idle, schedule_attack_interval, select_attack_skill, uses_stationary_attack_schedule,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::{
@@ -1170,7 +1174,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 return true;
             }
         }
-        let attackable = owned_monster_attackable(
+        let attackable = (!tamed && uses_stationary_attack_schedule(property.ai)) || owned_monster_attackable(
             game,
             region.id,
             &property,
@@ -1180,7 +1184,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &schedule_target,
         );
         if schedule_target.dead
-            || ((tamed || property.ai != 13)
+            || ((tamed || !uses_stationary_attack_schedule(property.ai))
                 && (schedule_target.god || schedule_target.city_dead || !attackable))
         {
             if !attackable && tamed {
@@ -1287,7 +1291,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    if tamed && pet_action == 2 && cast.is_none() {
+    if cast.is_none()
+        && ((tamed && pet_action == 2) || (!tamed && uses_stationary_attack_schedule(property.ai)))
+    {
         let Some(target_view) = schedule_target_view else {
             return false;
         };
@@ -1295,7 +1301,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let minimum_distance = skill_properties.query_property(5_004) as i32;
         let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32;
         if distance < minimum_distance || distance > maximum_distance {
-            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            if tamed {
+                lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
+            } else {
+                release_owned_monster_target(game, region, monster_id, runtime);
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+                }
+            }
             return true;
         }
     }
@@ -1772,7 +1785,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if target_dead
-        || ((tamed || property.ai != 13 || cast.is_some())
+        || ((tamed || !uses_stationary_attack_schedule(property.ai) || cast.is_some())
             && (target_god
                 || target_city_dead
                 || (!tamed
@@ -1828,23 +1841,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
             return true;
         }
-    }
-
-    if !tamed && matches!(property.ai, 11 | 13)
-        && cast.is_none()
-        && !stationary_bow_target_ready(
-            region,
-            monster_view,
-            target_view,
-            skill_properties.query_property(5_004) as i32,
-            maximum_distance as i32,
-        )
-    {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
-            monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
-        }
-        return true;
     }
 
     if !tamed && matches!(property.ai, 10 | 12 | 16)
