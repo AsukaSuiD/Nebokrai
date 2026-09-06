@@ -24,6 +24,11 @@
 //! навыка берётся из того же зарегистрированного объекта, что и IsRestored.
 //! Повторный максимум уровней setup не восстанавливает удалённый AddSkill-ом
 //! объект и не подменяет фактический уровень оставшегося владельца.
+//! Начало атаки получает ID/уровень из этого же реестра; после Begin источником
+//! обоих значений является MonsterBaseAttackDispatch. Повторный проход не
+//! перечитывает максимум setup и не смешивает сохранённую цель с другим уровнем.
+//! WORD-уровень monster-dispatch проверяется до Begin без усечения; настройка
+//! монстра изначально хранит u16, а общий реестр CMoveShape допускает i32.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -459,14 +464,6 @@ fn owns_complete_skill_selection(skills: &[MonsterSkill], ai_type: u32) -> bool 
                         BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
                     ))
         })
-}
-
-fn installed_monster_skill(skills: &[MonsterSkill], skill_id: u16) -> Option<MonsterSkill> {
-    skills
-        .iter()
-        .copied()
-        .filter(|skill| skill.id == skill_id)
-        .max_by_key(|skill| skill.level)
 }
 
 /// Точная встречная ветвь `CPet::OnStayingSchedule` и
@@ -1250,10 +1247,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         };
         selected
     };
-    let Some(skill) = installed_monster_skill(&property.skills, selected_skill_id) else {
-        return false;
+    let (skill_id, skill_level) = if let Some(cast) = cast {
+        (cast.dispatch().skill_id, cast.dispatch().skill_level)
+    } else {
+        let Some(skill) = region.find_monster_by_id(monster_id)
+            .and_then(|monster| monster.move_shape().skill(u32::from(selected_skill_id)))
+        else {
+            return false;
+        };
+        let Ok(level) = u16::try_from(skill.level()) else {
+            return false;
+        };
+        (skill.id(), level)
     };
-    let skill_id = u32::from(skill.id);
     if !is_owned_monster_attack_skill(skill_id) {
         return false;
     }
@@ -1271,7 +1277,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let Some(skill_properties) = game
-        .skill_base_properties(skill_id, i32::from(skill.level))
+        .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
     else {
         return false;
@@ -1300,7 +1306,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.move_shape_mut().begin_immediate_skill(skill_id);
-                monster.begin_base_attack_cast(target, skill_id, skill.level, now_ms);
+                monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
             }
             return true;
         }
@@ -1313,7 +1319,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let executed = owner.execute(
-            game, region, monster_id, skill_id, i32::from(skill.level), now_ms,
+            game, region, monster_id, skill_id, i32::from(skill_level), now_ms,
         );
         return executed;
     }
@@ -1324,7 +1330,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
         );
@@ -1336,22 +1342,22 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
         );
     }
     if skill_id == KNOCK_OUT_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_knock_out(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, deaths);
+        return execute_owned_monster_knock_out(game, region, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, deaths);
     }
     if skill_id == YAKSHA_SLASH_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_yaksha_slash(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, deaths);
+        return execute_owned_monster_yaksha_slash(game, region, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, deaths);
     }
     if skill_id == SNOW_STORM_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_snow_storm(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
+        return execute_owned_monster_snow_storm(game, region, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
     }
     if matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID) {
         return execute_owned_monster_base_projectile(
@@ -1359,7 +1365,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             if skill_id == ARCHERY_SKILL_ID {
                 MonsterBaseProjectileKind::Archery
             } else {
@@ -1376,7 +1382,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster_id,
             target,
             skill_id,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             projectile_dispatch,
@@ -1389,7 +1395,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1403,7 +1409,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1416,7 +1422,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1430,7 +1436,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1443,7 +1449,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1457,7 +1463,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1471,7 +1477,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1485,7 +1491,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1499,7 +1505,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1512,7 +1518,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1526,7 +1532,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1540,7 +1546,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
         );
@@ -1548,7 +1554,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == BOSS_BLUE_QUAKE_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_boss_blue_quake(
-            game, region, monster_id, target, skill.level, &skill_properties, now_ms, runtime, deaths,
+            game, region, monster_id, target, skill_level, &skill_properties, now_ms, runtime, deaths,
         );
     }
     if skill_id == BOSS_FIEND_PENETRATE_SKILL_ID {
@@ -1558,7 +1564,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1572,7 +1578,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1586,7 +1592,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1600,7 +1606,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
             runtime,
@@ -1613,7 +1619,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             target,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
         );
@@ -1632,7 +1638,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster_id,
             target,
             skill_id,
-            skill.level,
+            skill_level,
             &skill_properties,
             now_ms,
         );
@@ -2113,7 +2119,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .move_shape_mut()
             .shape_mut()
             .set_direction(direction);
-        monster.begin_base_attack_cast(target, skill_id, skill.level, now_ms);
+        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
         if fast_attack {
             monster.begin_fast_attack_progress();
         }
@@ -2121,7 +2127,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let mut start = CMessage::new(0x000b_fe01);
     start.add_byte(1);
     start.add_long(skill_id as i32);
-    start.add_short(skill.level as i16);
+    start.add_short(skill_level as i16);
     start.add_long(MONSTER_TYPE);
     start.add_long(monster_id);
     start.add_long(direction);
