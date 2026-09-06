@@ -39,9 +39,14 @@
 //! CPet (0x004E95F0), мечевые охранники (0x0060D020), JiuMai (0x0060A990)
 //! сохраняют свои побочные эффекты поверх очистки цели CMonsterAI
 //! (0x005DCC30). Следующее событие FIFO и отмена исполнения не входят сюда.
+//! OnStiffen (0x004C8770) вызывает этот же virtual после каждого снятого
+//! Attack, до default и продолжения active FIFO; timestamp пассивного события
+//! читается после всего обработчика. End навыка пока использует достигнутую
+//! отмену CMonster; произвольный concrete End(4), сохраняющий IsEnded=false,
+//! этим не считается восстановленным.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
-use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
+use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
@@ -62,6 +67,33 @@ const SLIP_ORDER: [[usize; 8]; 8] = [
     [6, 5, 7, 4, 0, 3, 1, 2],
     [7, 6, 0, 5, 1, 4, 2, 3],
 ];
+
+pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) -> PassiveStiffenAction {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return PassiveStiffenAction::None;
+    };
+    let action = monster.begin_reached_stiffen_action();
+    if action.interrupts_attack() {
+        while let Some(release_target) = region.find_monster_by_id_mut(monster_id)
+            .and_then(CMonster::take_stiffen_attack)
+        {
+            if release_target {
+                release_owned_monster_target(game, region, monster_id, runtime);
+            }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.resume_stiffen_after_target_release(release_target);
+            }
+        }
+    }
+    region.find_monster_by_id_mut(monster_id).map_or(PassiveStiffenAction::None, |monster| {
+        monster.finish_reached_stiffen_action(action, || runtime.now_milliseconds())
+    })
+}
 
 pub(crate) fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,

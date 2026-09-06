@@ -28,6 +28,9 @@
 //! Stiffen после завершения Attack выбирает базовый default-навык через
 //! CMoveShape::GetDefaultAttackSkillID (0x004CE240). Выбранный ID отделён
 //! от исполнения: этот переход не вызывает Begin и не создаёт cast.
+//! OnStiffen (0x004C880D) вызывает virtual OnLoseTarget после снятия Attack
+//! и до выбора default. Координатор освобождает заимствование CMonster на
+//! этой границе, чтобы производный AI мог обратиться к региону и близнецу.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1338,24 +1341,39 @@ impl CMonster {
         })
     }
 
-    pub(crate) fn process_reached_stiffen_action(
+    pub(crate) fn begin_reached_stiffen_action(&mut self) -> PassiveStiffenAction {
+        self.base_ai.begin_reached_stiffen_action()
+    }
+
+    pub(crate) fn take_stiffen_attack(&mut self) -> Option<bool> {
+        if !self.base_ai.stiffen_attack_pending() {
+            return None;
+        }
+        let release_target = self.base_ai.stiffen_attack_needs_end()
+            && self.base_attack_cast().is_some();
+        if release_target {
+            self.cancel_base_attack_cast();
+        } else {
+            let default_skill = self.move_shape.default_attack_skill_id();
+            self.move_shape.set_current_skill_id(Some(default_skill));
+        }
+        self.base_ai.finish_stiffen_attack(false);
+        Some(release_target)
+    }
+
+    pub(crate) fn resume_stiffen_after_target_release(&mut self, released: bool) {
+        if released {
+            let default_skill = self.move_shape.default_attack_skill_id();
+            self.move_shape.set_current_skill_id(Some(default_skill));
+        }
+        self.base_ai.discard_active_prefix();
+    }
+
+    pub(crate) fn finish_reached_stiffen_action(
         &mut self,
+        action: PassiveStiffenAction,
         now: impl FnOnce() -> u32,
     ) -> PassiveStiffenAction {
-        let action = self.base_ai.begin_reached_stiffen_action();
-        if action.interrupts_attack() {
-            while self.base_ai.stiffen_attack_pending() {
-                let release_target = self.base_ai.stiffen_attack_needs_end()
-                    && self.base_attack_cast().is_some();
-                if release_target {
-                    self.cancel_base_attack_cast();
-                }
-                self.base_ai.finish_stiffen_attack(release_target);
-                let default_skill = self.move_shape.default_attack_skill_id();
-                self.move_shape.set_current_skill_id(Some(default_skill));
-                self.base_ai.discard_active_prefix();
-            }
-        }
         self.base_ai.finish_reached_stiffen_action(action, now)
     }
 

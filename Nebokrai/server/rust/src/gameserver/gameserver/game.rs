@@ -1333,7 +1333,9 @@ use crate::gameserver::appserver::skills::knightcutstate::{
 use crate::gameserver::appserver::ai::baseai::{
     PassiveDeathAction, PassiveStiffenAction,
 };
-use crate::gameserver::appserver::ai::monsterai::release_owned_monster_target;
+use crate::gameserver::appserver::ai::monsterai::{
+    process_owned_monster_stiffen, release_owned_monster_target,
+};
 use crate::gameserver::appserver::ai::jiumai::{
     retarget_jiumai_after_hurt,
     synchronize_jiumai_target_loss,
@@ -47290,11 +47292,10 @@ impl CGame {
                     let mut passive_death = PassiveDeathAction::None;
                     let mut passive_stiffen = PassiveStiffenAction::None;
                     let mut handled_passive_action = None;
-                    let mut passive_action_executed = false;
-                    let death_started = owner
+                    let processed = owner
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
-                        .is_some_and(|monster| {
+                        .map_or(0, |monster| {
                             handled_passive_action = monster.advance_handled_passive_ai_action(|| {
                                 runtime.now_milliseconds()
                             });
@@ -47311,20 +47312,20 @@ impl CGame {
                                     "обработаны пассивные Defense-события монстра"
                                 );
                             }
-                            if handled_passive_action.is_none() && processed == 0 {
-                                passive_stiffen = monster.process_reached_stiffen_action(|| {
-                                    runtime.now_milliseconds()
-                                });
-                            }
-                            let death_started = handled_passive_action.is_none()
-                                && processed == 0
-                                && passive_stiffen == PassiveStiffenAction::None
-                                && monster.begin_reached_death_action();
-                            passive_action_executed = processed != 0
-                                || passive_stiffen != PassiveStiffenAction::None
-                                || death_started;
-                            death_started
+                            processed
                         });
+                    if handled_passive_action.is_none() && processed == 0 {
+                        passive_stiffen = process_owned_monster_stiffen(
+                            self, owner.base_mut(), monster_id, runtime);
+                    }
+                    let death_started = handled_passive_action.is_none()
+                        && processed == 0
+                        && passive_stiffen == PassiveStiffenAction::None
+                        && owner.base_mut().find_monster_by_id_mut(monster_id)
+                            .is_some_and(|monster| monster.begin_reached_death_action());
+                    let passive_action_executed = processed != 0
+                        || passive_stiffen != PassiveStiffenAction::None
+                        || death_started;
                     if death_started {
                         release_owned_monster_target(self, owner.base_mut(), monster_id, runtime);
                         if let Some(monster) =
