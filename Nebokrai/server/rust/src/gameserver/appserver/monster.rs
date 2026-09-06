@@ -44,6 +44,11 @@
 //! SetMoveable(true) и общий End после сброса двухударных флагов. Их ID входят
 //! в единую политику завершения; очистку прогресса выполняет существующий
 //! MonsterAttackProgress, без отдельных ветвей для отмены и Stiffen.
+//! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
+//! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
+//! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
+//! совпадающий ID. Неизвестный End без своего исполнения не считается
+//! завершённым и не снимает Attack; его concrete owner остаётся восстановить.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1362,10 +1367,12 @@ impl CMonster {
         if !self.base_ai.stiffen_attack_pending() {
             return None;
         }
+        let current_skill = self.move_shape.current_skill().map(|skill| skill.id());
         let release_target = self.base_ai.stiffen_attack_needs_end()
-            && self.base_attack_cast().is_some();
+            && current_skill.is_some();
         if release_target {
-            let skill_id = self.base_attack_cast.expect("проверенный cast Stiffen").dispatch().skill_id;
+            let skill_id = current_skill.expect("разрешённый текущий навык Stiffen");
+            let owns_cast = self.base_attack_cast.is_some_and(|cast| cast.dispatch().skill_id == skill_id);
             if matches!(skill_id,
                 super::skills::baseattack::BASE_ATTACK_SKILL_ID
                 | super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID)
@@ -1374,11 +1381,15 @@ impl CMonster {
                 if Self::attack_end_restores_movement(skill_id) {
                     self.move_shape.set_moveable(true);
                 }
-                self.attack_progress = MonsterAttackProgress::default();
+                if owns_cast {
+                    self.attack_progress = MonsterAttackProgress::default();
+                    self.base_attack_cast = None;
+                }
                 self.skill_last_used_ms.insert(skill_id, now());
-                self.base_attack_cast = None;
-            } else {
+            } else if owns_cast {
                 self.cancel_base_attack_cast();
+            } else {
+                return None;
             }
         } else {
             let default_skill = self.move_shape.default_attack_skill_id();
