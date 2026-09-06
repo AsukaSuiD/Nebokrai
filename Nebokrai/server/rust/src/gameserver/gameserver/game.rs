@@ -17,6 +17,8 @@
 //! выбора новой цели использует тот же обработчик завершения, что и потеря цели.
 //! CBaseAI::OnLoseTarget (0x004C7DA0) очищает цель до concrete End;
 //! очистка команды не зависит от совпадения её dispatch с живым экземпляром.
+//! Встречный вызов питомца (0x004E96DC..0x004E970E) добавляет только проверку
+//! type/id цели и затем входит в тот же OnLoseTarget; отдельного End/cleanup нет.
 //! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
 //! handling и проверки времени. Координатор публикует AI на время callback,
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
@@ -37945,53 +37947,15 @@ impl CGame {
         target: ShapeIdentity,
         runtime: &mut Runtime,
     ) {
-        let Some((current_skill_id, interrupted_active_skill)) = self
+        if self
             .find_player(player_id)
-            .and_then(|player| {
-                let matches_target = player.player_ai().has_current_object_target(target);
-                matches_target.then(|| {
-                    let interrupted_active_skill = player.current_skill_id()
-                        .is_some_and(|id| player.player_ai().player_skill_requires_target_end(id));
-                    (player.current_skill_id(), interrupted_active_skill)
-                })
-            })
-        else {
-            return;
-        };
-        let materialized_end = current_skill_id.filter(|_| interrupted_active_skill).and_then(|skill_id| {
-            self.end_materialized_player_skill(
-                player_id,
-                skill_id,
-                MaterializedSkillEndCause::ClientRequest,
-                runtime,
-            )
-        });
-        let (released, interrupted) = if materialized_end
-            == Some(PlayerSkillEndRuntimeOutcome::Ended)
+            .is_some_and(|player| player.player_ai().has_current_object_target(target))
         {
-            (true, true)
-        } else {
-            self.find_player_mut(player_id).map_or((false, false), |player| {
-                let released = player.player_ai_mut().release_object_target(target);
-                if released && interrupted_active_skill {
-                    player.set_skill_moveable(true);
-                    player.set_current_skill_id(None);
-                }
-                (released, released && interrupted_active_skill)
-            })
-        };
-        if released {
-            // Exact `OnLoseTarget` подтверждает отказный `0xBFE01` только
-            // рядом с `End(1)`. Текущая команда без живого исполнения снимается
-            // без ответа; ожидающий FIFO сохраняется, default восстанавливается.
-            if interrupted {
-                let _ = self.send_base_attack_failure(player_id, 2);
-            }
-            self.restore_player_default_attack_after_skill_end(player_id);
+            let _ = self.lose_player_skill_target(player_id, runtime);
         }
     }
 
-    /// Общий `OnLoseTarget` из смерти и повторного prepared Attack.
+    /// Общий `OnLoseTarget` из расписания, смерти, prepared Attack и AI питомца.
     /// Начатый обычный навык получает исходный
     /// `End(1)`; ожидающая команда остаётся в FIFO, а текущая освобождается.
     /// Default attack назначается в обоих случаях. Независимая

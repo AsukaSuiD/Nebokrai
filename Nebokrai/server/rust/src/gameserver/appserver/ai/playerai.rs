@@ -8,7 +8,8 @@
 //! до pop и не устанавливает цель отклоняемого запроса (0x0050998E..0x0050999D).
 //! Встречный OnLoseTarget питомца (0x004E96DC..0x004E970E) сравнивает
 //! установленные OnSchedule type/id цели, не ожидающий запрос и не GUID.
-//! Fallback освобождает только текущую команду; pending FIFO не затрагивается.
+//! После проверки цели общий OnLoseTarget очищает команду до End;
+//! pending FIFO не затрагивается, специального cleanup для питомца нет.
 //! Attack (0x00509FF0/0x0050A230) заменяет ожидающую команду независимо от
 //! текущего исполнения. Для WarSoul point-ветвь 0x0050A334..0x0050A3BF
 //! сравнивает голову, удаляет старые запросы и добавляет новый без Reject;
@@ -726,25 +727,6 @@ impl CPlayerAI {
     pub(crate) fn has_current_object_target(&self, target: super::super::shape::ShapeIdentity) -> bool {
         self.current_player_skill.and_then(PlayerSkillDispatch::object_target)
             .is_some_and(|current| current.object_type == target.object_type && current.id == target.id)
-    }
-
-    /// Fallback встречного `CPlayerAI::OnLoseTarget`, когда concrete execution
-    /// ещё не материализован: удаляет только текущую object-команду,
-    /// действительно направленную на отказавшегося питомца. Уже начатый skill
-    /// координатор завершает отдельно через исходный `End(1)`.
-    pub(crate) fn release_object_target(
-        &mut self,
-        target: super::super::shape::ShapeIdentity,
-    ) -> bool {
-        if !self.has_current_object_target(target) {
-            return false;
-        }
-        let dispatch = self.current_player_skill.expect("проверена текущая объектная цель");
-        if self.player_skill_execution(dispatch.skill_id()).is_some_and(|execution| execution.is_prepared()) {
-            self.current_player_skill = None;
-            return true;
-        }
-        self.finish_player_skill(dispatch, SkillTermination::Cancelled)
     }
 
     pub(crate) fn release_current_player_command(&mut self) {
