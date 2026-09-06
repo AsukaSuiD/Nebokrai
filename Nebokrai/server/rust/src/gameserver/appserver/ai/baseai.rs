@@ -678,7 +678,8 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 // Stand. Слоты +0x40/+8/+0/+4 задают OnSchedule/background/passive/active;
 // +0x44/+0xC — отдельный хвост WarSoul даже после AES_HUNG_UP passive.
 // Player Begin выполняется в OnSchedule до background, первый AI — только
-// в active после passive. Разделение Begin/AI WarSoul ещё не замкнуто.
+// в active после passive. WarSoul Begin ставит собственный Attack до первого
+// AI; End внутри AI сохраняет событие до следующего вызова OnFighting.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:472

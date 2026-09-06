@@ -92,7 +92,7 @@
 //! навыка; неоконченный End(4) сохраняет событие. До Move очистка доходит без
 //! прерывания навыка. Расписание проверяет пустоту обеих основных очередей
 //! до background/passive/active; новое расписание после их очистки ждёт
-//! следующего Run. Разделение WarSoul ещё требует замыкания. Stiffen передаёт
+//! следующего Run. WarSoul ставит собственный Attack после Begin. Stiffen передаёт
 //! ненулевой End отдельно от отказного End(0); удерживаемая HeartLessArrow
 //! выпускается без снятия execution и Attack до последующего AI.
 //! Обработанный Defense разрешает active в том же Run; Stiffen запрещает
@@ -143,13 +143,15 @@
 //! Все 13 постановок ChangeSkill используют WarSoul=0. Прямые вставки
 //! через 0x004C8E30 вне AddAIEvent адресуют основные active/passive очереди;
 //! абсолютных ссылок на обе функции в образе нет. Поэтому синтетический
-//! ChangeSkill после End не добавляется. Конкретные prepared-writer-ы
-//! ещё требуют проверки, их наличие не выводится из этой общей ветви.
+//! ChangeSkill после End не добавляется. Текущие 19 concrete WarSoul AI
+//! не выставляют prepared; их отдельные Summon также завершаются End(1),
+//! поэтому длительность созданной области не продлевает исполнение навыка.
 //! Подготовленный kernel передаётся в общую фоновую очередь до ChangeSkill,
 //! без End и без повторного Begin. Достигнутые длительные prepared-навыки
 //! устанавливают общий флаг в своих подтверждённых точках выпуска. Сам по себе
 //! локальный fired не означает prepared: SkeletonArchery сохраняет активный полёт.
-//! Разделение Begin/первого AI остальных адаптеров также не завершено.
+//! Begin подключённых player/WarSoul адаптеров отделён от первого AI;
+//! дополнительный tick между этими фазами не добавляется.
 //! В активном коде Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam.
 //! Однако старый закомментированный WhenAddBackStageSkill в AI/BaseAI.cpp
 //! сохраняет наш контракт 0x004C94B0: при owner != null и ID != SKILL_UNKNOW
@@ -1150,23 +1152,6 @@ impl CPlayerAI {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayerAI::OnFightingWithWarSoul
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: Begin ставит отдельный Attack; AI возвращает 0 даже после
-// собственного End. Следующий Run проверяет IsEnded и снимает Attack без
-// ChangeSkill. Prepared-перенос по virtual +0x88 добавляет ID в общую FIFO;
-// фоновый обход разрешает обычные и WarSoul экземпляры из их хранилищ.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:517
-// RVA: 0x00109230
-// ADDRESS: 00509230
-// PROTOTYPE: int __thiscall OnFightingWithWarSoul(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 
 
