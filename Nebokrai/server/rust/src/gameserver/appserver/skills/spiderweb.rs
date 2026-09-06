@@ -1,4 +1,6 @@
 //! Паутина паука `CSpiderWeb` (`0x199`) для игрока, монстра и питомца.
+//! Monster reuse фиксируется свежими часами общего End (0x004D84C0) после
+//! очистки полёта, отдельно от flight-time и времени состояния цели.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spiderweb.cpp`. Объектный путь сохраняет reuse, две
@@ -531,7 +533,7 @@ fn cancel_cast(region: &mut CServerRegion, monster_id: i32) {
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
-pub(crate) fn execute_owned_spider_web(
+pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -539,6 +541,7 @@ pub(crate) fn execute_owned_spider_web(
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
+    runtime: &mut Runtime,
 ) -> bool {
     let Some((source_shape, source_property, source_master, source_tamed, cast, last_used_ms, attack_interval)) =
         region.find_monster_by_id(monster_id).and_then(|monster| {
@@ -669,7 +672,7 @@ pub(crate) fn execute_owned_spider_web(
         };
         if (source_property.level as i32).wrapping_add(10) < target_level {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.finish_base_attack_cast(now_ms);
+                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
             }
             return true;
         }
@@ -738,7 +741,7 @@ pub(crate) fn execute_owned_spider_web(
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }

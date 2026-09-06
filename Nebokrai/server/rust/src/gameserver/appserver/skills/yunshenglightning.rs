@@ -1,4 +1,6 @@
 //! Владелец одноцелевой молнии `CYunShengLightning` (`0x19E`).
+//! Monster-End читает reuse после очистки полёта (`CSkill::End`, 0x004D84C0);
+//! время нанесения удара не подменяет эти часы завершения.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/yunshenglightning.cpp`. Player-путь сохраняет повторную
@@ -363,7 +365,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast(now_ms);
+        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
     }
     true
 }

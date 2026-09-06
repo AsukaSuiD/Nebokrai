@@ -1,4 +1,6 @@
 //! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`) для игрока и монстра.
+//! Monster-End освобождает локальный снимок пути и поражённых целей перед
+//! общим cleanup; reuse читает часы в `CSkill::End` (0x004D84C0), не в начале AI.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
 //! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
 //! callback CPlayer +0x158 (0x00485540).
@@ -1005,8 +1007,10 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         );
         if path.is_empty() {
             send_empty_path(game, region, &source, skill_level);
+            drop(path);
+            drop(progress);
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.finish_base_attack_cast(now_ms);
+                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
             }
             return true;
         }
@@ -1036,10 +1040,11 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     }
 
     if progress.current_cell >= progress.attack_cell_count {
+        drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast(now_ms);
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
         }
         return true;
     }

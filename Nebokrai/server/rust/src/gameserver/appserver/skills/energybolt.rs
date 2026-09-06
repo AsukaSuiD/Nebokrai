@@ -1,4 +1,6 @@
 //! Владелец общего пошагового снаряда и конкретной семантики энергетического снаряда.
+//! Monster-End освобождает также локальный снимок пути до общей очистки;
+//! reuse читает свежие часы после неё (`CSkill::End`, 0x004D84C0), не время шага.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` и исходный владелец
 //! `GameServer/appserver/skills/energybolt.cpp` подтверждают общий жизненный цикл
@@ -1056,10 +1058,11 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     }
     if progress.current_position >= progress.path.len() {
         send_end(game, region, &source, spec.skill_id, skill_level, &progress);
+        drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast(now_ms);
+            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
         }
         return true;
     }
