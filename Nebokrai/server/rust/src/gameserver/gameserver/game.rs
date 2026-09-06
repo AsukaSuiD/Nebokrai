@@ -1,4 +1,9 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! ProcessActiveAction (0x004C81D0) вызывает OnMoving/OnStanding до записи
+//! handling и проверки времени. Координатор публикует AI на время callback,
+//! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
+//! читаются после её обработки. Начатое действие занимает этот проход даже
+//! при удалении его очереди вложенным callback; второй dispatch не добавляется.
 //! Шаг назначения следует CPlayerAI::MoveTo (0x00508F10): ход проверяет
 //! одну клетку, бег две, а бег с riding-state 0x186A4 три (0x00508FB8).
 //! Каждая клетка проходит GetNextWalkPos (0x00509360) до единственного Move;
@@ -47344,27 +47349,28 @@ impl CGame {
                                 !ai_hibernated
                                     && !passive_action_hung_up
                                     && player_ai.active_move_unhandled();
-                            let active_move_handled = !ai_hibernated
-                                && !passive_action_hung_up
-                                && player_ai.advance_active_move(runtime.now_milliseconds());
                             if moving_started {
                                 let _ = self.with_published_player_ai(player_id, &mut player_ai, |game| {
                                     game.on_player_stand_on_switch_point(player_id)
                                 });
                             }
+                            let active_move_advanced = !ai_hibernated
+                                && !passive_action_hung_up
+                                && player_ai.advance_active_move(runtime.now_milliseconds());
+                            let active_move_handled = moving_started || active_move_advanced;
                             let active_stand_handled = if !ai_hibernated
                                 && !passive_action_hung_up
                                 && !active_move_handled
                                 && player_ai.active_stand_pending()
                             {
                                 let standing_started = player_ai.active_stand_unhandled();
-                                let _ =
-                                    player_ai.advance_active_stand(runtime.now_milliseconds());
                                 if standing_started {
                                     let _ = self.with_published_player_ai(player_id, &mut player_ai, |game| {
                                         game.on_player_stand_on_switch_point(player_id)
                                     });
                                 }
+                                let _ =
+                                    player_ai.advance_active_stand(runtime.now_milliseconds());
                                 true
                             } else {
                                 false
