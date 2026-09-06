@@ -20,6 +20,10 @@
 //! как CMonsterAI::OnChangeSkill (0x005DCBC0), а не максимум уровней в setup.
 //! Неудачный AddSkill может удалить прежнюю запись: наличие ID в настройках
 //! после этого не означает ни восстановленного навыка, ни допустимого cooldown.
+//! OnSearchEnemy также получает ID и уровень через GetCurrentSkill: дальность
+//! навыка берётся из того же зарегистрированного объекта, что и IsRestored.
+//! Повторный максимум уровней setup не восстанавливает удалённый AddSkill-ом
+//! объект и не подменяет фактический уровень оставшегося владельца.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -738,14 +742,13 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 .clone();
             let owner = monster.shape_view(&property)?;
             let area_index = monster.move_shape().shape().area_index()?;
-            let skill_id = monster.move_shape().current_skill_id()?;
-            let skill = installed_monster_skill(&property.skills, skill_id as u16)?;
+            let skill = monster.move_shape().current_skill()?;
             Some((
                 property,
                 owner,
                 area_index,
-                skill_id,
-                skill.level,
+                skill.id(),
+                skill.level(),
                 monster.move_shape().shape().get_speed(),
                 monster.master_info(),
             ))
