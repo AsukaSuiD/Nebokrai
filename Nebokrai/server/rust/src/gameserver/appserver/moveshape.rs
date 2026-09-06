@@ -7,6 +7,8 @@
 //! его перед Begin. Полные исполнения игрока остаются у CPlayerAI.
 //! End немедленного навыка отмечает сам owner независимо от active/background;
 //! координатор фонового обхода не выводит завершение из общего bool результата.
+//! Новый Begin сбрасывает этот же признак в AutoStart и допущенном active-пути;
+//! сброс не затрагивает очередь, выбранный ID и время восстановления.
 //! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
 //! Поиск по общему реестру заменяет два прохода native-векторов: порядок
@@ -1214,9 +1216,7 @@ impl CMoveShape {
             .collect();
         let count = started.len();
         for skill_id in &started {
-            if let Some(skill) = self.skills.get_mut(skill_id) {
-                skill.immediate_ended = false;
-            }
+            self.begin_immediate_skill(*skill_id);
         }
         self.back_stage_skill_ids.extend(started.into_iter().map(|skill_id| BackStageSkill { skill_id, begin_pending: true }));
         count
@@ -1253,6 +1253,12 @@ impl CMoveShape {
         self.back_stage_skill_ids.get(index)
             .and_then(|entry| self.skills.get(&entry.skill_id))
             .is_some_and(|skill| skill.immediate_ended)
+    }
+
+    pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32) {
+        if let Some(skill) = self.skills.get_mut(&skill_id) {
+            skill.immediate_ended = false;
+        }
     }
 
     pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32) {

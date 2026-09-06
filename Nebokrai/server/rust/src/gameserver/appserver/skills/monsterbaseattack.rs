@@ -1259,6 +1259,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
             return true;
         }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().begin_immediate_skill(skill_id);
+        }
         let executed = if is_swordship_skill(skill_id) {
             execute_monster_auto_start_swordship(
                 game, region, monster_id, skill_id, i32::from(skill.level),
