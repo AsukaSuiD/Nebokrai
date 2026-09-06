@@ -808,7 +808,10 @@ impl CMonster {
         )
     }
 
-    pub(crate) const fn set_pet_mode(&mut self, mode: i32) {
+    pub(crate) fn set_pet_mode(&mut self, mode: i32) {
+        if self.pet_behavior.mode_change_releases_target(mode) {
+            self.release_pet_ai_target();
+        }
         self.pet_behavior.set_mode(mode);
     }
 

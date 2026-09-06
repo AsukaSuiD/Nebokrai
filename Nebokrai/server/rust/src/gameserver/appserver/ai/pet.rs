@@ -23,6 +23,10 @@
 //! хозяина в безопасной клетке выбирает 2, вне неё — 1; прежний режим 0
 //! вызывает OnLoseTarget (0x004EA134). Возврат хозяина также проверяет 0
 //! (0x004E9FB2). Эти переходы сохраняют текущие cast и Move.
+//! SetPetCurrentAIMode (0x004E9460) перед записью режима вызывает OnLoseTarget,
+//! если новый режим пассивный либо прежний активный; HasTarget не проверяет.
+//! Затем обнуляет invalid_master_ms (+0x84) и seek_master_ms (+0x88),
+//! не затрагивая шестичасовой счётчик и master_logout.
 //! OnIdle (RVA 0x000E9580) проверяет GetCurrentSkill, а не один выбранный ID:
 //! если зарегистрированного навыка нет, ChangeSkill сохраняется в начале FIFO.
 //! OnFallowingSchedule (0x004E9BB0) требует пустые active/passive очереди и
@@ -157,6 +161,12 @@ impl PetBehaviorState {
 
     pub(crate) const fn set_mode(&mut self, mode: i32) {
         self.mode = mode;
+        self.lifecycle.invalid_master_ms = 0;
+        self.lifecycle.seek_master_ms = 0;
+    }
+
+    pub(crate) const fn mode_change_releases_target(&self, mode: i32) -> bool {
+        mode == PET_MODE_PASSIVE || self.mode == PET_MODE_ACTIVE
     }
 
     pub(crate) const fn action(self) -> i32 {
