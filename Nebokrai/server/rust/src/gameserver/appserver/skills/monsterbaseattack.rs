@@ -24,6 +24,11 @@
 //! навыка берётся из того же зарегистрированного объекта, что и IsRestored.
 //! Повторный максимум уровней setup не восстанавливает удалённый AddSkill-ом
 //! объект и не подменяет фактический уровень оставшегося владельца.
+//! Отсутствие навыка не блокирует общий dispatch поиска. CGladiator
+//! (0x006112C0), CSmartGladiator (0x00610AC0), CJiuMai (0x0060AD10) ищут
+//! по guard range без GetCurrentSkill; требование навыка остаётся только
+//! у ветвей, использующих его минимальную дистанцию. Общая проекция этой
+//! дистанции не вводит второй реестр и не меняет порядок обхода кандидатов.
 //! Начало атаки получает ID/уровень из этого же реестра; после Begin источником
 //! обоих значений является MonsterBaseAttackDispatch. Повторный проход не
 //! перечитывает максимум setup и не смешивает сохранённую цель с другим уровнем.
@@ -705,7 +710,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    let Some((property, owner, area_index, skill_id, skill_level, speed, master)) = region
+    let Some((property, owner, area_index, skill, speed, master)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -713,13 +718,13 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 .clone();
             let owner = monster.shape_view(&property)?;
             let area_index = monster.move_shape().shape().area_index()?;
-            let skill = monster.move_shape().current_skill()?;
+            let skill = monster.move_shape().current_skill()
+                .map(|skill| (skill.id(), skill.level()));
             Some((
                 property,
                 owner,
                 area_index,
-                skill.id(),
-                skill.level(),
+                skill,
                 monster.move_shape().shape().get_speed(),
                 monster.master_info(),
             ))
@@ -760,6 +765,10 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
+    let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
+        game.skill_base_properties(skill_id, skill_level)
+            .map_or(0, |properties| properties.query_property(5_004) as i32)
+    });
     let selected = match property.ai {
         0 | 3 => select_gladiator_enemy(
             game,
@@ -778,9 +787,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
         ),
         5 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_fixed_archer_enemy(
                 game,
                 region,
@@ -791,9 +800,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
         }
         6 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             let _ = search_stupid_archer_enemy(
                 game,
                 region,
@@ -808,9 +817,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             return true;
         }
         8 | 9 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_guard_with_bow_target(
                 game,
                 region,
@@ -820,9 +829,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
         }
         10 | 11 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_city_guard_enemy(
                 game,
                 region,
@@ -834,9 +843,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             .map(|selected| selected.identity)
         }
         17 | 100 | 101 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_country_guard_target(
                 game,
                 region,
@@ -854,9 +863,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
         ),
         12 | 13 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_village_country_guard_enemy(
                 game,
                 region,
@@ -868,9 +877,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             .map(|selected| selected.identity)
         }
         16 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_nation_country_guard_enemy(
                 game,
                 region,
@@ -891,9 +900,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.race,
         ),
         103 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_gods_battle_guard_enemy(
                 game,
                 region,
@@ -927,9 +936,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
         ),
         23 => {
-            let minimum_skill_distance = game
-                .skill_base_properties(skill_id, i32::from(skill_level))
-                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let Some(minimum_skill_distance) = minimum_skill_distance else {
+                return false;
+            };
             select_boss_fiend_enemy(
                 game,
                 region,
