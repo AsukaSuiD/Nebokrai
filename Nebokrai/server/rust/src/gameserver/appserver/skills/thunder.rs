@@ -1,4 +1,6 @@
 //! Гром боевого духа `CThunder` (`0x21F`).
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunder.cpp`. Здесь находятся проверки цели и пути,
@@ -277,6 +279,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 2, b"");
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.battle_fairy_execution(THUNDER_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

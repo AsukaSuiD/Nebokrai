@@ -1,4 +1,6 @@
 //! Базовая атака боевой феи GameServer (`SKILL_BATTLEFAIRY_BASE_ATTACK`).
+//! Успешный Begin возвращает Begun; проверка задержки первого AI выполняется
+//! при повторном входе в том же Run по исходному раннему отсчёту.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/battlefairybasemagic.cpp`. Отдельный FIFO боевой феи
@@ -259,12 +261,10 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             .kernel_mut()
             .advance(SkillStage::Begin, SkillStage::Check);
         player_ai.begin_battle_fairy_base_magic(execution);
-        let first_ai_now_ms = runtime.now_milliseconds();
-        let started_at_ms = player_ai.battle_fairy_base_magic()
-            .map_or(started_at_ms, |state| state.kernel().started_at_ms());
-        if first_ai_now_ms < started_at_ms.wrapping_add(delay_ms) {
-            return pending();
-        }
+        return QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Begun,
+            ..pending()
+        };
     } else if player_ai
         .battle_fairy_base_magic()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

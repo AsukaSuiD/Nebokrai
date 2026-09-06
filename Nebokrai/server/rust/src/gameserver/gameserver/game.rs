@@ -41538,6 +41538,175 @@ impl CGame {
         }
     }
 
+    /// Единственный выбор concrete WarSoul owner для Begin и последующего AI.
+    fn execute_battle_fairy_skill_owner<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: BattleFairySkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let attribute_skill = match dispatch {
+            BattleFairySkillDispatch::SelfTarget { skill_id, .. }
+            | BattleFairySkillDispatch::Point { skill_id, .. }
+            | BattleFairySkillDispatch::Object { skill_id, .. } => {
+                battle_fairy_attribute_definition(skill_id).is_some()
+            }
+        };
+        let concrete_life_shield = matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: LIFE_SHIELD_SKILL_ID,
+                ..
+            }
+                | BattleFairySkillDispatch::Point {
+                    skill_id: LIFE_SHIELD_SKILL_ID,
+                    ..
+                }
+                | BattleFairySkillDispatch::Object {
+                    skill_id: LIFE_SHIELD_SKILL_ID,
+                    ..
+                }
+        );
+        if attribute_skill {
+            execute_battle_fairy_attribute(self, player_id, dispatch, player_ai, runtime)
+        } else if concrete_life_shield {
+            execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
+        } else if is_fatal_blow_dispatch(dispatch) {
+            execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
+        } else if dispatch.skill_id() == TIANHUO_SKILL_ID {
+            execute_battle_fairy_tianhuo(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: LEIMING2_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: LEIMING2_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: LEIMING2_SKILL_ID,
+                ..
+            }
+        ) {
+            execute_battle_fairy_leiming2(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: THUNDER_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: THUNDER_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: THUNDER_SKILL_ID,
+                ..
+            }
+        ) {
+            execute_battle_fairy_thunder(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: POISON_ARROW_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: POISON_ARROW_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: POISON_ARROW_SKILL_ID,
+                target: ShapeIdentity {
+                    object_type: PLAYER_TYPE | MONSTER_TYPE,
+                    ..
+                },
+                ..
+            }
+        ) {
+            execute_battle_fairy_poison_arrow(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: BLOOD_LOSS_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: BLOOD_LOSS_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: BLOOD_LOSS_SKILL_ID,
+                target: ShapeIdentity {
+                    object_type: PLAYER_TYPE | MONSTER_TYPE,
+                    ..
+                },
+                ..
+            }
+        ) {
+            execute_battle_fairy_blood_loss(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: WANGSHENG_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: WANGSHENG_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: WANGSHENG_SKILL_ID,
+                ..
+            }
+        ) {
+            execute_battle_fairy_wangsheng(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: HUOXIESHU_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: HUOXIESHU_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: HUOXIESHU_SKILL_ID,
+                ..
+            }
+        ) {
+            execute_battle_fairy_huoxieshu(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::SelfTarget {
+                skill_id: LINGZHISHU_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Point {
+                skill_id: LINGZHISHU_SKILL_ID,
+                ..
+            } | BattleFairySkillDispatch::Object {
+                skill_id: LINGZHISHU_SKILL_ID,
+                ..
+            }
+        ) {
+            execute_battle_fairy_lingzhishu(self, player_id, dispatch, player_ai, runtime)
+        } else if matches!(
+            dispatch,
+            BattleFairySkillDispatch::Object {
+                skill_id: BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
+                target,
+                ..
+            } if is_base_magic_object_target_type(target.object_type)
+        ) {
+            execute_battle_fairy_base_magic(self, player_id, dispatch, player_ai, runtime)
+        } else {
+            self.send_battle_fairy_skill_failure(player_id, 2);
+            tracing::debug!(
+                player_id,
+                ?dispatch,
+                "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка боевой феи"
+            );
+            QueuedSkillExecutionOutcome {
+                state: QueuedSkillExecutionState::Rejected,
+                first_contact: false,
+                killing_blow: None,
+            }
+        }
+    }
+
+
     /// Слоты +0x44/+0xC CBaseAI::Run исполняются даже после AES_HUNG_UP
     /// основного passive-прохода. Общая dormancy проверяется вызывающим кодом;
     /// смерть запрещает выбор новой команды, но не подменяет End начатой.
@@ -41550,28 +41719,6 @@ impl CGame {
     ) -> usize {
         let mut execution_count = 0;
         if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule) {
-            let attribute_skill = match dispatch {
-                BattleFairySkillDispatch::SelfTarget { skill_id, .. }
-                | BattleFairySkillDispatch::Point { skill_id, .. }
-                | BattleFairySkillDispatch::Object { skill_id, .. } => {
-                    battle_fairy_attribute_definition(skill_id).is_some()
-                }
-            };
-            let concrete_life_shield = matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: LIFE_SHIELD_SKILL_ID,
-                    ..
-                }
-                    | BattleFairySkillDispatch::Point {
-                        skill_id: LIFE_SHIELD_SKILL_ID,
-                        ..
-                    }
-                    | BattleFairySkillDispatch::Object {
-                        skill_id: LIFE_SHIELD_SKILL_ID,
-                        ..
-                    }
-            );
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
                 && !player_ai.battle_fairy_skill_execution_is_materialized();
@@ -41584,146 +41731,20 @@ impl CGame {
                     first_contact: false,
                     killing_blow: None,
                 }
-            } else if attribute_skill {
-                execute_battle_fairy_attribute(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_life_shield {
-                execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
-            } else if is_fatal_blow_dispatch(dispatch) {
-                execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
-            } else if dispatch.skill_id() == TIANHUO_SKILL_ID {
-                execute_battle_fairy_tianhuo(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: LEIMING2_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: LEIMING2_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: LEIMING2_SKILL_ID,
-                    ..
-                }
-            ) {
-                execute_battle_fairy_leiming2(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: THUNDER_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: THUNDER_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: THUNDER_SKILL_ID,
-                    ..
-                }
-            ) {
-                execute_battle_fairy_thunder(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: POISON_ARROW_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: POISON_ARROW_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: POISON_ARROW_SKILL_ID,
-                    target: ShapeIdentity {
-                        object_type: PLAYER_TYPE | MONSTER_TYPE,
-                        ..
-                    },
-                    ..
-                }
-            ) {
-                execute_battle_fairy_poison_arrow(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: BLOOD_LOSS_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: BLOOD_LOSS_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: BLOOD_LOSS_SKILL_ID,
-                    target: ShapeIdentity {
-                        object_type: PLAYER_TYPE | MONSTER_TYPE,
-                        ..
-                    },
-                    ..
-                }
-            ) {
-                execute_battle_fairy_blood_loss(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: WANGSHENG_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: WANGSHENG_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: WANGSHENG_SKILL_ID,
-                    ..
-                }
-            ) {
-                execute_battle_fairy_wangsheng(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: HUOXIESHU_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: HUOXIESHU_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: HUOXIESHU_SKILL_ID,
-                    ..
-                }
-            ) {
-                execute_battle_fairy_huoxieshu(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id: LINGZHISHU_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Point {
-                    skill_id: LINGZHISHU_SKILL_ID,
-                    ..
-                } | BattleFairySkillDispatch::Object {
-                    skill_id: LINGZHISHU_SKILL_ID,
-                    ..
-                }
-            ) {
-                execute_battle_fairy_lingzhishu(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::Object {
-                    skill_id: BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
-                    target,
-                    ..
-                } if is_base_magic_object_target_type(target.object_type)
-            ) {
-                execute_battle_fairy_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else {
-                self.send_battle_fairy_skill_failure(player_id, 2);
-                tracing::debug!(
-                    player_id,
-                    ?dispatch,
-                    "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка боевой феи"
-                );
-                QueuedSkillExecutionOutcome {
-                    state: QueuedSkillExecutionState::Rejected,
-                    first_contact: false,
-                    killing_blow: None,
-                }
+                self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
+            };
+            player_ai.set_scheduled_fairy_skill_begin(None);
+            let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
+            let outcome = if begin_completed {
+                self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
+            } else {
+                outcome
             };
             let materialized_end = outcome.state != QueuedSkillExecutionState::Pending
                 && player_ai.battle_fairy_skill_execution_is_materialized();
-            player_ai.set_scheduled_fairy_skill_begin(None);
             if !schedule_rejected
+                && !begin_completed
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected
                 && !materialized_end

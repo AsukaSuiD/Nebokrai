@@ -1,4 +1,6 @@
 //! Небесный огонь боевого духа `CTianhuo` (`0x21A`).
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/tianhuo.cpp`. Конкретный `CheckCastCondition` требует
@@ -210,6 +212,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 2, b"");
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(TIANHUO_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

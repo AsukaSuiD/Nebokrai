@@ -1,4 +1,6 @@
 //! Смертельный удар боевого духа `CFatalBlow` (`0x21C`).
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/fatalblow.cpp`. Владелец сохраняет проверки цели и пути,
@@ -252,6 +254,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
             }
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(FATAL_BLOW_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

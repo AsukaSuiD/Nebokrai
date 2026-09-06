@@ -1,4 +1,6 @@
 //! Общая вертикаль исполнения восьми атрибутных навыков боевого духа.
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Конкретные идентификаторы и коды свойств принадлежат модулям навыков.
 //! Этот владелец семейства сохраняет общий порядок: проверка экипировки,
@@ -209,6 +211,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, target);
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.battle_fairy_execution(skill_id).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

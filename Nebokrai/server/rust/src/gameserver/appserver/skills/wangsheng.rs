@@ -1,4 +1,6 @@
 //! Восстановление здоровья игрока за ману боевого духа (`CWangsheng`).
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/wangsheng.cpp`. Мана owned боевого духа списывается и
@@ -105,6 +107,7 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game);
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(WANGSHENG_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)

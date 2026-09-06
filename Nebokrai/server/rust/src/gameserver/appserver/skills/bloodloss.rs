@@ -1,4 +1,6 @@
 //! Потеря крови боевого духа `CBloodLoss` (`0x21D`).
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/bloodloss.cpp`. Модуль сохраняет проверки цели и пути,
@@ -241,6 +243,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
             }
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(BLOOD_LOSS_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)

@@ -1,4 +1,6 @@
 //! Общий runtime двух навыков передачи ресурсов боевому духу.
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! `CHuoxieshu` и `CLingzhishu` имеют одинаковые стадии, visual packet и
 //! повтор при временном отсутствии equipment-owner-а. Раздельными остаются
@@ -221,6 +223,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
             dispatch,
             started_at_ms,
         ));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(kind.skill_id())
         .is_none_or(|state| state.dispatch() != dispatch)

@@ -1,4 +1,6 @@
 //! Отложенный гром боевого духа `CLeiming2` (`0x21B`).
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunder2.cpp`. Владелец сохраняет проверки цели и пути,
@@ -167,6 +169,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 2, b"");
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(LEIMING2_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

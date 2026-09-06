@@ -1,4 +1,6 @@
 //! Достигнутый контракт навыка боевого духа `CLifeShield`.
+//! Успешный Begin возвращает Begun до первого AI; общий координатор
+//! продолжает тот же owner без повторного допуска расписания.
 //!
 //! Навык `544` расходует `GAP_BF_MP` экипированного боевого духа, немедленно
 //! рассылает изменённый товар, затем создаёт упорядоченное защитное состояние.
@@ -142,6 +144,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
             }
         }
         player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .battle_fairy_execution(LIFE_SHIELD_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)
