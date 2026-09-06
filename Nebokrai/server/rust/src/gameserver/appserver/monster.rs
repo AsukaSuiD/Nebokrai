@@ -1,4 +1,8 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! Техническое хранение прогресса cast сгруппировано в MonsterAttackProgress:
+//! Default обслуживает одинаковую очистку при End и отмене. Типизированные
+//! значения остаются независимыми; Begin не получает дополнительного сброса,
+//! фоновые навыки, cooldown и призванные существа в эту группу не входят.
 //! Обычное завершение cast/немедленного навыка не стирает выбранный ID:
 //! CBaseAI::OnFighting (0x004C9320) лишь ставит ChangeSkill после IsEnded.
 //! Выбор меняется отдельным обработчиком очереди; освобождение исполнения
@@ -150,6 +154,18 @@ use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct MonsterAttackProgress {
+    fast_attack_progress: Option<MonsterFastAttackProgress>,
+    monster_projectile_progress: Option<MonsterProjectileProgress>,
+    path_projectile_progress: Option<PathProjectileProgress>,
+    boss_fiend_penetrate_progress: Option<BossFiendPenetrateProgress>,
+    little_star_progress: Option<LittleStarProgress>,
+    spider_web_progress: Option<SpiderWebProgress>,
+    spider_mist_progress: Option<SpiderMistProgress>,
+    yunsheng_lightning_progress: Option<YunShengLightningProgress>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMonster {
     move_shape: CMoveShape,
@@ -177,14 +193,7 @@ pub(crate) struct CMonster {
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
     base_attack_cast: Option<MonsterBaseAttackCast>,
-    fast_attack_progress: Option<MonsterFastAttackProgress>,
-    monster_projectile_progress: Option<MonsterProjectileProgress>,
-    path_projectile_progress: Option<PathProjectileProgress>,
-    boss_fiend_penetrate_progress: Option<BossFiendPenetrateProgress>,
-    little_star_progress: Option<LittleStarProgress>,
-    spider_web_progress: Option<SpiderWebProgress>,
-    spider_mist_progress: Option<SpiderMistProgress>,
-    yunsheng_lightning_progress: Option<YunShengLightningProgress>,
+    attack_progress: MonsterAttackProgress,
     summoned_creature: Option<SummonedCreatureLifecycle>,
     skill_last_used_ms: BTreeMap<u32, u32>,
     ai_schedule: MonsterAiScheduleState,
@@ -368,14 +377,7 @@ impl CMonster {
             last_attack_timer_ms: 0,
             killed_by: None,
             base_attack_cast: None,
-            fast_attack_progress: None,
-            monster_projectile_progress: None,
-            path_projectile_progress: None,
-            boss_fiend_penetrate_progress: None,
-            little_star_progress: None,
-            spider_web_progress: None,
-            spider_mist_progress: None,
-            yunsheng_lightning_progress: None,
+            attack_progress: MonsterAttackProgress::default(),
             summoned_creature: None,
             skill_last_used_ms: BTreeMap::new(),
             ai_schedule: MonsterAiScheduleState::default(),
@@ -1522,83 +1524,83 @@ impl CMonster {
     }
 
     pub(crate) fn begin_fast_attack_progress(&mut self) {
-        self.fast_attack_progress = Some(MonsterFastAttackProgress::default());
+        self.attack_progress.fast_attack_progress = Some(MonsterFastAttackProgress::default());
     }
 
     pub(crate) const fn fast_attack_progress(&self) -> Option<MonsterFastAttackProgress> {
-        self.fast_attack_progress
+        self.attack_progress.fast_attack_progress
     }
 
     pub(crate) fn fast_attack_progress_mut(&mut self) -> Option<&mut MonsterFastAttackProgress> {
-        self.fast_attack_progress.as_mut()
+        self.attack_progress.fast_attack_progress.as_mut()
     }
 
     pub(crate) fn begin_monster_projectile_progress(&mut self) {
-        self.monster_projectile_progress = Some(MonsterProjectileProgress::default());
+        self.attack_progress.monster_projectile_progress = Some(MonsterProjectileProgress::default());
     }
 
     pub(crate) const fn monster_projectile_progress(&self) -> Option<MonsterProjectileProgress> {
-        self.monster_projectile_progress
+        self.attack_progress.monster_projectile_progress
     }
 
     pub(crate) fn monster_projectile_progress_mut(
         &mut self,
     ) -> Option<&mut MonsterProjectileProgress> {
-        self.monster_projectile_progress.as_mut()
+        self.attack_progress.monster_projectile_progress.as_mut()
     }
 
     pub(crate) const fn path_projectile_progress(&self) -> Option<&PathProjectileProgress> {
-        self.path_projectile_progress.as_ref()
+        self.attack_progress.path_projectile_progress.as_ref()
     }
 
     pub(crate) fn set_path_projectile_progress(&mut self, progress: PathProjectileProgress) {
-        self.path_projectile_progress = Some(progress);
+        self.attack_progress.path_projectile_progress = Some(progress);
     }
 
     pub(crate) fn boss_fiend_penetrate_progress(&self) -> Option<&BossFiendPenetrateProgress> {
-        self.boss_fiend_penetrate_progress.as_ref()
+        self.attack_progress.boss_fiend_penetrate_progress.as_ref()
     }
 
     pub(crate) fn set_boss_fiend_penetrate_progress(
         &mut self,
         progress: BossFiendPenetrateProgress,
     ) {
-        self.boss_fiend_penetrate_progress = Some(progress);
+        self.attack_progress.boss_fiend_penetrate_progress = Some(progress);
     }
 
     pub(crate) fn little_star_progress(&self) -> Option<&LittleStarProgress> {
-        self.little_star_progress.as_ref()
+        self.attack_progress.little_star_progress.as_ref()
     }
 
     pub(crate) fn set_little_star_progress(&mut self, progress: LittleStarProgress) {
-        self.little_star_progress = Some(progress);
+        self.attack_progress.little_star_progress = Some(progress);
     }
 
     pub(crate) const fn spider_web_progress(&self) -> Option<SpiderWebProgress> {
-        self.spider_web_progress
+        self.attack_progress.spider_web_progress
     }
 
     pub(crate) const fn set_spider_web_progress(&mut self, progress: SpiderWebProgress) {
-        self.spider_web_progress = Some(progress);
+        self.attack_progress.spider_web_progress = Some(progress);
     }
 
     pub(crate) const fn spider_mist_progress(&self) -> Option<SpiderMistProgress> {
-        self.spider_mist_progress
+        self.attack_progress.spider_mist_progress
     }
 
     pub(crate) const fn set_spider_mist_progress(&mut self, progress: SpiderMistProgress) {
-        self.spider_mist_progress = Some(progress);
+        self.attack_progress.spider_mist_progress = Some(progress);
     }
 
     pub(crate) const fn yunsheng_lightning_progress(&self) -> Option<YunShengLightningProgress> {
-        self.yunsheng_lightning_progress
+        self.attack_progress.yunsheng_lightning_progress
     }
 
     pub(crate) const fn set_yunsheng_lightning_progress(
         &mut self,
         progress: YunShengLightningProgress,
     ) {
-        self.yunsheng_lightning_progress = Some(progress);
+        self.attack_progress.yunsheng_lightning_progress = Some(progress);
     }
 
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
@@ -1625,14 +1627,7 @@ impl CMonster {
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.finish_curable_skill_state(skill_id);
         }
-        self.fast_attack_progress = None;
-        self.monster_projectile_progress = None;
-        self.path_projectile_progress = None;
-        self.boss_fiend_penetrate_progress = None;
-        self.little_star_progress = None;
-        self.spider_web_progress = None;
-        self.spider_mist_progress = None;
-        self.yunsheng_lightning_progress = None;
+        self.attack_progress = MonsterAttackProgress::default();
         let _ = execution.terminate(SkillTermination::Completed);
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
@@ -1679,14 +1674,7 @@ impl CMonster {
     }
 
     pub(crate) fn cancel_base_attack_cast(&mut self) {
-        self.fast_attack_progress = None;
-        self.monster_projectile_progress = None;
-        self.path_projectile_progress = None;
-        self.boss_fiend_penetrate_progress = None;
-        self.little_star_progress = None;
-        self.spider_web_progress = None;
-        self.spider_mist_progress = None;
-        self.yunsheng_lightning_progress = None;
+        self.attack_progress = MonsterAttackProgress::default();
         if let Some(mut execution) = self.base_attack_cast.take() {
             let skill_id = execution.dispatch().skill_id;
             if skill_id == SPIDER_MIST_SKILL_ID {
