@@ -24,6 +24,9 @@
 //! Player-подготовка фиксируется после эффекта выпуска: EnergyBolt
 //! 0x0053CB9C, SnakeBolt 0x00534C82, ZombieClaw 0x0053842C. Общий kernel
 //! передаёт тот же путь в фон; progress.fired отдельно нужен monster-owner-у.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
@@ -553,6 +556,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         ai.begin_player_skill_execution(PlayerPathProjectileExecutionState::begin(
             dispatch, now_ms, destination,
         ));
+        return player_terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }

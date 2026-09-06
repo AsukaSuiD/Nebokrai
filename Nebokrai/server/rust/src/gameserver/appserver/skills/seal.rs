@@ -16,6 +16,9 @@
 //! Выпуск устанавливает общий prepared-флаг после эффекта 1
 //! (0x005AAB8D). Последующий AI продолжает тот же
 //! экземпляр в фоне; повторный Begin и отдельное хранилище не создаются.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::fightdefense::truncate_original;
@@ -336,6 +339,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
         }
         player_ai.begin_player_skill_execution(SealExecutionState::begin(dispatch, target, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch || state.target != target) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

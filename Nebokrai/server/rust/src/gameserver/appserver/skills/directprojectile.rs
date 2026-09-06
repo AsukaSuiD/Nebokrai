@@ -17,6 +17,9 @@
 //! SkeletonArchery::AI (0x005393A0) пишет fired в +0x58 (0x005396EF),
 //! но не prepared в +0x44: его полёт остаётся в активном AI. Поэтому
 //! одинаковая траектория не означает одинаковый переход в фон.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -233,6 +236,7 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
         if live_object_target_dead(game, region_id, dispatch) { send_failure(game, player_id, 10); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
         ai.begin_player_skill_execution(PlayerDirectProjectileExecutionState::begin(dispatch, target_position, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if live_object_target_dead(game, region_id, dispatch) {

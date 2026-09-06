@@ -14,6 +14,9 @@
 //! Player-выпуск ставит prepared после эффекта (0x0054046D); полёт
 //! продолжается тем же исполнением в общей фоновой очереди до End.
 //
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -385,6 +388,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(SPIDER_WEB_SKILL_ID));
         }
         player_ai.begin_player_skill_execution(PlayerSpiderWebExecutionState::begin(dispatch, now_ms));
+        return player_terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

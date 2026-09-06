@@ -23,6 +23,9 @@
 //! Следующий OnFighting переносит исполнение в фон без End; полёт продолжает
 //! тот же owner с исходной целью и временем. Это не attacking_started,
 //! который лишь прекращает удержание, и не разрешение движения при попадании.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -264,6 +267,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
         let started_at_ms = runtime.now_milliseconds();
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(HEARTLESS_ARROW_SKILL_ID)); }
         player_ai.begin_player_skill_execution(HeartlessArrowExecutionState::begin(dispatch, target, started_at_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 
     let target = player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().expect("выполнение выстрела создано").target;

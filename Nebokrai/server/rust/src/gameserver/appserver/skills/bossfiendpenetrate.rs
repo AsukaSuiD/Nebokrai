@@ -22,6 +22,9 @@
 //! AfterUseSkill. Callback игрока +0x158 пуст и не пересчитывает свойства.
 //! Выпуск игрока устанавливает prepared (0x0052C279) после эффекта 1;
 //! последующие клетки обходятся тем же экземпляром в общей фоновой очереди.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -485,6 +488,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             destination,
             now_ms,
         ));
+        return player_terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai
         .player_skill_state::<PlayerBossFiendPenetrateExecutionState>(BOSS_FIEND_PENETRATE_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

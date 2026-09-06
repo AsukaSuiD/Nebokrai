@@ -19,6 +19,9 @@
 //! Выпуск устанавливает общий prepared-флаг после эффекта 1
 //! (варианты 1/2/3: 0x0059E348 / 0x00562638 / 0x00560EE8). Последующий AI продолжает тот же
 //! экземпляр в фоне; повторный Begin и отдельное хранилище не создаются.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -171,6 +174,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
         if (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(requested_skill)); }
         player_ai.begin_player_skill_execution(GhostCutExecutionState::begin(dispatch, now_ms));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if player_ai.player_skill_state::<GhostCutExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if player_ai.player_skill_state::<GhostCutExecutionState>(dispatch.skill_id()).is_some_and(|state| !state.condition_checked) {
         if game.find_player(player_id).is_none_or(|player| !weapon_is_sword(game, player)) { send_failure(game, player_id, 0x0e, mp_loss); finish_player_ghost_cut(game, player_id, player_ai, requested_skill, runtime); return terminal(QueuedSkillExecutionState::Rejected) }

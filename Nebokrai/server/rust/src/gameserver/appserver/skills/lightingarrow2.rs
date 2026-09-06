@@ -16,6 +16,9 @@
 //! Выпуск устанавливает общий prepared-флаг после эффекта 1
 //! (0x0054D4A9). Последующий AI продолжает тот же
 //! экземпляр в фоне; повторный Begin и отдельное хранилище не создаются.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -143,6 +146,7 @@ pub(crate) fn execute_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { if mp_loss != 0 { player.set_skill_moveable(false) } player.set_current_skill_id(Some(LIGHTING_ARROW_2_SKILL_ID)); }
         ai.begin_player_skill_execution(LightingArrow2ExecutionState::begin(dispatch, destination, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<LightingArrow2ExecutionState>(LIGHTING_ARROW_2_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let destination = target_position(game, region_id, player_id, dispatch).unwrap_or_else(|| ai.player_skill_state::<LightingArrow2ExecutionState>(LIGHTING_ARROW_2_SKILL_ID).map(|state| state.destination).unwrap_or_default()); if target_is_dead(game, region_id, dispatch) { failure(game, player_id, 10, mp_loss); abort_player_lighting_arrow_2(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
     if ai.player_skill_state::<LightingArrow2ExecutionState>(LIGHTING_ARROW_2_SKILL_ID).is_some_and(|state| !state.condition_checked) {

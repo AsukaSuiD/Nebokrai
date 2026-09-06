@@ -16,6 +16,9 @@
 //! остаются elapsed.
 //! После эффекта выпуска player-ветвь ставит prepared (0x005432FE).
 //! Этот флаг общего kernel сохраняет полёт при переходе из Attack в фон.
+//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
+//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
+//! постановки Attack; раннее время Begin сохраняется общим kernel.
 
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -224,6 +227,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
         if game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(YAKSHA_SLASH_SKILL_ID)); }
         ai.begin_player_skill_execution(YakshaSlashExecutionState::begin(dispatch, now));
+        return terminal(QueuedSkillExecutionState::Begun);
     } else if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.periodic_state_target_dead(region_id, target) || (target.object_type == PLAYER_TYPE && target.id == player_id) { fail(game, player_id, 10); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
     if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
