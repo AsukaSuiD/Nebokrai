@@ -21,7 +21,6 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -39,7 +38,7 @@ fn finish_player_kerosene<Runtime: GameMainLoopRuntime>(game: &mut CGame, player
     restore_player_movement(game, player_id);
     finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(KEROSENE_SKILL_ID, now_ms));
 }
-fn abort_player_kerosene(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+fn abort_player_kerosene(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 pub(crate) fn complete_player_kerosene<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some(dispatch) = ai.player_skill_execution(KEROSENE_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_kerosene(game, player_id, ai, runtime);

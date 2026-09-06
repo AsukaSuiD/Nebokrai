@@ -29,7 +29,6 @@ use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored,
 };
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -72,7 +71,6 @@ fn restore_movement(game: &mut CGame, player_id: i32) {
 
 fn abort_player_callosity(game: &mut CGame, player_id: i32) {
     restore_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 fn finish_player_callosity<Runtime: GameMainLoopRuntime>(

@@ -22,7 +22,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -128,7 +128,6 @@ fn finish_player_god_thunder<Runtime: GameMainLoopRuntime>(game: &mut CGame, pla
 
 fn abort_player_god_thunder(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn complete_player_god_thunder_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, runtime: &mut Runtime) -> bool {

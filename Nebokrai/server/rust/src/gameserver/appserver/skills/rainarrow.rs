@@ -26,7 +26,6 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGO
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -56,7 +55,7 @@ fn finish_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, a
     restore_player_movement(game, id);
     finish_state_skill(game, id, ai, runtime, |ai, now_ms| ai.mark_skill_used(crate::gameserver::appserver::skills::rainarrowphalanx::RAIN_ARROW_SKILL_ID, now_ms));
 }
-fn abort_player_rain_arrow(game: &mut CGame, id: i32) { restore_player_movement(game, id); abort_skill(game, id); }
+fn abort_player_rain_arrow(game: &mut CGame, id: i32) { restore_player_movement(game, id); }
 pub(crate) fn complete_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) -> bool {
     let Some(dispatch) = ai.player_skill_state::<RainArrowExecutionState>(RAIN_ARROW_SKILL_ID).cloned().map(|state| state.kernel().dispatch()) else { return false };
     finish_player_rain_arrow(game, id, ai, runtime);

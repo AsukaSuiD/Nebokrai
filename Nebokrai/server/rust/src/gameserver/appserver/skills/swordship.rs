@@ -20,7 +20,6 @@ use super::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -138,7 +137,6 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        abort_skill(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let minimum_attack_gain = properties.query_property(SKILL_USAGE_TARGET_MIN_ATK_GAIN) as i32;

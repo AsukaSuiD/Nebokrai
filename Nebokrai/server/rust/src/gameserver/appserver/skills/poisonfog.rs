@@ -18,7 +18,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{GAP_WEAPON_CATEG
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -39,7 +39,7 @@ fn fail(game: &mut CGame, player_id: i32, code: u8, text: &[u8], mp: Option<u32>
 fn visual(game: &mut CGame, player_id: i32, level: i32, action: u8, target: Option<(i32, i32)>) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(action); message.add_long(POISON_FOG_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); if action == 1 { message.add_long(player.shape().get_direction()); } else { let Some((x, y)) = target else { return }; message.add_long(0); message.add_long(0); message.add_long(x); message.add_long(y); } let _ = game.send_player_shape_around(player_id, None, &message); }
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_poison_fog<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player_movement(game, player_id); finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(POISON_FOG_SKILL_ID, now_ms)); }
-fn abort_player_poison_fog(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+fn abort_player_poison_fog(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 pub(crate) fn complete_player_poison_fog<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.player_skill_execution(POISON_FOG_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_player_poison_fog(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Completed) }
 pub(crate) fn cancel_player_poison_fog<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.player_skill_execution(POISON_FOG_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_poison_fog(game, player_id); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 pub(crate) const fn is_poison_fog_target(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Point { skill_id: POISON_FOG_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: POISON_FOG_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }) }

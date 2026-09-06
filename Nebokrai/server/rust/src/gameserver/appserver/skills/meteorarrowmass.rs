@@ -17,7 +17,6 @@ pub(crate) use super::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
@@ -38,10 +37,9 @@ fn weapon_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
     ai.mark_skill_used(crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID, runtime.now_milliseconds());
 }
-fn abort_player_meteor_arrow_mass(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+fn abort_player_meteor_arrow_mass(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 pub(crate) fn complete_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some(dispatch) = ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
     finish_player_meteor_arrow_mass(game, player_id, ai, runtime);

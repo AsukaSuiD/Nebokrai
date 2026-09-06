@@ -30,7 +30,7 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -78,7 +78,7 @@ fn finish_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, pl
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(YAKSHA_SLASH_SKILL_ID, now_ms));
 }
 
-fn abort_player_yaksha_slash(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+fn abort_player_yaksha_slash(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 
 pub(crate) fn complete_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some(dispatch) = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };

@@ -32,7 +32,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -80,7 +80,7 @@ fn finish_player_explosive_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame,
     restore_player_movement(game, player_id);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(variant.skill_id(), now_ms));
 }
-fn abort_player_explosive_arrow(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+fn abort_player_explosive_arrow(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 pub(crate) fn complete_player_explosive_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, execution_skill_id: u32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some((dispatch, variant)) = ai.player_skill_state::<ExplosiveArrowExecutionState>(execution_skill_id).map(|state| (state.kernel().dispatch(), state.variant)) else { return false };
     finish_player_explosive_arrow(game, player_id, ai, variant, runtime);

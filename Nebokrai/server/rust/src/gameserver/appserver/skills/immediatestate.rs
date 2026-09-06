@@ -33,7 +33,6 @@ use super::taijistate::TaiJiState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -195,7 +194,6 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
         if player_ai.player_skill_execution(skill_id).is_some() {
-            abort_skill(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };

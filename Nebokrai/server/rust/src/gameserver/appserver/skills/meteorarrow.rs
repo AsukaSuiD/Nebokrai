@@ -20,7 +20,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGO
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -57,7 +57,6 @@ fn finish_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, pl
 }
 fn abort_player_meteor_arrow(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 pub(crate) fn complete_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some(dispatch) = ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };

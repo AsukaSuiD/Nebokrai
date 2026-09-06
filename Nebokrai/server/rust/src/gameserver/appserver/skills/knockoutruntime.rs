@@ -34,7 +34,6 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -386,7 +385,7 @@ fn release(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
 }
 
-fn abort_player_knock_out(game: &mut CGame, player_id: i32) { release(game, player_id); abort_skill(game, player_id); }
+fn abort_player_knock_out(game: &mut CGame, player_id: i32) { release(game, player_id); }
 fn finish_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(KNOCK_OUT_SKILL_ID, now_ms)); }
 pub(crate) fn complete_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.player_skill_execution(KNOCK_OUT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; release(game, player_id); finish_player_knock_out(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Completed) }
 pub(crate) fn cancel_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.player_skill_execution(KNOCK_OUT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_knock_out(game, player_id); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }

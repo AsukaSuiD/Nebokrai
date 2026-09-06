@@ -69,7 +69,6 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     resolve_coordinate_sufferer, resolve_identity_sufferer, resolve_state_user,
 };
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -200,7 +199,6 @@ fn finish_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id:
 
 fn abort_player_cure(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn complete_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {

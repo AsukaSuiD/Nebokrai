@@ -8,7 +8,9 @@
 //! затем CSkill::End (0x004d84c0). Обычный AfterUseSkill (0x0053cf30) вызывает
 //! только CPlayer::OnWeaponDamaged. Виртуальный +0x158 базового End у игрока
 //! пуст: пересчёт при наложении состояния остаётся у конкретного навыка,
-//! здесь он не повторяется. Хвост очищает current skill и фиксирует cooldown.
+//! здесь он не повторяется. Хвост фиксирует cooldown, но не меняет выбранный
+//! навык игрока: пустой слот 0x00485540 не сбрасывает m_pCurrentSkill.
+//! Смена выбора принадлежит OnChangeSkill/OnLoseTarget, не End экземпляра.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::CGame;
@@ -26,9 +28,6 @@ pub(crate) fn finish_state_skill<Runtime, MarkUsed>(
     MarkUsed: FnOnce(&mut CPlayerAI, u32),
 {
     game.damage_player_weapon(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
     mark_used(player_ai, runtime.now_milliseconds());
 }
 

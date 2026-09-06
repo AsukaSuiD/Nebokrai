@@ -54,13 +54,13 @@ pub(crate) fn finish_failed_base_attack(game: &mut CGame, player_id: i32, restor
         if restore_movement {
             player.set_skill_moveable(true);
         }
-        player.set_current_skill_id(None);
     }
 }
 
 /// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
 /// `CArchery::End`: износ оружия
-/// предшествует фиксации времени восстановления и очистке текущего навыка;
+/// предшествует фиксации времени восстановления; CSkill::End не сбрасывает
+/// выбранный навык игрока (его +0x158 — пустой ret 0x00485540);
 /// задержанные варианты сначала возвращают движение.
 fn finish_base_attack_owner<Runtime, MarkUsed>(
     game: &mut CGame,
@@ -79,9 +79,6 @@ fn finish_base_attack_owner<Runtime, MarkUsed>(
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
     mark_used(player_ai, runtime.now_milliseconds());
 }
 

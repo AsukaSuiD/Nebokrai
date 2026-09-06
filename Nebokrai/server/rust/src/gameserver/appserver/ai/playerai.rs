@@ -622,30 +622,39 @@ impl CPlayerAI {
         expected: PlayerSkillDispatch,
         termination: SkillTermination,
     ) -> bool {
-        if self.next_player_skill() != Some(expected) {
-            return false;
+        let finished_execution = self.finish_player_skill_execution(expected, termination);
+        if self.current_player_skill == Some(expected) {
+            self.current_player_skill = None;
+            return true;
         }
-        if self.current_player_skill.take().is_none() {
+        // Ещё не начатый запрос может быть отклонён прямо из FIFO. End уже
+        // существующего экземпляра не поглощает такой же повторный запрос.
+        if !finished_execution && self.current_player_skill.is_none()
+            && self.player_skills.front().copied() == Some(expected)
+        {
             self.player_skills.pop_front();
+            return true;
         }
-        self.finish_player_skill_execution(expected, termination);
-        true
+        finished_execution
     }
 
     /// End освобождает только выбранный CSkill, не остальные экземпляры.
-    /// Отделено от снятия команды для общего foreground/background lifecycle.
+    /// Фоновое End не снимает текущую или ожидающую команду. Совпадение
+    /// проверяется по полному dispatch, не только типу состояния или ID.
     fn finish_player_skill_execution(
         &mut self,
         expected: PlayerSkillDispatch,
         termination: SkillTermination,
-    ) {
+    ) -> bool {
         let skill_id = expected.skill_id();
         if self.player_skill_execution(skill_id).is_some_and(|state| state.dispatch() == expected)
             && let Some(mut execution) = self.player_skill_executions.remove(&skill_id)
         {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
+            return true;
         }
+        false
     }
 
     /// Fallback встречного `CPlayerAI::OnLoseTarget`, когда concrete execution

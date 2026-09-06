@@ -28,7 +28,6 @@ use super::rapture::{RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN
 use super::rapturestate::RaptureState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -72,7 +71,6 @@ fn restore_movement(game: &mut CGame, player_id: i32) {
 
 fn abort_player_agility(game: &mut CGame, player_id: i32) {
     restore_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 fn finish_player_agility<Runtime: GameMainLoopRuntime>(

@@ -33,7 +33,6 @@ use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::state::{
     resolve_coordinate_sufferer, send_owned_state_visual,
 };
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -85,7 +84,6 @@ fn finish_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, playe
 
 fn abort_player_promotion(game: &mut CGame, player_id: i32) {
     finish_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn complete_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {

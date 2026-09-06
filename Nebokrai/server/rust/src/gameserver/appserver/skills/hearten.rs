@@ -23,7 +23,6 @@ use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -77,7 +76,6 @@ fn restore_movement(game: &mut CGame, player_id: i32) {
 
 fn abort_player_hearten(game: &mut CGame, player_id: i32) {
     restore_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 fn finish_player_hearten<Runtime: GameMainLoopRuntime>(

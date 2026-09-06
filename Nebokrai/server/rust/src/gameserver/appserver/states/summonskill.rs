@@ -6,6 +6,9 @@
 //! AfterUseSkill (0x0053cf30) вызывает CPlayer::OnWeaponDamaged (0x00441d50).
 //! Базовый End вызывает у источника virtual +0x158, который у CPlayer пуст:
 //! здесь нет дополнительного пересчёта свойств или повторного Summon.
+//! Этот слот — пустой ret 0x00485540. End не меняет m_pCurrentSkill игрока:
+//! он очищает только поля собственного CSkill. Выбор default attack остаётся
+//! у OnChangeSkill/OnLoseTarget, в том числе после завершения фонового навыка.
 //! Игровые эффекты, пересчёты от изменения состояний и движение принадлежат
 //! конкретному навыку. После успешного завершения фиксируется время reuse;
 //! End(0) не вызывает AfterUseSkill и не меняет reuse. `CCorpsePtomaine`,
@@ -20,12 +23,6 @@
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-pub(crate) fn abort_skill(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
-}
-
 fn finish_summon_skill_owner<Runtime, MarkUsed>(
     game: &mut CGame,
     player_id: i32,
@@ -39,9 +36,6 @@ fn finish_summon_skill_owner<Runtime, MarkUsed>(
 {
     if damage_weapon {
         game.damage_player_weapon(player_id, runtime);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
     }
     mark_used(player_ai, runtime.now_milliseconds());
 }

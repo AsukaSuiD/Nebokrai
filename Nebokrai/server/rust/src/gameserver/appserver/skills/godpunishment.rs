@@ -16,7 +16,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -63,7 +63,6 @@ fn finish_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, 
 
 fn abort_player_god_punishment(game: &mut CGame, player: i32) {
     if let Some(owner) = game.find_player_mut(player) { owner.set_skill_moveable(true); }
-    abort_skill(game, player);
 }
 
 pub(crate) fn complete_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, player: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {

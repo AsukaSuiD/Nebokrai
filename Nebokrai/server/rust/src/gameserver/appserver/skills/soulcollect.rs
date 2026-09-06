@@ -18,7 +18,7 @@ use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTe
 use super::soulcollectstate::{SoulCollectState, send_soul_collect_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -83,7 +83,6 @@ fn finish_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, pl
 
 fn abort_player_soul_collect(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn complete_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {

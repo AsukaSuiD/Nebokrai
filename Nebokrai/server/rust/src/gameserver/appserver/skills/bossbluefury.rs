@@ -31,7 +31,6 @@ use crate::gameserver::appserver::skills::kernel::{
 };
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
 use crate::gameserver::appserver::states::state::send_owned_state_visual;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -161,7 +160,6 @@ fn finish_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
 
 fn abort_player_boss_blue_fury(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn cancel_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(

@@ -21,7 +21,7 @@ use super::basemagic::{
 use super::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -172,7 +172,6 @@ fn finish_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
 
 fn abort_player_heartless_arrow_area(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn complete_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(

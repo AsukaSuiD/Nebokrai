@@ -29,7 +29,6 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
@@ -293,7 +292,6 @@ fn finish_player_spider_web<Runtime: GameMainLoopRuntime>(
 
 fn abort_player_spider_web(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
 }
 
 pub(crate) fn cancel_player_spider_web<Runtime: GameMainLoopRuntime>(

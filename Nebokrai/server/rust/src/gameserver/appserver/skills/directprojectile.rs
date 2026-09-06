@@ -26,7 +26,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -127,7 +127,7 @@ fn finish<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(skill_id, now_ms));
 }
 
-fn abort(game: &mut CGame, player_id: i32) { restore_movement(game, player_id); abort_skill(game, player_id); }
+fn abort(game: &mut CGame, player_id: i32) { restore_movement(game, player_id); }
 
 pub(super) fn abort_player_direct_projectile_on_region_change(
     game: &mut CGame,

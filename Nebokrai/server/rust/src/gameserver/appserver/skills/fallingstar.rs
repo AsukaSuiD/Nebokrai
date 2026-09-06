@@ -26,7 +26,7 @@ use super::meteorarrowmass::send_meteor_arrow_state_remove;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -91,7 +91,7 @@ fn finish_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, pl
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(FALLING_STAR_SKILL_ID, now_ms));
 }
 
-fn abort_player_falling_star(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+fn abort_player_falling_star(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 
 pub(crate) fn complete_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some(dispatch) = ai.player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
