@@ -31,6 +31,10 @@
 //! OnStiffen (0x004C880D) вызывает virtual OnLoseTarget после снятия Attack
 //! и до выбора default. Координатор освобождает заимствование CMonster на
 //! этой границе, чтобы производный AI мог обратиться к региону и близнецу.
+//! CMonsterBaseAttack::End (0x005B3010) через 0x005DFBD0 вызывает
+//! CSkill::End (0x004D84C0): любой ненулевой аргумент, включая Stiffen=4,
+//! обновляет reuse даже у уже завершённого навыка. OnLoseTarget видит прежний
+//! выбранный навык; default назначается только после возврата из callback.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1345,14 +1349,23 @@ impl CMonster {
         self.base_ai.begin_reached_stiffen_action()
     }
 
-    pub(crate) fn take_stiffen_attack(&mut self) -> Option<bool> {
+    pub(crate) fn take_stiffen_attack(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
         if !self.base_ai.stiffen_attack_pending() {
             return None;
         }
         let release_target = self.base_ai.stiffen_attack_needs_end()
             && self.base_attack_cast().is_some();
         if release_target {
-            self.cancel_base_attack_cast();
+            if self.base_attack_cast.is_some_and(|cast| {
+                cast.dispatch().skill_id == super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID
+            }) {
+                let skill_id = super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID;
+                self.attack_progress = MonsterAttackProgress::default();
+                self.skill_last_used_ms.insert(skill_id, now());
+                self.base_attack_cast = None;
+            } else {
+                self.cancel_base_attack_cast();
+            }
         } else {
             let default_skill = self.move_shape.default_attack_skill_id();
             self.move_shape.set_current_skill_id(Some(default_skill));

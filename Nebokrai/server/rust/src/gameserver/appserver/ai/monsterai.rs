@@ -41,9 +41,10 @@
 //! (0x005DCC30). Следующее событие FIFO и отмена исполнения не входят сюда.
 //! OnStiffen (0x004C8770) вызывает этот же virtual после каждого снятого
 //! Attack, до default и продолжения active FIFO; timestamp пассивного события
-//! читается после всего обработчика. End навыка пока использует достигнутую
-//! отмену CMonster; произвольный concrete End(4), сохраняющий IsEnded=false,
-//! этим не считается восстановленным.
+//! читается после всего обработчика. End(4) базовой атаки сохраняет выбранный
+//! навык до callback и обновляет reuse; остальные навыки пока используют
+//! достигнутую отмену CMonster. Их concrete End(4), включая сохранение
+//! IsEnded=false и освобождение блокировок движения, ещё не восстановлен.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
@@ -80,7 +81,7 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
     let action = monster.begin_reached_stiffen_action();
     if action.interrupts_attack() {
         while let Some(release_target) = region.find_monster_by_id_mut(monster_id)
-            .and_then(CMonster::take_stiffen_attack)
+            .and_then(|monster| monster.take_stiffen_attack(|| runtime.now_milliseconds()))
         {
             if release_target {
                 release_owned_monster_target(game, region, monster_id, runtime);
