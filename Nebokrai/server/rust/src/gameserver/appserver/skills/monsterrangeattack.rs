@@ -32,9 +32,18 @@
 //! базовой атаки; RP защищающегося не меняется этим различием.
 //! End (VA `0x00546090`) возвращает движение; только успешный исход
 //! выполняет AfterUseSkill с износом оружия и фиксирует reuse.
+//! Monster Begin не наследует поворот и стартовый пакет базовой атаки:
+//! его sufferer — сам источник, kernel остаётся в Begin. Non-player
+//! CheckCastCondition не блокирует движение; отказ reuse всё равно вызывает
+//! End(0) и возвращает BeginRejected общему расписанию. Первый AI
+//! (0x00512569..0x005125D8) посылает старт с прежним направлением, затем
+//! читает свежие часы delay. Отсутствие свойств после Begin — End(0)
+//! (0x00512900). Ранние отказы schedule до Begin остаются у caller-а.
 
 use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
 use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
+use crate::gameserver::appserver::ai::monsterai::MonsterSkillCallOutcome;
+use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
@@ -319,12 +328,41 @@ pub(crate) struct MonsterRangeAttackDispatch {
     now_ms: u32,
 }
 
-pub(crate) fn prepare_owned_monster_range_cast(
+pub(crate) fn begin_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    started_at_ms: u32,
+    runtime: &mut Runtime,
+) -> MonsterSkillCallOutcome {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return MonsterSkillCallOutcome::NotHandled;
+    };
+    if !super::kernel::skill_is_restored(
+        monster.skill_last_used_ms(MONSTER_RANGE_ATTACK_SKILL_ID),
+        properties.query_property(super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME),
+        runtime.now_milliseconds(),
+    ) {
+        monster.move_shape_mut().set_moveable(true);
+        return MonsterSkillCallOutcome::BeginRejected;
+    }
+    let target = monster.move_shape().shape().identity();
+    monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
+        target,
+        skill_id: MONSTER_RANGE_ATTACK_SKILL_ID,
+        skill_level,
+    }, started_at_ms));
+    MonsterSkillCallOutcome::Handled
+}
+
+pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     properties: &CSkillBaseProperties,
     now_ms: u32,
+    runtime: &mut Runtime,
     dispatch: &mut Option<MonsterRangeAttackDispatch>,
 ) -> bool {
     let Some((shape, property, cast, attacker_master, attacker_tamed)) = region
@@ -344,8 +382,21 @@ pub(crate) fn prepare_owned_monster_range_cast(
     if cast.dispatch().skill_id != MONSTER_RANGE_ATTACK_SKILL_ID {
         return false;
     }
+    if cast.stage() == SkillStage::Begin {
+        let mut start = CMessage::new(0x000b_fe01);
+        start.add_byte(1);
+        start.add_long(MONSTER_RANGE_ATTACK_SKILL_ID as i32);
+        start.add_short(cast.dispatch().skill_level as i16);
+        start.add_long(MONSTER_TYPE);
+        start.add_long(monster_id);
+        start.add_long(shape.get_direction());
+        let _ = game.send_game_shape_around(region, &shape, None, &start);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+        }
+    }
     let delay_ms = properties.query_property(super::baseattack::SKILL_USAGE_DELAY_TIME);
-    if !super::kernel::skill_is_restored(cast.started_at_ms(), delay_ms, now_ms) {
+    if !super::kernel::skill_is_restored(cast.started_at_ms(), delay_ms, runtime.now_milliseconds()) {
         return true;
     }
     let (Ok(tile_x), Ok(tile_y)) = (shape.get_tile_x(), shape.get_tile_y()) else {

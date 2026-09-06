@@ -12,7 +12,8 @@
 //! повторного Begin или наличия боевой цели; завершение FIFO остаётся следующим
 //! active-проходом. Признак Begin берётся из зарегистрированного экземпляра.
 //! MonsterThorn AI без свойств (0x005423E2), MachineryStomp (0x00532836)
-//! и LordWiderangingAttack (0x00530366) вызывают owner End(0).
+//! и LordWiderangingAttack (0x00530366), MonsterRangeAttack (0x00512900)
+//! вызывают owner End(0).
 //! Общий lookup не поглощает этот отказ живого cast; до Begin свойства
 //! по-прежнему необходимы расписанию для расчёта диапазона.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
@@ -1272,7 +1273,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
     else {
-        if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID)
+        if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID)
             && cast.is_some()
         {
             return super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id);
@@ -1668,6 +1669,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster_id,
             &skill_properties,
             now_ms,
+            runtime,
             range_dispatch,
         );
     }
@@ -2087,6 +2089,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if !attack_started {
             return true;
         }
+    }
+    if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID {
+        let outcome = super::monsterrangeattack::begin_owned_monster_range_cast(
+            region, monster_id, skill_level, &skill_properties, now_ms, runtime,
+        );
+        return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
+            game, region, monster_id, outcome, runtime,
+        );
     }
     let last_used_ms = region
         .find_monster_by_id(monster_id)
