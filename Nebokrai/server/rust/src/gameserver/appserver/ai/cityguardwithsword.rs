@@ -22,8 +22,8 @@
 //! Tracing (0x0060D0E0) за пределом chase_range вызывает виртуальный
 //! OnLoseTarget, затем SearchEnemy (0x0060D292), не общий cancel. При
 //! сближении ForceMove предшествует отдельному Move(0) (0x0060D1F7),
-//! независимо от результата переноса. Ветка короткого отхода ещё требует
-//! полного подключения общего CBaseAI::MoveTo вместо одного пространственного шага.
+//! независимо от результата переноса. Короткий отход вызывает общий ходовой
+//! MoveTo: Slip, пространственный шаг и отдельный Move с задержкой.
 //! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
 //! порядка и фильтров достигнутого selector-а.
 
@@ -345,20 +345,9 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
         y: owner.tile_y,
     };
     if let Ok(destination) = CShape::get_direction_position(direction, origin) {
-        let figure = region.find_monster_by_id(monster_id).and_then(|monster| {
-            let property =
-                game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            Some(crate::gameserver::appserver::monster::CMonster::figure(property))
-        });
-        if let Some(figure) = figure {
-            let _ = game.move_owned_monster_step(
-                region,
-                monster_id,
-                destination.x,
-                destination.y,
-                figure,
-            );
-        }
+        super::monsterai::move_owned_monster_to(
+            game, region, monster_id, destination, || runtime.now_milliseconds(),
+        );
     }
     CitySwordTraceOutcome::Handled
 }

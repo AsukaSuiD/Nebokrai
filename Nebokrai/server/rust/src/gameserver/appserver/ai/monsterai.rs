@@ -206,6 +206,37 @@ pub(crate) fn find_slip_step(
         })
 }
 
+/// Одношаговая ходьба MoveTo (0x004C9020, run=0): Slip, Move, затем FIFO.
+/// Отказ вызывает пустой CMoveShape::OnCannotMove (+0xA4, 0x00485540)
+/// и не меняет очередь. Run-вариант с двумя Slip сюда не подмешивается.
+pub(crate) fn move_owned_monster_to(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target: ShapeAreaCoordinates,
+    now: impl FnOnce() -> u32,
+) {
+    let Some((origin, figure, speed, stop_frame)) = region.find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            if !monster.move_shape().is_moveable() { return None; }
+            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            let shape = monster.move_shape().shape();
+            let pet = monster.is_tamed().then(|| monster.pet_attack_properties(property));
+            Some((ShapeAreaCoordinates { x: shape.get_tile_x().ok()?, y: shape.get_tile_y().ok()? },
+                CMonster::figure(property),
+                pet.map_or(shape.get_speed(), |pet| f32::from_bits(pet.speed_bits)),
+                monster.stop_frame(property)))
+        })
+    else { return; };
+    let Some((direction, destination)) = find_slip_step(game, region, origin, target, figure)
+    else { return; };
+    let delay = one_step_move_delay_ms(direction, speed, stop_frame);
+    let _ = game.move_owned_monster_step(region, monster_id, destination.x, destination.y, figure);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_move(delay, now());
+    }
+}
+
 /// Отдельный timestamp расписания `CMonsterAI`; он не является cooldown
 /// конкретного `CSkill` и обновляется до его `CheckCast`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -438,15 +469,10 @@ pub(crate) fn approach_attack_range(
         tamed,
         pet_action,
         moveable,
-        speed,
-        stop_frame,
     )) = region.find_monster_by_id(monster_id).and_then(|monster| {
         let property = game
             .find_monster_property_by_origin_name(monster.base_property_key()?)?
             .clone();
-        let pet = monster
-            .is_tamed()
-            .then(|| monster.pet_attack_properties(&property));
         let monster_view = monster.shape_view(&property)?;
         Some((
             property.clone(),
@@ -456,10 +482,6 @@ pub(crate) fn approach_attack_range(
             monster.is_tamed(),
             monster.pet_action(),
             monster.move_shape().is_moveable(),
-            pet.map_or(monster.move_shape().shape().get_speed(), |pet| {
-                f32::from_bits(pet.speed_bits)
-            }),
-            pet.map_or(property.stop_frame, |pet| pet.stop_frame),
         ))
     }) else {
         return false;
@@ -500,38 +522,8 @@ pub(crate) fn approach_attack_range(
         return false;
     }
 
-    let origin = ShapeAreaCoordinates {
-        x: monster_x,
-        y: monster_y,
-    };
-    let figure = CMonster::figure(&property);
-    let destination = find_slip_step(
-        game,
-        region,
-        origin,
-        ShapeAreaCoordinates {
-            x: target_x,
-            y: target_y,
-        },
-        figure,
-    );
-    let Some((direction, destination)) = destination else {
-        return false;
-    };
-    if game.move_owned_monster_step(
-        region,
-        monster_id,
-        destination.x,
-        destination.y,
-        figure,
-    ) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.begin_active_ai_move(
-                one_step_move_delay_ms(direction, speed, stop_frame),
-                now_ms,
-            );
-        }
-    }
+    move_owned_monster_to(game, region, monster_id,
+        ShapeAreaCoordinates { x: target_x, y: target_y }, || now_ms);
     false
 }
 
