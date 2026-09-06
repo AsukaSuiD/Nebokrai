@@ -66,6 +66,8 @@
 //! SpiderWeb::End (0x0057B810) сбрасывает поля полёта и вызывает
 //! SetMoveable(true) перед общим End. SpiderWebProgress освобождается с cast,
 //! а SpiderWebState на цели остаётся у собственного state-owner-а.
+//! YunShengLightning разделяет End 0x0057B810: общий путь снимает один запрет
+//! движения и очищает полёт, без повторного удара или сообщения эффекта.
 //! OnStiffen разрешает GetCurrentSkill (0x004C87C8), не сохранённый dispatch.
 //! Отсутствующий навык проходит без End/OnLoseTarget; подтверждённый End
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
@@ -1742,7 +1744,8 @@ impl CMonster {
             | super::skills::corpseptomaine::CORPSE_PTOMAINE_SKILL_ID
             | super::skills::promotion::PROMOTION_SKILL_ID
             | super::skills::knockoutruntime::KNOCK_OUT_SKILL_ID
-            | super::skills::spiderweb::SPIDER_WEB_SKILL_ID)
+            | super::skills::spiderweb::SPIDER_WEB_SKILL_ID
+            | super::skills::yunshenglightning::YUNSHENG_LIGHTNING_SKILL_ID)
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {

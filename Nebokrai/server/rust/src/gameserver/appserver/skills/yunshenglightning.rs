@@ -19,6 +19,11 @@
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
 //! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
 //! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! End (0x0057B810, общий со SpiderWeb) сбрасывает поля полёта, вызывает
+//! SetMoveable(true), затем CAttackSkill::End. Monster-путь выполняет это
+//! через общий CMonster cleanup при завершении, отмене и Stiffen; End сам
+//! не наносит удар и не публикует эффект. Отсутствие monster-блокировки
+//! движения в Begin не отменяет подтверждённый декремент в End.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
