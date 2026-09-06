@@ -1,4 +1,8 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! CPet vtable 0x00652D0C: OnFighting (+0x1C) указывает на CBaseAI
+//! 0x004C9320. Завершение его атаки ставит ChangeSkill независимо от
+//! сохранённого первичного AI; специальные SearchEnemy лучников остаются
+//! только неприручённому владельцу.
 //! Техническое хранение прогресса cast сгруппировано в MonsterAttackProgress:
 //! Default обслуживает одинаковую очистку при End и отмене. Типизированные
 //! значения остаются независимыми; Begin не получает дополнительного сброса,
@@ -1602,8 +1606,12 @@ impl CMonster {
         if mark_reuse {
             self.skill_last_used_ms.insert(skill_id, now_ms);
         }
-        self.base_ai
-            .add_ai_event(self.attack_completion_action, 0, 0, now_ms);
+        let completion_action = if self.tamed {
+            AiShapeAction::ChangeSkill
+        } else {
+            self.attack_completion_action
+        };
+        self.base_ai.add_ai_event(completion_action, 0, 0, now_ms);
         Some(execution)
     }
 

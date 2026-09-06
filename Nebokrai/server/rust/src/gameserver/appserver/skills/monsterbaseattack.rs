@@ -56,6 +56,10 @@
 //! CJiuMai отличается: 0x0060AC3B при запрете сразу возвращается, сохраняя цель.
 //! CPuninessCreature (0x0060F4B0) переходит прямо к Tracing и такой проверки
 //! не имеет; исключение относится к первичному AI7, но не к приручённому CPet.
+//! CPet vtable 0x00652D0C хранит общий OnChangeSkill (+0x24 → 0x005DCBC0)
+//! и SelectAttackSkill (+0x8C → 0x005DD0B0). Поэтому приручение отключает
+//! boss/lord-selector и производный restore-delay AI5/AI103, но сохраняет
+//! исходный список odds, один RNG и общий default/IsRestored.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -542,10 +546,11 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     monster_health: u32,
     runtime: &mut Runtime,
 ) -> Option<u16> {
-    let default_skill_id = region.find_monster_by_id(monster_id)?
-        .move_shape().default_attack_skill_id() as u16;
+    let monster = region.find_monster_by_id(monster_id)?;
+    let default_skill_id = monster.move_shape().default_attack_skill_id() as u16;
+    let tamed = monster.is_tamed();
     let roll = game.skill_random_below(10_000);
-    let selected = if property.ai == 21 {
+    let selected = if !tamed && property.ai == 21 {
         choose_boss_blue_attack_skill(
             region,
             monster_id,
@@ -554,7 +559,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             roll,
             default_skill_id,
         )
-    } else if property.ai == 23 {
+    } else if !tamed && property.ai == 23 {
         choose_boss_fiend_attack_skill(
             game,
             region,
@@ -564,7 +569,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             roll,
             runtime,
         )
-    } else if property.ai == 19 {
+    } else if !tamed && property.ai == 19 {
         Some(select_lord_attack_skill(
             monster_health,
             property.maximum_hp,
@@ -600,13 +605,14 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, monster_health)) = region
+    let Some((property, monster_health, tamed)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             Some((
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?
                     .clone(),
                 monster.hit_points(),
+                monster.is_tamed(),
             ))
         })
     else {
@@ -623,7 +629,7 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     let Some(selected_skill_id) = selected else {
         return false;
     };
-    if inherits_fixed_archer_change_skill(property.ai) {
+    if !tamed && inherits_fixed_archer_change_skill(property.ai) {
         if queue_fixed_archer_skill_delay(
             game,
             region,
