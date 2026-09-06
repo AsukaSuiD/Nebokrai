@@ -29,6 +29,7 @@ pub(crate) fn dispatch_jjc_script_function(
     script_region_id: Option<i32>,
     function_id: i32,
     integer_arguments: [Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
+    now_milliseconds: impl FnMut() -> u32,
 ) -> JjcScriptFunctionOutcome {
     if !(FIRST_JJC_SCRIPT_FUNCTION..=LAST_JJC_SCRIPT_FUNCTION).contains(&function_id) {
         return JjcScriptFunctionOutcome::DifferentFunction;
@@ -67,7 +68,7 @@ pub(crate) fn dispatch_jjc_script_function(
             .unwrap_or_default(),
         4 => {
             if let (Some(region_id), Some(player_id)) = (script_region_id, script_player_id) {
-                let _ = game.end_player_jjc(region_id, player_id);
+                let _ = game.end_player_jjc(region_id, player_id, now_milliseconds);
             }
             0
         }

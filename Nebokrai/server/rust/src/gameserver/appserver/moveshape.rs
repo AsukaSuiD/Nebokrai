@@ -49,7 +49,10 @@
 //!
 //! Реализованные `AddSkill`, `DelSkill`, `ClearSkills`, auto-start background-
 //! очередь, `AddState`, `GetStatesNum` и `UpdateAbnormality` используют это же
-//! хранилище. Частичное извлечение background ID сохраняет порядок и cursor
+//! хранилище. Фоновая очередь игрока сохраняет порядок и повторные ID:
+//! старые SKILL_UNKNOW удаляются перед обходом, новые пометки — только
+//! на следующем проходе (CPlayerAI::OnExecuteBackStageSkills, 0x004C88E0).
+//! Частичное извлечение ID монстра сохраняет порядок и cursor
 //! ещё не материализованных concrete owner-ов. Ещё не восстановленные
 //! классы навыков и ИИ остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 
@@ -1196,9 +1199,31 @@ impl CMoveShape {
         count
     }
 
-    pub(crate) fn take_back_stage_skill_ids(&mut self) -> Vec<u32> {
-        self.back_stage_begin_cursor = 0;
-        std::mem::take(&mut self.back_stage_skill_ids)
+    /// OnExecuteBackStageSkills (0x004C88E0) удаляет старые SKILL_UNKNOW
+    /// перед обходом. Новые пометки остаются до следующего прохода.
+    pub(crate) fn prepare_back_stage_skill_pass(&mut self) {
+        let old_cursor = self.back_stage_begin_cursor;
+        let mut index = 0;
+        let mut begun = 0;
+        self.back_stage_skill_ids.retain(|id| {
+            let keep = *id != 0x7fff_ffff;
+            if keep && index < old_cursor { begun += 1; }
+            index += 1;
+            keep
+        });
+        self.back_stage_begin_cursor = begun;
+    }
+
+    pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
+        self.back_stage_skill_ids.get(index).copied()
+    }
+
+    pub(crate) fn mark_ended_back_stage_skill(&mut self, index: usize, expected: u32) {
+        if let Some(id) = self.back_stage_skill_ids.get_mut(index)
+            && *id == expected
+        {
+            *id = 0x7fff_ffff;
+        }
     }
 
     /// Извлекает только уже достигнутые concrete background-owner-ы, не

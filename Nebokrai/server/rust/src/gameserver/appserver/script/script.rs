@@ -867,6 +867,7 @@ impl<'a> CScript<'a> {
             self.context.region_id,
             function_id,
             integer_arguments,
+            || runtime.now_milliseconds(),
         ) {
             JjcScriptFunctionOutcome::Handled { legacy_return } => {
                 ScriptFunctionDispatchOutcome::Handled { legacy_return }

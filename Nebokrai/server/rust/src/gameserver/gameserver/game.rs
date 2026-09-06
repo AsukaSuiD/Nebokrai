@@ -18574,7 +18574,7 @@ impl CGame {
 
     /// Exact reached `EndPK -> UpdateJJcData -> OnRelive(1) -> BackRegion`.
     /// Сведения матча удаляются лишь после выбора и запуска возврата.
-    pub(crate) fn end_player_jjc(&mut self, region_id: i32, player_id: i32) -> bool {
+    pub(crate) fn end_player_jjc(&mut self, region_id: i32, player_id: i32, now_milliseconds: impl FnMut() -> u32) -> bool {
         let (region_min, region_max, _, buff_id) = self.globe_setup.jjc_game_config();
         let Some(player) = self.players.get_mut(&player_id) else {
             tracing::trace!(player_id, region_id, "завершение JJC пропущено: игрок отсутствует");
@@ -18595,7 +18595,7 @@ impl CGame {
             .get(&player_id)
             .is_some_and(|player| CMoveShape::is_died(player.health()));
         if relived {
-            self.relive_player(player_id, 1);
+            self.relive_player(player_id, 1, now_milliseconds);
         }
 
         let return_facts = self.players.get(&player_id).and_then(|player| {
@@ -19346,11 +19346,11 @@ impl CGame {
         }
     }
 
-    fn prepare_changed_player_region_entry(&mut self, player_id: i32, region_id: i32) {
+    fn prepare_changed_player_region_entry(&mut self, player_id: i32, region_id: i32, now_milliseconds: impl FnMut() -> u32) {
         if let Some(player) = self.find_player_mut(player_id) {
             player.begin_region_entry_states();
         }
-        let auto_started_skills = self.begin_player_back_stage_skills(player_id);
+        let auto_started_skills = self.begin_player_back_stage_skills(player_id, now_milliseconds);
         let skill_interrupted = self.on_player_skill_change_region(player_id);
         let router_delivery = self
             .region_router
@@ -19599,7 +19599,7 @@ impl CGame {
                 let _ = message.send_to_socket(self.net_server(), socket_id);
                 nearby_deliveries += 1;
             }
-            self.prepare_changed_player_region_entry(player_id, region_id);
+            self.prepare_changed_player_region_entry(player_id, region_id, || context.now_milliseconds());
             self.restore_player_region_pets(player_id, region_id);
             self.restore_player_region_carriage(player_id, region_id);
             self.finish_changed_player_region_entry(player_id, region_id);
@@ -25086,7 +25086,7 @@ impl CGame {
     /// запуск back-stage навыков сохраняется. Очистку спутников, пересчёт
     /// свойств, движение, `OnChangeStates`, состояния покоя и мира, virtual
     /// `GetReturnPoint`, смену региона и client publication исполняет `CGame`.
-    pub(crate) fn relive_player(&mut self, player_id: i32, relive_type: i32) {
+    pub(crate) fn relive_player(&mut self, player_id: i32, relive_type: i32, mut now_milliseconds: impl FnMut() -> u32) {
         let Some(player) = self.find_player(player_id) else {
             tracing::trace!(player_id, relive_type, "игрок для воскрешения не найден");
             return;
@@ -25097,14 +25097,14 @@ impl CGame {
             return;
         }
         let region_id = player.server_region_id().unwrap_or_default();
-        let passive_skills_before_entry = self.begin_player_back_stage_skills(player_id);
+        let passive_skills_before_entry = self.begin_player_back_stage_skills(player_id, &mut now_milliseconds);
         let (cleared_uncreated_pets, cleared_uncreated_carriage) = {
             let player = self
                 .find_player_mut(player_id)
                 .expect("игрок сохранён после синхронной проверки смерти");
             player.clear_relive_uncreated_companions()
         };
-        self.prepare_changed_player_region_entry(player_id, region_id);
+        self.prepare_changed_player_region_entry(player_id, region_id, now_milliseconds);
         self.finish_changed_player_region_entry(player_id, region_id);
         let (combat_property_delivery, tao_zhuang_ran) = self
             .update_player_properties(player_id)
@@ -30649,7 +30649,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
         membership.map_err(GamePlayerLoginBlock::Membership)?;
-        let auto_started_skills = self.begin_player_back_stage_skills(expected_player_id);
+        let auto_started_skills = self.begin_player_back_stage_skills(expected_player_id, || context.now_milliseconds());
         let _ = self.enter_gods_battle_player(region_id, expected_player_id);
         let team_snapshot_queued = team_id != 0 && !team_session_found;
         if team_snapshot_queued {
@@ -37824,12 +37824,22 @@ impl CGame {
         }
     }
 
-    fn begin_player_back_stage_skills(&mut self, player_id: i32) -> usize {
+    fn begin_player_back_stage_skills(&mut self, player_id: i32, mut now_milliseconds: impl FnMut() -> u32) -> usize {
         let skill_ids = self
             .find_player_mut(player_id)
             .map(CPlayer::begin_pending_back_stage_skill_ids)
             .unwrap_or_default();
-        for _skill_id in &skill_ids {
+        for skill_id in &skill_ids {
+            let dispatch = PlayerSkillDispatch::Object {
+                skill_id: *skill_id,
+                target: ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::default() },
+            };
+            let started_at_ms = now_milliseconds();
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.player_ai_mut().begin_player_skill_execution(
+                    crate::gameserver::appserver::skills::kernel::SkillExecutionKernel::begin(dispatch, started_at_ms),
+                );
+            }
             self.enter_player_combat_state(player_id);
         }
         skill_ids.len()
@@ -40794,28 +40804,49 @@ impl CGame {
         }
     }
 
-    /// Исполняет exact `OnExecuteBackStageSkills` для уже начатых при
-    /// `AddObject` self-target state skills. Завершённая либо отклонённая
-    /// запись исчезает из очереди, как `SKILL_UNKNOW` на следующем native tick.
+    /// OnExecuteBackStageSkills (0x004C88E0): сначала удаляются старые
+    /// SKILL_UNKNOW, затем каждый ID разрешается заново. End не удаляет
+    /// запись немедленно; дубликат ID уже видит завершённый экземпляр.
+    /// Сейчас здесь подключены автонавыки AddObject; подготовленные боевые
+    /// исполнения подключаются к тому же хранилищу и тому же порядку.
     fn execute_player_back_stage_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
     ) -> usize {
-        let skill_ids = self
-            .find_player_mut(player_id)
-            .map(CPlayer::take_back_stage_skill_ids)
-            .unwrap_or_default();
-        for skill_id in &skill_ids {
-            let executed = if is_immediate_state_skill(*skill_id) {
-                execute_player_auto_start_immediate_state(
-                    self, player_id, *skill_id, runtime,
-                )
-            } else if is_swordship_skill(*skill_id) {
-                execute_player_auto_start_swordship(self, player_id, *skill_id, runtime)
-            } else {
-                false
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.move_shape_mut().prepare_back_stage_skill_pass();
+        }
+        let mut index = 0;
+        let mut execution_count = 0;
+        while let Some(skill_id) = self.find_player(player_id)
+            .and_then(|player| player.back_stage_skill_id(index))
+        {
+            let execution = self.find_player(player_id)
+                .and_then(|player| player.player_ai().player_skill_execution(skill_id));
+            let Some(execution) = execution else {
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.move_shape_mut().mark_ended_back_stage_skill(index, skill_id);
+                }
+                index += 1;
+                continue;
             };
+            let executed = if is_immediate_state_skill(skill_id) {
+                execute_player_auto_start_immediate_state(
+                    self, player_id, skill_id, runtime,
+                )
+            } else if is_swordship_skill(skill_id) {
+                execute_player_auto_start_swordship(self, player_id, skill_id, runtime)
+            } else {
+                index += 1;
+                continue;
+            };
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.player_ai_mut().finish_player_skill_execution(execution.dispatch(),
+                    if executed { SkillTermination::Completed } else { SkillTermination::Rejected });
+            }
+            execution_count += 1;
+            index += 1;
             tracing::trace!(
                 player_id,
                 skill_id,
@@ -40823,7 +40854,7 @@ impl CGame {
                 "исполнен background-навык игрока"
             );
         }
-        skill_ids.len()
+        execution_count
     }
 
     /// Проводит `CMoveShape::AutoStartPassiveSkill → CBaseAI::Run →

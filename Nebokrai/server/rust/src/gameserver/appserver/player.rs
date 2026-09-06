@@ -7576,8 +7576,8 @@ impl CPlayer {
         &mut self.move_shape
     }
 
-    pub(crate) fn take_back_stage_skill_ids(&mut self) -> Vec<u32> {
-        self.move_shape.take_back_stage_skill_ids()
+    pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
+        self.move_shape.back_stage_skill_id(index)
     }
 
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {

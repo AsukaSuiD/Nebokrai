@@ -461,7 +461,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             );
         }
         REQUEST_RELIVE => {
-            game.relive_player(player_id, 0);
+            game.relive_player(player_id, 0, || runtime.now_milliseconds());
             trace_player_message_outcome(message_type, Some(player_id), "игрок возрождён");
         }
         INTERACT_WITH_NPC => {

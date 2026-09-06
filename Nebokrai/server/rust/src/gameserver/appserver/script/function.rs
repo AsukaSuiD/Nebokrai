@@ -7129,7 +7129,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
             if let Some(player_id) = script_player_id {
-                game.relive_player(player_id, relive_type);
+                game.relive_player(player_id, relive_type, || runtime.now_milliseconds());
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
