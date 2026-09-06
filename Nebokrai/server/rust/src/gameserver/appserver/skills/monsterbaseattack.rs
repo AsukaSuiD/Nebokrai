@@ -1265,6 +1265,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             )
         } else if is_wuxing_skill(skill_id) {
             // Exact player-only отказ завершает навык, но не создаёт состояние.
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.move_shape_mut().finish_immediate_skill(skill_id);
+            }
             true
         } else {
             execute_monster_immediate_state(

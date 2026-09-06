@@ -1636,6 +1636,7 @@ impl CMonster {
     /// Завершает немедленный self-state навык без искусственного attack-cast.
     /// `CSkill::End(1)` фиксирует reuse независимо от активной/фоновой очереди.
     pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.move_shape.finish_immediate_skill(skill_id);
         self.skill_last_used_ms.insert(skill_id, now_ms);
     }
 

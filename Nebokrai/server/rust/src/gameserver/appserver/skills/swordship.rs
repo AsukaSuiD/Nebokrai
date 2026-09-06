@@ -65,6 +65,9 @@ pub(crate) fn execute_monster_auto_start_swordship(
     );
     let _ = monster.move_shape_mut().replace_swordship_state(state);
     let _ = game.publish_owned_monster_states(region, monster_id);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.move_shape_mut().finish_immediate_skill(skill_id);
+    }
     true
 }
 

@@ -40836,6 +40836,9 @@ impl CGame {
                 continue;
             };
             let executed = if !has_effect {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.move_shape_mut().finish_immediate_skill(skill_id);
+                }
                 true
             } else if is_swordship_skill(skill_id) {
                 execute_monster_auto_start_swordship(
@@ -40846,11 +40849,6 @@ impl CGame {
                     self, region, monster_id, skill_id, skill_level, now_ms,
                 )
             };
-            if executed {
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().finish_immediate_back_stage_skill(index, skill_id);
-                }
-            }
             execution_count += usize::from(has_effect);
             tracing::trace!(
                 region_id = region.id,
