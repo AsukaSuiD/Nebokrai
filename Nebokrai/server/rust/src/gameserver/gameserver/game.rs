@@ -47274,6 +47274,7 @@ impl CGame {
                     let mut passive_death = PassiveDeathAction::None;
                     let mut passive_stiffen = PassiveStiffenAction::None;
                     let mut handled_passive_action = None;
+                    let mut passive_action_executed = false;
                     let (
                         death_started,
                         guard_target_release,
@@ -47308,6 +47309,9 @@ impl CGame {
                                 && processed == 0
                                 && passive_stiffen == PassiveStiffenAction::None
                                 && monster.begin_reached_death_action();
+                            passive_action_executed = processed != 0
+                                || passive_stiffen != PassiveStiffenAction::None
+                                || death_started;
                             let guard_target_release = death_started
                                 && matches!(
                                     monster.active_ai(),
@@ -47389,7 +47393,8 @@ impl CGame {
                                 && !change_skill_pending
                             {
                                 schedule_ready = monster.advance_active_ai_stand(now_ms)
-                                    && monster.primary_ai_queues_idle();
+                                    && monster.primary_ai_queues_idle()
+                                    && !passive_action_executed;
                             }
                         }
                     }

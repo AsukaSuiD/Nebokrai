@@ -1,4 +1,8 @@
 //! Достигнутая event-queue часть `CBaseAI` исторического GameServer.
+//! Run (0x004C7D10) допускает OnIdle только при AES_IDLE всех основных фаз.
+//! Defense и первый OnStiffen возвращают EXEC даже после снятия последнего
+//! события: monster caller сохраняет результат passive-фазы отдельно от
+//! пустоты FIFO. EXEC разрешает active-фазу, но не последующий OnIdle.
 //! Базовый OnBeenHurted: EXE/PDB GameServer, appserver/ai/baseai.cpp:815,
 //! RVA 0x000C8700; discard_active_prefix сохраняет первую Attack/Move-границу.
 //! Defense в ProcessPassiveAction (0x004C84F0) вызывает производный
