@@ -1,6 +1,11 @@
 //! Базовая атака боевой феи GameServer (`SKILL_BATTLEFAIRY_BASE_ATTACK`).
 //! Успешный Begin возвращает Begun; проверка задержки первого AI выполняется
 //! при повторном входе в том же Run по исходному раннему отсчёту.
+//! BFBaseAttack::Begin (0x00517020) оставляет +0x50 равным нулю.
+//! Первый AI проверяет цель, отправляет start через effect(+8, 0)
+//! (0x00517802..0x0051780E), затем переводит стадию в Check и проверяет
+//! задержку. Смерть цели в этой первой фазе даёт один 4,10 и ZHGS0050;
+//! повторная проверка перед выстрелом сохраняет отдельный отказ ниже.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/battlefairybasemagic.cpp`. Отдельный FIFO боевой феи
@@ -243,23 +248,11 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"ZHGS0050");
             return reject_before_ai(game);
         }
-        let direction = player.shape().get_direction();
-        let mut start = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-        start.add_byte(1);
-        start.add_long(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID as i32);
-        start.base_mut().add_short(skill_level as i16);
-        start.add_long(BATTLE_FAIRY_VISUAL_OBJECT_TYPE);
-        start.add_long(player_id);
-        start.add_long(direction);
-        let _ = game.send_player_shape_around(player_id, None, &start);
-        let mut execution = BattleFairyBaseMagicExecutionState::begin(
+        let execution = BattleFairyBaseMagicExecutionState::begin(
             dispatch,
             target,
             started_at_ms,
         );
-        let _ = execution
-            .kernel_mut()
-            .advance(SkillStage::Begin, SkillStage::Check);
         player_ai.begin_battle_fairy_base_magic(execution);
         return QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Begun,
@@ -270,7 +263,33 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return rejected();
-    } else if started_at_ms < player_ai
+    }
+
+    if player_ai.battle_fairy_base_magic()
+        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
+    {
+        if game.base_magic_target_dead(region_id, target) {
+            game.send_battle_fairy_skill_failure(player_id, 10);
+            game.send_skill_system_info(player_id, b"ZHGS0050");
+            send_end(game, player_id, skill_level);
+            return rejected();
+        }
+        let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else {
+            return rejected();
+        };
+        let mut start = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+        start.add_byte(1);
+        start.add_long(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID as i32);
+        start.base_mut().add_short(skill_level as i16);
+        start.add_long(BATTLE_FAIRY_VISUAL_OBJECT_TYPE);
+        start.add_long(player_id);
+        start.add_long(direction);
+        let _ = game.send_player_shape_around(player_id, None, &start);
+        if let Some(kernel) = player_ai.battle_fairy_execution_mut(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
+            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    if runtime.now_milliseconds() < player_ai
             .battle_fairy_base_magic()
             .map_or(started_at_ms, |state| state.kernel().started_at_ms())
             .wrapping_add(delay_ms)
