@@ -47249,6 +47249,13 @@ impl CGame {
                         Some((property.ai, monster.stop_frame(property), monster.is_tamed(), monster.pet_action()))
                     })
                     .unwrap_or((0, 0, false, 0));
+                if ai_type == 20 && !tamed {
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        let _ = crate::gameserver::appserver::ai::jiumai::maintain_jiumai_twin(
+                            self, owner.base_mut(), monster_id, runtime);
+                        self.restore_region_owner(owner);
+                    }
+                }
                 let schedule_attempted = self.find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .is_some_and(|monster| monster.primary_ai_queues_idle()

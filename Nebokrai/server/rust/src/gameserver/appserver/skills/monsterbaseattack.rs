@@ -262,7 +262,7 @@ use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_batt
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
 use crate::gameserver::appserver::ai::jiumai::{
-    assign_jiumai_target, ensure_jiumai_twin, maintain_jiumai_twin, select_jiumai_enemy,
+    assign_jiumai_target, ensure_jiumai_twin, select_jiumai_enemy,
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
@@ -1055,13 +1055,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    if !tamed && property.ai == 20
+    if !tamed && property.ai == 20 && target.is_none() && cast.is_none()
         && !ensure_jiumai_twin(game, region, monster_id, &property)
-    {
-        return false;
-    }
-    if !tamed && property.ai == 20
-        && !maintain_jiumai_twin(game, region, monster_id, &property, runtime)
     {
         return false;
     }

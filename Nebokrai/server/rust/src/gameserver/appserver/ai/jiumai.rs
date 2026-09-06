@@ -3,6 +3,10 @@
 //! `WhenBeenHurted` сохраняет прямые допустимые цели и исходный одиночный шаг
 //! при исчезнувшем игроке. `OnSchedule` сначала сближает близнецов, затем
 //! использует общую FIFO навыка для `SearchEnemy/Attack`.
+//! Префикс OnSchedule (0x0060AB10) обслуживает пару до проверки HasTarget,
+//! только для живого владельца с пустыми active/passive очередями. CGame
+//! вызывает его до background/passive; OnFighting и поздний OnIdle не
+//! повторяют ForceMove/RNG. Создание пары остаётся отдельным OnIdle.
 
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -125,12 +129,17 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
-    property: &MonsterProperties,
     runtime: &mut Runtime,
 ) -> bool {
     let Some((twins_id, owner, target)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
+            if monster.is_tamed() || CMoveShape::is_died(monster.hit_points())
+                || !monster.primary_ai_queues_idle()
+            {
+                return None;
+            }
+            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
             Some((
                 monster.jiu_mai_ai()?.twins_id(),
                 monster.shape_view(property)?,
