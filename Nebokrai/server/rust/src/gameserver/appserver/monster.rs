@@ -49,6 +49,10 @@
 //! выбранного навыка вызывается и без kernel. Очистка cast затрагивает только
 //! совпадающий ID. Неизвестный End без своего исполнения не считается
 //! завершённым и не снимает Attack; его concrete owner остаётся восстановить.
+//! Немедленные State/WuXing/Swordship разделяют End (0x005AFA40), который
+//! не снимает наложенное состояние. Stiffen=4 отмечает общий навык ended и
+//! обновляет reuse независимо от обычного End(0) некоторых AI; фон увидит
+//! этот флаг при следующем проходе, без преждевременного удаления его FIFO.
 //! CPassiveGladiator::OnBeenHurted (0x00610E40) ставит SearchEnemy после
 //! base-handler каждого Defense, до pop в ProcessPassiveAction. Реакции
 //! не откладываются на конец пачки: следующий Defense очищает новый
@@ -1373,10 +1377,12 @@ impl CMonster {
         if release_target {
             let skill_id = current_skill.expect("разрешённый текущий навык Stiffen");
             let owns_cast = self.base_attack_cast.is_some_and(|cast| cast.dispatch().skill_id == skill_id);
+            let immediate = super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some();
             if matches!(skill_id,
                 super::skills::baseattack::BASE_ATTACK_SKILL_ID
                 | super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID)
                 || Self::attack_end_restores_movement(skill_id)
+                || immediate
             {
                 if Self::attack_end_restores_movement(skill_id) {
                     self.move_shape.set_moveable(true);
@@ -1385,7 +1391,11 @@ impl CMonster {
                     self.attack_progress = MonsterAttackProgress::default();
                     self.base_attack_cast = None;
                 }
-                self.skill_last_used_ms.insert(skill_id, now());
+                if immediate {
+                    self.mark_immediate_skill_used(skill_id, now());
+                } else {
+                    self.skill_last_used_ms.insert(skill_id, now());
+                }
             } else if owns_cast {
                 self.cancel_base_attack_cast();
             } else {

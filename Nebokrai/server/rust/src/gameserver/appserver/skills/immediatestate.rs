@@ -24,6 +24,11 @@
 //! Поэтому фоновое применение не пропускает оружейный эффект завершения.
 //! Успешный Begin возвращает Begun до наложения состояния; авто-вход уже
 //! имеет kernel от AddObject и не повторяет Begin или его reuse-проверку.
+//! Все 14 вариантов MonsterImmediateSkill имеют End по адресу 0x005AFA40
+//! (включая четыре Swordship и пять WuXing). Внешний Stiffen вызывает End(4),
+//! поэтому CMonster отмечает ended и reuse даже для вариантов с обычным
+//! AI-End(0). Это завершение навыка, а не End наложенного state-объекта;
+//! состояние и порядок удаления записи фоновой очереди остаются независимыми.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
