@@ -695,6 +695,12 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
+    if has_target && MonsterAiKind::from_ai_type(property.ai).has_guard_station() {
+        super::super::ai::cityguardwithsword::check_guard_station_target(
+            game, region, monster_id, property.chase_range as i32, runtime,
+        );
+        return true;
+    }
     if MonsterAiKind::is_generic_ai_type(property.ai)
         || (matches!(property.ai, 2 | 20) && has_target)
     {
@@ -1070,20 +1076,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         {
             state.record_station(monster_view);
             monster.begin_active_ai_change_skill(runtime.now_milliseconds());
-        }
-        let left_chase_range = region
-            .find_monster_by_id_mut(monster_id)
-            .and_then(|monster| {
-                let state = monster.guard_station_ai_mut()?;
-                Some(
-                    target.is_some()
-                        && state.left_chase_range(monster_view, property.chase_range as i32),
-                )
-            })
-            .unwrap_or(false);
-        if left_chase_range {
-            lose_guard_sword_target(game, region, monster_id, runtime);
-            return true;
         }
     }
     if target.is_none()

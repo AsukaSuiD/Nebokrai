@@ -9,7 +9,6 @@
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeAreaCoordinates, ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -29,11 +28,6 @@ impl GuardStationState {
         });
     }
 
-    pub(crate) fn left_chase_range(&self, owner: ShapeView, chase_range: i32) -> bool {
-        self.station.is_some_and(|station| {
-            real_distance(owner.tile_x, owner.tile_y, station.x, station.y) > chase_range
-        })
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

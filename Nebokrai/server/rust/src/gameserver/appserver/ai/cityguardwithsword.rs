@@ -14,6 +14,11 @@
 //! сначала вызывает CMonsterAI::OnLoseTarget (0x005DCC30), очищающий только
 //! цель: он не отменяет cast, выбранный навык или active Move. Один обработчик
 //! обслуживает бой и смерть; последующий SearchEnemy принадлежит caller-у.
+//! OnSearchEnemy (AI9: 0x0060EA60, AI10: 0x0060E290) при имеющейся цели
+//! только сравнивает RealDistance(long,long) до поста с chase_range и при
+//! превышении вызывает OnLoseTarget. Новый selector и добавочный SearchEnemy
+//! в этой ветви не исполняются. Проверка не переносится на такты cast;
+//! координаты источника берутся из CShape, без округления до клетки заранее.
 //! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
 //! порядка и фильтров достигнутого selector-а.
 
@@ -194,6 +199,25 @@ pub(crate) fn select_city_guard_enemy(
 pub(crate) enum CitySwordTraceOutcome {
     Ready,
     Handled,
+}
+
+/// Ветка OnSearchEnemy с уже имеющейся целью; завершение FIFO остаётся caller-у.
+pub(crate) fn check_guard_station_target<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    chase_range: i32,
+    runtime: &mut Runtime,
+) {
+    let outside = region.find_monster_by_id_mut(monster_id).is_some_and(|monster| {
+        let station = monster.guard_station_ai_mut().and_then(|state| state.station());
+        station.is_some_and(|station| {
+            monster.move_shape().shape().real_distance_to_point(station.x, station.y) > chase_range
+        })
+    });
+    if outside {
+        release_guard_sword_target(game, region, monster_id, runtime);
+    }
 }
 
 /// Выполняет виртуальный `OnLoseTarget` AI9/AI10/AI12/AI16: цель очищается,
