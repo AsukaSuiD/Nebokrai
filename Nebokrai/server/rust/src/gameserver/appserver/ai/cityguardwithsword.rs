@@ -346,7 +346,7 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
     };
     if let Ok(destination) = CShape::get_direction_position(direction, origin) {
         super::monsterai::move_owned_monster_to(
-            game, region, monster_id, destination, || runtime.now_milliseconds(),
+            game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
         );
     }
     CitySwordTraceOutcome::Handled

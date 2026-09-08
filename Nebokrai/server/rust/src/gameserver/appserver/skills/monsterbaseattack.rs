@@ -737,7 +737,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    let Some((owner, area_index, skill, speed, master)) = region
+    let Some((owner, area_index, skill, master)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let owner = monster.shape_view(&property)?;
@@ -748,7 +748,6 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 owner,
                 area_index,
                 skill,
-                monster.move_shape().shape().get_speed(),
                 monster.master_info(),
             ))
         })
@@ -834,7 +833,6 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 area_index,
                 &property,
                 minimum_skill_distance,
-                speed,
                 runtime,
             );
             return true;
@@ -2033,7 +2031,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         monster_id,
         MonsterTraceTarget::Shape(target_view),
         maximum_distance,
-        now_ms,
+        runtime,
     ) {
         if tamed && pet_action == 2 {
             lose_pet_target_and_search(region, monster_id, runtime);

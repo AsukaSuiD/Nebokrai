@@ -10,9 +10,14 @@
 //! `lordwiderangingattack` исполняют конкретные стадии и эффекты.
 //! Реакция на урон сначала сохраняет общую Defense-ветвь, затем в порядке
 //! `x -> y -> CServerRegion::GetShape` ищет первую призванную форму в квадрате
-//! младшего байта `figure`, делает от её клетки один беговой шаг и только при
+//! младшего байта `figure`, задаёт беговой отход от её клетки и только при
 //! отсутствии прежней цели принимает атакующего. Пространственная мутация и
 //! wire-доставка остаются у `CGame`.
+//! Вызов 0x0060B259 идёт через направленный MoveTo (0x004C7CB0) в общий
+//! координатный MoveTo (0x004C9020): два Slip с исходным направлением,
+//! Move(run=1), затем отдельное событие Move перед HasTarget/SetTarget.
+//! Отказ любого Slip не публикует частичный шаг; общий обработчик сохраняет
+//! формулу задержки и свежий timestamp после spatial-вызова.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -25,7 +30,6 @@
 // COMPONENT_VARIANT_END: GameServer
 
 use super::guardtarget::select_nearest_player_or_pet;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
@@ -106,31 +110,24 @@ pub(crate) fn plan_lord_hurt_response_in_region(
     LordHurtPlan::default()
 }
 
-/// Применяет ordered часть `WhenBeenHurted`: Defense, один беговой шаг и
+/// Применяет упорядоченную часть `WhenBeenHurted`: Defense, беговой MoveTo и
 /// назначение атакующего только при всё ещё пустой текущей цели.
 pub(crate) fn apply_lord_hurt_response(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
-    property: &MonsterProperties,
     attacker: ShapeIdentity,
-    now_ms: u32,
+    mut now: impl FnMut() -> u32,
     plan: LordHurtPlan,
 ) -> bool {
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
         return false;
     };
-    monster.when_been_hurted(now_ms);
+    monster.when_been_hurted(now());
 
     if let Some(destination) = plan.avoidance_step {
-        let _ = game.move_owned_monster_step_with_run(
-            region,
-            monster_id,
-            destination.x,
-            destination.y,
-            CMonster::figure(property),
-            1,
-        );
+        super::monsterai::move_owned_monster_to(game, region, monster_id, destination, 1,
+            &mut now);
     }
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id)

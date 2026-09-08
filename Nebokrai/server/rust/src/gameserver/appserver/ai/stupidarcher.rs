@@ -8,9 +8,11 @@
 //! исходную задержку `CBaseAI::MoveTo`; иначе цель передаётся существующему
 //! навыку. После завершения навыка `OnFighting` ставит `ASA_SEARCH_ENEMY`, а
 //! отдельный FIFO-такт повторяет тот же выбор цели до следующего расписания.
+//! Отход OnSearchEnemy (0x0060F952) вызывает CBaseAI::MoveTo(run=0):
+//! случайное направление задаёт приоритет Slip, но заблокированный шаг может
+//! быть заменён обходным. После Move ставится ASA_MOVE независимо от его
+//! результата; лишь отказ самого Slip не меняет FIFO. Тайминг общий с MoveTo.
 
-use super::baseai::one_step_move_delay_ms;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView};
@@ -59,12 +61,8 @@ pub(crate) fn search_stupid_archer_enemy<Runtime: GameMainLoopRuntime>(
     area_index: usize,
     property: &MonsterProperties,
     minimum_skill_distance: i32,
-    speed: f32,
     runtime: &mut Runtime,
 ) -> StupidArcherSearch {
-    let stop_frame = region
-        .find_monster_by_id(monster_id)
-        .map_or(property.stop_frame, |monster| monster.stop_frame(property));
     let mut selected = None;
     for player_id in region.player_ids_around_area(area_index) {
         let Some(player) = game.find_player(player_id) else {
@@ -122,21 +120,9 @@ pub(crate) fn search_stupid_archer_enemy<Runtime: GameMainLoopRuntime>(
         y: owner.tile_y,
     };
     if let Ok(destination) = CShape::get_direction_position(direction, origin) {
-        let moved = game.move_owned_monster_step(
-            region,
-            monster_id,
-            destination.x,
-            destination.y,
-            CMonster::figure(property),
+        super::monsterai::move_owned_monster_to(
+            game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
         );
-        if moved
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
-        {
-            monster.begin_active_ai_move(
-                one_step_move_delay_ms(direction, speed, stop_frame),
-                runtime.now_milliseconds(),
-            );
-        }
     }
     StupidArcherSearch::Handled
 }

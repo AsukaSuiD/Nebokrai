@@ -429,7 +429,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             maximum_distance,
-            now_ms,
+            runtime,
         ) {
             return true;
         }

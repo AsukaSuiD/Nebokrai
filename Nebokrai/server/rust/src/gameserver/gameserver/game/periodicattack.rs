@@ -710,7 +710,7 @@ impl CGame {
                     target_id,
                     &property,
                     master.master_id,
-                    now_ms,
+                    runtime,
                 );
             }
             if attack.full_miss == 0
@@ -753,7 +753,7 @@ impl CGame {
                         id: master.master_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
-                    now_ms,
+                    runtime,
                 );
             }
             if let Some(plan) = lord_hurt_plan {
@@ -761,13 +761,12 @@ impl CGame {
                     self,
                     owner.base_mut(),
                     target_id,
-                    &property,
                     ShapeIdentity {
                         object_type: master.master_type,
                         id: master.master_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
-                    now_ms,
+                    || runtime.now_milliseconds(),
                     plan,
                 );
             }

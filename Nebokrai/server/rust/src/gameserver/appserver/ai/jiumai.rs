@@ -13,6 +13,10 @@
 //! навык. Отложенная синхронизация ниже пока сохраняет метку связанной цели.
 //! Общий schedule-OnLoseTarget и death FIFO вызывают один переход пары
 //! непосредственно; наличие старой linked-метки ему не требуется.
+//! Отход WhenBeenHurted (0x0060A8E7) вызывает общий CBaseAI::MoveTo(run=0),
+//! а не прямой Move: при успешном Slip за пространственной попыткой всегда
+//! следует ASA_MOVE. Отказ Slip не ставит событие. Defense предшествует выбору
+//! цели или отходу; каждый AddAIEvent получает собственное текущее время.
 
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -23,7 +27,6 @@
 
 use super::archer::select_archer_enemy;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
@@ -319,24 +322,22 @@ pub(crate) fn release_jiumai_target(
 /// свободная пара принимает существующего игрока либо приручённого монстра или
 /// повозку. При исчезнувшем игроке выбирается ближайший игрок, затем монстр;
 /// без найденного ориентира сохраняется прежнее направление. После выбора
-/// выполняется ровно один исходный шаг.
-pub(crate) fn retarget_jiumai_after_hurt(
+/// выполняется одна попытка ходового MoveTo.
+pub(crate) fn retarget_jiumai_after_hurt<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     attacker: ShapeIdentity,
-    now_ms: u32,
+    runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, owner, area_index, direction, fighting)) = region
+    let Some((owner, area_index, direction, fighting)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             monster.jiu_mai_ai()?;
             let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                .clone();
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
             Some((
-                property.clone(),
-                monster.shape_view(&property)?,
+                monster.shape_view(property)?,
                 monster.move_shape().shape().area_index(),
                 monster.move_shape().shape().get_direction(),
                 monster.ai_target().is_some(),
@@ -346,7 +347,7 @@ pub(crate) fn retarget_jiumai_after_hurt(
         return false;
     };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.when_been_hurted(now_ms);
+        monster.when_been_hurted(runtime.now_milliseconds());
     }
     if fighting {
         return true;
@@ -392,12 +393,8 @@ pub(crate) fn retarget_jiumai_after_hurt(
             .ok()
         });
     if let Some(destination) = retreat {
-        let _ = game.move_owned_monster_step(
-            region,
-            monster_id,
-            destination.x,
-            destination.y,
-            CMonster::figure(&property),
+        super::monsterai::move_owned_monster_to(
+            game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
         );
     }
     true

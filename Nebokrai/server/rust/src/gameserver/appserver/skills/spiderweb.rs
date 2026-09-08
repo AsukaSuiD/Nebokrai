@@ -611,7 +611,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             maximum_distance,
-            now_ms,
+            runtime,
         ) {
             return true;
         }

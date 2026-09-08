@@ -28068,8 +28068,8 @@ impl CGame {
         figure: ShapeFigure,
         run: i32,
     ) -> bool {
-        let area_width = self.globe_setup.area_width();
-        let area_height = self.globe_setup.area_height();
+        // CMoveShape::OnMove использует единые runtime AREA_WIDTH/AREA_HEIGHT.
+        let (area_width, area_height) = self.area_dimensions();
         let Some(around) =
             GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)
         else {
@@ -28091,40 +28091,6 @@ impl CGame {
 
     pub(crate) const fn spatial_delivery_ready(&self) -> bool {
         self.area_width > 0 && self.area_height > 0
-    }
-
-    /// Применяет шаг питомца с размерами областей текущего runtime-владельца,
-    /// как в исходной ветви `CPet::OnFallowingSchedule`.
-    pub(crate) fn move_owned_pet_step(
-        &mut self,
-        region: &mut CServerRegion,
-        monster_id: i32,
-        x: i32,
-        y: i32,
-        figure: ShapeFigure,
-    ) -> bool {
-        let area_width = self.area_width;
-        let area_height = self.area_height;
-        let Some(around) = GameServerAroundRuntime::new(
-            self,
-            &self.session_factory,
-            area_width,
-            area_height,
-        ) else {
-            return false;
-        };
-        region
-            .move_owned_monster(
-                monster_id,
-                x,
-                y,
-                0,
-                figure,
-                area_width,
-                area_height,
-                &around,
-            )
-            .is_some_and(|result| result.is_ok())
     }
 
     /// Применяет рассчитанный владельцем ИИ мгновенный перенос монстра;
@@ -34556,13 +34522,12 @@ impl CGame {
                 self,
                 owner.base_mut(),
                 monster_id,
-                &property,
                 ShapeIdentity {
                     object_type: PLAYER_TYPE,
                     id: player_id,
                     ex_id: CGuid::GUID_INVALID,
                 },
-                now_ms,
+                || runtime.now_milliseconds(),
                 plan,
             );
         }
@@ -45291,7 +45256,7 @@ impl CGame {
                     target_id,
                     &property,
                     master.master_id,
-                    now_ms,
+                    runtime,
                 );
             }
             if attack.full_miss == 0
@@ -45334,7 +45299,7 @@ impl CGame {
                         id: master.master_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
-                    now_ms,
+                    runtime,
                 );
             }
             if let Some(plan) = lord_hurt_plan {
@@ -45342,13 +45307,12 @@ impl CGame {
                     self,
                     owner.base_mut(),
                     target_id,
-                    &property,
                     ShapeIdentity {
                         object_type: master.master_type,
                         id: master.master_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
-                    now_ms,
+                    || runtime.now_milliseconds(),
                     plan,
                 );
             }

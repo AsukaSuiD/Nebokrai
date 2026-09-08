@@ -659,7 +659,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            now_ms,
+            runtime,
         ) {
             return MonsterSkillCallOutcome::Handled;
         }

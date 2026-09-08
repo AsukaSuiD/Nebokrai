@@ -9,6 +9,11 @@
 //! OnSchedule без цели (0x006107EF) вызывает MoveTo до pop сохранённого шага;
 //! даже неуспешное движение потребляет запись. CGame проводит это до background
 //! и passive. OnIdle (0x00610660) при непустой очереди не вызывает базовый idle.
+//! Оба отхода, из OnSchedule (0x0061083D) и WhenBeenHurted (0x006105A9),
+//! вызывают общий ходовой CBaseAI::MoveTo: Slip выбирает свободный шаг,
+//! затем Move получает его и ставится ASA_MOVE независимо от результата Move.
+//! При отказе Slip активная FIFO не меняется; очередь шагов всё равно теряет
+//! обработанную запись. Defense и Move получают отдельные часы.
 
 use std::collections::VecDeque;
 
@@ -19,7 +24,6 @@ use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use super::baseai::one_step_move_delay_ms;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -60,7 +64,7 @@ pub(crate) fn execute_smart_gladiator_retreat<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, origin, speed, stop_frame, destination)) = region
+    let Some(destination) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
@@ -69,21 +73,14 @@ pub(crate) fn execute_smart_gladiator_retreat<Runtime: GameMainLoopRuntime>(
             {
                 return None;
             }
-            Some((property.clone(), monster.shape_view(property)?,
-                monster.move_shape().shape().get_speed(), monster.stop_frame(property),
-                monster.smart_gladiator_ai()?.first_step()?))
+            monster.smart_gladiator_ai()?.first_step()
         })
     else {
         return false;
     };
-    if game.move_owned_monster_step(region, monster_id, destination.x, destination.y,
-        CMonster::figure(&property))
-        && let Some(monster) = region.find_monster_by_id_mut(monster_id)
-    {
-        let direction = get_line_direction(origin.tile_x, origin.tile_y, destination.x, destination.y);
-        monster.begin_active_ai_move(one_step_move_delay_ms(direction, speed, stop_frame),
-            runtime.now_milliseconds());
-    }
+    super::monsterai::move_owned_monster_to(
+        game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
+    );
     if let Some(state) = region.find_monster_by_id_mut(monster_id)
         .and_then(CMonster::smart_gladiator_ai_mut)
     {
@@ -284,13 +281,13 @@ fn nearest_monster(
 /// Применяет подтверждённую реакцию AI2 на удар игрока. Базовая реакция на
 /// урон выполняется всегда; выбор цели и немедленный шаг выполняются только
 /// когда гладиатор ещё не ведёт бой.
-pub(crate) fn apply_player_hurt_response(
+pub(crate) fn apply_player_hurt_response<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     property: &MonsterProperties,
     player_id: i32,
-    now_ms: u32,
+    runtime: &mut Runtime,
 ) {
     let Some((owner, health, area_index, was_fighting)) = region
         .find_monster_by_id(monster_id)
@@ -306,7 +303,7 @@ pub(crate) fn apply_player_hurt_response(
         return;
     };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.when_been_hurted(now_ms);
+        monster.when_been_hurted(runtime.now_milliseconds());
     }
     if was_fighting {
         return;
@@ -334,12 +331,8 @@ pub(crate) fn apply_player_hurt_response(
             .or_else(|| nearest_monster(game, region, area_index, owner, monster_id))
     });
     if let Some(destination) = threat.and_then(|threat| retreat_step_from(owner, threat)) {
-        let _ = game.move_owned_monster_step(
-            region,
-            monster_id,
-            destination.x,
-            destination.y,
-            CMonster::figure(property),
+        super::monsterai::move_owned_monster_to(
+            game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
         );
     }
 }

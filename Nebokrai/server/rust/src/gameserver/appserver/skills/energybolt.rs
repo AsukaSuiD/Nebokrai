@@ -957,7 +957,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
             monster_id,
             trace_target,
             maximum_distance,
-            now_ms,
+            runtime,
         ) {
             return true;
         }

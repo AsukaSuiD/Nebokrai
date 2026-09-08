@@ -569,7 +569,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 id: monster_id,
                 ex_id: CGuid::GUID_INVALID,
             },
-            now_ms,
+            runtime,
         );
     }
     if attack.full_miss == 0
@@ -583,13 +583,12 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             game,
             region,
             target.id,
-            property,
             ShapeIdentity {
                 object_type: MONSTER_TYPE,
                 id: monster_id,
                 ex_id: CGuid::GUID_INVALID,
             },
-            now_ms,
+            || runtime.now_milliseconds(),
             plan,
         );
     }

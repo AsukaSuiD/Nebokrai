@@ -266,7 +266,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            now_ms,
+            runtime,
         ) {
             return MonsterSkillCallOutcome::Handled;
         }

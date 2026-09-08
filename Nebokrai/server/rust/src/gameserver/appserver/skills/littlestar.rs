@@ -607,7 +607,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
             monster_id,
             trace_target,
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            now_ms,
+            runtime,
         ) {
             return true;
         }

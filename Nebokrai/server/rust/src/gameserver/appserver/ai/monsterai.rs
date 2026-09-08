@@ -11,7 +11,12 @@
 //! Выбранный ID хранится каноническим `CMoveShape::current_skill_id`; конкретный
 //! владелец навыка разрешает уровень и исполняет стадии. Общий достигнутый шаг
 //! преследования сохраняет slip-порядок, задержку движения и ограничения
-//! питомца без дополнительного RNG. Реакция `WhenBeenHurted` назначает новую
+//! питомца без дополнительного RNG.
+//! `CBaseAI::MoveTo` (baseai.cpp, 0x004C9020) обслуживает общий spatial/FIFO
+//! путь: один Slip для ходьбы, два для бега с исходным направлением. После
+//! Move timestamp берётся заново; старое время начала такта из caller-а
+//! не используется. Параметры навыка и выбор назначения остаются у caller-а.
+//! Реакция `WhenBeenHurted` назначает новую
 //! цель только свободному ИИ: игрок принимается всегда, а монстр — только после
 //! подтверждения приручения. `HasTarget` считает object-целью только пару со
 //! строго положительными типом объекта и ID; отрицательные legacy-значения
@@ -185,6 +190,16 @@ pub(crate) fn find_slip_step(
     figure: crate::gameserver::appserver::shape::ShapeFigure,
 ) -> Option<(i32, ShapeAreaCoordinates)> {
     let desired_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
+    find_slip_step_in_direction(game, region, origin, desired_direction, figure)
+}
+
+fn find_slip_step_in_direction(
+    game: &CGame,
+    region: &CServerRegion,
+    origin: ShapeAreaCoordinates,
+    desired_direction: i32,
+    figure: crate::gameserver::appserver::shape::ShapeFigure,
+) -> Option<(i32, ShapeAreaCoordinates)> {
     let figure_index = usize::from(figure.get(0).min(2));
     SLIP_ORDER[desired_direction as usize]
         .into_iter()
@@ -206,14 +221,18 @@ pub(crate) fn find_slip_step(
         })
 }
 
-/// Одношаговая ходьба MoveTo (0x004C9020, run=0): Slip, Move, затем FIFO.
+/// MoveTo (0x004C9020): один Slip для ходьбы, два для ненулевого run,
+/// затем Move и FIFO. Второй Slip сохраняет исходное желаемое направление;
+/// его отказ не публикует даже первый шаг. Задержка зависит от направления
+/// между исходной и окончательной клетками, без удвоения при беге.
 /// Отказ вызывает пустой CMoveShape::OnCannotMove (+0xA4, 0x00485540)
-/// и не меняет очередь. Run-вариант с двумя Slip сюда не подмешивается.
+/// и не меняет очередь.
 pub(crate) fn move_owned_monster_to(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     target: ShapeAreaCoordinates,
+    run: i32,
     now: impl FnOnce() -> u32,
 ) {
     let Some((origin, figure, speed, stop_frame)) = region.find_monster_by_id(monster_id)
@@ -221,17 +240,28 @@ pub(crate) fn move_owned_monster_to(
             if !monster.move_shape().is_moveable() { return None; }
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
             let shape = monster.move_shape().shape();
-            let pet = monster.is_tamed().then(|| monster.pet_attack_properties(property));
             Some((ShapeAreaCoordinates { x: shape.get_tile_x().ok()?, y: shape.get_tile_y().ok()? },
                 CMonster::figure(property),
-                pet.map_or(shape.get_speed(), |pet| f32::from_bits(pet.speed_bits)),
+                monster.speed(),
                 monster.stop_frame(property)))
         })
     else { return; };
-    let Some((direction, destination)) = find_slip_step(game, region, origin, target, figure)
+    let desired_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
+    let Some((_, mut destination)) = find_slip_step_in_direction(
+        game, region, origin, desired_direction, figure,
+    )
     else { return; };
+    if run != 0 {
+        let Some((_, second)) = find_slip_step_in_direction(
+            game, region, destination, desired_direction, figure,
+        ) else { return; };
+        destination = second;
+    }
+    let direction = get_line_direction(origin.x, origin.y, destination.x, destination.y);
     let delay = one_step_move_delay_ms(direction, speed, stop_frame);
-    let _ = game.move_owned_monster_step(region, monster_id, destination.x, destination.y, figure);
+    let _ = game.move_owned_monster_step_with_run(
+        region, monster_id, destination.x, destination.y, figure, run,
+    );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.begin_active_ai_move(delay, now());
     }
@@ -378,7 +408,7 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
     property: &crate::setup::monsterlist::MonsterProperties,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((origin, speed, stop_frame, has_skill)) = region
+    let Some((origin, stop_frame, has_skill)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let shape = monster.move_shape().shape();
@@ -387,7 +417,6 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
                     x: shape.get_tile_x().ok()?,
                     y: shape.get_tile_y().ok()?,
                 },
-                shape.get_speed(),
                 monster.stop_frame(property),
                 monster.move_shape().current_skill().is_some(),
             ))
@@ -402,20 +431,9 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
     }
     if (game.skill_random_below(10_000) as u32) < property.move_timer {
         let direction = game.skill_random_below(8);
-        if let Ok(destination) = CShape::get_direction_position(direction, origin)
-            && game.move_owned_monster_step(
-                region,
-                monster_id,
-                destination.x,
-                destination.y,
-                CMonster::figure(property),
-            )
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
-        {
-            monster.begin_active_ai_move(
-                one_step_move_delay_ms(direction, speed, stop_frame),
-                runtime.now_milliseconds(),
-            );
+        if let Ok(destination) = CShape::get_direction_position(direction, origin) {
+            move_owned_monster_to(game, region, monster_id, destination, 0,
+                || runtime.now_milliseconds());
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.begin_active_ai_stand(stop_frame, runtime.now_milliseconds());
@@ -453,13 +471,13 @@ impl MonsterTraceTarget {
 /// Выполняет общий шаг `CBaseAI::Tracing` перед запуском выбранного навыка.
 /// Наблюдаемый порядок движения задаёт существующий индекс региона; функция не
 /// выбирает навык и не потребляет RNG.
-pub(crate) fn approach_attack_range(
+pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     target: MonsterTraceTarget,
     maximum_distance: u32,
-    now_ms: u32,
+    runtime: &mut Runtime,
 ) -> bool {
     let Some((
         property,
@@ -511,7 +529,7 @@ pub(crate) fn approach_attack_range(
     if distance > chase_range as i32 {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if has_owned_search_enemy(property.ai, tamed) {
-                monster.lose_ai_target_and_search(now_ms);
+                monster.lose_ai_target_and_search(runtime.now_milliseconds());
             } else {
                 monster.clear_ai_target();
             }
@@ -523,7 +541,7 @@ pub(crate) fn approach_attack_range(
     }
 
     move_owned_monster_to(game, region, monster_id,
-        ShapeAreaCoordinates { x: target_x, y: target_y }, || now_ms);
+        ShapeAreaCoordinates { x: target_x, y: target_y }, 0, || runtime.now_milliseconds());
     false
 }
 

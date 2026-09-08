@@ -369,7 +369,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
         monster_id,
         MonsterTraceTarget::Shape(target_view),
         properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-        now_ms,
+        runtime,
     ) {
         return true;
     }

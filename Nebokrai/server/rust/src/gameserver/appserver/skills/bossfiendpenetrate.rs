@@ -932,7 +932,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             monster_id,
             trace_target,
             maximum_distance,
-            now_ms,
+            runtime,
         ) {
             return true;
         }

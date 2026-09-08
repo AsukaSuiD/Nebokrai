@@ -5,6 +5,11 @@
 //! шестичасовой счётчик жизни, переходы режима/действия, возврат и одичание.
 //! `OnMoving` живого питомца без текущего навыка ставит отдельный
 //! `ASA_SEARCH_ENEMY` в общую FIFO-очередь.
+//! Ближнее следование (0x004E9DA2) использует общий MoveTo(run=0): Slip,
+//! OnMove, затем ASA_MOVE даже при отказе spatial-вызова. Задержка берёт
+//! CMonster::GetSpeed/GetStopFrame с pet factors, а не сырую скорость CShape.
+//! Общий OnMove использует runtime AREA_WIDTH/AREA_HEIGHT; отдельного
+//! pet wire-пути нет. Дальний перенос остаётся самостоятельной ветвью.
 //! `OnIdle` сохраняет `ChangeSkill? → Stand → SearchEnemy`. OnLoseTarget
 //! 0x004E95F0 вызывает базовую очистку цели, затем для ATTACKING проверяет
 //! HasTarget (+0x50), при необходимости повторяет OnLoseTarget (+0x2C),
@@ -529,15 +534,8 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
     if (real_distance(pet_x, pet_y, master_x, master_y) as f32)
         <= game.globe_setup().pet_translate_distance()
     {
-        if let Some((direction, step)) = super::monsterai::find_slip_step(
-            game, region, ShapeAreaCoordinates { x: pet_x, y: pet_y }, destination, figure,
-        ) && game.move_owned_pet_step(region, monster_id, step.x, step.y, figure)
-            && let Some(pet) = region.find_monster_by_id_mut(monster_id)
-        {
-            pet.begin_active_ai_move(super::baseai::one_step_move_delay_ms(
-                direction, pet_shape.get_speed(), pet.stop_frame(&property)),
-                runtime.now_milliseconds());
-        }
+        super::monsterai::move_owned_monster_to(game, region, monster_id, destination, 0,
+            || runtime.now_milliseconds());
         return true;
     }
     let Ok(position) = region.region.get_random_pos_in_range(

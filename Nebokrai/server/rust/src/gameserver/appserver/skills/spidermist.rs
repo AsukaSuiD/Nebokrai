@@ -490,7 +490,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         monster_id,
         MonsterTraceTarget::Shape(target_owner.view),
         maximum_distance,
-        now_ms,
+        runtime,
     ) {
         return true;
     }

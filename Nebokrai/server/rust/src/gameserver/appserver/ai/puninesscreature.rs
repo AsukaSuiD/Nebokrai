@@ -15,9 +15,12 @@
 //! направляя существующую цель в Tracing вместо общего Begin атаки.
 //! После фаз отдельный вход без цели выполняет OnIdle. Проверка принадлежности
 //! исключает приручённого монстра: его текущий владелец CPet, даже при setup AI7.
+//! Отход Tracing (0x0060F45B) проходит общий CBaseAI::MoveTo(run=0):
+//! выбранная соседняя клетка задаёт направление для Slip, затем Move и ASA_MOVE.
+//! Отказ Slip оставляет FIFO прежним; результат пространственного Move не
+//! отменяет положенную ему задержку. Геометрия и тайминг принадлежат MoveTo.
 
 
-use super::baseai::one_step_move_delay_ms;
 use super::monsterai::queue_monster_idle;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -84,18 +87,15 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
     if region.find_monster_by_id(monster_id).is_some_and(CMonster::is_tamed) {
         return false;
     }
-    let Some((property, source, source_view, stop_frame, target, schedule_idle)) = region
+    let Some((property, source_view, target, schedule_idle)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
                 .find_monster_property_by_origin_name(monster.base_property_key()?)?
                 .clone();
-            let stop_frame = monster.stop_frame(&property);
             Some((
                 property.clone(),
-                monster.move_shape().shape().clone(),
                 monster.shape_view(&property)?,
-                stop_frame,
                 monster.ai_target(),
                 monster.primary_ai_queues_idle(),
             ))
@@ -136,21 +136,9 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
             y: source_view.tile_y,
         };
         if let Ok(destination) = CShape::get_direction_position(direction, origin) {
-            let figure = CMonster::figure(&property);
-            if game.move_owned_monster_step(
-                region,
-                monster_id,
-                destination.x,
-                destination.y,
-                figure,
-            ) {
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.begin_active_ai_move(
-                        one_step_move_delay_ms(direction, source.get_speed(), stop_frame),
-                        runtime.now_milliseconds(),
-                    );
-                }
-            }
+            super::monsterai::move_owned_monster_to(
+                game, region, monster_id, destination, 0, || runtime.now_milliseconds(),
+            );
         }
         return true;
     }

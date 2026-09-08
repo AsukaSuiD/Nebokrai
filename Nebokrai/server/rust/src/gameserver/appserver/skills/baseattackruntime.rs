@@ -754,7 +754,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                 target_id,
                 &monster_property,
                 player_id,
-                now_ms,
+                runtime,
             );
         }
         if attack.full_miss == 0
@@ -797,7 +797,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                     id: player_id,
                     ex_id: CGuid::GUID_INVALID,
                 },
-                now_ms,
+                runtime,
             );
         }
         if let Some(plan) = lord_hurt_plan {
@@ -805,13 +805,12 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                 game,
                 owner.base_mut(),
                 target_id,
-                &monster_property,
                 ShapeIdentity {
                     object_type: PLAYER_TYPE,
                     id: player_id,
                     ex_id: CGuid::GUID_INVALID,
                 },
-                now_ms,
+                || runtime.now_milliseconds(),
                 plan,
             );
         }

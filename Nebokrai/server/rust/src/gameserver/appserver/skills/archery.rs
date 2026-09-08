@@ -206,7 +206,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             maximum_distance,
-            now_ms,
+            runtime,
         ) {
             return true;
         }

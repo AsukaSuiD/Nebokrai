@@ -231,7 +231,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
                 |target| MonsterTraceTarget::Shape(target.view),
             ),
             maximum_distance,
-            now_ms,
+            runtime,
         ) {
             return true;
         }
