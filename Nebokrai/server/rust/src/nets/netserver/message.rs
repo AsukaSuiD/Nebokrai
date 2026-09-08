@@ -47,6 +47,9 @@
 //! Исходный father raw pointer caller передаёт как typed
 //! `Option<&CServerRegion>`, а nullable exception pointer — как уникальный
 //! player/map ID; это сознательная смена формы без изменения recipient set.
+//! Синхронные callback-и временно извлечённого региона используют тот же
+//! sender через recipient/spatial snapshot: сохраняются area order и team-tail,
+//! но owning объекты с навыками и visual-ресурсами не клонируются.
 //! Положительные глобальные `AREA_WIDTH/HEIGHT` выражены проверяемой concrete
 //! runtime-границей. `SendAll` oversized-log читает неинициализированное
 //! constructor-ом `CMySocket::m_lIndexID`; Rust не подставляет значение и
@@ -65,7 +68,7 @@
 use std::fmt;
 
 use crate::gameserver::appserver::area::CArea;
-use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionRecipientsSnapshot};
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeCoordinateBlock};
 use crate::gameserver::gameserver::game::CGame;
@@ -93,6 +96,41 @@ pub(crate) const AROUND_SEND_AREA_OFFSETS: [(i32, i32); 9] = [
     (0, 1),
     (1, 1),
 ];
+
+enum RegionMessageRecipients<'a> {
+    Live(&'a CServerRegion),
+    Snapshot(&'a ServerRegionRecipientsSnapshot),
+}
+
+impl RegionMessageRecipients<'_> {
+    fn region_id(&self) -> i32 {
+        match self {
+            Self::Live(region) => region.id,
+            Self::Snapshot(region) => region.region_id(),
+        }
+    }
+
+    fn find_all_player_ids(&self, destination: &mut Vec<i32>) {
+        match self {
+            Self::Live(region) => region.find_all_player_ids(destination),
+            Self::Snapshot(region) => region.find_all_player_ids(destination),
+        }
+    }
+
+    fn find_player_ids_in_area(&self, x: i32, y: i32, destination: &mut Vec<i32>) {
+        match self {
+            Self::Live(region) => region.find_player_ids_in_area(x, y, destination),
+            Self::Snapshot(region) => region.find_player_ids_in_area(x, y, destination),
+        }
+    }
+
+    fn is_in_around(&self, shape: &CShape, other: &CShape) -> bool {
+        match self {
+            Self::Live(region) => shape.is_in_around(other, region),
+            Self::Snapshot(region) => region.is_in_around(shape, other),
+        }
+    }
+}
 
 /// Ошибка восстановления Game-сообщения из wire-буфера.
 #[derive(Debug, Eq, PartialEq)]
@@ -461,8 +499,34 @@ impl CMessage {
         let Some(server_region) = server_region else {
             return 0;
         };
+        self.send_to_region_recipients(
+            RegionMessageRecipients::Live(server_region),
+            excluded_player_id,
+            game,
+        )
+    }
+
+    pub(crate) fn send_to_region_snapshot(
+        &self,
+        server_region: &ServerRegionRecipientsSnapshot,
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+    ) -> i32 {
+        self.send_to_region_recipients(
+            RegionMessageRecipients::Snapshot(server_region),
+            excluded_player_id,
+            game,
+        )
+    }
+
+    fn send_to_region_recipients(
+        &self,
+        server_region: RegionMessageRecipients<'_>,
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+    ) -> i32 {
         let frame = self.rle_send_frame();
-        self.log_oversized_rle("SendToRegion", server_region.id, frame.len());
+        self.log_oversized_rle("SendToRegion", server_region.region_id(), frame.len());
         let mut player_ids = Vec::new();
         server_region.find_all_player_ids(&mut player_ids);
         self.send_player_ids(&player_ids, excluded_player_id, game, &frame);
@@ -522,7 +586,26 @@ impl CMessage {
         let tile_x = origin.get_tile_x()?;
         let tile_y = origin.get_tile_y()?;
         Ok(self.send_to_around_at(
-            server_region,
+            server_region.map(RegionMessageRecipients::Live),
+            tile_x,
+            tile_y,
+            Some(origin),
+            excluded_player_id,
+            runtime,
+        ))
+    }
+
+    pub(crate) fn send_to_around_snapshot(
+        &self,
+        server_region: &ServerRegionRecipientsSnapshot,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        runtime: &GameServerAroundRuntime<'_>,
+    ) -> Result<i32, ShapeCoordinateBlock> {
+        let tile_x = origin.get_tile_x()?;
+        let tile_y = origin.get_tile_y()?;
+        Ok(self.send_to_around_at(
+            Some(RegionMessageRecipients::Snapshot(server_region)),
             tile_x,
             tile_y,
             Some(origin),
@@ -540,7 +623,7 @@ impl CMessage {
         runtime: &GameServerAroundRuntime<'_>,
     ) -> i32 {
         self.send_to_around_at(
-            server_region,
+            server_region.map(RegionMessageRecipients::Live),
             tile_x,
             tile_y,
             None,
@@ -551,7 +634,7 @@ impl CMessage {
 
     fn send_to_around_at(
         &self,
-        server_region: Option<&CServerRegion>,
+        server_region: Option<RegionMessageRecipients<'_>>,
         tile_x: i32,
         tile_y: i32,
         main_shape: Option<&CShape>,
@@ -562,7 +645,7 @@ impl CMessage {
             return 0;
         };
         let frame = self.rle_send_frame();
-        self.log_oversized_rle("SendToAround", server_region.id, frame.len());
+        self.log_oversized_rle("SendToAround", server_region.region_id(), frame.len());
         let mut around_player_ids = Vec::new();
         let center_x = tile_x / runtime.area_width;
         let center_y = tile_y / runtime.area_height;
@@ -616,10 +699,7 @@ impl CMessage {
             if excluded_player_id == Some(player.player_id()) {
                 continue;
             }
-            if player
-                .shape()
-                .is_in_around(main_player.shape(), server_region)
-            {
+            if server_region.is_in_around(player.shape(), main_player.shape()) {
                 continue;
             }
             if self.message_type() == TEAM_LOCAL_ONLY_MESSAGE {

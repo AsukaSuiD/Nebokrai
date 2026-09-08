@@ -237,7 +237,7 @@ pub(crate) trait WarContendContext: WarContendEntryContext {
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>);
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerWarRegion {
     pub(crate) base: CServerRegion,
     pub(crate) contenders: Vec<ContendState>,

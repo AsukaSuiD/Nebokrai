@@ -166,7 +166,7 @@ fn build_attack_path(
             if open { path.push((candidate.x, candidate.y, 0)); return path; }
         }
         if let Some(owner) = game.take_region_owner(region_id) {
-            if let Ok(candidate) = game.random_region_position_owned(owner.base(), occupied.0.wrapping_sub(2), occupied.1.wrapping_sub(2), 5, 5) {
+            if let Ok(candidate) = game.random_region_position_owned(&owner.base().region, occupied.0.wrapping_sub(2), occupied.1.wrapping_sub(2), 5, 5) {
                 path.push((candidate.x, candidate.y, 0));
             }
             game.restore_region_owner(owner);

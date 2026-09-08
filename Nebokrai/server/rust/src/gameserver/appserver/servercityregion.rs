@@ -91,7 +91,7 @@ const OC_CLOSE: i32 = 1;
 const OC_REFRESH: i32 = 2;
 const OC_DIED: i32 = 3;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CityGateState {
     pub(crate) gate: CCityGate,
 }
@@ -263,7 +263,7 @@ pub(crate) struct CityGuardRefreshTargets {
     pub(crate) spawn_indices: Vec<i32>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerCityRegion {
     pub(crate) war: CServerWarRegion,
     pub(crate) city_gates: BTreeMap<i32, CityGateState>,

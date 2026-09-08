@@ -152,7 +152,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
 
     if game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         let cooldown_now_ms = runtime.now_milliseconds();
         let last_used_ms = game.player_skill_last_used_ms(player_id, skill_id);
         if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {

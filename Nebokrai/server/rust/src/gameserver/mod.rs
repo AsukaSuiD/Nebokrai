@@ -390,6 +390,7 @@ pub(crate) mod appserver {
         pub(crate) mod attackpower;
         pub(crate) mod state;
         pub(crate) mod summonskill;
+        pub(crate) mod visualeffect;
     }
     pub(crate) mod message {
         pub(crate) mod containermessage;

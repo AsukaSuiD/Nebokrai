@@ -296,7 +296,7 @@ pub(crate) struct CountryMoveShape {
     pub(crate) id: i32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CServerCountryRegion {
     pub(crate) base: CServerRegion,
     pub(crate) contenders: Vec<ContendState>,

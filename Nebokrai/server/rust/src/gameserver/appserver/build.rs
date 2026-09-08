@@ -87,7 +87,7 @@ pub(crate) enum BuildDecodeError {
     Coordinate(ShapeCoordinateBlock),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CBuild {
     move_shape: CMoveShape,
     pub(crate) hp: u32,

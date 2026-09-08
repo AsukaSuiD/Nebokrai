@@ -33,7 +33,7 @@ use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ServerNationRegion {
     pub(crate) war: CServerWarRegion,
     country_names: [Vec<u8>; 5],

@@ -18,7 +18,7 @@ new_key_type! {
     struct MonsterEntity;
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct MonsterWorld {
     entities: SlotMap<MonsterEntity, Option<CMonster>>,
     legacy_ids: BTreeMap<i32, MonsterEntity>,

@@ -1985,7 +1985,7 @@ pub(crate) enum PlayerTalkChannel {
     Union,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     player_ai: CPlayerAI,

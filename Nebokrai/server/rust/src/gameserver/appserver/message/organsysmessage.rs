@@ -1673,11 +1673,11 @@ impl WarRegionContext for ContendProjectionContext<'_> {
             .find_player(player_id)
             .and_then(|player| player.server_region_id())
             .and_then(|region_id| self.game.find_region(region_id))
-            .map(|owner| owner.base().clone());
+            .map(|owner| owner.base().recipients_snapshot());
         if let Some(region) = region {
             let _ = self
                 .game
-                .publish_war_player_contend_state(&region, player_id, state);
+                .publish_war_player_contend_state_snapshot(&region, player_id, state);
         }
     }
 
@@ -1805,7 +1805,7 @@ impl GameOrganizingWarContext<'_> {
                 continue;
             };
             let destination = match self.game.random_region_position_owned(
-                &region.war.base,
+                &region.war.base.region,
                 rect.left,
                 rect.top,
                 rect.right.wrapping_sub(rect.left),

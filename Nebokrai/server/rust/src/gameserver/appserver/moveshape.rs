@@ -104,6 +104,11 @@
 //! Изменяемый доступ не создаёт фиктивного monster-kernel и не подменяет
 //! чужой вариант. Общий IsEnded не выводится из наличия concrete-исполнения;
 //! отдельный immediate-флаг +0x4c не подменяет базовый lifecycle.
+//! Визуальный ресурс CState принадлежит самому экземпляру отдельно от
+//! копируемой скалярной базы. Общий сброс сначала очищает source/target/time,
+//! затем удаляет Option<CVisualEffect> и только потом выставляет ended.
+//! Владеющие формы и регионы не клонируются: временным рассылкам достаточно
+//! упорядоченного снимка адресатов, случайной позиции — заимствования CRegion.
 //! CSkill constructor (0x004D8120) задаёт timestamp +0x40 равным нулю;
 //! новая регистрация не наследует его от удалённого экземпляра того же ID.
 //! Доступ к этим полям использует тот же первый GetSkill по текущей metadata,
@@ -140,6 +145,7 @@ use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
+use super::states::visualeffect::CVisualEffect;
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
@@ -361,7 +367,7 @@ impl RegisteredSkillExecution {
 /// Достигнутая common-проекция `CSkill`: identity, level и concrete owner.
 /// Алгоритмы concrete attack/defense/state/summon остаются у skill owners;
 /// исполнение, его ресурсы и reuse принадлежат каждому экземпляру.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct MoveShapeSkill {
     id: u32,
     level: i32,
@@ -369,6 +375,7 @@ pub(crate) struct MoveShapeSkill {
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
     execution: RegisteredSkillExecution,
+    current_visual_effect: Option<CVisualEffect>,
     last_used_ms: u32,
 }
 
@@ -618,6 +625,15 @@ pub(crate) struct UndeadStateMutation {
 }
 
 impl MoveShapeSkill {
+    /// Общий хвост CSkill::End после concrete cleanup и OnEndSkill.
+    /// Владеющий visual не входит в копируемый снимок скалярного lifecycle.
+    fn finish_base(&mut self, termination: SkillTermination) {
+        let visual = &mut self.current_visual_effect;
+        self.execution
+            .lifecycle_mut()
+            .reset_after_end(termination, || drop(visual.take()));
+    }
+
     pub(crate) const fn id(&self) -> u32 {
         self.id
     }
@@ -681,7 +697,7 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
     fn move_shape_is_alive(&self, identity: ShapeIdentity) -> Option<bool>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
     skills: [Vec<MoveShapeSkill>; 4],
@@ -1315,7 +1331,7 @@ impl CMoveShape {
     pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32, factory: &CSkillFactory) {
         if let Some(skill) = self.skill_mut(skill_id, factory) {
             skill.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
-            skill.execution.lifecycle_mut().reset_after_end(SkillTermination::Completed);
+            skill.finish_base(SkillTermination::Completed);
         }
     }
 
@@ -5362,6 +5378,19 @@ impl CMoveShape {
         Some(self.skill_mut(skill_id, factory)?.execution.lifecycle_mut())
     }
 
+    pub(crate) fn finish_skill_base(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+        termination: SkillTermination,
+    ) -> bool {
+        let Some(skill) = self.skill_mut(skill_id, factory) else {
+            return false;
+        };
+        skill.finish_base(termination);
+        true
+    }
+
     pub(crate) fn monster_skill_execution(
         &self,
         skill_id: u32,
@@ -5552,6 +5581,7 @@ impl CMoveShape {
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
+            current_visual_effect: None,
             last_used_ms: 0,
         });
     }
@@ -5641,6 +5671,7 @@ impl CMoveShape {
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
+            current_visual_effect: None,
             last_used_ms: 0,
         });
         true

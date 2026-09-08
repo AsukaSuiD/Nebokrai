@@ -337,7 +337,7 @@ pub(crate) struct MonsterSkillExecution {
     pub(crate) progress: Option<MonsterSkillProgress>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CMonster {
     move_shape: CMoveShape,
     original_name: Vec<u8>,
@@ -1657,9 +1657,7 @@ impl CMonster {
                 } else {
                     self.finish_attack_skill_resources(skill_id);
                 }
-                if let Some(lifecycle) = self.move_shape.skill_lifecycle_mut(skill_id, factory) {
-                    lifecycle.reset_after_end(SkillTermination::Completed);
-                }
+                self.move_shape.finish_skill_base(skill_id, factory, SkillTermination::Completed);
                 ended_skill = Some(skill_id);
             } else {
                 return None;
@@ -2077,8 +2075,7 @@ impl CMonster {
         }
         self.clear_skill_progress(skill_id, factory);
         self.finish_attack_skill_resources(skill_id);
-        let _ = self.move_shape.monster_skill_execution_mut(skill_id, factory)?
-            .kernel.terminate(SkillTermination::Completed);
+        self.move_shape.finish_skill_base(skill_id, factory, SkillTermination::Completed);
         if let Some(now) = reuse_clock {
             self.move_shape.mark_skill_used(skill_id, now(), factory);
         }
@@ -2143,9 +2140,7 @@ impl CMonster {
             self.move_shape.finish_immediate_skill(skill_id, factory);
         }
         self.move_shape.set_current_skill_id(None);
-        if let Some(stored) = self.move_shape.monster_skill_execution_mut(skill_id, factory) {
-            stored.kernel.lifecycle_mut().reset_after_end(termination.unwrap_or(SkillTermination::Cancelled));
-        }
+        self.move_shape.finish_skill_base(skill_id, factory, termination.unwrap_or(SkillTermination::Cancelled));
     }
 
     /// Удаление CState из Cure не вызывает CSkill::End(int).

@@ -99,7 +99,7 @@ pub(crate) fn ensure_jiumai_twin(
     }
 
     let position = game.random_region_position_owned(
-        region,
+        &region.region,
         owner.tile_x.wrapping_sub(5),
         owner.tile_y.wrapping_sub(5),
         10,

@@ -410,7 +410,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     let Some(mut target) = target_snapshot(game, region_id, identity) else { failure(game, player_id, 10); return result(QueuedSkillExecutionState::Rejected) };
     if game.player_skill_execution(player_id, KNOCK_OUT_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, now);
         if !skill_is_restored(game.player_skill_last_used_ms(player_id, KNOCK_OUT_SKILL_ID), reuse, now) {
             failure(game, player_id, 0x0d); failure(game, player_id, 2);
             return result(QueuedSkillExecutionState::Rejected);

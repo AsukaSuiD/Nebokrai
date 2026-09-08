@@ -491,7 +491,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
 
     if game.player_skill_execution(player_id, PROMOTION_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         let Some(target) = target else {
             send_failure(game, player_id, 10);
             game.send_skill_system_info(player_id, b"GS0286");

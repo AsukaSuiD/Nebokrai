@@ -21,7 +21,7 @@ use crate::nets::netserver::message::CMessage;
 
 const NPC_TYPE: i32 = 500;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CNpc {
     move_shape: CMoveShape,
     script_file: Vec<u8>,

@@ -202,7 +202,7 @@ where
 
     if game.player_skill_execution(player_id, Owner::SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
             game.player_skill_last_used_ms(player_id, Owner::SKILL_ID),

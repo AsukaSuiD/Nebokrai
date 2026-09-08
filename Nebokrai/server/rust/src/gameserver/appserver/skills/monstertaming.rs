@@ -268,7 +268,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
             None,
         );
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         if !skill_is_restored(
             game.player_skill_last_used_ms(player_id, MONSTER_TAMING_SKILL_ID),
             reuse_delay_ms,

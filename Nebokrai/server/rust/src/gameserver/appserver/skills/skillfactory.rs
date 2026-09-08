@@ -23,8 +23,34 @@
 //! `QuerySkillType` остаётся отдельным lookup runtime-свойств и не подменяется
 //! категорией конструктора. QuerySkillType (0x0046C3D0) не проверяет admission:
 //! даже ID без concrete factory-owner возвращает категорию имеющейся записи.
-//! Этот каталог не реализует создание состояния или
-//! `End` конкретных навыков: их lifecycle остаётся в соответствующих owner-ах.
+//! End-политики всех 209 владельцев подтверждены slot `+0x68` их vtable:
+//! найдено 37 общих тел End(int), без подстановки категории runtime-свойств.
+//! Только общий хвост: `50E9B0`, `5A30D0`, `5AC2D0`, `5AFA40`, `5B3010`,
+//! `5DFBD0`, `601A40`; чтение GetUser в двух из этих тел не меняет движение.
+//! Возврат движения источнику: `52B410`, `53BF50`, `540890`, `546090`,
+//! `54D760`, `55B2B0`, `56A330`, `577C40`, `57B810`, `582810`, `58C3A0`,
+//! `58DE90`, `58F5E0`, `591AD0`, `598EE0`, `59A410`, `59D6B0`, `5AE7A0`.
+//! `570B20` освобождает пути после возврата движения, остальные path-owner-ы
+//! делают это до него. `5502F0` при null GetUser пробует GetSufferer.
+//! `512B50` и `5970C0` также ставят available=true; `544830` — false.
+//! `5888D0` ставит available=true и обновляет visual действием 3 только при
+//! End(0). Особые visual-хвосты: `516FB0`, `51A700`, `51E370`, `5222A0`,
+//! `5355F0`, `5A0790`; их точные условия описаны в SkillEndEffect.
+//! End не проверяет ended: constructor/failed Begin не разрешают пропустить
+//! source-aware действия. Null source не заменяется держателем реестра.
+//! Наличие owned visual независимо от concrete payload; политика не создаёт
+//! эффект и не разрешает пакет только по факту регистрации навыка.
+//! У Po/Yu и transfer-owner-ов End(bool) в `+0x94` не подменяет End(int)
+//! в `+0x68`. Удерживаемый HeartLessArrow при ненулевом End имеет отдельный
+//! ранний release-переход; эта карта не заменяет проверку его concrete-флагов.
+//! Attack/State AfterUse (`+0x8C`) и Summon AfterUse (`+0x90`) вызываются
+//! только при ненулевом End перед общим сбросом. `53CF30` изнашивает оружие
+//! разрешённого CPlayer; пять пустых overrides используют `601A70`.
+//! `CItemSkill_2` (`5149E0`) вместо износа записывает время item-группы из
+//! текущих properties ID/level (`usage 0xC351`); Defense не имеет AfterUse.
+//! Каталог не выполняет End: concrete поля/ресурсы, вызовы visual и общая
+//! source-aware граница остаются обязанностью runtime-владельцев. Эта карта
+//! не объявляет восстановленными неизвестные concrete layout и полный End.
 //! `BTreeMap`, `Vec` и `Drop` заменяют служебный код MSVC map/heap. Старые
 //! переполнения и выходы за границу при повреждённой длине остановлены
 //! типизированной ошибкой без дополнительных side effects. Неизвестности
@@ -62,8 +88,83 @@ impl SkillCategory {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillEndMovement {
+    None,
+    User,
+    UserOrSufferer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillEndPathOrder {
+    BeforeMovement,
+    AfterMovement,
+}
+
+/// Дополнительные действия конкретного End до общего CSkill::End.
+/// Любая visual-ветвь требует реально существующего owned visual; отсутствие
+/// concrete execution само по себе ничего не говорит о наличии этого ресурса.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillEndEffect {
+    None,
+    /// После возврата движения: OnChangeStates у разрешённого CPlayer,
+    /// затем UpdateVisualEffect(skill, 3), если visual существует.
+    Rage,
+    /// UpdateVisualEffect(skill, 3) только при нулевом аргументе End.
+    ScorpionOnlyZero,
+    /// После освобождения пути и возврата движения — visual action 3.
+    Star,
+    /// При разрешённом GetUser: BeginVisualEffect(1), затем visual action 3.
+    /// Это не EndVisualEffect: первый вызов идёт через slot 0, не slot 4.
+    BattleFairyBaseMagic,
+    /// При существующих visual и GetUser: BeginVisualEffect(1), затем action 3.
+    BattleFairyState,
+    /// Visual action 3 без дополнительного source-gate в самом End.
+    BattleFairyFatal,
+    /// Visual action 3 без дополнительного source-gate в самом End.
+    BattleFairySummon,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SkillEndPolicy {
+    pub(crate) movement: SkillEndMovement,
+    /// None сохраняет available; Some задаёт безусловную concrete-запись.
+    pub(crate) available: Option<bool>,
+    pub(crate) effect: SkillEndEffect,
+    /// Порядок освобождения существующих путей, а не создание пустого payload.
+    pub(crate) path_order: SkillEndPathOrder,
+}
+
+impl SkillEndPolicy {
+    const COMMON: Self = Self {
+        movement: SkillEndMovement::None,
+        available: None,
+        effect: SkillEndEffect::None,
+        path_order: SkillEndPathOrder::BeforeMovement,
+    };
+    const USER: Self = Self { movement: SkillEndMovement::User, ..Self::COMMON };
+    const USER_OR_SUFFERER: Self = Self { movement: SkillEndMovement::UserOrSufferer, ..Self::COMMON };
+    const USER_AVAILABLE: Self = Self { available: Some(true), ..Self::USER };
+    const USER_UNAVAILABLE: Self = Self { available: Some(false), ..Self::USER };
+    const USER_PATHS_AFTER_MOVEMENT: Self = Self { path_order: SkillEndPathOrder::AfterMovement, ..Self::USER };
+    const RAGE: Self = Self { effect: SkillEndEffect::Rage, ..Self::USER };
+    const SCORPION: Self = Self { effect: SkillEndEffect::ScorpionOnlyZero, ..Self::USER_AVAILABLE };
+    const STAR: Self = Self { effect: SkillEndEffect::Star, ..Self::USER };
+    const BATTLE_FAIRY_BASE_MAGIC: Self = Self { effect: SkillEndEffect::BattleFairyBaseMagic, ..Self::COMMON };
+    const BATTLE_FAIRY_STATE: Self = Self { effect: SkillEndEffect::BattleFairyState, ..Self::COMMON };
+    const BATTLE_FAIRY_FATAL: Self = Self { effect: SkillEndEffect::BattleFairyFatal, ..Self::COMMON };
+    const BATTLE_FAIRY_SUMMON: Self = Self { effect: SkillEndEffect::BattleFairySummon, ..Self::COMMON };
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillAfterUse {
+    Weapon,
+    None,
+    ItemGroup,
+}
+
 macro_rules! skill_owners {
-    ($($(#[$attribute:meta])* $owner:ident: $category:ident => $id:pat),+ $(,)?) => {
+    ($($(#[$attribute:meta])* $owner:ident: $category:ident, $end_policy:ident, $after_use:ident => $id:pat),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub(crate) enum SkillOwner {
             $($(#[$attribute])* $owner,)+
@@ -73,6 +174,18 @@ macro_rules! skill_owners {
             pub(crate) const fn category(self) -> SkillCategory {
                 match self {
                     $(Self::$owner => SkillCategory::$category,)+
+                }
+            }
+
+            pub(crate) const fn end_policy(self) -> SkillEndPolicy {
+                match self {
+                    $(Self::$owner => SkillEndPolicy::$end_policy,)+
+                }
+            }
+
+            pub(crate) const fn after_use(self) -> SkillAfterUse {
+                match self {
+                    $(Self::$owner => SkillAfterUse::$after_use,)+
                 }
             }
         }
@@ -91,216 +204,216 @@ macro_rules! skill_owners {
 // Имена классов сохранены по PDB. Это единственный каталог фабричного выбора:
 // категория принадлежит конструктору экземпляра, а не записи runtime-свойств.
 skill_owners! {
-    CBaseAttack: Attack => 0x001,
-    CArchery: Summon => 0x002,
-    CBaseMagic: Summon => 0x003,
-    CFightDefense: Defense => 0x00a,
-    CMosou: Attack => 0x065,
-    CGhostCut: Attack => 0x066,
-    CKnightCut: State => 0x067,
-    CArmyBreak: Attack => 0x068,
-    CFlash: Attack => 0x069,
-    CSwallow: Attack => 0x06a,
-    CLeafCut: State => 0x06b,
-    CJuCut: Attack => 0x06c,
-    CRage: State => 0x06d,
-    CRageBreak: State => 0x06e,
-    CSwordship: State => 0x06f,
-    CLightningSword: Attack => 0x070,
-    CLittleFlash: Attack => 0x071,
-    CThunderSlash: Summon => 0x072,
-    CRush: State => 0x073,
-    CPillar: State => 0x074,
-    CCallosity: State => 0x075,
-    CBlind: State => 0x076,
-    CLightningSword2: Attack => 0x077,
-    CLightningSword3: Attack => 0x078,
-    CGhostCut2: Attack => 0x079,
-    CGhostCut3: Attack => 0x07a,
-    CArmyBreak2: Attack => 0x07b,
-    CRush2: State => 0x07c,
-    CCallosity2: State => 0x07d,
-    CLightningSword4: Attack => 0x07e,
-    CLittleFlash2: Attack => 0x07f,
-    CLeafCut2: State => 0x080,
-    CAgility2: State => 0x081,
-    CRoar: State => 0x083,
-    CEnergyHolding: State => 0x089,
-    CInverseChopped: Attack => 0x08a,
-    CLeafCut3: State => 0x08f,
-    CPoisonFog: Summon => 0x0c9,
-    CHeartLessArrow: Attack => 0x0ca,
-    CLightingArrow: Attack => 0x0cb,
-    CMeteorArrowMass: State => 0x0cc,
-    CMeteorArrow: Summon => 0x0cd,
-    CRainArrow: Attack => 0x0ce,
-    CPoisonMoth: Attack => 0x0cf,
-    CBloodRose: Attack => 0x0d0,
-    CScorpion: Attack => 0x0d1,
-    CBoaLock: State => 0x0d2,
-    CHeal: State => 0x0d3,
-    CMonsterTaming: Attack => 0x0d4,
-    CFallingStar: Summon => 0x0d5,
-    CExplosiveArrow: Attack => 0x0d6,
-    CPetsControl: Attack => 0x0d7,
-    CGibe: Attack => 0x0d8,
-    CSuperHeal: State => 0x0d9,
-    CAgility: State => 0x0da,
-    CRapture: State => 0x0db,
-    CNatural: State => 0x0dc,
-    CStrike: Attack => 0x0dd,
-    CMachineShield: State => 0x0de,
-    CDaubPoison: State => 0x0df,
-    CSwordship2: State => 0x0e0,
-    CExplosiveArrow2: Attack => 0x0e1,
-    CExplosiveArrow3: Attack => 0x0e2,
-    CHeal2: State => 0x0e3,
-    CSuperHeal2: State => 0x0e4,
-    CHeartLessArrow2: Attack => 0x0e5,
-    CHeartLessArrow3: Attack => 0x0e6,
-    CLightingArrow2: Attack => 0x0e7,
-    CSwordship3: State => 0x0e8,
-    CSwordship4: State => 0x0e9,
-    CKerosene: State => 0x0f1,
-    CIgnition: Attack => 0x0f2,
-    CTaiJi: State => 0x12d,
-    CWeak: Summon => 0x12e,
-    CGodBless: State => 0x12f,
-    COrigin: State => 0x130,
-    CCure: State => 0x131,
-    CFireBolt: Summon => 0x132,
-    CLightning: Attack => 0x133,
-    CFireWall: Summon => 0x134,
-    CInfernol: Attack => 0x135,
-    CSevenShootingStar: Attack => 0x136,
-    CChaosSphere: Summon => 0x137,
-    CSeal: Attack => 0x138,
-    CYinYang: Summon => 0x139,
-    CGodPunishment: Summon => 0x13a,
-    CSoulCollect: State => 0x13b,
-    CSoulMirror: Attack => 0x13c,
-    CFireBall: Summon => 0x13d,
-    CChainLightning: Attack => 0x13e,
-    CThunderBlow: Summon => 0x13f,
-    CGodThunder: Summon => 0x140,
-    CManaShield: State => 0x141,
-    CPromotion: State => 0x142,
-    CGodThunder2: Summon => 0x143,
-    CHearten: State => 0x144,
-    CGodBless2: State => 0x145,
-    CYinYang2: Summon => 0x146,
-    CThunderBlow2: Attack => 0x14d,
-    CSpiderPoison: State => 0x191,
-    CKnockOut: State => 0x192,
-    CSnowStorm: Summon => 0x193,
-    CCorpseCandleBlasting: Attack => 0x194,
-    CSporeBlasting: State => 0x195,
-    CYakshaSlash: Attack => 0x196,
-    CMonsterThorn: Attack => 0x197,
-    CSpiderMist: Summon => 0x198,
-    CSpiderWeb: State => 0x199,
-    CSummonCorpseCandle: Summon => 0x19a,
-    CSummonSkeleton: Summon => 0x19b,
-    CSummonSpore: Summon => 0x19c,
-    CChuckStone: Attack => 0x19d,
-    CYunShengLightning: Attack => 0x19e,
-    CCorpsePtomaine: State => 0x19f,
-    CEnergyBolt: Attack => 0x1a0,
-    CSkeletonArchery: Attack => 0x1a1,
-    CZombieClaw: Attack => 0x1a2,
-    CFury: State => 0x1a3,
-    CLittleStar: Attack => 0x1a4,
-    CSnakeBolt: Attack => 0x1a5,
-    CSpriteBurn: State => 0x1a6,
-    CMachineryStomp: Attack => 0x1a7,
-    CLordFastAttack: Attack => 0x1f5,
-    CLordWiderangingAttack: Attack => 0x1f6,
-    CBossBlueFury: State => 0x1f7,
-    CBossBlueQuake: Attack => 0x1f8,
-    CBossFiendSummon: Summon => 0x1f9,
-    CBossFiendPenetrate: Attack => 0x1fa,
-    CPojia: State => 0x212,
-    CPobing: State => 0x213,
-    CPomo: State => 0x214,
-    CPofa: State => 0x215,
-    CYujia: State => 0x216,
-    CYubing: State => 0x217,
-    CYumo: State => 0x218,
-    CYufa: State => 0x219,
-    CTianhuo: Summon => 0x21a,
-    CLeiming2: Summon => 0x21b,
-    CFatalBlow: Attack => 0x21c,
-    CBloodLoss: State => 0x21d,
-    CPoisonArrow: State => 0x21e,
-    CThunder: Summon => 0x21f,
-    CLifeShield: State => 0x220,
-    CWangsheng: State => 0x221,
-    CHuoxieshu: State => 0x222,
-    CLingzhishu: State => 0x223,
-    BFBaseAttack: Summon => 0x224,
-    CEnlargeMaxHp: State => 0x259,
-    CEnlargeMaxMp: State => 0x25a,
-    CEnlargeFullMiss: State => 0x25b,
-    CMonsterBaseAttack: Attack => 0x2bd,
-    CMonsterFastAttack: Attack => 0x2d1,
-    CMonsterRangeAttack: Attack => 0x2ef,
+    CBaseAttack: Attack, COMMON, Weapon => 0x001,
+    CArchery: Summon, USER, Weapon => 0x002,
+    CBaseMagic: Summon, USER, Weapon => 0x003,
+    CFightDefense: Defense, COMMON, None => 0x00a,
+    CMosou: Attack, USER, Weapon => 0x065,
+    CGhostCut: Attack, USER, Weapon => 0x066,
+    CKnightCut: State, USER, Weapon => 0x067,
+    CArmyBreak: Attack, USER, Weapon => 0x068,
+    CFlash: Attack, USER, Weapon => 0x069,
+    CSwallow: Attack, USER_AVAILABLE, Weapon => 0x06a,
+    CLeafCut: State, USER, Weapon => 0x06b,
+    CJuCut: Attack, USER, Weapon => 0x06c,
+    CRage: State, RAGE, Weapon => 0x06d,
+    CRageBreak: State, USER, Weapon => 0x06e,
+    CSwordship: State, COMMON, Weapon => 0x06f,
+    CLightningSword: Attack, USER, Weapon => 0x070,
+    CLittleFlash: Attack, USER, Weapon => 0x071,
+    CThunderSlash: Summon, USER, Weapon => 0x072,
+    CRush: State, USER_PATHS_AFTER_MOVEMENT, Weapon => 0x073,
+    CPillar: State, USER, Weapon => 0x074,
+    CCallosity: State, USER, Weapon => 0x075,
+    CBlind: State, USER, Weapon => 0x076,
+    CLightningSword2: Attack, USER, Weapon => 0x077,
+    CLightningSword3: Attack, USER, Weapon => 0x078,
+    CGhostCut2: Attack, USER, Weapon => 0x079,
+    CGhostCut3: Attack, USER, Weapon => 0x07a,
+    CArmyBreak2: Attack, USER, Weapon => 0x07b,
+    CRush2: State, USER_PATHS_AFTER_MOVEMENT, Weapon => 0x07c,
+    CCallosity2: State, USER, Weapon => 0x07d,
+    CLightningSword4: Attack, USER, Weapon => 0x07e,
+    CLittleFlash2: Attack, USER, Weapon => 0x07f,
+    CLeafCut2: State, USER, Weapon => 0x080,
+    CAgility2: State, USER, Weapon => 0x081,
+    CRoar: State, USER, Weapon => 0x083,
+    CEnergyHolding: State, USER_OR_SUFFERER, Weapon => 0x089,
+    CInverseChopped: Attack, USER, Weapon => 0x08a,
+    CLeafCut3: State, USER, Weapon => 0x08f,
+    CPoisonFog: Summon, USER, Weapon => 0x0c9,
+    CHeartLessArrow: Attack, USER, Weapon => 0x0ca,
+    CLightingArrow: Attack, USER, Weapon => 0x0cb,
+    CMeteorArrowMass: State, USER_OR_SUFFERER, Weapon => 0x0cc,
+    CMeteorArrow: Summon, USER, Weapon => 0x0cd,
+    CRainArrow: Attack, USER, Weapon => 0x0ce,
+    CPoisonMoth: Attack, USER, Weapon => 0x0cf,
+    CBloodRose: Attack, USER, Weapon => 0x0d0,
+    CScorpion: Attack, SCORPION, Weapon => 0x0d1,
+    CBoaLock: State, USER, Weapon => 0x0d2,
+    CHeal: State, USER, Weapon => 0x0d3,
+    CMonsterTaming: Attack, USER, None => 0x0d4,
+    CFallingStar: Summon, USER, Weapon => 0x0d5,
+    CExplosiveArrow: Attack, USER, Weapon => 0x0d6,
+    CPetsControl: Attack, USER, None => 0x0d7,
+    CGibe: Attack, COMMON, None => 0x0d8,
+    CSuperHeal: State, USER, Weapon => 0x0d9,
+    CAgility: State, USER, Weapon => 0x0da,
+    CRapture: State, USER, Weapon => 0x0db,
+    CNatural: State, USER, Weapon => 0x0dc,
+    CStrike: Attack, USER, Weapon => 0x0dd,
+    CMachineShield: State, USER, Weapon => 0x0de,
+    CDaubPoison: State, USER, Weapon => 0x0df,
+    CSwordship2: State, COMMON, Weapon => 0x0e0,
+    CExplosiveArrow2: Attack, USER, Weapon => 0x0e1,
+    CExplosiveArrow3: Attack, USER, Weapon => 0x0e2,
+    CHeal2: State, USER, Weapon => 0x0e3,
+    CSuperHeal2: State, USER, Weapon => 0x0e4,
+    CHeartLessArrow2: Attack, USER, Weapon => 0x0e5,
+    CHeartLessArrow3: Attack, USER, Weapon => 0x0e6,
+    CLightingArrow2: Attack, USER, Weapon => 0x0e7,
+    CSwordship3: State, COMMON, Weapon => 0x0e8,
+    CSwordship4: State, COMMON, Weapon => 0x0e9,
+    CKerosene: State, USER, Weapon => 0x0f1,
+    CIgnition: Attack, USER_UNAVAILABLE, Weapon => 0x0f2,
+    CTaiJi: State, COMMON, Weapon => 0x12d,
+    CWeak: Summon, USER, Weapon => 0x12e,
+    CGodBless: State, USER_OR_SUFFERER, Weapon => 0x12f,
+    COrigin: State, COMMON, Weapon => 0x130,
+    CCure: State, USER, Weapon => 0x131,
+    CFireBolt: Summon, USER, Weapon => 0x132,
+    CLightning: Attack, COMMON, Weapon => 0x133,
+    CFireWall: Summon, USER, Weapon => 0x134,
+    CInfernol: Attack, USER, Weapon => 0x135,
+    CSevenShootingStar: Attack, STAR, Weapon => 0x136,
+    CChaosSphere: Summon, USER, Weapon => 0x137,
+    CSeal: Attack, USER, Weapon => 0x138,
+    CYinYang: Summon, USER, Weapon => 0x139,
+    CGodPunishment: Summon, COMMON, Weapon => 0x13a,
+    CSoulCollect: State, USER_OR_SUFFERER, Weapon => 0x13b,
+    CSoulMirror: Attack, USER, Weapon => 0x13c,
+    CFireBall: Summon, USER, Weapon => 0x13d,
+    CChainLightning: Attack, USER, Weapon => 0x13e,
+    CThunderBlow: Summon, COMMON, Weapon => 0x13f,
+    CGodThunder: Summon, USER, Weapon => 0x140,
+    CManaShield: State, USER, Weapon => 0x141,
+    CPromotion: State, USER, Weapon => 0x142,
+    CGodThunder2: Summon, USER, Weapon => 0x143,
+    CHearten: State, USER, Weapon => 0x144,
+    CGodBless2: State, USER_OR_SUFFERER, Weapon => 0x145,
+    CYinYang2: Summon, USER, Weapon => 0x146,
+    CThunderBlow2: Attack, COMMON, Weapon => 0x14d,
+    CSpiderPoison: State, USER, Weapon => 0x191,
+    CKnockOut: State, USER, Weapon => 0x192,
+    CSnowStorm: Summon, USER, Weapon => 0x193,
+    CCorpseCandleBlasting: Attack, USER, Weapon => 0x194,
+    CSporeBlasting: State, USER, Weapon => 0x195,
+    CYakshaSlash: Attack, USER, Weapon => 0x196,
+    CMonsterThorn: Attack, USER, Weapon => 0x197,
+    CSpiderMist: Summon, USER, Weapon => 0x198,
+    CSpiderWeb: State, USER, Weapon => 0x199,
+    CSummonCorpseCandle: Summon, USER, Weapon => 0x19a,
+    CSummonSkeleton: Summon, USER, Weapon => 0x19b,
+    CSummonSpore: Summon, USER, Weapon => 0x19c,
+    CChuckStone: Attack, USER, Weapon => 0x19d,
+    CYunShengLightning: Attack, USER, Weapon => 0x19e,
+    CCorpsePtomaine: State, USER, None => 0x19f,
+    CEnergyBolt: Attack, USER, Weapon => 0x1a0,
+    CSkeletonArchery: Attack, USER, Weapon => 0x1a1,
+    CZombieClaw: Attack, USER, Weapon => 0x1a2,
+    CFury: State, USER, Weapon => 0x1a3,
+    CLittleStar: Attack, STAR, Weapon => 0x1a4,
+    CSnakeBolt: Attack, USER, Weapon => 0x1a5,
+    CSpriteBurn: State, USER, None => 0x1a6,
+    CMachineryStomp: Attack, USER, Weapon => 0x1a7,
+    CLordFastAttack: Attack, USER_AVAILABLE, Weapon => 0x1f5,
+    CLordWiderangingAttack: Attack, USER, Weapon => 0x1f6,
+    CBossBlueFury: State, USER, Weapon => 0x1f7,
+    CBossBlueQuake: Attack, USER, Weapon => 0x1f8,
+    CBossFiendSummon: Summon, USER, Weapon => 0x1f9,
+    CBossFiendPenetrate: Attack, USER, Weapon => 0x1fa,
+    CPojia: State, COMMON, Weapon => 0x212,
+    CPobing: State, COMMON, Weapon => 0x213,
+    CPomo: State, COMMON, Weapon => 0x214,
+    CPofa: State, COMMON, Weapon => 0x215,
+    CYujia: State, COMMON, Weapon => 0x216,
+    CYubing: State, COMMON, Weapon => 0x217,
+    CYumo: State, COMMON, Weapon => 0x218,
+    CYufa: State, COMMON, Weapon => 0x219,
+    CTianhuo: Summon, BATTLE_FAIRY_SUMMON, Weapon => 0x21a,
+    CLeiming2: Summon, BATTLE_FAIRY_SUMMON, Weapon => 0x21b,
+    CFatalBlow: Attack, BATTLE_FAIRY_FATAL, Weapon => 0x21c,
+    CBloodLoss: State, BATTLE_FAIRY_STATE, Weapon => 0x21d,
+    CPoisonArrow: State, BATTLE_FAIRY_STATE, Weapon => 0x21e,
+    CThunder: Summon, BATTLE_FAIRY_SUMMON, Weapon => 0x21f,
+    CLifeShield: State, BATTLE_FAIRY_STATE, Weapon => 0x220,
+    CWangsheng: State, COMMON, Weapon => 0x221,
+    CHuoxieshu: State, COMMON, Weapon => 0x222,
+    CLingzhishu: State, COMMON, Weapon => 0x223,
+    BFBaseAttack: Summon, BATTLE_FAIRY_BASE_MAGIC, Weapon => 0x224,
+    CEnlargeMaxHp: State, COMMON, Weapon => 0x259,
+    CEnlargeMaxMp: State, COMMON, Weapon => 0x25a,
+    CEnlargeFullMiss: State, COMMON, Weapon => 0x25b,
+    CMonsterBaseAttack: Attack, COMMON, Weapon => 0x2bd,
+    CMonsterFastAttack: Attack, USER_AVAILABLE, Weapon => 0x2d1,
+    CMonsterRangeAttack: Attack, USER, Weapon => 0x2ef,
     #[allow(non_camel_case_types)]
-    CItemSkill_2: Summon => 0x322,
-    CWuXingMetal: State => 0x353,
-    CWuXingWood: State => 0x354,
-    CWuXingWater: State => 0x355,
-    CWuXingFire: State => 0x356,
-    CWuXingEarth: State => 0x357,
-    CNonFun: Attack => 0x384,
-    CNonFun1: Attack => 0x385,
-    CNonFun2: Attack => 0x386,
-    CNonFun3: Attack => 0x387,
-    CNonFun4: Attack => 0x388,
-    CNonFun5: Attack => 0x389,
-    CNonFun6: Attack => 0x38a,
-    CNonFun7: Attack => 0x38b,
-    CNonFun8: Attack => 0x38c,
-    CNonFun9: Attack => 0x38d,
-    CNonFun10: Attack => 0x38e,
-    CNonFun11: Attack => 0x38f,
-    CNonFun12: Attack => 0x390,
-    CNonFun13: Attack => 0x391,
-    CNonFun14: Attack => 0x392,
-    CNonFun15: Attack => 0x393,
-    CNonFun16: Attack => 0x394,
-    CNonFun17: Attack => 0x395,
-    CNonFun18: Attack => 0x396,
-    CNonFun19: Attack => 0x397,
-    CNonFun20: Attack => 0x398,
-    CNonFun21: Attack => 0x399,
-    CNonFun22: Attack => 0x39a,
-    CNonFun23: Attack => 0x39b,
-    CNonFun24: Attack => 0x39c,
-    CNonFun25: Attack => 0x39d,
-    CNonFun26: Attack => 0x39e,
-    CNonFun27: Attack => 0x39f,
-    CNonFun28: Attack => 0x3a0,
-    CNonFun29: Attack => 0x3a1,
-    CNonFun30: Attack => 0x3a2,
-    CNonFun31: Attack => 0x3a3,
-    CNonFun32: Attack => 0x3a4,
-    CNonFun33: Attack => 0x3a5,
-    CNonFun34: Attack => 0x3a6,
-    CNonFun35: Attack => 0x3a7,
-    CNonFun36: Attack => 0x3a8,
-    CNonFun37: Attack => 0x3a9,
-    CNonFun38: Attack => 0x3aa,
-    CNonFun39: Attack => 0x3ab,
-    CNonFun40: Attack => 0x3ac,
-    CNonFun41: Attack => 0x3ad,
-    CNonFun42: Attack => 0x3ae,
-    CNonFun43: Attack => 0x3af,
-    CNonFun44: Attack => 0x3b0,
-    CNonFun45: Attack => 0x3b1,
-    CNonFun46: Attack => 0x3b2,
-    CNonFun60: Attack => 0x3c0,
-    CNonFun61: Attack => 0x3c1,
-    CNonFun62: Attack => 0x3c2,
+    CItemSkill_2: Summon, USER, ItemGroup => 0x322,
+    CWuXingMetal: State, COMMON, Weapon => 0x353,
+    CWuXingWood: State, COMMON, Weapon => 0x354,
+    CWuXingWater: State, COMMON, Weapon => 0x355,
+    CWuXingFire: State, COMMON, Weapon => 0x356,
+    CWuXingEarth: State, COMMON, Weapon => 0x357,
+    CNonFun: Attack, COMMON, Weapon => 0x384,
+    CNonFun1: Attack, COMMON, Weapon => 0x385,
+    CNonFun2: Attack, COMMON, Weapon => 0x386,
+    CNonFun3: Attack, COMMON, Weapon => 0x387,
+    CNonFun4: Attack, COMMON, Weapon => 0x388,
+    CNonFun5: Attack, COMMON, Weapon => 0x389,
+    CNonFun6: Attack, COMMON, Weapon => 0x38a,
+    CNonFun7: Attack, COMMON, Weapon => 0x38b,
+    CNonFun8: Attack, COMMON, Weapon => 0x38c,
+    CNonFun9: Attack, COMMON, Weapon => 0x38d,
+    CNonFun10: Attack, COMMON, Weapon => 0x38e,
+    CNonFun11: Attack, COMMON, Weapon => 0x38f,
+    CNonFun12: Attack, COMMON, Weapon => 0x390,
+    CNonFun13: Attack, COMMON, Weapon => 0x391,
+    CNonFun14: Attack, COMMON, Weapon => 0x392,
+    CNonFun15: Attack, COMMON, Weapon => 0x393,
+    CNonFun16: Attack, COMMON, Weapon => 0x394,
+    CNonFun17: Attack, COMMON, Weapon => 0x395,
+    CNonFun18: Attack, COMMON, Weapon => 0x396,
+    CNonFun19: Attack, COMMON, Weapon => 0x397,
+    CNonFun20: Attack, COMMON, Weapon => 0x398,
+    CNonFun21: Attack, COMMON, Weapon => 0x399,
+    CNonFun22: Attack, COMMON, Weapon => 0x39a,
+    CNonFun23: Attack, COMMON, Weapon => 0x39b,
+    CNonFun24: Attack, COMMON, Weapon => 0x39c,
+    CNonFun25: Attack, COMMON, Weapon => 0x39d,
+    CNonFun26: Attack, COMMON, Weapon => 0x39e,
+    CNonFun27: Attack, COMMON, Weapon => 0x39f,
+    CNonFun28: Attack, COMMON, Weapon => 0x3a0,
+    CNonFun29: Attack, COMMON, Weapon => 0x3a1,
+    CNonFun30: Attack, COMMON, Weapon => 0x3a2,
+    CNonFun31: Attack, COMMON, Weapon => 0x3a3,
+    CNonFun32: Attack, COMMON, Weapon => 0x3a4,
+    CNonFun33: Attack, COMMON, Weapon => 0x3a5,
+    CNonFun34: Attack, COMMON, Weapon => 0x3a6,
+    CNonFun35: Attack, COMMON, Weapon => 0x3a7,
+    CNonFun36: Attack, COMMON, Weapon => 0x3a8,
+    CNonFun37: Attack, COMMON, Weapon => 0x3a9,
+    CNonFun38: Attack, COMMON, Weapon => 0x3aa,
+    CNonFun39: Attack, COMMON, Weapon => 0x3ab,
+    CNonFun40: Attack, COMMON, Weapon => 0x3ac,
+    CNonFun41: Attack, COMMON, Weapon => 0x3ad,
+    CNonFun42: Attack, COMMON, Weapon => 0x3ae,
+    CNonFun43: Attack, COMMON, Weapon => 0x3af,
+    CNonFun44: Attack, COMMON, Weapon => 0x3b0,
+    CNonFun45: Attack, COMMON, Weapon => 0x3b1,
+    CNonFun46: Attack, COMMON, Weapon => 0x3b2,
+    CNonFun60: Attack, COMMON, Weapon => 0x3c0,
+    CNonFun61: Attack, COMMON, Weapon => 0x3c1,
+    CNonFun62: Attack, COMMON, Weapon => 0x3c2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]

@@ -588,6 +588,10 @@
 //! Equipment compose и DaKong announcement paths входят в тот же dispatcher;
 //! DaKong на точной позиции вызова временно возвращает извлечённого owned
 //! player в canonical map, сохраняя C++ player-pointer context и mutations.
+//! Цепочка helper-ов передаёт того же player по значению: placeholder и копии
+//! навыков с visual-ресурсами не создаются. Callback-и временно извлечённых
+//! регионов держат только общий recipient/spatial snapshot CServerRegion;
+//! snapshot обновляется после base AI, а игровые owners остаются единственными.
 //! PreciousBox script `2221/2222/2237` соединяет trusted повторный action,
 //! configuration RNG, goods create/upgrade/packet effects, `0xBF91A..1C` и
 //! optional World announcement `0x5FF0E` в одном synchronous owner-е.
@@ -804,7 +808,7 @@ use crate::gameserver::appserver::monster::{
 };
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeResolver, UndeadState,
+    CMoveShape, MoveShapeCommandBlock, MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE,
 };
 use crate::gameserver::appserver::build::{
     BUILD_OBJECT_TYPE, BuildClientPublication, CBuild,
@@ -886,7 +890,8 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionMonsterEffectsContext, ServerRegionMonsterRectBlock,
     ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSpawnOutcome,
-    ServerRegionWeather, ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionRecipientsSnapshot, ServerRegionWeather, ServerRegionWeatherTick,
+    ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
@@ -2203,7 +2208,7 @@ impl MoveShapeResolver for RegionBlockRefreshResolver {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ServerRegionOwner {
     Base(CServerRegion),
     Village(CServerVillageRegion),
@@ -3529,7 +3534,7 @@ pub(crate) enum GamePlayerFightStatePhase {
 struct GameCountryRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
-    region: CServerRegion,
+    region: ServerRegionRecipientsSnapshot,
     stationary_change_states: BTreeMap<ShapeIdentity, i32>,
     ai_tick: i32,
 }
@@ -3556,7 +3561,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
-                .publish_war_player_contend_state(&self.region, player_id, state);
+                .publish_war_player_contend_state_snapshot(&self.region, player_id, state);
         tracing::trace!(
             player_id,
             state,
@@ -3596,7 +3601,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
             tick_interval_ms,
             self.runtime,
         )?;
-        self.region = region.clone();
+        self.region = region.recipients_snapshot();
         Ok(())
     }
 
@@ -3634,7 +3639,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
             0x3ff,
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-            .send_to_region(Some(&self.region), None, self.game);
+            .send_to_region_snapshot(&self.region, None, self.game);
         tracing::trace!(
             country,
             symbol_name,
@@ -3673,7 +3678,8 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
 struct GameCityRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
-    region: CServerRegion,
+    region: ServerRegionRecipientsSnapshot,
+    city_state: i32,
     stationary_change_states: BTreeMap<ShapeIdentity, i32>,
     ai_tick: i32,
     war_number: i32,
@@ -3839,7 +3845,7 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameCityRegionAiContext<
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
-                .publish_war_player_contend_state(&self.region, player_id, state);
+                .publish_war_player_contend_state_snapshot(&self.region, player_id, state);
         tracing::trace!(
             player_id,
             state,
@@ -3922,7 +3928,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiCo
             0x3ff,
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-            .send_to_region(Some(&self.region), None, self.game);
+            .send_to_region_snapshot(&self.region, None, self.game);
         tracing::trace!(
             country,
             faction_name,
@@ -3948,7 +3954,8 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
         )?;
         self.guard_monsters.extend(outcome.guard_monsters);
         self.guard_indices.extend(outcome.guard_indices);
-        self.region = region.clone();
+        self.region = region.recipients_snapshot();
+        self.city_state = region.city_state;
         self.owner = WarRegionOwnership {
             faction_id: region.param.owned_faction_id,
             union_id: region.param.owned_union_id,
@@ -3983,13 +3990,13 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
         union_id: i32,
         current_owner: WarRegionOwnership,
     ) -> WarRegionOwnership {
-        let current = if self.region.city_state == 0 {
+        let current = if self.city_state == 0 {
             current_owner
         } else {
             self.defence_side_faction_id = faction_id;
             self.game.send_city_victory(
                 self.war_number,
-                self.region.id,
+                self.region.region_id(),
                 faction_id,
                 union_id,
             );
@@ -4010,7 +4017,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             0xffff_0000,
             self.game.get_string_by_id(b"GS0241"),
         )
-        .send_to_region(Some(&self.region), None, self.game);
+        .send_to_region_snapshot(&self.region, None, self.game);
         tracing::trace!(
             delivery,
             "отправлено уведомление региона о захвате городского символа"
@@ -4051,7 +4058,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
 struct GameVillageRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
-    region: CServerRegion,
+    region: ServerRegionRecipientsSnapshot,
     stationary_change_states: BTreeMap<ShapeIdentity, i32>,
     war_number: i32,
     ai_tick: i32,
@@ -4088,7 +4095,7 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameVillageRegionAiConte
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
-                .publish_war_player_contend_state(&self.region, player_id, state);
+                .publish_war_player_contend_state_snapshot(&self.region, player_id, state);
         tracing::trace!(
             player_id,
             state,
@@ -4194,7 +4201,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
             0x3ff,
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-            .send_to_region(Some(&self.region), None, self.game);
+            .send_to_region_snapshot(&self.region, None, self.game);
         tracing::trace!(
             country,
             faction_name,
@@ -4218,7 +4225,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
             tick_interval_ms,
             self.runtime,
         )?;
-        self.region = region.clone();
+        self.region = region.recipients_snapshot();
         Ok(())
     }
 
@@ -4263,7 +4270,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
             0xffff_0000,
             self.game.get_string_by_id(b"GS0241"),
         )
-        .send_to_region(Some(&self.region), None, self.game);
+        .send_to_region_snapshot(&self.region, None, self.game);
         tracing::trace!(
             delivery,
             "отправлено уведомление региона о захвате деревенского символа"
@@ -13167,15 +13174,13 @@ impl CGame {
         let outcome = match &mut owner {
             ServerRegionOwner::Village(region) => {
                 region.war.remove_contenders_for_player(player_id);
-                let base = region.war.base.clone();
-                let _ = self.publish_war_player_contend_state(&base, player_id, false);
+                let _ = self.publish_war_player_contend_state(&region.war.base, player_id, false);
                 let _ = self.send_nation_contend_time(player_id, 0);
                 PlayerItemContendCancel::CancelledNotify
             }
             ServerRegionOwner::City(region) => {
                 region.war.remove_contenders_for_player(player_id);
-                let base = region.war.base.clone();
-                let _ = self.publish_war_player_contend_state(&base, player_id, false);
+                let _ = self.publish_war_player_contend_state(&region.war.base, player_id, false);
                 let _ = self.send_nation_contend_time(player_id, 0);
                 PlayerItemContendCancel::CancelledNotify
             }
@@ -13891,6 +13896,24 @@ impl CGame {
         message.send_to_around(Some(region), origin, excluded_player_id, &runtime)
     }
 
+    fn send_game_shape_around_snapshot(
+        &self,
+        region: &ServerRegionRecipientsSnapshot,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock> {
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return Ok(0);
+        };
+        message.send_to_around_snapshot(region, origin, excluded_player_id, &runtime)
+    }
+
     /// Материализует owner-side tail `CServerRegion::AddMonster`: property и
     /// имя master-а разрешаются из канонических реестров `CGame`, затем exact
     /// fresh `0xBF502` уходит через owning region.
@@ -14066,6 +14089,31 @@ impl CGame {
         player_id: i32,
         contend_state: bool,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let message = self.prepare_war_player_contend_state_message(player_id, contend_state)?;
+        let player = self
+            .find_player(player_id)
+            .expect("war contender сохранён до synchronous around-send");
+        Some(self.send_game_shape_around(region, player.shape(), None, &message))
+    }
+
+    pub(crate) fn publish_war_player_contend_state_snapshot(
+        &mut self,
+        region: &ServerRegionRecipientsSnapshot,
+        player_id: i32,
+        contend_state: bool,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let message = self.prepare_war_player_contend_state_message(player_id, contend_state)?;
+        let player = self
+            .find_player(player_id)
+            .expect("war contender сохранён до synchronous around-send");
+        Some(self.send_game_shape_around_snapshot(region, player.shape(), None, &message))
+    }
+
+    fn prepare_war_player_contend_state_message(
+        &mut self,
+        player_id: i32,
+        contend_state: bool,
+    ) -> Option<CMessage> {
         let player = self.find_player_mut(player_id)?;
         if !player.set_contend_state(contend_state) {
             return None;
@@ -14073,10 +14121,7 @@ impl CGame {
         let mut message = CMessage::new(0xbff28);
         message.add_long(player_id);
         message.add_byte(u8::from(contend_state));
-        let player = self
-            .find_player(player_id)
-            .expect("war contender сохранён до synchronous around-send");
-        Some(self.send_game_shape_around(region, player.shape(), None, &message))
+        Some(message)
     }
 
     fn publish_player_died_state(
@@ -18433,16 +18478,14 @@ impl CGame {
         let target_height = target_rectangle[3].wrapping_sub(target_rectangle[1]);
         let mut moved = 0usize;
         for player_id in player_ids {
-            let destination_region = self
-                .find_region(target_region_id)
-                .map(|owner| owner.base().clone());
-            let destination = destination_region.and_then(|region| {
-                self.random_region_position_owned(
-                    &region,
+            let destination = self.with_legacy_random_stream(|game, random| {
+                let region = &game.find_region(target_region_id)?.base().region;
+                region.get_random_pos_in_range(
                     target_rectangle[0],
                     target_rectangle[1],
                     target_width,
                     target_height,
+                    random,
                 )
                 .ok()
             });
@@ -19249,17 +19292,12 @@ impl CGame {
         let mut random_block = None;
         if width > 0
             && height > 0
-            && let Some(destination) = self
-                .find_region(point.region_id)
-                .map(|owner| owner.base().clone())
+            && let Some(destination) = self.with_legacy_random_stream(|game, random| {
+                let region = &game.find_region(point.region_id)?.base().region;
+                Some(region.get_random_pos_in_range(point.left, point.top, width, height, random))
+            })
         {
-            match self.random_region_position_owned(
-                &destination,
-                point.left,
-                point.top,
-                width,
-                height,
-            ) {
+            match destination {
                 Ok(position) => {
                     x = position.x;
                     y = position.y;
@@ -21653,7 +21691,7 @@ impl CGame {
             );
             return;
         };
-        let Some(mut player) = self.players.remove(&player_id) else {
+        let Some(player) = self.players.remove(&player_id) else {
             self.session_factory
                 .register_equipment_da_kong_plug(actual_plug_id, plug);
             tracing::trace!(
@@ -21665,8 +21703,8 @@ impl CGame {
             );
             return;
         };
-        self.process_equipment_da_kong_inner(
-            &mut player,
+        let player = self.process_equipment_da_kong_inner(
+            player,
             &mut plug,
             session_id,
             operation,
@@ -21996,12 +22034,12 @@ impl CGame {
 
     fn process_equipment_da_kong_inner<Context: ScriptFunctionRuntime>(
         &mut self,
-        player: &mut CPlayer,
+        mut player: CPlayer,
         plug: &mut CEquipmentDaKong,
         session_id: i32,
         operation: EquipmentDaKongOperation,
         context: &mut Context,
-    ) {
+    ) -> CPlayer {
         if player.server_region_id().is_none() {
             tracing::trace!(
                 player_id = player.player_id(),
@@ -22009,17 +22047,17 @@ impl CGame {
                 ?operation,
                 "регион игрока DaKong не найден"
             );
-            return;
+            return player;
         }
         match operation {
             EquipmentDaKongOperation::DaKong { color_index } => {
-                self.equipment_da_kong_create_socket(player, plug, color_index, context);
+                return self.equipment_da_kong_create_socket(player, plug, color_index, context);
             }
             EquipmentDaKongOperation::ChangeRoleColor { socket } => {
-                self.equipment_da_kong_change_color(player, plug, socket);
+                self.equipment_da_kong_change_color(&mut player, plug, socket);
             }
             EquipmentDaKongOperation::QueryResult => {
-                let published = self.equipment_da_kong_publish_preview(player, plug);
+                let published = self.equipment_da_kong_publish_preview(&player, plug);
                 tracing::trace!(
                     player_id = player.player_id(),
                     session_id,
@@ -22028,12 +22066,13 @@ impl CGame {
                 );
             }
             EquipmentDaKongOperation::EnchaseGem { parameter } => {
-                self.equipment_da_kong_enchase(player, plug, parameter, context);
+                return self.equipment_da_kong_enchase(player, plug, parameter, context);
             }
             EquipmentDaKongOperation::DestroyGem { socket } => {
-                self.equipment_da_kong_destroy_gem(player, plug, socket);
+                self.equipment_da_kong_destroy_gem(&mut player, plug, socket);
             }
         }
+        player
     }
 
     fn equipment_da_kong_equipment_id(plug: &CEquipmentDaKong) -> Option<CGuid> {
@@ -23109,17 +23148,15 @@ impl CGame {
     fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
         context: &mut Context,
-        player: &mut CPlayer,
+        player: CPlayer,
         script: &'static [u8],
-    ) {
+    ) -> CPlayer {
         let player_id = player.player_id();
         let region_id = player.server_region_id();
-        // В C++ player pointer остаётся в game map во время синхронного script
-        // call. Rust-владелец извлекает player для equipment mutation, поэтому
-        // на время dispatcher-а возвращаем исходный owned value, оставляя clone
-        // только как безопасный placeholder для ссылки вызывающего кода.
-        let attached_player = std::mem::replace(player, player.clone());
-        let displaced = self.players.insert(player_id, attached_player);
+        // Синхронный script видит того же игрока в game map. Передаём
+        // владение целиком и возвращаем его после вызова, не копируя навыки
+        // и их ресурсы и не оставляя фиктивного игрока у вызывающей стороны.
+        let displaced = self.players.insert(player_id, player);
         assert!(
             displaced.is_none(),
             "DaKong owner извлекает игрока перед script dispatch"
@@ -23133,20 +23170,21 @@ impl CGame {
             },
             context,
         );
-        *player = self
+        let player = self
             .players
             .remove(&player_id)
             .expect("синхронный DaKong script сохраняет canonical player owner");
         tracing::trace!(player_id, script = ?script, "выполнен сценарий DaKong");
+        player
     }
 
     fn equipment_da_kong_create_socket<Context: ScriptFunctionRuntime>(
         &mut self,
-        player: &mut CPlayer,
+        mut player: CPlayer,
         plug: &CEquipmentDaKong,
         color_index: i32,
         context: &mut Context,
-    ) {
+    ) -> CPlayer {
         const STONES: [&[u8]; 7] = [
             b"FZ1042", b"FZ1043", b"FZ1044", b"FZ1045", b"FZ1046", b"FZ1047", b"FZ1048",
         ];
@@ -23156,7 +23194,7 @@ impl CGame {
                 player_id,
                 "оборудование для создания сокета DaKong не выбрано"
             );
-            return;
+            return player;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
             tracing::trace!(
@@ -23164,7 +23202,7 @@ impl CGame {
                 ?equipment_id,
                 "оборудование для создания сокета DaKong не найдено"
             );
-            return;
+            return player;
         };
         let socket_count = equipment.da_kong_count(&self.goods_factory) as usize;
         if socket_count > 6 {
@@ -23174,7 +23212,7 @@ impl CGame {
                 socket_count,
                 "число сокетов DaKong достигло предела"
             );
-            return;
+            return player;
         }
         let stone_index = self
             .goods_factory
@@ -23195,7 +23233,7 @@ impl CGame {
                 socket_count,
                 "материал создания сокета DaKong отсутствует"
             );
-            return;
+            return player;
         }
         let succeeded = {
             let (setup, random_state) = (&self.da_kong_xiang_qian, &mut self.random_state);
@@ -23229,13 +23267,13 @@ impl CGame {
                 )
             };
             if new_count == 6 {
-                self.equipment_da_kong_run_script(
+                player = self.equipment_da_kong_run_script(
                     context,
                     player,
                     b"scripts/goods/hole06_gonggao.script",
                 );
             } else if new_count == 7 {
-                self.equipment_da_kong_run_script(
+                player = self.equipment_da_kong_run_script(
                     context,
                     player,
                     b"scripts/goods/hole07_gonggao.script",
@@ -23270,9 +23308,9 @@ impl CGame {
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("DaKong equipment сохраняется до audit");
-        self.equipment_da_kong_log(player, 1, stone_index, equipment);
-        self.equipment_da_kong_consume_packet(player, stone_index);
-        let preview_published = self.equipment_da_kong_publish_preview(player, plug);
+        self.equipment_da_kong_log(&player, 1, stone_index, equipment);
+        self.equipment_da_kong_consume_packet(&mut player, stone_index);
+        let preview_published = self.equipment_da_kong_publish_preview(&player, plug);
         tracing::trace!(
             player_id,
             ?equipment_id,
@@ -23281,6 +23319,7 @@ impl CGame {
             preview_published,
             "создание сокета DaKong завершено"
         );
+        player
     }
 
     fn equipment_da_kong_publish_preview(
@@ -23464,17 +23503,17 @@ impl CGame {
 
     fn equipment_da_kong_enchase<Context: ScriptFunctionRuntime>(
         &mut self,
-        player: &mut CPlayer,
+        mut player: CPlayer,
         plug: &mut CEquipmentDaKong,
         _parameter: i32,
         context: &mut Context,
-    ) {
+    ) -> CPlayer {
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
             tracing::trace!(player_id, "оборудование инкрустации DaKong не выбрано");
-            return;
+            return player;
         };
-        let gems = self.equipment_da_kong_gems(player, plug);
+        let gems = self.equipment_da_kong_gems(&player, plug);
         let effects = {
             let Some(equipment) = player.get_goods_by_id_mut(equipment_id) else {
                 tracing::trace!(
@@ -23482,7 +23521,7 @@ impl CGame {
                     ?equipment_id,
                     "оборудование инкрустации DaKong не найдено"
                 );
-                return;
+                return player;
             };
             deal_enchase_gems(equipment, &gems, &self.goods_factory, true)
         };
@@ -23501,18 +23540,18 @@ impl CGame {
                     audit,
                 } => {
                     if audit {
-                        self.equipment_da_kong_log_snapshot(player, 2, gem.base_index, equipment);
+                        self.equipment_da_kong_log_snapshot(&player, 2, gem.base_index, equipment);
                     }
                 }
                 EquipmentDaKongEnchaseEvent::Script(script) => {
-                    self.equipment_da_kong_run_script(context, player, script);
+                    player = self.equipment_da_kong_run_script(context, player, script);
                 }
             }
         }
         if changed {
             self.equipment_da_kong_notify(player_id, "GS1167");
         }
-        self.equipment_da_kong_consume_shadow_gems(player, plug);
+        self.equipment_da_kong_consume_shadow_gems(&mut player, plug);
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("enchase equipment сохраняется после gem consumption");
@@ -23523,6 +23562,7 @@ impl CGame {
             changed,
             "инкрустация DaKong завершена"
         );
+        player
     }
 
     fn equipment_da_kong_destroy_gem(
@@ -25322,17 +25362,14 @@ impl CGame {
         let width = return_point.right.wrapping_sub(return_point.left);
         let height = return_point.bottom.wrapping_sub(return_point.top);
         if width > 0 && height > 0 {
-            if let Some(region) = self
-                .find_region(return_point.region_id)
-                .map(|owner| owner.base().clone())
+            if let Some(position) = self.with_legacy_random_stream(|game, random| {
+                let region = &game.find_region(return_point.region_id)?.base().region;
+                Some(region.get_random_pos_in_range(
+                    return_point.left, return_point.top, width, height, random,
+                ))
+            })
             {
-                match self.random_region_position_owned(
-                    &region,
-                    return_point.left,
-                    return_point.top,
-                    width,
-                    height,
-                ) {
+                match position {
                     Ok(position) => {
                         x = position.x;
                         y = position.y;
@@ -33416,6 +33453,24 @@ impl CGame {
         }
     }
 
+    /// CSkill::Begin: запись CState, затем CPlayer::OnBeginSkill и сброс
+    /// prepared после его успеха. Дальнейший отказ derived Begin базу не откатывает.
+    pub(crate) fn begin_player_skill_with_combat(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        started_at_ms: u32,
+    ) -> bool {
+        if !self.begin_player_skill_lifecycle(player_id, dispatch, started_at_ms) {
+            return false;
+        }
+        if dispatch.skill_id() != SKILL_BASE_DEFENSE {
+            self.enter_player_combat_state(player_id);
+        }
+        self.finish_player_skill_base_begin(player_id, dispatch.skill_id(), true);
+        true
+    }
+
     pub(crate) fn begin_player_skill_execution(&mut self, player_id: i32, state: impl Into<PlayerSkillExecution>) -> bool {
         let execution = state.into();
         let kernel = execution.kernel();
@@ -33447,10 +33502,9 @@ impl CGame {
         }
         let stage = self.player_skill_execution(player_id, skill_id).map(|kernel| kernel.stage());
         let Some(player) = self.players.get_mut(&player_id) else { return false };
-        let Some(lifecycle) = player.move_shape_mut().skill_lifecycle_mut(skill_id, &self.skill_factory) else { return false };
         // CPlayer::OnEndSkill — пустой virtual 0x00485540. Derived cleanup
         // уже выполнен concrete owner-ом до этой общей границы.
-        lifecycle.reset_after_end(termination);
+        player.move_shape_mut().finish_skill_base(skill_id, &self.skill_factory, termination);
         player.move_shape_mut().clear_player_execution(skill_id, &self.skill_factory);
         tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка игрока завершено");
         true
@@ -33550,8 +33604,7 @@ impl CGame {
         }
         let stage = self.battle_fairy_execution(player_id, skill_id).map(|kernel| kernel.stage());
         let Some(player) = self.players.get_mut(&player_id) else { return false };
-        let Some(lifecycle) = player.move_shape_mut().skill_lifecycle_mut(skill_id, &self.skill_factory) else { return false };
-        lifecycle.reset_after_end(termination);
+        player.move_shape_mut().finish_skill_base(skill_id, &self.skill_factory, termination);
         player.move_shape_mut().clear_battle_fairy_execution(skill_id, &self.skill_factory);
         tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка боевой феи завершено");
         true
@@ -38104,9 +38157,7 @@ impl CGame {
             let started_at_ms = now_milliseconds();
             // Автоматический Begin имеет собственные часы, не контекст
             // выбранной в OnSchedule команды. База предшествует OnBeginSkill.
-            self.begin_player_skill_lifecycle(player_id, dispatch, started_at_ms);
-            self.enter_player_combat_state(player_id);
-            self.finish_player_skill_base_begin(player_id, *skill_id, true);
+            self.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
             if let Some(player) = self.players.get_mut(&player_id) {
                 player.move_shape_mut().install_player_execution(
                     SkillExecutionKernel::begin(dispatch, started_at_ms).into(), &self.skill_factory,
@@ -46819,7 +46870,7 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let projection = region.base.clone();
+        let projection = region.base.recipients_snapshot();
         let mut context = GameCountryRegionAiContext {
             game: self,
             runtime,
@@ -46853,11 +46904,12 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let projection = region.war.base.clone();
+        let projection = region.war.base.recipients_snapshot();
         let mut context = GameCityRegionAiContext {
             game: self,
             runtime,
             region: projection,
+            city_state: region.war.base.city_state,
             stationary_change_states,
             ai_tick,
             war_number: region.war.base.war_number,
@@ -46907,7 +46959,7 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let projection = region.war.base.clone();
+        let projection = region.war.base.recipients_snapshot();
         let mut context = GameVillageRegionAiContext {
             game: self,
             runtime,
@@ -48688,17 +48740,14 @@ impl CGame {
         let mut x = point_value.left.wrapping_add(width / 2);
         let mut y = point_value.top.wrapping_add(height / 2);
         if width > 0 && height > 0 {
-            if let Some(destination) = self
-                .find_region(point_value.region_id)
-                .map(|owner| owner.base().clone())
+            if let Some(destination) = self.with_legacy_random_stream(|game, random| {
+                let region = &game.find_region(point_value.region_id)?.base().region;
+                Some(region.get_random_pos_in_range(
+                    point_value.left, point_value.top, width, height, random,
+                ))
+            })
             {
-                match self.random_region_position_owned(
-                    &destination,
-                    point_value.left,
-                    point_value.top,
-                    width,
-                    height,
-                ) {
+                match destination {
                     Ok(position) => {
                         x = position.x;
                         y = position.y;
@@ -49208,10 +49257,13 @@ impl WarRegionClearContext for CGame {
         {
             return;
         }
-        let Some(region) = self.find_region(region_id).map(|owner| owner.base().clone()) else {
+        let Some(region) = self
+            .find_region(region_id)
+            .map(|owner| owner.base().recipients_snapshot())
+        else {
             return;
         };
-        let _ = self.publish_war_player_contend_state(&region, player_id, state);
+        let _ = self.publish_war_player_contend_state_snapshot(&region, player_id, state);
     }
 }
 

@@ -135,9 +135,7 @@ impl CGame {
         let needs_begin = inherited_begin
             && self.player_skill_begin_pending(player_id, skill_id);
         if needs_begin {
-            self.begin_player_skill_lifecycle(player_id, dispatch, runtime.now_milliseconds());
-            self.enter_player_combat_state(player_id);
-            self.finish_player_skill_base_begin(player_id, skill_id, true);
+            self.begin_player_skill_with_combat(player_id, dispatch, runtime.now_milliseconds());
         }
     }
 

@@ -49,7 +49,7 @@ pub(crate) struct CityGateInit {
     pub(crate) script: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CCityGate {
     build: CBuild,
 }

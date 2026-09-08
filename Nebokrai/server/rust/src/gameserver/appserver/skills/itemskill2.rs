@@ -147,7 +147,7 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         let mana = game.find_player(player_id).map_or(mana, CPlayer::mana);
         if game.find_player(player_id).is_none_or(|player| player.check_item_in_packet(item_index) < item_amount) { send_notify(game, player_id, b"GS1179"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==PLAYER_TYPE && !allow_player { send_notify(game, player_id, b"GS1180"); return terminal(QueuedSkillExecutionState::Rejected); }

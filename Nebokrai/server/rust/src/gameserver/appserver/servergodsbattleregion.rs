@@ -331,7 +331,7 @@ fn read_top_ten_i32(
 /// Startup-часть concrete GodsBattle region. Constructor подтверждает
 /// наследование `CServerWarRegion`; player faction membership уже связан с
 /// Add/Remove tail, NPC/contend gameplay коллекции сохраняют owned defaults.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerGodsBattleRegion {
     pub(crate) war: CServerWarRegion,
     faction_players: [BTreeSet<i32>; 3],

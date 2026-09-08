@@ -26,10 +26,11 @@
 //! без выдуманной identity; это не конструктор зарегистрированного навыка.
 //! CSkill::End(0) (0x004D84C0) разрешает старый GetUser и вызывает OnEndSkill
 //! до очистки полей; он не проверяет IsEnded и сохраняет available/reuse.
-//! reset_after_end ниже выполняет только сброс данных, не callback и не
-//! полный End. Настоящий CVisualEffect пока не материализован: его owned
-//! destructor/delete, как и concrete cleanup, остаётся отдельной обязанностью
-//! caller-а. Пакет эффекта не заменяет этот ресурс. Diagnostic termination
+//! reset_after_end ниже очищает данные, затем вызывает переданное владельцем
+//! удаление visual и лишь после этого выставляет ended. Это не callback и не
+//! полный concrete End. Option<CVisualEffect> принадлежит самому экземпляру,
+//! а не копируемой скалярной базе; пакет эффекта не заменяет ресурс.
+//! Подключение производных visual остаётся отдельной задачей. Diagnostic termination
 //! не подменяет native ended; полное подключение registered End ещё требуется.
 //!
 //! Отложенные межвладельческие действия формируются до постановки команды
@@ -45,8 +46,9 @@
 //! Расписание пишет ранний отсчёт сразу в базу экземпляра, до конкретных
 //! проверок ресурсов. Установщик переносит эту же базу в concrete kernel,
 //! сохраняя уже выполненный первый переход в Check. Отдельного маркера
-//! времени в CPlayerAI нет. Владельцы с собственным Begin пока подключают
-//! базу при успешной установке; их ранние отказы требуют отдельного связывания.
+//! времени в CPlayerAI нет. Подключённые собственные Begin вызывают общий
+//! переход в своей подтверждённой точке до concrete-проверок; отказ сохраняет
+//! достигнутую базу. Остальные собственные Begin требуют отдельного связывания.
 //! m_bSkillPrepared — независимый флаг CSkill (+0x44), не стадия Attack:
 //! OnFighting (0x005092B0) переносит подготовленный экземпляр в фон до End.
 //! Конкретный owner устанавливает его в подтверждённой точке выпуска.
@@ -419,14 +421,19 @@ impl SkillLifecycle {
         success
     }
 
-    /// Только сброс common-данных после внешних OnEndSkill/concrete cleanup.
-    /// Повторный вызов допустим; этот метод сам не исполняет native End.
-    pub(crate) fn reset_after_end(&mut self, termination: SkillTermination) {
+    /// Сброс полей и удаление visual после внешних OnEndSkill/concrete cleanup.
+    /// Повторный вызов допустим; этот метод сам не исполняет полный native End.
+    pub(crate) fn reset_after_end(
+        &mut self,
+        termination: SkillTermination,
+        clear_visual: impl FnOnce(),
+    ) {
         self.user = (0, Self::EMPTY_IDENTITY);
         self.sufferer = (0, Self::EMPTY_IDENTITY);
         self.destination = (0, 0);
         self.started_at_ms = 0;
         self.prepared = false;
+        clear_visual();
         self.ended = true;
         self.termination = Some(termination);
     }
@@ -482,14 +489,6 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
         true
     }
 
-    pub(crate) fn terminate(&mut self, termination: SkillTermination) -> bool {
-        if self.lifecycle.termination().is_some() {
-            return false;
-        }
-        self.lifecycle.reset_after_end(termination);
-        true
-    }
-
     pub(crate) const fn lifecycle(&self) -> &SkillLifecycle {
         &self.lifecycle
     }
@@ -500,11 +499,5 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
 
     pub(crate) fn replace_lifecycle(&mut self, lifecycle: SkillLifecycle) -> SkillLifecycle {
         std::mem::replace(&mut self.lifecycle, lifecycle)
-    }
-
-    /// Извлечение базы перед сменой варианта владельца. Старое исполнение
-    /// после этой операции не должно продолжаться с пустой базой.
-    pub(crate) fn take_lifecycle(&mut self) -> SkillLifecycle {
-        std::mem::take(&mut self.lifecycle)
     }
 }

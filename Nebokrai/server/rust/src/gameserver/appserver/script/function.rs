@@ -442,7 +442,7 @@ use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionTaxSessionKind, ServerRegionNpcSetup,
+    RegionTaxSessionKind, ServerRegionNpcSetup, ServerRegionRecipientsSnapshot,
 };
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
@@ -928,7 +928,7 @@ enum ContendEntrySchedule {
 struct GameWarContendEntryContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
-    region: CServerRegion,
+    region: ServerRegionRecipientsSnapshot,
     war_number: i32,
     owner_faction_id: i32,
     schedule: ContendEntrySchedule,
@@ -967,7 +967,7 @@ impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let changed = self
             .game
-            .publish_war_player_contend_state(&self.region, player_id, state)
+            .publish_war_player_contend_state_snapshot(&self.region, player_id, state)
             .is_some();
         tracing::trace!(player_id, state, changed, "опубликовано состояние захвата военного региона");
     }
@@ -1043,7 +1043,7 @@ impl<Runtime: GameClockContext> WarContendEntryContext for GameWarContendEntryCo
             0xff,
         );
         let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
-            .send_to_region(Some(&self.region), None, self.game);
+            .send_to_region_snapshot(&self.region, None, self.game);
         tracing::trace!(country, faction_name, symbol_name, delivery, "опубликован первый претендент фракции");
     }
 }
@@ -1174,7 +1174,7 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
     let mut context = GameWarContendEntryContext {
         game,
         runtime,
-        region: war.base.clone(),
+        region: war.base.recipients_snapshot(),
         war_number,
         owner_faction_id,
         schedule,
@@ -1593,7 +1593,7 @@ pub(crate) enum CountryWarActionScriptFunctionOutcome {
 struct GameCountryContendEntryContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
-    region: CServerRegion,
+    region: ServerRegionRecipientsSnapshot,
 }
 
 impl<Runtime: GameClockContext> CountryContendEntryContext
@@ -1613,7 +1613,7 @@ impl<Runtime: GameClockContext> CountryContendEntryContext
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
-                .publish_war_player_contend_state(&self.region, player_id, state);
+                .publish_war_player_contend_state_snapshot(&self.region, player_id, state);
         tracing::trace!(player_id, state, changed = around_delivery.is_some(), ?around_delivery, "опубликовано состояние захвата страны");
     }
 
@@ -1791,7 +1791,7 @@ pub(crate) fn run_country_war_action_script_function<Runtime: GameClockContext>(
         );
     };
     let duration_ms = duration.wrapping_mul(1_000);
-    let region_projection = region.base.clone();
+    let region_projection = region.base.recipients_snapshot();
     let mut context = GameCountryContendEntryContext {
         game,
         runtime,
@@ -5295,16 +5295,14 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 Some(SCRIPT_INT_PARAMETER_ERROR) | Some(0) | None => player_region_id,
                 Some(region_id) => region_id,
             };
-            let region = game
-                .find_region(region_id)
-                .map(|owner| owner.base().clone());
-            let Some(position) = region.and_then(|region| {
-                game.random_region_position_owned(
-                    &region,
+            let Some(position) = game.with_legacy_random_stream(|game, random| {
+                let region = &game.find_region(region_id)?.base().region;
+                region.get_random_pos_in_range(
                     0,
                     0,
-                    region.region.width,
-                    region.region.height,
+                    region.width,
+                    region.height,
+                    random,
                 )
                 .ok()
             })

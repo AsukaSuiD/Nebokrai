@@ -524,7 +524,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
 
     if game.player_skill_execution(player_id, CURE_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         let Some(initial_target) = target_snapshot(game, region_id, requested_identity) else {
             send_failure(game, player_id, 10);
             game.send_skill_system_info(player_id, b"GS0286");

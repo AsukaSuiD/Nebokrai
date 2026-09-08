@@ -105,7 +105,7 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
 
     if game.player_skill_execution(player_id, skill_id).is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
+        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(skill_id));
         }

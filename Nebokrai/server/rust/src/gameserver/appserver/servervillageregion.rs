@@ -65,7 +65,7 @@ pub(crate) struct VillageWarEndTargets {
     pub(crate) goods: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerVillageRegion {
     pub(crate) war: CServerWarRegion,
     pub(crate) goods: Vec<String>,

@@ -9,11 +9,13 @@
 //! `CreateNpc/CreateMonster`, persisted companions и GodsBattle faction spawn
 //! используют тот же owner без теневого process context; удалённый регион
 //! по-прежнему маршрутизируется самим script wire.
+//! Выбор случайной клетки заимствует только CRegion и общий RNG: живые формы,
+//! реестры навыков и их уникальные ресурсы для него не копируются.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::region::RegionRandomContext;
-use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
+use crate::gameserver::appserver::region::{CRegion, RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, RegionMembershipBlock, ServerRegionMonsterContext,
     ServerRegionMonsterEffectsContext,
@@ -139,7 +141,7 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 impl CGame {
     pub(crate) fn random_region_position_owned(
         &mut self,
-        region: &CServerRegion,
+        region: &CRegion,
         left: i32,
         top: i32,
         width: i32,
@@ -147,7 +149,6 @@ impl CGame {
     ) -> Result<RegionRandomPosition, RegionCellAccessBlock> {
         self.with_legacy_random_stream(|_, random| {
             region
-                .region
                 .get_random_pos_in_range(left, top, width, height, random)
         })
     }

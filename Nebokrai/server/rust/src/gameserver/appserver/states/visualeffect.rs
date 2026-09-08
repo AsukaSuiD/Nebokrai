@@ -1,96 +1,77 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый базовый ресурс `CVisualEffect` GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/states/visualeffect.h/.cpp`.
+//! Constructor (0x005DC200) задаёт ended=false и loop=0. BeginVisualEffect
+//! (0x005DC1B0) снова снимает ended и сохраняет signed int без нормализации
+//! в bool: любой ненулевой loop, включая отрицательный, подавляет базовый End.
+//! EndVisualEffect (0x005DC1D0) выставляет ended, но не меняет loop.
+//! Обе перегрузки UpdateVisualEffect (0x005DC1E0/0x005DC1F0) игнорируют
+//! CState* и дополнительный ULONG, поэтому представлены одной базовой
+//! операцией без фиктивных аргументов. При loop=0 она вызывает End даже
+//! у уже завершённого эффекта; отдельного IsEnded-gate и часов здесь нет.
+//! В native это virtual вызов слота +4. Этот конкретный Rust-тип представляет
+//! только базовый класс: производные Update с собственными действиями,
+//! например CExStateNewVisualEffect (0x005D9CF0), не подменяются базовым телом.
+//!
+//! CState constructor (0x005DBCA0) оставляет visual-указатель null, destructor
+//! (0x005DBD40) вызывает CVisualEffect destructor и operator delete. Здесь
+//! ресурс владеет своим состоянием по значению, без сырых указателей и
+//! неявного копирования; Drop воспроизводит базовый destructor 0x005DC220:
+//! ended=true, затем loop=0. Освобождение памяти остаётся обычному Rust owner-у.
+//! Для владеющего поля состояния достаточно Option<CVisualEffect>, не флага
+//! или отправленного пакета. Этот базовый ресурс достаточен для его owned
+//! удаления, но не реализует остальные concrete ресурсы и virtual Update
+//! производных эффектов. Их подключение и порядок полного CSkill::End
+//! остаются обязанностью владельца состояния; сетевой пакет не заменяет Drop.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CVisualEffect {
+    ended: bool,
+    loop_value: i32,
+}
 
-// ============================================================================
-// FUNCTION: CVisualEffect::BeginVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp:13
-// RVA: 0x001DC1B0
-// ADDRESS: 005dc1b0
-// PROTOTYPE: void __thiscall BeginVisualEffect(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CVisualEffect {
+    pub(crate) const fn new() -> Self {
+        Self {
+            ended: false,
+            loop_value: 0,
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CVisualEffect::EndVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp:22
-// RVA: 0x001DC1D0
-// ADDRESS: 005dc1d0
-// PROTOTYPE: void __thiscall EndVisualEffect(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn is_ended(&self) -> bool {
+        self.ended
+    }
 
-// ============================================================================
-// FUNCTION: CVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp:30
-// RVA: 0x001DC1E0
-// ADDRESS: 005dc1e0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn loop_value(&self) -> i32 {
+        self.loop_value
+    }
 
-// ============================================================================
-// FUNCTION: CVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp:37
-// RVA: 0x001DC1F0
-// ADDRESS: 005dc1f0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn begin_visual_effect(&mut self, loop_value: i32) {
+        self.ended = false;
+        self.loop_value = loop_value;
+    }
 
-// ============================================================================
-// FUNCTION: CVisualEffect::CVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp:43
-// RVA: 0x001DC200
-// ADDRESS: 005dc200
-// PROTOTYPE: undefined __thiscall CVisualEffect(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn end_visual_effect(&mut self) {
+        self.ended = true;
+    }
 
-// ============================================================================
-// FUNCTION: CVisualEffect::~CVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\visualeffect.cpp:51
-// RVA: 0x001DC220
-// ADDRESS: 005dc220
-// PROTOTYPE: void __thiscall ~CVisualEffect(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn update_visual_effect(&mut self) {
+        if self.loop_value == 0 {
+            self.end_visual_effect();
+        }
+    }
+}
 
+impl Default for CVisualEffect {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-// COMPONENT_VARIANT_END: GameServer
+impl Drop for CVisualEffect {
+    fn drop(&mut self) {
+        self.ended = true;
+        self.loop_value = 0;
+    }
+}
