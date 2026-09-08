@@ -28,10 +28,17 @@
 //! и без GetCurrentSkill, не наследуя добавочные SearchEnemy первичного AI.
 //! Назначение/сброс цели используют тот же is_tamed (флаг и identity игрока),
 //! что и координатор; один оставшийся флаг не переключает действие CPet.
-//! Техническое хранение прогресса cast сгруппировано в MonsterAttackProgress:
-//! Default обслуживает одинаковую очистку при End и отмене. Типизированные
-//! значения остаются независимыми; Begin не получает дополнительного сброса,
-//! фоновые навыки, cooldown и призванные существа в эту группу не входят.
+//! Kernel и типизированный ресурс cast принадлежат MonsterSkillExecution
+//! конкретного MoveShapeSkill; reuse хранится в том же зарегистрированном
+//! экземпляре. GetSkill выбирает первый элемент native-категории, поэтому
+//! повторяемые ID не объединяются общей картой. Смена AI и завершение одного
+//! навыка сохраняют исполнения остальных. Begin не получает дополнительного
+//! сброса ресурсов; жизнь призванного существа остаётся у CMonster.
+//! Этот перенос хранения не заменяет ещё не подключённый полный обход
+//! registered owners для StopAllSkills и source/common End.
+//! Native constructor создаёт уже IsEnded-навык без Begin. Пока общий base
+//! lifecycle не материализован, отсутствие kernel не различает это состояние
+//! и отказ Begin; новая семантика IsEnded из одного Option не выводится.
 //! Обычное завершение cast/немедленного навыка не стирает выбранный ID:
 //! CBaseAI::OnFighting (0x004C9320) лишь ставит ChangeSkill после IsEnded.
 //! Выбор меняется отдельным обработчиком очереди; освобождение исполнения
@@ -54,7 +61,7 @@
 //! CMonsterFastAttack/CLordFastAttack::End (0x00512B50) используют тот же
 //! SetMoveable(true) и общий End после сброса двухударных флагов. Их ID входят
 //! в единую политику завершения; очистку прогресса выполняет существующий
-//! MonsterAttackProgress, без отдельных ветвей для отмены и Stiffen.
+//! MonsterSkillExecution, без отдельных ветвей для отмены и Stiffen.
 //! Fury/BossBlueFury/BossBlueQuake разделяют End 0x00546090: их cast также
 //! снимает один запрет движения. Это не End наложенных Fury/Cure/Quake-state:
 //! их контейнеры, сроки и собственные блокировки остаются у state-владельцев.
@@ -66,10 +73,10 @@
 //! curable-навыка; созданная CSpiderMistPhalanx ей не принадлежит и сохраняется.
 //! ChuckStone/SkeletonArchery::End (0x0056A330) сбрасывает полётные поля,
 //! снимает один запрет движения и вызывает общий End. Прогресс полёта хранится
-//! в MonsterAttackProgress; отмена и Stiffen используют ту же очистку.
+//! в MonsterSkillExecution; отмена и Stiffen используют ту же очистку.
 //! EnergyBolt/SnakeBolt/ZombieClaw::End (0x0053BF50) освобождает массив пути
 //! и полётные поля, затем вызывает SetMoveable(true) и общий End. Owned Vec
-//! пути освобождается с MonsterAttackProgress; нанесённые попадания и состояния
+//! пути освобождается с ресурсом экземпляра; нанесённые попадания и состояния
 //! целей не являются ресурсами этого исполнения и при End не откатываются.
 //! SpiderPoison/SpriteBurn/CorpsePtomaine/Promotion/KnockOut разделяют
 //! End 0x00546090. Общая политика завершает их cast, не снимая наложенные
@@ -235,8 +242,6 @@
 //! Для ненулевой figure унаследованный `CSkill::GetTargetPath` выбирает
 //! ближайшую клетку footprint, а не центральную tile-позицию монстра.
 
-use std::collections::BTreeMap;
-
 use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
 use super::ai::baseai::{
     AiPhaseState, AiShapeAction, CBaseAI, PassiveDeathAction, PassiveStiffenAction,
@@ -272,16 +277,61 @@ use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 
+macro_rules! monster_skill_progress {
+    ($($variant:ident($state:ty)),+ $(,)?) => {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub(crate) enum MonsterSkillProgress {
+            $($variant($state)),+
+        }
+
+        pub(crate) trait MonsterSkillProgressState: Sized {
+            fn from_progress(progress: &MonsterSkillProgress) -> Option<&Self>;
+            fn from_progress_mut(progress: &mut MonsterSkillProgress) -> Option<&mut Self>;
+        }
+
+        $(
+            impl From<$state> for MonsterSkillProgress {
+                fn from(state: $state) -> Self {
+                    Self::$variant(state)
+                }
+            }
+
+            impl MonsterSkillProgressState for $state {
+                fn from_progress(progress: &MonsterSkillProgress) -> Option<&Self> {
+                    if let MonsterSkillProgress::$variant(state) = progress {
+                        Some(state)
+                    } else {
+                        None
+                    }
+                }
+
+                fn from_progress_mut(progress: &mut MonsterSkillProgress) -> Option<&mut Self> {
+                    if let MonsterSkillProgress::$variant(state) = progress {
+                        Some(state)
+                    } else {
+                        None
+                    }
+                }
+            }
+        )+
+    };
+}
+
+monster_skill_progress! {
+    FastAttack(MonsterFastAttackProgress),
+    Projectile(MonsterProjectileProgress),
+    PathProjectile(PathProjectileProgress),
+    BossFiendPenetrate(BossFiendPenetrateProgress),
+    LittleStar(LittleStarProgress),
+    SpiderWeb(SpiderWebProgress),
+    SpiderMist(SpiderMistProgress),
+    YunShengLightning(YunShengLightningProgress),
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct MonsterAttackProgress {
-    fast_attack_progress: Option<MonsterFastAttackProgress>,
-    monster_projectile_progress: Option<MonsterProjectileProgress>,
-    path_projectile_progress: Option<PathProjectileProgress>,
-    boss_fiend_penetrate_progress: Option<BossFiendPenetrateProgress>,
-    little_star_progress: Option<LittleStarProgress>,
-    spider_web_progress: Option<SpiderWebProgress>,
-    spider_mist_progress: Option<SpiderMistProgress>,
-    yunsheng_lightning_progress: Option<YunShengLightningProgress>,
+pub(crate) struct MonsterSkillExecution {
+    pub(crate) kernel: Option<MonsterBaseAttackCast>,
+    pub(crate) progress: Option<MonsterSkillProgress>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -311,10 +361,7 @@ pub(crate) struct CMonster {
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
-    base_attack_cast: Option<MonsterBaseAttackCast>,
-    attack_progress: MonsterAttackProgress,
     summoned_creature: Option<SummonedCreatureLifecycle>,
-    skill_last_used_ms: BTreeMap<u32, u32>,
     ai_schedule: MonsterAiScheduleState,
     base_attack_owned_tick: bool,
     boss_blue_ai: BossBlueAiState,
@@ -495,10 +542,7 @@ impl CMonster {
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
             killed_by: None,
-            base_attack_cast: None,
-            attack_progress: MonsterAttackProgress::default(),
             summoned_creature: None,
-            skill_last_used_ms: BTreeMap::new(),
             ai_schedule: MonsterAiScheduleState::default(),
             base_attack_owned_tick: false,
             boss_blue_ai: BossBlueAiState::default(),
@@ -1596,7 +1640,6 @@ impl CMonster {
         let mut ended_skill = None;
         if release_target {
             let skill_id = current_skill.expect("разрешённый текущий навык Stiffen");
-            let owns_cast = self.base_attack_cast.is_some_and(|cast| cast.dispatch().skill_id == skill_id);
             let immediate = super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some();
             if matches!(skill_id,
                 super::skills::baseattack::BASE_ATTACK_SKILL_ID
@@ -1605,16 +1648,16 @@ impl CMonster {
                 || skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID
                 || immediate
             {
-                if owns_cast {
-                    self.attack_progress = MonsterAttackProgress::default();
-                }
+                self.clear_skill_progress(skill_id, factory);
                 if skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID {
-                    self.prepare_little_star_end();
+                    self.prepare_little_star_end(factory);
                 } else {
                     self.finish_attack_skill_resources(skill_id);
                 }
-                if owns_cast {
-                    self.base_attack_cast = None;
+                if let Some(execution) = self.move_shape.monster_skill_execution_mut(skill_id, factory)
+                    && let Some(kernel) = execution.kernel.as_mut()
+                {
+                    let _ = kernel.terminate(SkillTermination::Completed);
                 }
                 ended_skill = Some(skill_id);
             } else {
@@ -1633,7 +1676,7 @@ impl CMonster {
             if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
                 self.mark_immediate_skill_used(skill_id, now(), factory);
             } else {
-                self.skill_last_used_ms.insert(skill_id, now());
+                self.move_shape.mark_skill_used(skill_id, now(), factory);
             }
         }
         if let Some(ai) = self.selected_base_ai_mut() {
@@ -1796,7 +1839,7 @@ impl CMonster {
     pub(crate) fn current_active_attack_cast(&self, factory: &CSkillFactory) -> Option<MonsterBaseAttackCast> {
         if !self.active_ai_attack_pending() { return None; }
         let skill_id = self.move_shape.current_skill(factory)?.id();
-        self.base_attack_cast.filter(|cast| cast.dispatch().skill_id == skill_id)
+        self.base_attack_cast(skill_id, factory)
     }
 
     pub(crate) fn active_ai_attack_can_execute(&self, factory: &CSkillFactory) -> bool {
@@ -1818,15 +1861,10 @@ impl CMonster {
         if has_skill && !skill_ended {
             return false;
         }
-        let owns_cast = self.current_active_attack_cast(factory).is_some();
         if skill_ended
             && self.current_active_attack_cast(factory).is_some_and(|cast| cast.termination().is_none())
         {
-            self.finish_active_immediate_skill();
-        }
-        if (skill_ended && owns_cast) || !has_skill {
-            self.base_attack_cast = None;
-            self.attack_progress = MonsterAttackProgress::default();
+            self.finish_active_immediate_skill(factory);
         }
         let completion_ai_type = self.active_primary_ai_type().unwrap_or(0);
         let alive = !CMoveShape::is_died(self.hit_points);
@@ -1874,8 +1912,8 @@ impl CMonster {
         }
     }
 
-    pub(crate) const fn base_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
-        self.base_attack_cast
+    pub(crate) fn base_attack_cast(&self, skill_id: u32, factory: &CSkillFactory) -> Option<MonsterBaseAttackCast> {
+        self.move_shape.monster_skill_execution(skill_id, factory)?.kernel
     }
 
     pub(crate) fn begin_base_attack_cast(
@@ -1884,6 +1922,7 @@ impl CMonster {
         skill_id: u32,
         skill_level: u16,
         now_ms: u32,
+        factory: &CSkillFactory,
     ) {
         let mut execution = MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
             target,
@@ -1891,14 +1930,15 @@ impl CMonster {
             skill_level,
         }, now_ms);
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
-        self.install_base_attack_cast(execution);
+        self.install_base_attack_cast(execution, factory);
     }
 
-    pub(crate) fn install_base_attack_cast(&mut self, execution: MonsterBaseAttackCast) {
+    pub(crate) fn install_base_attack_cast(&mut self, execution: MonsterBaseAttackCast, factory: &CSkillFactory) {
         if self.selected_base_ai().is_none() { return; }
         let skill_id = execution.dispatch().skill_id;
         let now_ms = execution.started_at_ms();
-        self.base_attack_cast = Some(execution);
+        let Some(stored) = self.move_shape.monster_skill_execution_mut(skill_id, factory) else { return; };
+        stored.kernel = Some(execution);
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.register_curable_skill_state(skill_id);
         }
@@ -1907,96 +1947,51 @@ impl CMonster {
         }
     }
 
-    pub(crate) fn begin_fast_attack_progress(&mut self) {
-        self.attack_progress.fast_attack_progress = Some(MonsterFastAttackProgress::default());
+    pub(crate) fn skill_progress<T: MonsterSkillProgressState>(
+        &self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&T> {
+        let progress = self.move_shape.monster_skill_execution(skill_id, factory)?.progress.as_ref()?;
+        T::from_progress(progress)
     }
 
-    pub(crate) const fn fast_attack_progress(&self) -> Option<MonsterFastAttackProgress> {
-        self.attack_progress.fast_attack_progress
-    }
-
-    pub(crate) fn fast_attack_progress_mut(&mut self) -> Option<&mut MonsterFastAttackProgress> {
-        self.attack_progress.fast_attack_progress.as_mut()
-    }
-
-    pub(crate) fn begin_monster_projectile_progress(&mut self) {
-        self.attack_progress.monster_projectile_progress = Some(MonsterProjectileProgress::default());
-    }
-
-    pub(crate) const fn monster_projectile_progress(&self) -> Option<MonsterProjectileProgress> {
-        self.attack_progress.monster_projectile_progress
-    }
-
-    pub(crate) fn monster_projectile_progress_mut(
+    pub(crate) fn skill_progress_mut<T: MonsterSkillProgressState>(
         &mut self,
-    ) -> Option<&mut MonsterProjectileProgress> {
-        self.attack_progress.monster_projectile_progress.as_mut()
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&mut T> {
+        let progress = self.move_shape.monster_skill_execution_mut(skill_id, factory)?.progress.as_mut()?;
+        T::from_progress_mut(progress)
     }
 
-    pub(crate) const fn path_projectile_progress(&self) -> Option<&PathProjectileProgress> {
-        self.attack_progress.path_projectile_progress.as_ref()
-    }
-
-    pub(crate) fn set_path_projectile_progress(&mut self, progress: PathProjectileProgress) {
-        self.attack_progress.path_projectile_progress = Some(progress);
-    }
-
-    pub(crate) fn boss_fiend_penetrate_progress(&self) -> Option<&BossFiendPenetrateProgress> {
-        self.attack_progress.boss_fiend_penetrate_progress.as_ref()
-    }
-
-    pub(crate) fn set_boss_fiend_penetrate_progress(
+    pub(crate) fn set_skill_progress(
         &mut self,
-        progress: BossFiendPenetrateProgress,
+        skill_id: u32,
+        progress: impl Into<MonsterSkillProgress>,
+        factory: &CSkillFactory,
     ) {
-        self.attack_progress.boss_fiend_penetrate_progress = Some(progress);
+        if let Some(execution) = self.move_shape.monster_skill_execution_mut(skill_id, factory) {
+            execution.progress = Some(progress.into());
+        }
     }
 
-    pub(crate) fn little_star_progress(&self) -> Option<&LittleStarProgress> {
-        self.attack_progress.little_star_progress.as_ref()
+    pub(crate) fn clear_skill_progress(&mut self, skill_id: u32, factory: &CSkillFactory) {
+        if let Some(execution) = self.move_shape.monster_skill_execution_mut(skill_id, factory) {
+            execution.progress = None;
+        }
     }
 
-    pub(crate) fn set_little_star_progress(&mut self, progress: Option<LittleStarProgress>) {
-        self.attack_progress.little_star_progress = progress;
-    }
-
-    pub(crate) fn prepare_little_star_end(&mut self) {
-        self.attack_progress.little_star_progress = None;
+    pub(crate) fn prepare_little_star_end(&mut self, factory: &CSkillFactory) {
+        self.clear_skill_progress(super::skills::littlestar::LITTLE_STAR_SKILL_ID, factory);
         self.move_shape.set_moveable(true);
-    }
-
-    pub(crate) const fn spider_web_progress(&self) -> Option<SpiderWebProgress> {
-        self.attack_progress.spider_web_progress
-    }
-
-    pub(crate) const fn set_spider_web_progress(&mut self, progress: SpiderWebProgress) {
-        self.attack_progress.spider_web_progress = Some(progress);
-    }
-
-    pub(crate) const fn spider_mist_progress(&self) -> Option<SpiderMistProgress> {
-        self.attack_progress.spider_mist_progress
-    }
-
-    pub(crate) const fn set_spider_mist_progress(&mut self, progress: SpiderMistProgress) {
-        self.attack_progress.spider_mist_progress = Some(progress);
-    }
-
-    pub(crate) const fn yunsheng_lightning_progress(&self) -> Option<YunShengLightningProgress> {
-        self.attack_progress.yunsheng_lightning_progress
-    }
-
-    pub(crate) const fn set_yunsheng_lightning_progress(
-        &mut self,
-        progress: YunShengLightningProgress,
-    ) {
-        self.attack_progress.yunsheng_lightning_progress = Some(progress);
     }
 
     /// Общий `CSkill::End` (0x004D84C0) читает reuse после derived-cleanup.
     /// Готовое время AI/попадания сюда не передаётся: каждый owner предоставляет
     /// чтение runtime, которое вызывается только для живого завершения с reuse.
-    pub(crate) fn finish_base_attack_cast_with_clock(&mut self, now: impl FnOnce() -> u32) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(Some(now))
+    pub(crate) fn finish_base_attack_cast_with_clock(&mut self, skill_id: u32, factory: &CSkillFactory, now: impl FnOnce() -> u32) -> Option<MonsterBaseAttackCast> {
+        self.finish_base_attack_cast_with_reuse(skill_id, factory, Some(now))
     }
 
     /// `CSkill::End(false)` завершает самостоятельное AI-действие, но не
@@ -2004,8 +1999,10 @@ impl CMonster {
     /// derived AI всё равно получает своё обычное completion action.
     pub(crate) fn finish_base_attack_cast_without_reuse(
         &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
     ) -> Option<MonsterBaseAttackCast> {
-        self.finish_base_attack_cast_with_reuse(None::<fn() -> u32>)
+        self.finish_base_attack_cast_with_reuse(skill_id, factory, None::<fn() -> u32>)
     }
 
     const fn attack_end_restores_movement(skill_id: u32) -> bool {
@@ -2046,9 +2043,6 @@ impl CMonster {
     }
 
     fn finish_attack_skill_resources(&mut self, skill_id: u32) {
-        if skill_id == super::skills::bossfiendpenetrate::BOSS_FIEND_PENETRATE_SKILL_ID {
-            self.attack_progress.boss_fiend_penetrate_progress = None;
-        }
         if Self::attack_end_restores_movement(skill_id) {
             self.move_shape.set_moveable(true);
         }
@@ -2059,20 +2053,21 @@ impl CMonster {
 
     fn finish_base_attack_cast_with_reuse(
         &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
         reuse_clock: Option<impl FnOnce() -> u32>,
     ) -> Option<MonsterBaseAttackCast> {
-        let mut execution = self.base_attack_cast?;
+        let mut execution = self.base_attack_cast(skill_id, factory)?;
         if execution.termination().is_some() {
             return None;
         }
-        let skill_id = execution.dispatch().skill_id;
-        self.attack_progress = MonsterAttackProgress::default();
+        self.clear_skill_progress(skill_id, factory);
         self.finish_attack_skill_resources(skill_id);
         let _ = execution.terminate(SkillTermination::Completed);
         if let Some(now) = reuse_clock {
-            self.skill_last_used_ms.insert(skill_id, now());
+            self.move_shape.mark_skill_used(skill_id, now(), factory);
         }
-        self.base_attack_cast = Some(execution);
+        self.move_shape.monster_skill_execution_mut(skill_id, factory)?.kernel = Some(execution);
         Some(execution)
     }
 
@@ -2080,24 +2075,27 @@ impl CMonster {
     /// `CSkill::End(1)` фиксирует reuse независимо от активной/фоновой очереди.
     pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32, factory: &CSkillFactory) {
         self.move_shape.finish_immediate_skill(skill_id, factory);
-        self.skill_last_used_ms.insert(skill_id, now_ms);
+        self.move_shape.mark_skill_used(skill_id, now_ms, factory);
     }
 
     /// Активный `OnFighting` завершает и `End(0)`: очередь меняет навык,
     /// но отметка восстановления остаётся прежней. Фоновый вызов сюда не идёт.
-    pub(crate) fn finish_active_immediate_skill(&mut self) {
+    pub(crate) fn finish_active_immediate_skill(&mut self, factory: &CSkillFactory) {
         if self.selected_base_ai().is_none() { return; }
+        let Some(skill_id) = self.move_shape.current_skill(factory).map(|skill| skill.id()) else { return; };
         self.move_shape.shape_mut().set_action(1);
-        let _ = self.finish_base_attack_cast_without_reuse();
+        let _ = self.finish_base_attack_cast_without_reuse(skill_id, factory);
     }
 
     pub(crate) fn advance_base_attack_cast(
         &mut self,
+        skill_id: u32,
         expected: SkillStage,
         next: SkillStage,
+        factory: &CSkillFactory,
     ) -> bool {
-        self.base_attack_cast
-            .as_mut()
+        self.move_shape.monster_skill_execution_mut(skill_id, factory)
+            .and_then(|execution| execution.kernel.as_mut())
             .is_some_and(|execution| execution.advance(expected, next))
     }
 
@@ -2121,9 +2119,9 @@ impl CMonster {
     }
 
     pub(crate) fn cancel_base_attack_cast(&mut self, factory: &CSkillFactory) {
-        self.attack_progress = MonsterAttackProgress::default();
-        if let Some(mut execution) = self.base_attack_cast.take() {
-            let skill_id = execution.dispatch().skill_id;
+        let Some(skill_id) = self.move_shape.current_skill(factory).map(|skill| skill.id()) else { return; };
+        self.clear_skill_progress(skill_id, factory);
+        if let Some(mut execution) = self.base_attack_cast(skill_id, factory) {
             if execution.termination().is_none() {
                 self.finish_attack_skill_resources(skill_id);
             }
@@ -2132,16 +2130,20 @@ impl CMonster {
             }
             self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);
+            if let Some(stored) = self.move_shape.monster_skill_execution_mut(skill_id, factory) {
+                stored.kernel = Some(execution);
+            }
         }
     }
 
     /// Удаление CState из Cure не вызывает CSkill::End(int).
-    pub(crate) fn remove_curable_attack_cast(&mut self, skill_id: u32) -> bool {
-        if self.base_attack_cast.is_none_or(|cast| cast.dispatch().skill_id != skill_id) {
+    pub(crate) fn remove_curable_attack_cast(&mut self, skill_id: u32, factory: &CSkillFactory) -> bool {
+        let Some(execution) = self.move_shape.monster_skill_execution_mut(skill_id, factory) else { return false; };
+        if execution.kernel.is_none() {
             return false;
         }
-        self.attack_progress = MonsterAttackProgress::default();
-        self.base_attack_cast = None;
+        execution.progress = None;
+        execution.kernel = None;
         self.move_shape.finish_curable_skill_state(skill_id);
         if self.move_shape.current_skill_id() == Some(skill_id) {
             self.move_shape.set_current_skill_id(None);
@@ -2149,11 +2151,8 @@ impl CMonster {
         true
     }
 
-    pub(crate) fn skill_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.skill_last_used_ms
-            .get(&skill_id)
-            .copied()
-            .unwrap_or_default()
+    pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {
+        self.move_shape.skill_last_used_ms(skill_id, factory)
     }
 
     pub(crate) const fn begin_ai_attack_attempt(

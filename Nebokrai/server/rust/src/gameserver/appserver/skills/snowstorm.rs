@@ -112,7 +112,7 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
         let interval = if region.find_monster_by_id(monster_id).is_some_and(|monster| monster.is_tamed()) { region.find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
         if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(SNOW_STORM_SKILL_ID)).unwrap_or_default();
+        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(SNOW_STORM_SKILL_ID, game.skill_factory())).unwrap_or_default();
         if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used, reuse, now_ms,
             )
@@ -125,7 +125,7 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().shape_mut().set_direction(direction); monster.begin_base_attack_cast(target, SNOW_STORM_SKILL_ID, skill_level, now_ms); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().shape_mut().set_direction(direction); monster.begin_base_attack_cast(target, SNOW_STORM_SKILL_ID, skill_level, now_ms, game.skill_factory()); }
         send_monster_visual(game, region, monster_id, skill_level, 1, None);
         return true;
     }
@@ -142,10 +142,10 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
     let summoned = initialized && region.add_snow_storm_phalanx(phalanx, target_x, target_y, area_width, area_height, started_at_ms, runtime).is_ok();
     if summoned { *entry = Some(summon_id); }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.advance_base_attack_cast(SNOW_STORM_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(SNOW_STORM_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(SNOW_STORM_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+        let _ = monster.finish_base_attack_cast_with_clock(SNOW_STORM_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

@@ -143,7 +143,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.monster_projectile_progress(),
+                monster.skill_progress::<MonsterProjectileProgress>(skill_id, game.skill_factory()).copied(),
             ))
         })
     else {
@@ -164,7 +164,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_some() {
-                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+                let _ = monster.finish_base_attack_cast_with_clock(skill_id, game.skill_factory(), || runtime.now_milliseconds());
             }
             monster.clear_ai_target(game.skill_factory());
         }
@@ -231,8 +231,9 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
                 skill_id,
                 skill_level,
                 now_ms,
+                game.skill_factory(),
             );
-            monster.begin_monster_projectile_progress();
+            monster.set_skill_progress(skill_id, MonsterProjectileProgress::default(), game.skill_factory());
         }
         let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
         let source = region
@@ -321,9 +322,9 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
         progress.fire(missile_flying_time_ms, detached.then_some((impact_x, impact_y)));
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             *monster
-                .monster_projectile_progress_mut()
+                .skill_progress_mut::<MonsterProjectileProgress>(skill_id, game.skill_factory())
                 .expect("состояние полёта принадлежит текущему навыку") = progress;
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
     }
     if !time_reached(

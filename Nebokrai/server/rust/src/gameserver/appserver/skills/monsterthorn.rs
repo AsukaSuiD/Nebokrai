@@ -137,7 +137,7 @@ fn begin_monster_ai(
     let source = monster.move_shape().shape().clone();
     send_thorn_visual(game, region, &source, monster_id, skill_level, 1, None);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+        let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Begin, SkillStage::Check, game.skill_factory());
     }
     true
 }
@@ -200,7 +200,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
                 .is_tamed()
                 .then(|| monster.pet_attack_properties(&property)),
             monster.current_active_attack_cast(game.skill_factory()),
-            monster.skill_last_used_ms(MONSTER_THORN_SKILL_ID),
+            monster.skill_last_used_ms(MONSTER_THORN_SKILL_ID, game.skill_factory()),
         ))
     }) else {
         return MonsterSkillCallOutcome::NotHandled;
@@ -223,9 +223,9 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
                 game, region, &source_shape, monster_id, skill_level, 2, None,
             );
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+                let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
             }
-            super::monsterattack::finish_owned_monster_attack_impact(region, monster_id, runtime);
+            super::monsterattack::finish_owned_monster_attack_impact(region, monster_id, MONSTER_THORN_SKILL_ID, game.skill_factory(), runtime);
             return MonsterSkillCallOutcome::Handled;
         }
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -234,7 +234,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         return MonsterSkillCallOutcome::Handled;
     };
     if target.dead && cast.is_some_and(|cast| cast.dispatch().skill_id == MONSTER_THORN_SKILL_ID) {
-        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID);
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID, game.skill_factory());
         return MonsterSkillCallOutcome::Handled;
     }
     if cast.is_none()
@@ -306,7 +306,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
                 target: target_identity,
                 skill_id: MONSTER_THORN_SKILL_ID,
                 skill_level,
-            }, now_ms));
+            }, now_ms), game.skill_factory());
         }
         return MonsterSkillCallOutcome::Handled;
     }
@@ -329,17 +329,17 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     };
     let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if maximum != 0 && path.len() > maximum as usize {
-        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID);
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID, game.skill_factory());
         return MonsterSkillCallOutcome::Handled;
     }
     if path.iter().any(|cell| cell.2 == 2) {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.finish_base_attack_cast_with_clock(MONSTER_THORN_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
         }
         return MonsterSkillCallOutcome::Handled;
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
     }
     send_thorn_visual(
         game,
@@ -352,7 +352,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     );
 
     if target_identity == source_shape.identity() {
-        super::monsterattack::finish_owned_monster_attack_impact(region, monster_id, runtime);
+        super::monsterattack::finish_owned_monster_attack_impact(region, monster_id, MONSTER_THORN_SKILL_ID, game.skill_factory(), runtime);
         return MonsterSkillCallOutcome::Handled;
     }
 
@@ -418,8 +418,8 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         attack,
     );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
     }
     apply_owned_monster_attack_hit(
         game,
@@ -441,7 +441,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.finish_base_attack_cast_with_clock(MONSTER_THORN_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     MonsterSkillCallOutcome::Handled
 }

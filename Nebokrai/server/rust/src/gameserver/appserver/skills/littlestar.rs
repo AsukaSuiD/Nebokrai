@@ -596,8 +596,8 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.little_star_progress().cloned(),
-                monster.skill_last_used_ms(LITTLE_STAR_SKILL_ID),
+                monster.skill_progress::<LittleStarProgress>(LITTLE_STAR_SKILL_ID, game.skill_factory()).cloned(),
+                monster.skill_last_used_ms(LITTLE_STAR_SKILL_ID, game.skill_factory()),
             ))
         })
     else {
@@ -667,7 +667,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
-            monster.begin_base_attack_cast(target_identity, LITTLE_STAR_SKILL_ID, skill_level, now_ms);
+            monster.begin_base_attack_cast(target_identity, LITTLE_STAR_SKILL_ID, skill_level, now_ms, game.skill_factory());
         }
         let current_source = region.find_monster_by_id(monster_id)
             .map(|monster| monster.move_shape().shape()).unwrap_or(&source);
@@ -699,7 +699,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
         send_fire(game, region, &source, skill_level, endpoint.0, endpoint.1);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            let _ = monster.advance_base_attack_cast(LITTLE_STAR_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
         LittleStarProgress::new(path)
     };
@@ -711,7 +711,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         );
         progress.record_attack(runtime.now_milliseconds());
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+            let _ = monster.advance_base_attack_cast(LITTLE_STAR_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         }
     }
 
@@ -723,15 +723,15 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     if expired {
         drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.prepare_little_star_end();
+            monster.prepare_little_star_end(game.skill_factory());
         }
         send_end(game, region, &source, skill_level);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.advance_base_attack_cast(LITTLE_STAR_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+            let _ = monster.finish_base_attack_cast_with_clock(LITTLE_STAR_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_little_star_progress(Some(progress));
+        monster.set_skill_progress(LITTLE_STAR_SKILL_ID, progress, game.skill_factory());
     }
     true
 }

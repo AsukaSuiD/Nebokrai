@@ -399,8 +399,8 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.spider_mist_progress(),
-                monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID),
+                monster.skill_progress::<SpiderMistProgress>(SPIDER_MIST_SKILL_ID, game.skill_factory()).copied(),
+                monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID, game.skill_factory()),
                 property.ai,
                 attack_interval,
             ))
@@ -427,7 +427,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         }
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(true);
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            let _ = monster.advance_base_attack_cast(SPIDER_MIST_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
         send_fire(
             game,
@@ -466,9 +466,9 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             send_phalanx_entry(game, region, phalanx_id);
         }
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.advance_base_attack_cast(SPIDER_MIST_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+            let _ = monster.advance_base_attack_cast(SPIDER_MIST_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+            let _ = monster.finish_base_attack_cast_with_clock(SPIDER_MIST_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
         }
         return true;
     }
@@ -521,8 +521,8 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
-        monster.begin_base_attack_cast(target, SPIDER_MIST_SKILL_ID, skill_level, now_ms);
-        monster.set_spider_mist_progress(SpiderMistProgress { destination_x, destination_y });
+        monster.begin_base_attack_cast(target, SPIDER_MIST_SKILL_ID, skill_level, now_ms, game.skill_factory());
+        monster.set_skill_progress(SPIDER_MIST_SKILL_ID, SpiderMistProgress { destination_x, destination_y }, game.skill_factory());
     }
     let source = region
         .find_monster_by_id(monster_id)

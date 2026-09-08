@@ -295,7 +295,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
                 property.ai,
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(PROMOTION_SKILL_ID),
+                monster.skill_last_used_ms(PROMOTION_SKILL_ID, game.skill_factory()),
             ))
         })
     else {
@@ -352,6 +352,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
                 PROMOTION_SKILL_ID,
                 skill_level,
                 now_ms,
+                game.skill_factory(),
             );
         }
         send_monster_cast(
@@ -388,8 +389,8 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
         1,
     );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+        let _ = monster.advance_base_attack_cast(PROMOTION_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(PROMOTION_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
     let state = PromotionState::new(
         now_ms,
@@ -414,8 +415,8 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
         );
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.advance_base_attack_cast(PROMOTION_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+        let _ = monster.finish_base_attack_cast_with_clock(PROMOTION_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

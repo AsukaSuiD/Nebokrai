@@ -90,6 +90,15 @@
 //! CSkill::GetSkillName (0x004D86E0) читает актуальные свойства по ID/уровню,
 //! а не имя времени регистрации. None в name означает отсутствие записи;
 //! локализованный GS0318 и пустой fallback разрешаются владельцем публикации.
+//! Исполнение и принадлежащие навыку ресурсы монстра хранятся в каждом
+//! зарегистрированном экземпляре, вместе с отдельным reuse timestamp.
+//! CSkill constructor (0x004D8120) задаёт timestamp +0x40 равным нулю;
+//! новая регистрация не наследует его от удалённого экземпляра того же ID.
+//! Доступ к этим полям использует тот же первый GetSkill по текущей metadata,
+//! без дополнительного реестра и без поиска по intrinsic-категории. Отсутствие
+//! kernel не означает отсутствия самого registered owner-а. Полная модель
+//! source/target базового CSkill и concrete End без активного исполнения
+//! ещё не подключены: перенос ресурсов сам по себе не реализует StopAllSkills.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
 //! Полный registered-skill End ещё не подключён; завершение одного текущего
@@ -309,8 +318,8 @@ enum ImmediateSkillLifecycle {
 }
 
 /// Достигнутая common-проекция `CSkill`: identity, level и concrete owner.
-/// Исполнение concrete attack/defense/state/summon owners остаётся у самих
-/// skill owners; здесь хранится точный результат `CMoveShape::AddSkill`.
+/// Алгоритмы concrete attack/defense/state/summon остаются у skill owners;
+/// ресурсы исполнения монстра и reuse принадлежат каждому экземпляру.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MoveShapeSkill {
     id: u32,
@@ -318,6 +327,8 @@ pub(crate) struct MoveShapeSkill {
     owner: SkillOwner,
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
+    monster_execution: super::monster::MonsterSkillExecution,
+    last_used_ms: u32,
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
@@ -5293,6 +5304,32 @@ impl CMoveShape {
         self.skills[category as usize].iter_mut().find(|skill| skill.id == skill_id)
     }
 
+    pub(crate) fn monster_skill_execution(
+        &self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&super::monster::MonsterSkillExecution> {
+        self.skill(skill_id, factory).map(|skill| &skill.monster_execution)
+    }
+
+    pub(crate) fn monster_skill_execution_mut(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&mut super::monster::MonsterSkillExecution> {
+        self.skill_mut(skill_id, factory).map(|skill| &mut skill.monster_execution)
+    }
+
+    pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {
+        self.skill(skill_id, factory).map_or(0, |skill| skill.last_used_ms)
+    }
+
+    pub(crate) fn mark_skill_used(&mut self, skill_id: u32, now_ms: u32, factory: &CSkillFactory) {
+        if let Some(skill) = self.skill_mut(skill_id, factory) {
+            skill.last_used_ms = now_ms;
+        }
+    }
+
     /// Удаление реестра сохраняет неразрешённый current ID. Полный concrete
     /// End перед удалением ещё требует подключения lifecycle владельца.
     pub(crate) fn clear_skills(&mut self, factory: &CSkillFactory) {
@@ -5316,6 +5353,8 @@ impl CMoveShape {
                 .expect("CFightDefense входит в native factory"),
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
+            monster_execution: Default::default(),
+            last_used_ms: 0,
         });
     }
 
@@ -5403,6 +5442,8 @@ impl CMoveShape {
             owner,
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
+            monster_execution: Default::default(),
+            last_used_ms: 0,
         });
         true
     }

@@ -894,8 +894,8 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.boss_fiend_penetrate_progress().cloned(),
-                monster.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID),
+                monster.skill_progress::<BossFiendPenetrateProgress>(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory()).cloned(),
+                monster.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory()),
             ))
         })
     else {
@@ -967,11 +967,12 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 BOSS_FIEND_PENETRATE_SKILL_ID,
                 skill_level,
                 now_ms,
+                game.skill_factory(),
             );
-            monster.set_boss_fiend_penetrate_progress(BossFiendPenetrateProgress::new(
+            monster.set_skill_progress(BOSS_FIEND_PENETRATE_SKILL_ID, BossFiendPenetrateProgress::new(
                 destination.0,
                 destination.1,
-            ));
+            ), game.skill_factory());
         }
         send_start(game, region, &source, skill_level);
         return true;
@@ -1010,7 +1011,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             drop(path);
             drop(progress);
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+                let _ = monster.finish_base_attack_cast_with_clock(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
             }
             return true;
         }
@@ -1034,17 +1035,17 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             missile_flying_time_ms,
         );
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_boss_fiend_penetrate_progress(progress.clone());
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            monster.set_skill_progress(BOSS_FIEND_PENETRATE_SKILL_ID, progress.clone(), game.skill_factory());
+            let _ = monster.advance_base_attack_cast(BOSS_FIEND_PENETRATE_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
     }
 
     if progress.current_cell >= progress.attack_cell_count {
         drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.advance_base_attack_cast(BOSS_FIEND_PENETRATE_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+            let _ = monster.advance_base_attack_cast(BOSS_FIEND_PENETRATE_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+            let _ = monster.finish_base_attack_cast_with_clock(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
         }
         return true;
     }
@@ -1097,7 +1098,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     }
     progress.current_cell = progress.current_cell.wrapping_add(1);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_boss_fiend_penetrate_progress(progress);
+        monster.set_skill_progress(BOSS_FIEND_PENETRATE_SKILL_ID, progress, game.skill_factory());
     }
     true
 }

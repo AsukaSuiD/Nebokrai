@@ -334,13 +334,14 @@ pub(crate) fn begin_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
     skill_level: u16,
     properties: &CSkillBaseProperties,
     started_at_ms: u32,
+    factory: &super::skillfactory::CSkillFactory,
     runtime: &mut Runtime,
 ) -> MonsterSkillCallOutcome {
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
         return MonsterSkillCallOutcome::NotHandled;
     };
     if !super::kernel::skill_is_restored(
-        monster.skill_last_used_ms(MONSTER_RANGE_ATTACK_SKILL_ID),
+        monster.skill_last_used_ms(MONSTER_RANGE_ATTACK_SKILL_ID, factory),
         properties.query_property(super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME),
         runtime.now_milliseconds(),
     ) {
@@ -352,7 +353,7 @@ pub(crate) fn begin_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
         target,
         skill_id: MONSTER_RANGE_ATTACK_SKILL_ID,
         skill_level,
-    }, started_at_ms));
+    }, started_at_ms), factory);
     MonsterSkillCallOutcome::Handled
 }
 
@@ -392,7 +393,7 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
         start.add_long(shape.get_direction());
         let _ = game.send_game_shape_around(region, &shape, None, &start);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+            let _ = monster.advance_base_attack_cast(MONSTER_RANGE_ATTACK_SKILL_ID, SkillStage::Begin, SkillStage::Check, game.skill_factory());
         }
     }
     let delay_ms = properties.query_property(super::baseattack::SKILL_USAGE_DELAY_TIME);
@@ -403,7 +404,7 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(MONSTER_RANGE_ATTACK_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
     }
     let fire = range_attack_fire_message(
         cast.dispatch().skill_level,

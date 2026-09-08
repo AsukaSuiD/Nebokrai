@@ -108,7 +108,7 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     let delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let last_used_ms = region
         .find_monster_by_id(monster_id)
-        .map(|monster| monster.skill_last_used_ms(skill.id()))
+        .map(|monster| monster.skill_last_used_ms(skill.id(), game.skill_factory()))
         .unwrap_or_default();
     let restored_at_ms = runtime.now_milliseconds();
     if skill_is_restored(last_used_ms, delay_ms, restored_at_ms) {

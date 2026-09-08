@@ -39371,7 +39371,10 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_attack_impact(owner.base_mut(), dispatch.monster_id, runtime);
+                finish_owned_monster_attack_impact(
+                    owner.base_mut(), dispatch.monster_id, dispatch.skill_id,
+                    &self.skill_factory, runtime,
+                );
                 self.restore_region_owner(owner);
             }
         }
@@ -39413,7 +39416,10 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_attack_impact(owner.base_mut(), dispatch.monster_id, runtime);
+                finish_owned_monster_attack_impact(
+                    owner.base_mut(), dispatch.monster_id, MONSTER_RANGE_ATTACK_SKILL_ID,
+                    &self.skill_factory, runtime,
+                );
                 self.restore_region_owner(owner);
             }
         }
@@ -39450,7 +39456,10 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_attack_impact(owner.base_mut(), dispatch.monster_id, runtime);
+                finish_owned_monster_attack_impact(
+                    owner.base_mut(), dispatch.monster_id, dispatch.skill_id,
+                    &self.skill_factory, runtime,
+                );
                 self.restore_region_owner(owner);
             }
         }

@@ -296,7 +296,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
                 property,
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(skill_id),
+                monster.skill_last_used_ms(skill_id, game.skill_factory()),
             ))
         })
     else {
@@ -314,7 +314,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
             .map(|view| (view.tile_x, view.tile_y))
             .unwrap_or((0, 0));
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
         send_fire(game, region, &source, monster_id, skill_id, skill_level, target_x, target_y);
 
@@ -350,9 +350,9 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
             }
         }
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+            let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+            let _ = monster.finish_base_attack_cast_with_clock(skill_id, game.skill_factory(), || runtime.now_milliseconds());
         }
         return true;
     }
@@ -400,7 +400,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
-        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
+        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, game.skill_factory());
     }
     let source = region
         .find_monster_by_id(monster_id)

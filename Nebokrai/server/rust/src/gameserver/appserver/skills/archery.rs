@@ -135,7 +135,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(skill_id),
+                monster.skill_last_used_ms(skill_id, game.skill_factory()),
             ))
         })
     else {
@@ -154,7 +154,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 monster.move_shape_mut().set_moveable(true);
             }
             if cast.is_some() {
-                let _ = monster.finish_base_attack_cast_without_reuse();
+                let _ = monster.finish_base_attack_cast_without_reuse(skill_id, game.skill_factory());
             }
             monster.clear_ai_target(game.skill_factory());
         }
@@ -179,7 +179,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 monster.move_shape_mut().set_moveable(true);
             }
             if cast.is_some() {
-                let _ = monster.finish_base_attack_cast_without_reuse();
+                let _ = monster.finish_base_attack_cast_without_reuse(skill_id, game.skill_factory());
             }
             monster.clear_ai_target(game.skill_factory());
         }
@@ -194,7 +194,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         if cast.is_some()
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
-            let _ = monster.finish_base_attack_cast_without_reuse();
+            let _ = monster.finish_base_attack_cast_without_reuse(skill_id, game.skill_factory());
         }
         return true;
     };
@@ -255,6 +255,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 skill_id,
                 skill_level,
                 now_ms,
+                game.skill_factory(),
             );
         }
         let source = region
@@ -353,11 +354,11 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         }
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.finish_base_attack_cast_with_clock(skill_id, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

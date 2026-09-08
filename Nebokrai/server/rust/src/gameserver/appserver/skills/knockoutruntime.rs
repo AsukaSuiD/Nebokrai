@@ -279,7 +279,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         let interval = if tamed { region.find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
         if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(REUSE);
-        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(KNOCK_OUT_SKILL_ID)).unwrap_or_default();
+        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(KNOCK_OUT_SKILL_ID, game.skill_factory())).unwrap_or_default();
         if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used, reuse, now_ms,
             )
@@ -294,7 +294,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, KNOCK_OUT_SKILL_ID, skill_level, now_ms);
+            monster.begin_base_attack_cast(target_identity, KNOCK_OUT_SKILL_ID, skill_level, now_ms, game.skill_factory());
         }
         monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, false);
         return true;
@@ -331,14 +331,14 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         level_rate,
     );
     if chance <= game.skill_random_below(100) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(KNOCK_OUT_SKILL_ID, game.skill_factory()); }
         return true;
     }
     let Some((attacker_master, attack)) = monster_attack(game, region, monster_id, property) else { return true };
     let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+        let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
     apply_owned_monster_attack_hit(game, region, runtime, now_ms, monster_id, attacker_master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack, deaths);
     if !owned_target_has_cure(game, region, target_identity) {
@@ -351,8 +351,8 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         }
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+        let _ = monster.finish_base_attack_cast_with_clock(KNOCK_OUT_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

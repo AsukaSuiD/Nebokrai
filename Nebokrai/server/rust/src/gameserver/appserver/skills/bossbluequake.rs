@@ -824,7 +824,7 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     let Some((mut source, property, master, tamed, cast, last_used_ms)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((
         monster.move_shape().shape().clone(),
         game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-        monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID),
+        monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID, game.skill_factory()),
     ))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
@@ -855,7 +855,7 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, BOSS_BLUE_QUAKE_SKILL_ID, level, now_ms);
+            monster.begin_base_attack_cast(target_identity, BOSS_BLUE_QUAKE_SKILL_ID, level, now_ms, game.skill_factory());
         }
         source.set_direction(direction);
         send_visual(game, region, &source, level, true);
@@ -865,7 +865,7 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     if cast.dispatch().skill_id != BOSS_BLUE_QUAKE_SKILL_ID { return false; }
     if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) { return true; }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(BOSS_BLUE_QUAKE_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
     }
     send_visual(game, region, &source, level, false);
     let Ok(face) = source.get_face_position() else { return true };
@@ -876,9 +876,9 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             master, tamed, identity, source_x, source_y, deaths);
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.advance_base_attack_cast(BOSS_BLUE_QUAKE_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(BOSS_BLUE_QUAKE_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+        let _ = monster.finish_base_attack_cast_with_clock(BOSS_BLUE_QUAKE_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

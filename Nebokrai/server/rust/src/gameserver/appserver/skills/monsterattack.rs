@@ -23,6 +23,7 @@ use super::fightdefense::{
 };
 use super::knockoutstate::finish_blind_states_on_defense;
 use super::kernel::SkillStage;
+use super::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
 use crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt;
 use crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt;
@@ -53,25 +54,28 @@ pub(crate) fn end_owned_monster_skill_without_reuse(
     region: &mut CServerRegion,
     monster_id: i32,
     skill_id: u32,
+    factory: &CSkillFactory,
 ) -> bool {
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
-    if !monster.base_attack_cast().is_some_and(|cast| cast.dispatch().skill_id == skill_id) {
+    if monster.base_attack_cast(skill_id, factory).is_none() {
         return false;
     }
-    let _ = monster.finish_base_attack_cast_without_reuse();
+    let _ = monster.finish_base_attack_cast_without_reuse(skill_id, factory);
     true
 }
 
 pub(crate) fn finish_owned_monster_attack_impact<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,
     monster_id: i32,
+    skill_id: u32,
+    factory: &CSkillFactory,
     runtime: &mut Runtime,
 ) {
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Calculate, SkillStage::Attack, factory);
+        let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Attack, SkillStage::Apply, factory);
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.finish_base_attack_cast_with_clock(skill_id, factory, || runtime.now_milliseconds());
     }
 }
 

@@ -196,8 +196,8 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.yunsheng_lightning_progress(),
-                monster.skill_last_used_ms(YUNSHENG_LIGHTNING_SKILL_ID),
+                monster.skill_progress::<YunShengLightningProgress>(YUNSHENG_LIGHTNING_SKILL_ID, game.skill_factory()).copied(),
+                monster.skill_last_used_ms(YUNSHENG_LIGHTNING_SKILL_ID, game.skill_factory()),
             ))
         })
     else {
@@ -265,10 +265,11 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.begin_base_attack_cast(
                 target_identity, YUNSHENG_LIGHTNING_SKILL_ID, skill_level, now_ms,
+                game.skill_factory(),
             );
-            monster.set_yunsheng_lightning_progress(YunShengLightningProgress::new(
+            monster.set_skill_progress(YUNSHENG_LIGHTNING_SKILL_ID, YunShengLightningProgress::new(
                 target_x, target_y,
-            ));
+            ), game.skill_factory());
         }
         send_start(game, region, &source, skill_level);
         return true;
@@ -302,8 +303,8 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         let flying_time_ms = properties.query_property(SKILL_USAGE_MISSILE_FLYING_TIME);
         progress.fire(target_x, target_y, flying_time_ms);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_yunsheng_lightning_progress(progress);
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            monster.set_skill_progress(YUNSHENG_LIGHTNING_SKILL_ID, progress, game.skill_factory());
+            let _ = monster.advance_base_attack_cast(YUNSHENG_LIGHTNING_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
     }
     if !time_reached(
@@ -363,9 +364,9 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         );
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.advance_base_attack_cast(YUNSHENG_LIGHTNING_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(YUNSHENG_LIGHTNING_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+        let _ = monster.finish_base_attack_cast_with_clock(YUNSHENG_LIGHTNING_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

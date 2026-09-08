@@ -922,8 +922,8 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.path_projectile_progress().cloned(),
-                monster.skill_last_used_ms(spec.skill_id),
+                monster.skill_progress::<PathProjectileProgress>(spec.skill_id, game.skill_factory()).cloned(),
+                monster.skill_last_used_ms(spec.skill_id, game.skill_factory()),
             ))
         })
     else {
@@ -992,11 +992,11 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
         let direction = get_line_direction(source_x, source_y, destination.0, destination.1);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
-            monster.begin_base_attack_cast(target_identity, spec.skill_id, skill_level, now_ms);
-            monster.set_path_projectile_progress(PathProjectileProgress::new(
+            monster.begin_base_attack_cast(target_identity, spec.skill_id, skill_level, now_ms, game.skill_factory());
+            monster.set_skill_progress(spec.skill_id, PathProjectileProgress::new(
                 destination.0,
                 destination.1,
-            ));
+            ), game.skill_factory());
         }
         let source = region
             .find_monster_by_id(monster_id)
@@ -1045,8 +1045,8 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
             progress.missile_flying_time_ms,
         );
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_path_projectile_progress(progress.clone());
-            let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+            monster.set_skill_progress(spec.skill_id, progress.clone(), game.skill_factory());
+            let _ = monster.advance_base_attack_cast(spec.skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
     }
 
@@ -1060,9 +1060,9 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
         send_end(game, region, &source, spec.skill_id, skill_level, &progress);
         drop(progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.advance_base_attack_cast(spec.skill_id, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+            let _ = monster.advance_base_attack_cast(spec.skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+            let _ = monster.finish_base_attack_cast_with_clock(spec.skill_id, game.skill_factory(), || runtime.now_milliseconds());
         }
         return true;
     }
@@ -1094,7 +1094,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 send_end(game, region, &source, spec.skill_id, skill_level, &progress);
                 progress.finish_after_collision();
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.set_path_projectile_progress(progress);
+                    monster.set_skill_progress(spec.skill_id, progress, game.skill_factory());
                 }
                 return true;
             }
@@ -1107,7 +1107,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     }
     progress.advance();
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_path_projectile_progress(progress);
+        monster.set_skill_progress(spec.skill_id, progress, game.skill_factory());
     }
     true
 }

@@ -78,12 +78,13 @@ pub(crate) fn begin_owned_monster_base_attack(
     target: crate::gameserver::appserver::shape::ShapeIdentity,
     skill_level: u16,
     started_at_ms: u32,
+    factory: &super::skillfactory::CSkillFactory,
 ) {
     use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
             target, skill_id: BASE_ATTACK_SKILL_ID, skill_level,
-        }, started_at_ms));
+        }, started_at_ms), factory);
     }
 }
 
@@ -103,7 +104,7 @@ pub(crate) fn start_owned_monster_base_attack_ai(
         monster.move_shape().shape().real_distance_to_point(0, 0)
     };
     if maximum_distance != 0 && distance as u32 > maximum_distance {
-        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, BASE_ATTACK_SKILL_ID);
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, BASE_ATTACK_SKILL_ID, game.skill_factory());
         return false;
     }
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
@@ -122,7 +123,7 @@ pub(crate) fn start_owned_monster_base_attack_ai(
     start.add_long(shape.get_direction());
     let _ = game.send_game_shape_around(region, &shape, None, &start);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+        let _ = monster.advance_base_attack_cast(BASE_ATTACK_SKILL_ID, SkillStage::Begin, SkillStage::Check, game.skill_factory());
     }
     true
 }
@@ -164,7 +165,7 @@ pub(crate) fn handle_owned_monster_base_target_loss<Runtime: GameMainLoopRuntime
         let _ = game.send_game_shape_around(region, monster.move_shape().shape(), None, &fire);
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.finish_base_attack_cast_with_clock(BASE_ATTACK_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

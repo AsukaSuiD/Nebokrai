@@ -590,7 +590,7 @@ fn outside_cells(
 pub(crate) struct WideArcAttackDispatch {
     pub(crate) monster_id: i32,
     pub(crate) cells: Vec<(i32, i32)>,
-    skill_id: u32,
+    pub(crate) skill_id: u32,
     skill_level: u16,
     properties: CSkillBaseProperties,
     property: MonsterProperties,
@@ -626,7 +626,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 monster.is_tamed().then(|| monster.pet_attack_properties(&property)),
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(skill_id),
+                monster.skill_last_used_ms(skill_id, game.skill_factory()),
             ))
         })
     else {
@@ -639,7 +639,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     }
     let target = resolve_owned_monster_attack_target(game, region, target_identity);
     if cast.is_some() && target.as_ref().is_none_or(|target| target.dead) {
-        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id);
+        let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game.skill_factory());
         return MonsterSkillCallOutcome::Handled;
     }
     let Some(target) = target else { return MonsterSkillCallOutcome::NotHandled };
@@ -713,7 +713,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
                 target: target_identity,
                 skill_id,
                 skill_level,
-            }, now_ms));
+            }, now_ms), game.skill_factory());
         }
         return MonsterSkillCallOutcome::Handled;
     }
@@ -729,7 +729,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             .map(|monster| monster.move_shape().shape()).unwrap_or(&source);
         send_start(game, region, source, skill_id, skill_level);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Begin, SkillStage::Check);
+            let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Begin, SkillStage::Check, game.skill_factory());
         }
     }
     if !skill_is_restored(
@@ -740,7 +740,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         return MonsterSkillCallOutcome::Handled;
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
     }
     send_fire(game, region, &source, &target.shape, skill_id, skill_level);
     let mut cells = Vec::with_capacity(32);

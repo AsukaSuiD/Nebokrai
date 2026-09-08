@@ -192,7 +192,7 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
                 property,
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(FURY_SKILL_ID),
+                monster.skill_last_used_ms(FURY_SKILL_ID, game.skill_factory()),
             ))
         })
     else {
@@ -242,6 +242,7 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
                 FURY_SKILL_ID,
                 skill_level,
                 now_ms,
+                game.skill_factory(),
             );
         }
         send_cast_start(game, region, &source, skill_level);
@@ -258,15 +259,15 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
 
     send_cast_fire(game, region, &source, skill_level);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+        let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
 
     let identity = source.identity();
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         if monster.move_shape_mut().restart_rage_break_state(now_ms) {
-            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+            let _ = monster.finish_base_attack_cast_with_clock(FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
             return true;
         }
     }
@@ -290,8 +291,8 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
     }
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
+        let _ = monster.finish_base_attack_cast_with_clock(FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }

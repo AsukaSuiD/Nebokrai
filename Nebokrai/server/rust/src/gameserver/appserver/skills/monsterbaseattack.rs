@@ -11,7 +11,9 @@
 //! доступно только достигнутому Attack выбранного GetAI и совпадающему
 //! зарегистрированному current skill. Пустая FIFO другого AI после смены
 //! хозяина проходит собственные Schedule/Idle, не продолжая и не отменяя
-//! чужое исполнение. Новый Begin заменяет его только в своей обычной точке.
+//! чужое исполнение. Begin, progress, reuse и End обращаются к экземпляру
+//! зарегистрированного навыка по ID собственного dispatch или concrete owner-а;
+//! состояние другого навыка не используется как запасное исполнение.
 //! OnFighting уже начатого immediate вызывает тот же owner до target/range
 //! расписания: его sufferer — сам монстр. Фоновый Begin не требует attack-cast,
 //! повторного Begin или наличия боевой цели; завершение FIFO остаётся следующим
@@ -206,7 +208,7 @@ use super::baseattack::{
     SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
 use super::monsterfastattack::{
-    MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME,
+    MONSTER_FAST_ATTACK_SKILL_ID, MonsterFastAttackProgress, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME,
     fast_attack_fire_message,
 };
 use super::monsterattack::{
@@ -662,7 +664,7 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             )?;
             let last_used_ms = region
                 .find_monster_by_id(monster_id)?
-                .skill_last_used_ms(u32::from(selected_skill_id));
+                .skill_last_used_ms(u32::from(selected_skill_id), game.skill_factory());
             Some(skill_is_restored(
                 last_used_ms,
                 properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
@@ -1296,7 +1298,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID | COMMON_BASE_ATTACK_SKILL_ID)
             && cast.is_some()
         {
-            return super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id);
+            return super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game.skill_factory());
         }
         return false;
     };
@@ -1338,14 +1340,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
             let last_used_ms = region
                 .find_monster_by_id(monster_id)
-                .map(|monster| monster.skill_last_used_ms(skill_id))
+                .map(|monster| monster.skill_last_used_ms(skill_id, game.skill_factory()))
                 .unwrap_or_default();
             if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
                 return true;
             }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.move_shape_mut().begin_immediate_skill(skill_id, game.skill_factory());
-                monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
+                monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, game.skill_factory());
             }
             return true;
         }
@@ -1353,7 +1355,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .is_some_and(|monster| monster.move_shape().immediate_skill_ended(skill_id, game.skill_factory()))
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.finish_active_immediate_skill();
+                monster.finish_active_immediate_skill(game.skill_factory());
             }
             return true;
         }
@@ -1842,7 +1844,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             let second_time = skill_properties.query_property(SKILL_USAGE_SECOND_TIME);
             let Some(mut progress) = region
                 .find_monster_by_id(monster_id)
-                .and_then(CMonster::fast_attack_progress)
+                .and_then(|monster| monster.skill_progress::<MonsterFastAttackProgress>(dispatch.skill_id, game.skill_factory()).copied())
             else {
                 return true;
             };
@@ -1858,10 +1860,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 progress.mark_visual_started();
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                     *monster
-                        .fast_attack_progress_mut()
+                        .skill_progress_mut::<MonsterFastAttackProgress>(dispatch.skill_id, game.skill_factory())
                         .expect("состояние быстрой атаки принадлежит текущему cast") = progress;
                     let _ = monster
-                        .advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+                        .advance_base_attack_cast(dispatch.skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
                 }
             }
             let first_due = time_reached(
@@ -1880,7 +1882,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 hits += 1;
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                     *monster
-                        .fast_attack_progress_mut()
+                        .skill_progress_mut::<MonsterFastAttackProgress>(dispatch.skill_id, game.skill_factory())
                         .expect("состояние быстрой атаки принадлежит текущему cast") = progress;
                 }
             }
@@ -1894,7 +1896,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         } else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 let _ = monster
-                    .advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+                    .advance_base_attack_cast(dispatch.skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
             }
             let mut fire = CMessage::new(0x000b_fe01);
             fire.add_byte(2);
@@ -1916,7 +1918,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             )
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+                let _ = monster.finish_base_attack_cast_with_clock(dispatch.skill_id, game.skill_factory(), || runtime.now_milliseconds());
             }
             return true;
         }
@@ -2008,16 +2010,16 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID
                 ) {
                     let _ = monster
-                        .advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+                        .advance_base_attack_cast(dispatch.skill_id, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
                     if finish_cast && hit_index + 1 == hit_count {
                         let _ = monster
-                            .advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+                            .advance_base_attack_cast(dispatch.skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
                     }
                 } else {
                     let _ = monster
-                        .advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+                        .advance_base_attack_cast(dispatch.skill_id, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
                     let _ = monster
-                        .advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+                        .advance_base_attack_cast(dispatch.skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
                 }
             }
             apply_owned_monster_attack_hit(
@@ -2043,7 +2045,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
             monster.move_shape_mut().shape_mut().set_action(1);
-            let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+            let _ = monster.finish_base_attack_cast_with_clock(dispatch.skill_id, game.skill_factory(), || runtime.now_milliseconds());
         }
         return true;
     }
@@ -2075,19 +2077,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID {
         let outcome = super::monsterrangeattack::begin_owned_monster_range_cast(
-            region, monster_id, skill_level, &skill_properties, now_ms, runtime,
+            region, monster_id, skill_level, &skill_properties, now_ms, game.skill_factory(), runtime,
         );
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
             game, region, monster_id, outcome, runtime,
         );
     }
     if skill_id == COMMON_BASE_ATTACK_SKILL_ID {
-        super::baseattack::begin_owned_monster_base_attack(region, monster_id, target, skill_level, now_ms);
+        super::baseattack::begin_owned_monster_base_attack(region, monster_id, target, skill_level, now_ms, game.skill_factory());
         return true;
     }
     let last_used_ms = region
         .find_monster_by_id(monster_id)
-        .map(|monster| monster.skill_last_used_ms(skill_id))
+        .map(|monster| monster.skill_last_used_ms(skill_id, game.skill_factory()))
         .unwrap_or_default();
     if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
         if pet_ai {
@@ -2101,9 +2103,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .move_shape_mut()
             .shape_mut()
             .set_direction(direction);
-        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
+        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, game.skill_factory());
         if fast_attack {
-            monster.begin_fast_attack_progress();
+            monster.set_skill_progress(skill_id, MonsterFastAttackProgress::default(), game.skill_factory());
         }
     }
     let mut start = CMessage::new(0x000b_fe01);

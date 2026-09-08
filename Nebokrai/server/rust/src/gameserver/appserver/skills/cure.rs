@@ -343,7 +343,7 @@ fn finish_monster_curable_state(
             }
             POISON_FOG_STATE_ID => RemovedMonsterCurableState::PoisonFog(monster.move_shape_mut().take_poison_fog_state()?),
             SPIDER_MIST_SKILL_ID => {
-                if !monster.remove_curable_attack_cast(SPIDER_MIST_SKILL_ID) {
+                if !monster.remove_curable_attack_cast(SPIDER_MIST_SKILL_ID, game.skill_factory()) {
                     return None;
                 }
                 RemovedMonsterCurableState::ActiveSpiderMist

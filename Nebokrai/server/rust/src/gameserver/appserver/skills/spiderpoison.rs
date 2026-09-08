@@ -393,7 +393,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
             let pet_attack = monster.is_tamed().then(|| monster.pet_attack_properties(&property));
-            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID)))
+            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID, game.skill_factory())))
         })
     else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
@@ -460,7 +460,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, SPIDER_POISON_SKILL_ID, skill_level, now_ms);
+            monster.begin_base_attack_cast(target_identity, SPIDER_POISON_SKILL_ID, skill_level, now_ms, game.skill_factory());
         }
         let source = region.find_monster_by_id(monster_id).map(|monster| monster.move_shape().shape()).unwrap_or(&source_shape);
         send_visual(game, region, source, monster_id, skill_level, 1, None);
@@ -474,7 +474,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate); }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory()); }
     send_visual(game, region, &source_shape, monster_id, skill_level, 2, Some((target_identity, target_x, target_y)));
     let (minimum, maximum, element) = region.find_monster_by_id(monster_id).map(|monster| {
         let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
@@ -498,8 +498,8 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     };
     let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
-        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+        let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
     }
     apply_owned_monster_attack_hit(game, region, runtime, now_ms, monster_id, attacker_master,
         target_identity, &target.shape, target.health, target.mana, target.master,
@@ -514,7 +514,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
+        let _ = monster.finish_base_attack_cast_with_clock(SPIDER_POISON_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }
