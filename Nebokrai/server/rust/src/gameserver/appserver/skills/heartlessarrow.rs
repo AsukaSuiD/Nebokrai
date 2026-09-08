@@ -208,7 +208,7 @@ pub(crate) fn apply_daub_poison(game: &mut CGame, player_id: i32, region_id: i32
 pub(crate) fn apply_daub_poison_with_master(game: &mut CGame, player_id: i32, master: MasterInfo, region_id: i32, target: ShapeIdentity, now_ms: u32) {
     let Some((level, weapon_level)) = game.find_player(player_id).and_then(|player| {
         if !player.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return None; }
-        let level = player.learned_skill_level(DAUB_POISON_SKILL_ID);
+        let level = player.learned_skill_level(DAUB_POISON_SKILL_ID, game.skill_factory());
         (level != 0).then(|| (level, player.weapon_damage_level(game.goods_factory())))
     }) else { return };
     let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else { return };
@@ -235,7 +235,7 @@ pub(crate) const fn is_heartless_arrow_dispatch(dispatch: PlayerSkillDispatch) -
 pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_heartless_arrow_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
-    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(HEARTLESS_ARROW_SKILL_ID), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(HEARTLESS_ARROW_SKILL_ID, game.skill_factory()), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(HEARTLESS_ARROW_SKILL_ID, level) else {
         if player_ai.player_skill_state::<HeartlessArrowExecutionState>(HEARTLESS_ARROW_SKILL_ID).copied().is_some() { abort_player_heartless_arrow(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);

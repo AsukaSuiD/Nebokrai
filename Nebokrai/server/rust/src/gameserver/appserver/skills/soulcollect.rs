@@ -142,7 +142,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if !is_soul_collect_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let level = player.learned_skill_level(SOUL_COLLECT_SKILL_ID);
+    let level = player.learned_skill_level(SOUL_COLLECT_SKILL_ID, game.skill_factory());
     let Some(properties) = game.skill_base_properties(SOUL_COLLECT_SKILL_ID, level) else {
         if player_ai.player_skill_execution(SOUL_COLLECT_SKILL_ID).is_some() { abort_player_soul_collect(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);

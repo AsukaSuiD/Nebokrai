@@ -78,7 +78,7 @@ pub(crate) const fn is_meteor_arrow_mass_dispatch(dispatch: PlayerSkillDispatch)
 pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
     ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_meteor_arrow_mass_dispatch(dispatch) { return result(QueuedSkillExecutionState::Rejected) }
-    let Some(level) = game.find_player(player_id).map(|p| p.learned_skill_level(METEOR_ARROW_MASS_SKILL_ID)) else { return result(QueuedSkillExecutionState::Rejected) };
+    let Some(level) = game.find_player(player_id).map(|p| p.learned_skill_level(METEOR_ARROW_MASS_SKILL_ID, game.skill_factory())) else { return result(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(METEOR_ARROW_MASS_SKILL_ID, level) else { if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_some() { abort_player_meteor_arrow_mass(game, player_id); } return result(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let amount = properties.query_property(AMOUNT); let limit = properties.query_property(AMOUNT_LIMIT);

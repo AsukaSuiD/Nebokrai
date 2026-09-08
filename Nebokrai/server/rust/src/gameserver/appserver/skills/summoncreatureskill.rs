@@ -140,7 +140,7 @@ pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: 
 pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     let skill_id = player_skill_id(dispatch);
     if !is_player_summon_creature_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, source_x, source_y, skill_level, master)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id), master_info(player)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, source_x, source_y, skill_level, master)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id, game.skill_factory()), master_info(player)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else { abort_player_summon_creature(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -295,7 +295,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
                 monster.move_shape().shape().clone(),
                 property,
                 attack_interval_ms,
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(skill_id),
             ))
         })
@@ -359,7 +359,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
 
     let Some(target_view) = target_view(game, region, target) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };

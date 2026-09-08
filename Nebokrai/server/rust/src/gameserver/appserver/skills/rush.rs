@@ -315,7 +315,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .and_then(|player| Some((
             player.server_region_id()?,
-            player.learned_skill_level(RUSH_SKILL_ID),
+            player.learned_skill_level(RUSH_SKILL_ID, game.skill_factory()),
             player.level(),
             player.shape().get_tile_x().ok()?,
             player.shape().get_tile_y().ok()?,

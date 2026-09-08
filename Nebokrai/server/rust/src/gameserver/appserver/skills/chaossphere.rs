@@ -183,7 +183,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     if !is_chaos_sphere_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((
         player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(CHAOS_SPHERE_SKILL_ID), player.mana(),
+        player.learned_skill_level(CHAOS_SPHERE_SKILL_ID, game.skill_factory()), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CHAOS_SPHERE_SKILL_ID, level) else {
         if player_ai.player_skill_state::<ChaosSphereExecutionState>(CHAOS_SPHERE_SKILL_ID).is_some() {

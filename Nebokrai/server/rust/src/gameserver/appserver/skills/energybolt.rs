@@ -508,7 +508,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
     }
     let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((
         player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(spec.skill_id), player.mana(),
+        player.learned_skill_level(spec.skill_id, game.skill_factory()), player.mana(),
     ))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(spec.skill_id, level) else {
         if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_some() {
@@ -921,7 +921,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 attack_interval_ms,
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.path_projectile_progress().cloned(),
                 monster.skill_last_used_ms(spec.skill_id),
             ))
@@ -940,7 +940,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
         .or_else(|| progress.as_ref().map(PathProjectileProgress::destination))
     else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -985,7 +985,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
         );
         if maximum_distance != 0 && initial_path.len() > maximum_distance as usize {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }
@@ -1029,7 +1029,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
             && path.len() > maximum_distance.wrapping_add(1) as usize
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }

@@ -9,15 +9,15 @@
 //! координатор фонового обхода не выводит завершение из общего bool результата.
 //! Новый Begin сбрасывает этот же признак в AutoStart и допущенном active-пути;
 //! сброс не затрагивает очередь, выбранный ID и время восстановления.
-//! Begin немедленного навыка хранится отдельно от IsEnded: новый экземпляр
-//! ещё не ended, но его AI не выполняет эффект до Begin (флаг +0x4c,
-//! например EnlargeFullMiss::AI 0x0051673b). End снимает этот флаг.
-//! Три достижимые комбинации Begin/IsEnded представлены одним lifecycle;
-//! одновременно начатого и завершённого immediate-экземпляра нет.
+//! Begin немедленного навыка хранится отдельно от IsEnded: CState constructor
+//! (0x005DBCA0) задаёт ended=true. Все 14 immediate-конструкторов сохраняют
+//! это значение и обнуляют собственный флаг +0x4c. До Begin эффекта нет
+//! (например EnlargeFullMiss::AI 0x0051673b), End снова снимает этот флаг.
+//! Constructor/Begin/End принадлежат одному lifecycle экземпляра;
+//! новый и завершённый immediate-навыки оба удовлетворяют IsEnded.
 //! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
-//! Поиск по общему реестру заменяет два прохода native-векторов: порядок
-//! элементов не влияет на этот результат, категории и их приоритет сохранены.
+//! Прямые проходы intrinsic-категорий не зависят от QuerySkillType.
 //! Выбранный ID не доказывает наличие навыка: GetCurrentSkill (RVA 0x000CDC10,
 //! moveshape.cpp:1720) разрешает его через реестр. OnIdle монстра/питомца и
 //! OnMoving питомца проверяют эту проекцию; отсутствующий default ID не
@@ -76,15 +76,28 @@
 //! Begin(self, self), затем WhenAddBackStageSkill этого же AI. Сам background-
 //! список принадлежит CBaseAI. Удаление навыка не очищает списки других
 //! владельцев: очередной OnExecute помечает отсутствующий ID как UNKNOWN.
-//! Реестр экземпляров ещё неполон: native AddSkill (0x004D1C70) допускает
+//! Четыре стандартных Vec сохраняют независимые экземпляры, их порядок и
+//! повторные ID: native AddSkill (0x004D1C70) допускает
 //! повторный ID, когда уровень первого найденного экземпляра равен нулю.
-//! Категорию вставки задаёт concrete constructor; GetSkill/DelSkill выбирают
-//! её отдельно через актуальный QuerySkillType(ID, 1). Уникальная Rust-map
-//! пока не выражает это расхождение и сохраняет insertion-order только state.
+//! Категорию вставки задаёт concrete constructor; GetSkill (0x004CE2D0)/DelSkill выбирают
+//! её отдельно через актуальный QuerySkillType(ID, 1). Явная &CSkillFactory
+//! сохраняет изменения reload, включая частично декодированный snapshot,
+//! без копии категорий в форме. Повышение ненулевого уровня удаляет первое
+//! совпадение и добавляет экземпляр в хвост. DelSkill отвергает UNKNOWN до
+//! current cleanup, но ID 0 проходит cleanup и только потом category lookup.
+//! AutoStart обращается прямо к каждому state-экземпляру, не разрешая заново
+//! его ID; смена metadata-категории не подменяет объект этого обхода.
+//! CSkill::GetSkillName (0x004D86E0) читает актуальные свойства по ID/уровню,
+//! а не имя времени регистрации. None в name означает отсутствие записи;
+//! локализованный GS0318 и пустой fallback разрешаются владельцем публикации.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
 //! Полный registered-skill End ещё не подключён; завершение одного текущего
 //! cast не заменяет этот контракт, в том числе перед приручением монстра.
+//! В Luvinia Application/MoveShape.cpp AddSkill/DelSkill остались пустыми,
+//! а StopAllSkills работает с другой active-module map и удаляет её записи.
+//! Старый GetSkill сохранился в отключённом OtherMessage; world factory
+//! хранит конфигурации. Эти формы не заменяют четыре owner-вектора Miracle.
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
 use std::collections::BTreeMap;
@@ -227,7 +240,7 @@ use crate::gameserver::appserver::skills::bossbluefurystate::{
 use crate::gameserver::appserver::skills::bossbluequakestate::{
     BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID,
 };
-use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory, SkillOwner};
 use crate::gameserver::appserver::skills::statefactory::known_state_record_offsets;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
@@ -261,10 +274,6 @@ const NPC_TYPE: i32 = 500;
 const SET_POSITION_MESSAGE: i32 = 0xBF603;
 const FORCE_MOVE_MESSAGE: i32 = 0xBF604;
 const MOVE_MESSAGE: i32 = 0xBF605;
-const SKILL_TYPE_ATTACK: u32 = 0;
-const SKILL_TYPE_DEFENSE: u32 = 1;
-const SKILL_TYPE_STATE: u32 = 2;
-const SKILL_TYPE_SUMMON: u32 = 3;
 pub(crate) const SKILL_BASE_DEFENSE: u32 = 10;
 const SKILL_NOT_DISAPPEAR_AFTER_DEAD: u32 = 56;
 const SKILL_USAGE_CONST: u32 = 20_010;
@@ -299,15 +308,14 @@ enum ImmediateSkillLifecycle {
     Ended,
 }
 
-/// Достигнутая common-проекция `CSkill`: identity, level, category и name.
+/// Достигнутая common-проекция `CSkill`: identity, level и concrete owner.
 /// Исполнение concrete attack/defense/state/summon owners остаётся у самих
 /// skill owners; здесь хранится точный результат `CMoveShape::AddSkill`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MoveShapeSkill {
     id: u32,
     level: i32,
-    skill_type: u32,
-    name: Vec<u8>,
+    owner: SkillOwner,
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
 }
@@ -567,11 +575,12 @@ impl MoveShapeSkill {
     }
 
     pub(crate) const fn skill_type(&self) -> u32 {
-        self.skill_type
+        self.owner.category() as u32
     }
 
-    pub(crate) fn name(&self) -> &[u8] {
-        &self.name
+    pub(crate) fn name<'a>(&self, factory: &'a CSkillFactory) -> Option<&'a [u8]> {
+        factory.query_skill_base_properties(self.id, self.level)
+            .map(|properties| properties.skill_name())
     }
 
     pub(crate) const fn item_position(&self) -> i32 {
@@ -623,8 +632,7 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
-    skills: BTreeMap<u32, MoveShapeSkill>,
-    state_skill_order: IndexSet<u32>,
+    skills: [Vec<MoveShapeSkill>; 4],
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     state_storage: CanonicalStateStorage,
@@ -824,8 +832,7 @@ impl Default for CMoveShape {
     fn default() -> Self {
         Self {
             shape: CShape::default(),
-            skills: BTreeMap::new(),
-            state_skill_order: IndexSet::new(),
+            skills: Default::default(),
             current_skill_id: None,
             item_skill_ids: Vec::new(),
             state_storage: CanonicalStateStorage::default(),
@@ -921,8 +928,8 @@ impl CMoveShape {
         &self.pets
     }
 
-    pub(crate) fn skill_level(&self, skill_id: u32) -> i32 {
-        self.skills.get(&skill_id).map_or(0, MoveShapeSkill::level)
+    pub(crate) fn skill_level(&self, skill_id: u32, factory: &CSkillFactory) -> i32 {
+        self.skill(skill_id, factory).map_or(0, MoveShapeSkill::level)
     }
 
     pub(crate) const fn shape(&self) -> &CShape {
@@ -1216,44 +1223,45 @@ impl CMoveShape {
         self.can_fight
     }
 
-    pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {
-        &self.skills
+    pub(crate) fn skills(&self) -> impl Iterator<Item = &MoveShapeSkill> {
+        self.skills.iter().flat_map(|category| category.iter())
     }
 
-    /// Exact `AutoStartPassiveSkill`: state-skill vector обходится в порядке
+    pub(crate) fn skills_in_category(&self, category: SkillCategory) -> &[MoveShapeSkill] {
+        &self.skills[category as usize]
+    }
+
+    /// `AutoStartPassiveSkill`: state-вектор обходится в порядке
     /// вставки, а каждый `IsAutoStart != 0` добавляется в background-очередь.
     /// Self-target `Begin(this, this)` в Rust задаётся самим владельцем.
     pub(crate) fn auto_start_passive_skills(&mut self, ai: &mut CBaseAI) -> usize {
-        let started: Vec<u32> = self
-            .state_skill_order
-            .iter()
-            .copied()
-            .filter(|skill_id| is_auto_start_state_skill(*skill_id))
-            .collect();
-        let count = started.len();
-        for skill_id in &started {
-            self.begin_immediate_skill(*skill_id);
-            ai.add_pending_back_stage_skill(*skill_id);
+        let mut count = 0;
+        for skill in &mut self.skills[SkillCategory::State as usize] {
+            if is_auto_start_state_skill(skill.id) {
+                skill.immediate_lifecycle = ImmediateSkillLifecycle::Begun;
+                ai.add_pending_back_stage_skill(skill.id);
+                count += 1;
+            }
         }
         count
     }
 
-    pub(crate) fn immediate_skill_ended(&self, skill_id: u32) -> bool {
-        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_lifecycle == ImmediateSkillLifecycle::Ended)
+    pub(crate) fn immediate_skill_ended(&self, skill_id: u32, factory: &CSkillFactory) -> bool {
+        self.skill(skill_id, factory).is_some_and(|skill| skill.immediate_lifecycle != ImmediateSkillLifecycle::Begun)
     }
 
-    pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32) {
-        if let Some(skill) = self.skills.get_mut(&skill_id) {
+    pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32, factory: &CSkillFactory) {
+        if let Some(skill) = self.skill_mut(skill_id, factory) {
             skill.immediate_lifecycle = ImmediateSkillLifecycle::Begun;
         }
     }
 
-    pub(crate) fn immediate_skill_started(&self, skill_id: u32) -> bool {
-        self.skills.get(&skill_id).is_some_and(|skill| skill.immediate_lifecycle == ImmediateSkillLifecycle::Begun)
+    pub(crate) fn immediate_skill_started(&self, skill_id: u32, factory: &CSkillFactory) -> bool {
+        self.skill(skill_id, factory).is_some_and(|skill| skill.immediate_lifecycle == ImmediateSkillLifecycle::Begun)
     }
 
-    pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32) {
-        if let Some(skill) = self.skills.get_mut(&skill_id) {
+    pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32, factory: &CSkillFactory) {
+        if let Some(skill) = self.skill_mut(skill_id, factory) {
             skill.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
         }
     }
@@ -1930,7 +1938,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn clear_persisted_runtime_state(&mut self) {
-        self.skills.clear();
+        self.skills.iter_mut().for_each(Vec::clear);
         self.current_skill_id = None;
         self.item_skill_ids.clear();
         self.ex_states.clear();
@@ -5275,43 +5283,44 @@ impl CMoveShape {
             .collect()
     }
 
-    pub(crate) fn skill(&self, skill_id: u32) -> Option<&MoveShapeSkill> {
-        self.skills.get(&skill_id)
+    pub(crate) fn skill(&self, skill_id: u32, factory: &CSkillFactory) -> Option<&MoveShapeSkill> {
+        let category = SkillCategory::from_raw(factory.query_skill_type(skill_id, 1))?;
+        self.skills_in_category(category).iter().find(|skill| skill.id == skill_id)
     }
 
-    /// Exact `ClearSkills` для канонической Rust-проекции четырёх C++
-    /// skill-векторов. Concrete `End/Delete` не имеют отдельного наблюдаемого
-    /// состояния после уже достигнутого сброса current skill.
-    pub(crate) fn clear_skills(&mut self) {
-        self.current_skill_id = None;
-        self.skills.clear();
-        self.state_skill_order.clear();
+    fn skill_mut(&mut self, skill_id: u32, factory: &CSkillFactory) -> Option<&mut MoveShapeSkill> {
+        let category = SkillCategory::from_raw(factory.query_skill_type(skill_id, 1))?;
+        self.skills[category as usize].iter_mut().find(|skill| skill.id == skill_id)
+    }
+
+    /// Удаление реестра сохраняет неразрешённый current ID. Полный concrete
+    /// End перед удалением ещё требует подключения lifecycle владельца.
+    pub(crate) fn clear_skills(&mut self, factory: &CSkillFactory) {
+        if self.current_skill(factory).is_some() {
+            self.current_skill_id = None;
+        }
+        for category in [SkillCategory::Attack, SkillCategory::Defense, SkillCategory::Summon, SkillCategory::State] {
+            self.skills[category as usize].clear();
+        }
     }
 
     /// `CSkillFactory::QuerySkill(SKILL_BASE_DEFENSE, 1)` создавал
     /// `CFightDefense` отдельной ветвью даже без reloadable properties.
-    /// Registry используется только для имени проекции и не может отменить
-    /// intrinsic defense либо изменить его категорию.
-    pub(crate) fn add_base_defense_skill(&mut self, factory: &CSkillFactory) {
-        let name = factory
-            .query_skill_base_properties(SKILL_BASE_DEFENSE, 1)
-            .map(|properties| properties.skill_name().to_vec())
-            .unwrap_or_default();
-        self.skills.insert(
-            SKILL_BASE_DEFENSE,
-            MoveShapeSkill {
-                id: SKILL_BASE_DEFENSE,
-                level: 1,
-                skill_type: SKILL_TYPE_DEFENSE,
-                name,
-                item_position: -1,
-                immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
-            },
-        );
+    /// Reloadable properties не могут отменить intrinsic defense или
+    /// изменить его категорию; имя читается только при обращении к экземпляру.
+    pub(crate) fn add_base_defense_skill(&mut self, _factory: &CSkillFactory) {
+        self.skills[SkillCategory::Defense as usize].push(MoveShapeSkill {
+            id: SKILL_BASE_DEFENSE,
+            level: 1,
+            owner: CSkillFactory::factory_owner(SKILL_BASE_DEFENSE)
+                .expect("CFightDefense входит в native factory"),
+            item_position: -1,
+            immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
+        });
     }
 
-    pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32) -> bool {
-        let Some(skill) = self.skills.get_mut(&skill_id) else { return false };
+    pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32, factory: &CSkillFactory) -> bool {
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
         skill.set_item_position(position);
         true
     }
@@ -5322,15 +5331,15 @@ impl CMoveShape {
     }
 
     /// Проекция GetCurrentSkill в реестр; execution и End остаются у skill-owner.
-    pub(crate) fn current_skill(&self) -> Option<&MoveShapeSkill> {
-        self.current_skill_id.and_then(|skill_id| self.skill(skill_id))
+    pub(crate) fn current_skill(&self, factory: &CSkillFactory) -> Option<&MoveShapeSkill> {
+        self.current_skill_id.and_then(|skill_id| self.skill(skill_id, factory))
     }
 
     /// GetDefaultAttackSkillID (0x004CE240): порядок категорий важнее порядка ID.
     pub(crate) fn default_attack_skill_id(&self) -> u32 {
-        if self.skills.get(&2).is_some_and(|skill| skill.skill_type == SKILL_TYPE_ATTACK) {
+        if self.skills_in_category(SkillCategory::Attack).iter().any(|skill| skill.id == 2) {
             2
-        } else if self.skills.get(&3).is_some_and(|skill| skill.skill_type == SKILL_TYPE_SUMMON) {
+        } else if self.skills_in_category(SkillCategory::Summon).iter().any(|skill| skill.id == 3) {
             3
         } else {
             1
@@ -5373,72 +5382,48 @@ impl CMoveShape {
         self.moveable = self.moveable_count < 1;
     }
 
-    /// Exact `AddSkill(tagSkillID, long)` для already decoded factory registry:
-    /// прежний ненулевой уровень не понижается; иначе entry заменяется только
-    /// для native-supported ID одной из четырёх canonical категорий.
+    /// AddSkill (0x004D1C70): ненулевой уровень не понижается, повышение
+    /// удаляет первое совпадение и добавляет новый экземпляр в хвост.
+    /// Нулевой уровень прежнего экземпляра допускает повторный ID.
     pub(crate) fn add_skill(&mut self, skill_id: u32, level: i32, factory: &CSkillFactory) -> bool {
-        if let Some(existing) = self.skills.get(&skill_id) {
-            if existing.level != 0 && level <= existing.level {
-                return true;
+        if let Some(existing) = self.skill(skill_id, factory) {
+            if existing.level != 0 {
+                if level <= existing.level {
+                    return true;
+                }
+                self.delete_skill(skill_id, factory);
             }
         }
-        self.skills.remove(&skill_id);
-        self.state_skill_order.shift_remove(&skill_id);
-        if !CSkillFactory::supports_skill_id(skill_id) {
-            return false;
-        }
-        let Some(properties) = factory.query_skill_base_properties(skill_id, level) else {
+        let Some(owner) = CSkillFactory::factory_owner(skill_id) else {
             return false;
         };
-        let skill_type = properties.skill_type();
-        if !matches!(
-            skill_type,
-            SKILL_TYPE_ATTACK | SKILL_TYPE_DEFENSE | SKILL_TYPE_STATE | SKILL_TYPE_SUMMON
-        ) {
-            return false;
-        }
-        self.skills.insert(
-            skill_id,
-            MoveShapeSkill {
-                id: skill_id,
-                level,
-                skill_type,
-                name: properties.skill_name().to_vec(),
-                item_position: -1,
-                immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
-            },
-        );
-        if skill_type == SKILL_TYPE_STATE {
-            self.state_skill_order.insert(skill_id);
-        }
+        self.skills[owner.category() as usize].push(MoveShapeSkill {
+            id: skill_id,
+            level,
+            owner,
+            item_position: -1,
+            immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
+        });
         true
     }
 
-    /// Exact reached state-transition `DelSkill(tagSkillID)`. Исходник всегда
-    /// завершает текущий skill до category lookup, даже когда удаляется другой
-    /// ID или искомой записи нет. Concrete `End/Delete` не имеют отдельного
-    /// наблюдаемого state в достигнутой common-проекции.
+    /// DelSkill (0x004CF320) удаляет только первый найденный экземпляр.
+    /// До category lookup обрабатывается разрешённый current, даже если
+    /// удаляется другой ID. UNKNOWN отвергается до этого, а ID 0 — после.
     pub(crate) fn delete_skill(&mut self, skill_id: u32, factory: &CSkillFactory) -> bool {
-        if skill_id == 0 {
+        if skill_id == super::skills::skillfactory::UNKNOWN_SKILL_ID {
             return false;
         }
-        if self
-            .current_skill_id
-            .is_some_and(|current| self.skills.contains_key(&current))
-        {
+        if self.current_skill(factory).is_some() {
             self.current_skill_id = None;
         }
-        if !CSkillFactory::supports_skill_id(skill_id) {
+        let Some(category) = SkillCategory::from_raw(factory.query_skill_type(skill_id, 1)) else {
             return false;
+        };
+        let skills = &mut self.skills[category as usize];
+        if let Some(index) = skills.iter().position(|skill| skill.id == skill_id) {
+            skills.remove(index);
         }
-        if !matches!(
-            factory.query_skill_type(skill_id, 1),
-            SKILL_TYPE_ATTACK | SKILL_TYPE_DEFENSE | SKILL_TYPE_STATE | SKILL_TYPE_SUMMON
-        ) {
-            return false;
-        }
-        self.state_skill_order.shift_remove(&skill_id);
-        self.skills.remove(&skill_id);
         true
     }
 
@@ -6274,18 +6259,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 // GetDefaultAttackSkillID материализован в default_attack_skill_id.
 
 // ============================================================================
-// FUNCTION: CMoveShape::GetSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2677
-// RVA: 0x000CE2D0
-// ADDRESS: 004ce2d0
-// PROTOTYPE: CSkill * __thiscall GetSkill(tagSkillID param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::FindPositionForPet

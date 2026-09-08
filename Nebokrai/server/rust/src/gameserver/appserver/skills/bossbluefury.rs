@@ -192,7 +192,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         .and_then(|player| {
             Some((
                 player.server_region_id()?,
-                player.learned_skill_level(BOSS_BLUE_FURY_SKILL_ID),
+                player.learned_skill_level(BOSS_BLUE_FURY_SKILL_ID, game.skill_factory()),
                 player.rp(),
                 player.is_dead(),
             ))
@@ -345,7 +345,7 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         .map(|monster| {
             (
                 monster.move_shape().shape().clone(),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(BOSS_BLUE_FURY_SKILL_ID),
             )
         })
@@ -357,7 +357,7 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
         else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         };

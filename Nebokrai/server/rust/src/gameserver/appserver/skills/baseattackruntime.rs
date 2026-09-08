@@ -74,7 +74,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     let Some(player) = game.find_player(player_id) else {
         return rejected();
     };
-    let skill_level = player.learned_skill_level(BASE_ATTACK_SKILL_ID);
+    let skill_level = player.learned_skill_level(BASE_ATTACK_SKILL_ID, game.skill_factory());
     let Some(properties) = game
         .skill_factory
         .query_skill_base_properties(BASE_ATTACK_SKILL_ID, skill_level)

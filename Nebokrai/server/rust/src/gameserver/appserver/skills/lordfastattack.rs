@@ -389,7 +389,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(skill_id),
+            player.learned_skill_level(skill_id, game.skill_factory()),
             player.shape_view()?,
         ))
     }) else {

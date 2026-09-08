@@ -209,7 +209,7 @@ fn attack_impact<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32,
 pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_player_direct_projectile_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let skill_id = skill_id(dispatch);
-    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id)))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id, game.skill_factory())))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);

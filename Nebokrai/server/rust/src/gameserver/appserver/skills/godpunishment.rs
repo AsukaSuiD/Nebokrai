@@ -84,7 +84,7 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
     let id = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
     if id != GOD_PUNISHMENT_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let level = player.learned_skill_level(id); let Some(region) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let level = player.learned_skill_level(id, game.skill_factory()); let Some(region) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(props) = game.skill_base_properties(id, level) else {
         if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_some() { abort_player_god_punishment(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);

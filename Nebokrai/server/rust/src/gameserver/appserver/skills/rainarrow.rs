@@ -105,7 +105,7 @@ pub(crate) const fn is_rain_arrow_dispatch(d: PlayerSkillDispatch) -> bool { mat
 pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, dispatch: PlayerSkillDispatch,
     ai: &mut CPlayerAI, runtime: &mut R) -> QueuedSkillExecutionOutcome {
     if !is_rain_arrow_dispatch(dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
-    let Some((region, level, source, direction)) = game.find_player(id).and_then(|p| Some((p.server_region_id()?, p.learned_skill_level(RAIN_ARROW_SKILL_ID),
+    let Some((region, level, source, direction)) = game.find_player(id).and_then(|p| Some((p.server_region_id()?, p.learned_skill_level(RAIN_ARROW_SKILL_ID, game.skill_factory()),
         (p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?), p.shape().get_direction()))) else { return outcome(QueuedSkillExecutionState::Rejected) };
     let Some(props) = game.skill_base_properties(RAIN_ARROW_SKILL_ID, level) else { if ai.player_skill_state::<RainArrowExecutionState>(RAIN_ARROW_SKILL_ID).cloned().is_some() { abort_player_rain_arrow(game, id); } return outcome(QueuedSkillExecutionState::Rejected) };
     let mp = props.query_property(USER_MP_LOSE); let reuse = props.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = props.query_property(SKILL_USAGE_DELAY_TIME);

@@ -107,7 +107,7 @@ pub(crate) fn start_owned_monster_base_attack_ai(
         return false;
     }
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
-    let Some(cast) = monster.current_active_attack_cast() else { return false };
+    let Some(cast) = monster.current_active_attack_cast(game.skill_factory()) else { return false };
     let (target_x, target_y) = target.map_or((0, 0), |target| (target.tile_x, target.tile_y));
     monster.move_shape_mut().shape_mut().set_direction(crate::public::tools::get_line_direction(
         source.tile_x, source.tile_y, target_x, target_y,
@@ -136,7 +136,7 @@ pub(crate) fn handle_owned_monster_base_target_loss<Runtime: GameMainLoopRuntime
     runtime: &mut Runtime,
 ) -> bool {
     use super::kernel::SkillStage;
-    let Some(cast) = region.find_monster_by_id(monster_id).and_then(|monster| monster.current_active_attack_cast()) else { return false };
+    let Some(cast) = region.find_monster_by_id(monster_id).and_then(|monster| monster.current_active_attack_cast(game.skill_factory())) else { return false };
     if cast.dispatch().skill_id != BASE_ATTACK_SKILL_ID { return false }
     let target = super::monsterattack::resolve_owned_monster_attack_target(game, region, cast.dispatch().target);
     if let Some(target) = target {

@@ -281,7 +281,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         player.server_region_id()?,
         player.shape().get_tile_x().ok()?,
         player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(SEAL_SKILL_ID),
+        player.learned_skill_level(SEAL_SKILL_ID, game.skill_factory()),
         player.mana(),
         master_info(player),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };

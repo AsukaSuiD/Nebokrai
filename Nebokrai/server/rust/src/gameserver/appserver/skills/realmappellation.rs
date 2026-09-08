@@ -71,7 +71,7 @@ pub(crate) fn set_bonus(
     let succeeded = if appellation_id == 0 {
         true
     } else if let Some(identity) = resolve_bonus(appellation_id) {
-        if player.realm_appellation_entitled(appellation_id)
+        if player.realm_appellation_entitled(appellation_id, factory)
             && player.add_realm_appellation_skill(identity.skill_id, identity.level, factory)
         {
             player.set_realm_appellation_bonus_identity(identity.skill_id, identity.level);

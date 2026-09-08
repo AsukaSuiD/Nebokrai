@@ -92,7 +92,7 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 attack_interval_ms,
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(SPORE_BLASTING_SKILL_ID),
             ))
         })
@@ -104,7 +104,7 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
         let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
         else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         };

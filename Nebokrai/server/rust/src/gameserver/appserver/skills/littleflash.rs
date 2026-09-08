@@ -337,7 +337,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     let skill_id = variant.skill_id();
     let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((
         player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(skill_id),
+        player.learned_skill_level(skill_id, game.skill_factory()),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
         if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_some() {

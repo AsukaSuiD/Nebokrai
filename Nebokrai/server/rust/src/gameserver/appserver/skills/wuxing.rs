@@ -138,7 +138,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
 
     let skill_level = game
         .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id));
+        .map_or(0, |player| player.learned_skill_level(skill_id, game.skill_factory()));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };

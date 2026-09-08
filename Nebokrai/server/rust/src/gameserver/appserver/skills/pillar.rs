@@ -86,7 +86,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
     ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_pillar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(PILLAR_SKILL_ID)) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(PILLAR_SKILL_ID, game.skill_factory())) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if ai.player_skill_execution(PILLAR_SKILL_ID).is_some() { finish_player_pillar(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let keep = properties.query_property(STATE_PERSIST_TIME);

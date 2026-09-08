@@ -169,7 +169,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if matches!(dispatch, PlayerSkillDispatch::SelfTarget { .. } | PlayerSkillDispatch::Point { .. }) {
-        let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(BLIND_SKILL_ID)) else {
+        let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(BLIND_SKILL_ID, game.skill_factory())) else {
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let Some(properties) = game.skill_base_properties(BLIND_SKILL_ID, level) else {
@@ -195,7 +195,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             player.shape().get_tile_x().ok()?,
             player.shape().get_tile_y().ok()?,
             player.level(),
-            player.learned_skill_level(BLIND_SKILL_ID),
+            player.learned_skill_level(BLIND_SKILL_ID, game.skill_factory()),
             player.mana(),
         )))
     else {

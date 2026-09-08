@@ -109,7 +109,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     if !is_thunder_slash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, mana, rp)) = game.find_player(player_id).and_then(|player| Some((
         player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(THUNDER_SLASH_SKILL_ID), player.mana(), player.rp(),
+        player.learned_skill_level(THUNDER_SLASH_SKILL_ID, game.skill_factory()), player.mana(), player.rp(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(THUNDER_SLASH_SKILL_ID, level) else {
         if ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).is_some() {

@@ -156,7 +156,7 @@ pub(crate) fn execute_player_rush_2<Runtime: GameMainLoopRuntime>(
     if !is_rush_2_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_level, source_x, source_y, mana, rp)) = game
         .find_player(player_id)
-        .and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(RUSH_2_SKILL_ID), player.level(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(), player.rp())))
+        .and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(RUSH_2_SKILL_ID, game.skill_factory()), player.level(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(), player.rp())))
     else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(RUSH_2_SKILL_ID, level) else {
         if ai.player_skill_execution(RUSH_2_SKILL_ID).is_some() { finish_player_rush_2(game, player_id, ai, runtime) }

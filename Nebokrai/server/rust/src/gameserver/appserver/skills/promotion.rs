@@ -294,7 +294,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
                 monster.move_shape().shape().get_tile_y().ok()?,
                 property.ai,
                 attack_interval_ms,
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(PROMOTION_SKILL_ID),
             ))
         })
@@ -303,7 +303,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
     };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -313,7 +313,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
     };
     if target.dead {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -462,7 +462,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
                 player.server_region_id()?,
                 player.shape().get_tile_x().ok()?,
                 player.shape().get_tile_y().ok()?,
-                player.learned_skill_level(PROMOTION_SKILL_ID),
+                player.learned_skill_level(PROMOTION_SKILL_ID, game.skill_factory()),
                 player.mana(),
             ))
         })

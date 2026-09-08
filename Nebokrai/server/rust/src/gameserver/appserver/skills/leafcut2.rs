@@ -77,7 +77,7 @@ pub(crate) fn execute_player_leaf_cut_2<Runtime: GameMainLoopRuntime>(game: &mut
     if !is_leaf_cut_2_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some(target) = dispatch_target(dispatch) else { return reject_initial(game, player_id, 10, 0, None) };
     if target.object_type == PLAYER_TYPE && target.id == player_id { return reject_initial(game, player_id, 10, 0, None) }
-    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(LEAF_CUT_2_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(LEAF_CUT_2_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some((target_x, target_y, target_dead, target_name)) = target_facts(game, region_id, target) else { return reject_initial(game, player_id, 10, 0, None) };
     let Some((source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(LEAF_CUT_2_SKILL_ID, level) else { if ai.player_skill_execution(LEAF_CUT_2_SKILL_ID).is_some() { finish_player_leaf_cut_2(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };

@@ -155,7 +155,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
             Some((
                 player.server_region_id()?,
                 player.shape().area_index()?,
-                player.learned_skill_level(GIBE_SKILL_ID),
+                player.learned_skill_level(GIBE_SKILL_ID, game.skill_factory()),
                 player.is_dead(),
             ))
         })

@@ -135,7 +135,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     if player.server_region_id().is_none() {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let skill_level = player.learned_skill_level(skill_id);
+    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
     let initial_mana = player.mana();
     let Some(properties) = game.skill_base_properties(skill_id, skill_level)
     else {

@@ -275,7 +275,7 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
     let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(INFERNOL_SKILL_ID),
+            player.learned_skill_level(INFERNOL_SKILL_ID, game.skill_factory()),
             player.mana(),
         ))
     }) else {

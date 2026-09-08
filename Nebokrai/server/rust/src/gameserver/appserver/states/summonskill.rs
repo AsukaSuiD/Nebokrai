@@ -16,9 +16,9 @@
 //! `AfterUseSkill` пустой функцией; для них используется явный хвост без
 //! износа оружия.
 //! Конструктор исходного класса менял лишь vtable и техническую категорию `3`;
-//! в Rust категория читается из `CSkillBaseProperties`, а общий lifecycle
-//! принадлежит `skills/kernel.rs` и `CPlayerAI`. Неизвестных частей в
-//! достигнутом хвосте нет.
+//! в Rust intrinsic-категория принадлежит фабричному owner-каталогу.
+//! Этот хвост применяется к уже начатому исполнению; он не заменяет полный
+//! End зарегистрированного экземпляра до Begin или после прежнего End.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};

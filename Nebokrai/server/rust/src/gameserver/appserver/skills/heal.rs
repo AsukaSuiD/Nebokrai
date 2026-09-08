@@ -253,7 +253,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
                 player.server_region_id()?,
                 player.shape().get_tile_x().ok()?,
                 player.shape().get_tile_y().ok()?,
-                player.learned_skill_level(skill_id),
+                player.learned_skill_level(skill_id, game.skill_factory()),
                 player.mana(),
                 player.weapon_damage_level(game.goods_factory()) as u32,
             ))

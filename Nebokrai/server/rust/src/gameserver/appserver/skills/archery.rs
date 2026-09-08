@@ -134,7 +134,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                     .clone(),
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(skill_id),
             ))
         })
@@ -156,7 +156,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             if cast.is_some() {
                 let _ = monster.finish_base_attack_cast_without_reuse();
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -181,7 +181,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             if cast.is_some() {
                 let _ = monster.finish_base_attack_cast_without_reuse();
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -454,7 +454,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return rejected();
     };
-    let skill_level = player.learned_skill_level(ARCHERY_SKILL_ID);
+    let skill_level = player.learned_skill_level(ARCHERY_SKILL_ID, game.skill_factory());
     let Some(properties) = game.skill_base_properties(ARCHERY_SKILL_ID, skill_level)
     else {
         return rejected();

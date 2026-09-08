@@ -98,7 +98,7 @@ impl MonsterImmediateSkill {
         skill_id: u32, skill_level: i32, runtime: &mut Runtime,
     ) -> bool {
         if !region.find_monster_by_id(monster_id)
-            .is_some_and(|monster| monster.move_shape().immediate_skill_started(skill_id))
+            .is_some_and(|monster| monster.move_shape().immediate_skill_started(skill_id, game.skill_factory()))
         {
             return false;
         }
@@ -113,7 +113,7 @@ impl MonsterImmediateSkill {
                 let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
                     return false;
                 };
-                monster.move_shape_mut().finish_immediate_skill(skill_id);
+                monster.move_shape_mut().finish_immediate_skill(skill_id, game.skill_factory());
                 true
             }
         }
@@ -136,7 +136,7 @@ pub(crate) fn execute_monster_immediate_state<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        monster.move_shape_mut().finish_immediate_skill(skill_id);
+        monster.move_shape_mut().finish_immediate_skill(skill_id, game.skill_factory());
         return true;
     };
     match skill_id {
@@ -174,7 +174,7 @@ pub(crate) fn execute_monster_immediate_state<Runtime: GameMainLoopRuntime>(
     }
     let _ = game.publish_owned_monster_states(region, monster_id);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.mark_immediate_skill_used(skill_id, runtime.now_milliseconds());
+        monster.mark_immediate_skill_used(skill_id, runtime.now_milliseconds(), game.skill_factory());
     }
     true
 }
@@ -224,7 +224,7 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
 
     let skill_level = game
         .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id));
+        .map_or(0, |player| player.learned_skill_level(skill_id, game.skill_factory()));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };

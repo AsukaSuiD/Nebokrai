@@ -268,7 +268,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_soul_mirror_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(SOUL_MIRROR_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(SOUL_MIRROR_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SOUL_MIRROR_SKILL_ID, level) else {
         if player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).is_some() { abort_player_soul_mirror(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);

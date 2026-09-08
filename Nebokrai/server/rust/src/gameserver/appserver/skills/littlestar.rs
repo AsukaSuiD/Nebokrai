@@ -12,9 +12,13 @@
 //! использует ту же геометрию и частоту без расхода, относящегося к игроку.
 //! Формулы, порядок клеток, применение атак и wire-эффекты принадлежат этому
 //! owner-у; `CGame` только разрешает владельцев и доставляет результат.
-//! Player `End` возвращает движение, публикует action `3` и завершает
-//! `CAttackSkill::End(1)` с единичным оружейным `AfterUseSkill`; этот порядок
-//! общий для завершения и отмены, а периодический `Attack` оружие не изнашивает.
+//! Player `End` сначала освобождает путь и сбрасывает локальный таймер,
+//! возвращает движение, публикует action `3` и передаёт исходный аргумент
+//! в `CAttackSkill::End`. При End(0) нет `AfterUseSkill` и чтения/записи
+//! reuse; End(1) сохраняет единичный износ оружия после derived cleanup.
+//! Периодический `Attack` оружие не изнашивает. Отказ MP в AI (0x00535E08)
+//! и отсутствие свойств (0x005360F0) вызывают End(0), истечение срока
+//! (0x005360DB) — End(1).
 //! Стихийная прибавка вычисляется в расширенной точности x87 из целых свойств
 //! и сохранённой `f32`-константы, затем усекается к нулю. Player и monster
 //! ветви используют абсолютный срок `CSkill::IsRestored`; периодические тики
@@ -149,21 +153,29 @@ fn finish_player_little_star<Runtime: GameMainLoopRuntime>(
     level: i32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
+    successful: bool,
 ) {
+    if let Some(state) = player_ai.player_skill_state_mut::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID) {
+        state.path = None;
+        state.last_attack_ms = 0;
+    }
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
     send_player_visual(game, player_id, level, 3, None);
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(LITTLE_STAR_SKILL_ID, now_ms);
-    });
+    if successful {
+        finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+            player_ai.mark_skill_used(LITTLE_STAR_SKILL_ID, now_ms);
+        });
+    }
 }
 
-pub(crate) fn cancel_player_little_star<Runtime: GameMainLoopRuntime>(
+fn end_player_little_star<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
+    successful: bool,
 ) -> bool {
     let Some(dispatch) = player_ai
         .player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID)
@@ -173,9 +185,31 @@ pub(crate) fn cancel_player_little_star<Runtime: GameMainLoopRuntime>(
     };
     let level = game
         .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(LITTLE_STAR_SKILL_ID));
-    finish_player_little_star(game, player_id, level, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+        .map_or(0, |player| player.learned_skill_level(LITTLE_STAR_SKILL_ID, game.skill_factory()));
+    finish_player_little_star(game, player_id, level, player_ai, runtime, successful);
+    player_ai.finish_player_skill(dispatch, if successful {
+        SkillTermination::Completed
+    } else {
+        SkillTermination::Cancelled
+    })
+}
+
+pub(crate) fn cancel_player_little_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    end_player_little_star(game, player_id, player_ai, runtime, false)
+}
+
+pub(crate) fn complete_player_little_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    end_player_little_star(game, player_id, player_ai, runtime, true)
 }
 
 #[allow(clippy::too_many_arguments, reason = "параметры соответствуют подтверждённой формуле навыка")]
@@ -238,11 +272,11 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
     if !is_player_little_star_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((
         player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(LITTLE_STAR_SKILL_ID), player.mana(),
+        player.learned_skill_level(LITTLE_STAR_SKILL_ID, game.skill_factory()), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(LITTLE_STAR_SKILL_ID, level) else {
         if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some() {
-            finish_player_little_star(game, player_id, level, ai, runtime);
+            finish_player_little_star(game, player_id, level, ai, runtime, false);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -283,14 +317,14 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 
     if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
         let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
-            finish_player_little_star(game, player_id, level, ai, runtime);
+            finish_player_little_star(game, player_id, level, ai, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_player_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_player_little_star(game, player_id, level, ai, runtime);
+            finish_player_little_star(game, player_id, level, ai, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -306,7 +340,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
     if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some_and(|state| state.path.is_none()) {
         let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
-            finish_player_little_star(game, player_id, level, ai, runtime);
+            finish_player_little_star(game, player_id, level, ai, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, Some(maximum_distance));
@@ -354,7 +388,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
             if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        finish_player_little_star(game, player_id, level, ai, runtime);
+        finish_player_little_star(game, player_id, level, ai, runtime, true);
         terminal(QueuedSkillExecutionState::Completed)
     } else {
         terminal(QueuedSkillExecutionState::Pending)
@@ -561,7 +595,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 attack_interval_ms,
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.little_star_progress().cloned(),
                 monster.skill_last_used_ms(LITTLE_STAR_SKILL_ID),
             ))
@@ -581,7 +615,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         })
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }

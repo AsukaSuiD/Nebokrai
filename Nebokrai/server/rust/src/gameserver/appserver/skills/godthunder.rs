@@ -159,7 +159,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
     let requested = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
     if requested != skill_id { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region, level, source_x, source_y, initial_mana)) = game.find_player(player_id).and_then(|player| Some((
-        player.server_region_id()?, player.learned_skill_level(skill_id),
+        player.server_region_id()?, player.learned_skill_level(skill_id, game.skill_factory()),
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else {

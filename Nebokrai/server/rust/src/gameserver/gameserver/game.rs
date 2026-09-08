@@ -1123,7 +1123,7 @@ use crate::gameserver::appserver::skills::sevenshootingstar::{
     is_seven_shooting_star_dispatch, SEVEN_SHOOTING_STAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::littlestar::{
-    cancel_player_little_star, execute_player_little_star, is_player_little_star_dispatch,
+    cancel_player_little_star, complete_player_little_star, execute_player_little_star, is_player_little_star_dispatch,
     LITTLE_STAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::energybolt::{
@@ -1148,7 +1148,7 @@ use crate::gameserver::appserver::skills::corpseptomaine::{
     is_player_corpse_ptomaine_dispatch, CORPSE_PTOMAINE_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::monsterthorn::{
-    cancel_player_monster_thorn, execute_player_monster_thorn,
+    cancel_player_monster_thorn, complete_player_monster_thorn, execute_player_monster_thorn,
     is_player_monster_thorn_dispatch, MONSTER_THORN_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::spidermist::{
@@ -12622,7 +12622,7 @@ impl CGame {
                             skill.skill_id,
                             skill.skill_level,
                             skill.skill_level,
-                            &skill.skill_name,
+                            self.skill_name_or_fallback(skill.skill_name.as_deref()),
                             &self.skill_factory,
                             false,
                         ) {
@@ -17643,7 +17643,7 @@ impl CGame {
             return -1;
         };
         let skill_id = self.skill_factory.query_skill_id(Some(skill_name));
-        target.item_skill_level(skill_id)
+        target.item_skill_level(skill_id, &self.skill_factory)
     }
 
     /// `AddSkill` достигнут из goods-script runtime: обычный skill публикует
@@ -30132,7 +30132,7 @@ impl CGame {
         );
         let (taming_level, current_pets) = self.players.get(&player_id).map_or((0, 0), |player| {
             (
-                player.learned_skill_level(0xd4),
+                player.learned_skill_level(0xd4, &self.skill_factory),
                 player.active_pets().len() as u32,
             )
         });
@@ -35140,7 +35140,7 @@ impl CGame {
                         skill.skill_id,
                         skill.skill_level,
                         skill.skill_level,
-                        &skill.skill_name,
+                        self.skill_name_or_fallback(skill.skill_name.as_deref()),
                         &self.skill_factory,
                         false,
                     ) {
@@ -35464,7 +35464,7 @@ impl CGame {
                 PlayerEquipmentRemoveEffect::WarSoulSkillDetached { .. } => {}
                 PlayerEquipmentRemoveEffect::SkillRemoved(skill) => {
                     let mut message = CMessage::new(skill.message_type as i32);
-                    add_legacy_c_string(message.base_mut(), &skill.skill_name);
+                    add_legacy_c_string(message.base_mut(), self.skill_name_or_fallback(skill.skill_name.as_deref()));
                     let delivery = message.send_to_player(self.net_server(), skill.player_id);
                     tracing::trace!(
                         player_id = skill.player_id,
@@ -35585,7 +35585,7 @@ impl CGame {
                         skill.skill_id,
                         skill.skill_level,
                         skill.skill_level,
-                        &skill.skill_name,
+                        self.skill_name_or_fallback(skill.skill_name.as_deref()),
                         &self.skill_factory,
                         true,
                     ) {
@@ -36294,7 +36294,7 @@ impl CGame {
                 }
                 BattleFairySkillResetEffect::SkillRemoved(skill) => {
                     let mut message = CMessage::new(skill.message_type as i32);
-                    add_legacy_c_string(message.base_mut(), &skill.skill_name);
+                    add_legacy_c_string(message.base_mut(), self.skill_name_or_fallback(skill.skill_name.as_deref()));
                     let delivery = message.send_to_player(self.net_server(), skill.player_id);
                     tracing::trace!(
                         player_id = skill.player_id,
@@ -36309,7 +36309,7 @@ impl CGame {
                         skill.skill_id,
                         skill.skill_level,
                         skill.skill_level,
-                        &skill.skill_name,
+                        self.skill_name_or_fallback(skill.skill_name.as_deref()),
                         &self.skill_factory,
                         true,
                     ) {
@@ -36328,7 +36328,7 @@ impl CGame {
                         skill.skill_id,
                         skill.skill_level,
                         skill.skill_level,
-                        &skill.skill_name,
+                        self.skill_name_or_fallback(skill.skill_name.as_deref()),
                         &self.skill_factory,
                         false,
                     ) {
@@ -36416,7 +36416,7 @@ impl CGame {
                 skill.skill_id,
                 skill.skill_level,
                 skill.skill_level,
-                &skill.skill_name,
+                self.skill_name_or_fallback(skill.skill_name.as_deref()),
                 &self.skill_factory,
                 true,
             ) {
@@ -37854,8 +37854,8 @@ impl CGame {
 
     fn begin_player_back_stage_skills(&mut self, player_id: i32, mut now_milliseconds: impl FnMut() -> u32) -> usize {
         let skill_ids = self
-            .find_player_mut(player_id)
-            .map(CPlayer::begin_pending_back_stage_skill_ids)
+            .players.get_mut(&player_id)
+            .map(|player| player.begin_pending_back_stage_skill_ids(&self.skill_factory))
             .unwrap_or_default();
         for skill_id in &skill_ids {
             let dispatch = PlayerSkillDispatch::Object {
@@ -38702,7 +38702,7 @@ impl CGame {
                     Some((
                         player.shape_view()?,
                         Some((
-                            player.learned_skill_level(MONSTER_TAMING_SKILL_ID),
+                            player.learned_skill_level(MONSTER_TAMING_SKILL_ID, &self.skill_factory),
                             player.active_pets().len() as u32,
                         )),
                     ))
@@ -39524,6 +39524,12 @@ impl CGame {
         searched
     }
 
+    // GetSkillName (0x004D86E0): отсутствие properties-записи отличается
+    // от её пустого имени. Только первое использует локализованный GS0318.
+    fn skill_name_or_fallback<'a>(&'a self, name: Option<&'a [u8]>) -> &'a [u8] {
+        name.unwrap_or_else(|| self.get_string_by_id(b"GS0318"))
+    }
+
     pub(crate) fn send_skill_system_info(&self, player_id: i32, string_id: &[u8]) {
         let mut message = CMessage::new(0x000b_f807);
         message.add_ulong(CSkillFactory::get_skill_failed_message_color());
@@ -39833,6 +39839,12 @@ impl CGame {
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
         let explicitly_completed = if cause.uses_nonzero_end() {
             match skill_id {
+                LITTLE_STAR_SKILL_ID => Some(complete_player_little_star(
+                    self, player_id, &mut player_ai, runtime,
+                )),
+                MONSTER_THORN_SKILL_ID => Some(complete_player_monster_thorn(
+                    self, player_id, &mut player_ai, runtime,
+                )),
                 HEARTLESS_ARROW_SKILL_ID => Some(complete_or_release_player_heartless_arrow(
                     self,
                     player_id,
@@ -40777,8 +40789,8 @@ impl CGame {
                 .and_then(|monster| {
                     let shape = monster.move_shape();
                     let skill_id = monster.back_stage_skill_id(index)?;
-                    Some((skill_id, shape.skill_level(skill_id),
-                        shape.immediate_skill_ended(skill_id) || shape.skill(skill_id).is_none()))
+                    Some((skill_id, shape.skill_level(skill_id, &self.skill_factory),
+                        shape.immediate_skill_ended(skill_id, &self.skill_factory) || shape.skill(skill_id, &self.skill_factory).is_none()))
                 })
             else {
                 break;
@@ -44388,10 +44400,10 @@ impl CGame {
         let removed_skills = self
             .find_player(player_id)
             .expect("TaoZhuang rebuild сохраняет canonical player")
-            .tao_zhuang_skills_for_removal(&self.tao_zhuang_setup);
+            .tao_zhuang_skills_for_removal(&self.tao_zhuang_setup, &self.skill_factory);
         for removed in removed_skills {
             let mut message = CMessage::new(removed.message_type as i32);
-            add_legacy_c_string(message.base_mut(), &removed.skill_name);
+            add_legacy_c_string(message.base_mut(), self.skill_name_or_fallback(removed.skill_name.as_deref()));
             let _ = message.send_to_player(self.net_server(), player_id);
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
             let _ = players
@@ -44491,7 +44503,7 @@ impl CGame {
                 skill.skill_id,
                 skill.skill_level,
                 skill.skill_level,
-                &skill.skill_name,
+                self.skill_name_or_fallback(skill.skill_name.as_deref()),
                 &self.skill_factory,
                 true,
             ) {
@@ -46965,7 +46977,7 @@ impl CGame {
                                 }
                                 let skill_id = player_ai.selected_battle_fairy_skill_id();
                                 let skill_level =
-                                    player.learned_skill_level_if_present(skill_id)?;
+                                    player.learned_skill_level_if_present(skill_id, &self.skill_factory)?;
                                 let last_used_ms =
                                     player_ai.selected_battle_fairy_skill_last_used_ms()?;
                                 let properties = self
@@ -47315,13 +47327,13 @@ impl CGame {
                                 && monster.ai_target().is_none();
                             active_action_completed = !schedule_ready;
                         } else if !death_started {
-                            monster.queue_search_after_active_move(ai_type, || runtime.now_milliseconds());
+                            monster.queue_search_after_active_move(ai_type, &self.skill_factory, || runtime.now_milliseconds());
                             move_pending = monster.advance_active_ai_move(|| runtime.now_milliseconds());
                             if !move_pending && monster.active_ai_attack_pending() {
-                                if monster.active_ai_attack_can_execute() {
+                                if monster.active_ai_attack_can_execute(&self.skill_factory) {
                                     attack_pending = true;
                                 } else {
-                                    active_action_completed = monster.finish_active_ai_attack(|| runtime.now_milliseconds());
+                                    active_action_completed = monster.finish_active_ai_attack(&self.skill_factory, || runtime.now_milliseconds());
                                 }
                             } else {
                                 search_enemy_pending = monster.active_ai_search_enemy_pending();

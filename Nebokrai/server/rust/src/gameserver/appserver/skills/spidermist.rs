@@ -231,7 +231,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
                 player.server_region_id()?,
                 player.shape().get_tile_x().ok()?,
                 player.shape().get_tile_y().ok()?,
-                player.learned_skill_level(SPIDER_MIST_SKILL_ID),
+                player.learned_skill_level(SPIDER_MIST_SKILL_ID, game.skill_factory()),
                 master_info(player),
             ))
         })
@@ -398,7 +398,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             };
             Some((
                 monster.move_shape().shape().clone(),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.spider_mist_progress(),
                 monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID),
                 property.ai,
@@ -414,7 +414,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         }
         let Some(progress) = progress else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.cancel_base_attack_cast();
+                monster.cancel_base_attack_cast(game.skill_factory());
             }
             return true;
         };

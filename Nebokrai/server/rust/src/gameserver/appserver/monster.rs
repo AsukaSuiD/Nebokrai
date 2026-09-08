@@ -678,6 +678,7 @@ impl CMonster {
         master: MasterInfo,
         pet_mode: i32,
         factors: Option<[f32; 10]>,
+        factory: &CSkillFactory,
     ) -> bool {
         if property.tamable != 1
             || self.tame_attempt_count >= property.maximum_tame_attempt_count
@@ -685,7 +686,7 @@ impl CMonster {
         {
             return false;
         }
-        self.clear_ai_target();
+        self.clear_ai_target(factory);
         self.tamed = true;
         self.master_info = master;
         self.pet_behavior.set_mode(pet_mode);
@@ -805,7 +806,7 @@ impl CMonster {
         factory: &CSkillFactory,
         random: &mut impl FnMut(i32) -> i32,
     ) {
-        self.move_shape.clear_skills();
+        self.move_shape.clear_skills(factory);
         self.move_shape.add_base_defense_skill(factory);
         let _discarded_roll = random(property.skills.len() as i32);
         for skill in &property.skills {
@@ -1584,12 +1585,12 @@ impl CMonster {
     }
 
     /// Очистка concrete End до доставки эффекта; Attack пока остаётся в FIFO.
-    pub(crate) fn prepare_stiffen_attack(&mut self) -> Option<(bool, Option<u32>)> {
+    pub(crate) fn prepare_stiffen_attack(&mut self, factory: &CSkillFactory) -> Option<(bool, Option<u32>)> {
         let ai = self.selected_base_ai()?;
         if !ai.stiffen_attack_pending() {
             return None;
         }
-        let current_skill = self.move_shape.current_skill().map(|skill| skill.id());
+        let current_skill = self.move_shape.current_skill(factory).map(|skill| skill.id());
         let release_target = ai.stiffen_attack_needs_end()
             && current_skill.is_some();
         let mut ended_skill = None;
@@ -1626,11 +1627,11 @@ impl CMonster {
         Some((release_target, ended_skill))
     }
 
-    pub(crate) fn finish_stiffen_attack(&mut self, ended_skill: Option<u32>, now: impl FnOnce() -> u32) {
+    pub(crate) fn finish_stiffen_attack(&mut self, ended_skill: Option<u32>, factory: &CSkillFactory, now: impl FnOnce() -> u32) {
         if self.selected_base_ai().is_none() { return; }
         if let Some(skill_id) = ended_skill {
             if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
-                self.mark_immediate_skill_used(skill_id, now());
+                self.mark_immediate_skill_used(skill_id, now(), factory);
             } else {
                 self.skill_last_used_ms.insert(skill_id, now());
             }
@@ -1716,7 +1717,7 @@ impl CMonster {
         self.selected_base_ai().is_some_and(CBaseAI::active_attack_pending)
     }
 
-    pub(crate) fn queue_search_after_active_move(&mut self, ai_type: u32, now: impl FnOnce() -> u32) {
+    pub(crate) fn queue_search_after_active_move(&mut self, ai_type: u32, factory: &CSkillFactory, now: impl FnOnce() -> u32) {
         if matches!(self.active_ai(), Some(ActiveMonsterAi::Carriage
             | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)))
         {
@@ -1740,7 +1741,7 @@ impl CMonster {
         // `CPassiveGladiator::OnMoving` RVA `0x00210E70` дополнительно требует
         // непустой `m_vEnemy`, которой соответствует owned IndexSet AI1.
         let search = if matches!(self.active_ai(), Some(ActiveMonsterAi::Pet)) {
-            alive && self.move_shape.current_skill().is_none()
+            alive && self.move_shape.current_skill(factory).is_none()
         } else {
             (alive && matches!(ai_type, 4 | 17 | 100))
                 || matches!(ai_type, 9 | 10 | 12 | 16)
@@ -1779,47 +1780,47 @@ impl CMonster {
         self.selected_base_ai_mut().is_some_and(|ai| ai.advance_active_move(now))
     }
 
-    pub(crate) fn active_ai_attack_ended(&self) -> bool {
+    pub(crate) fn active_ai_attack_ended(&self, factory: &CSkillFactory) -> bool {
         if self.selected_base_ai().is_none() { return false; }
-        let Some(skill) = self.move_shape.current_skill() else { return false };
+        let Some(skill) = self.move_shape.current_skill(factory) else { return false };
         let skill_id = skill.id();
         if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
-            self.move_shape.immediate_skill_ended(skill_id)
+            self.move_shape.immediate_skill_ended(skill_id, factory)
         } else {
-            self.current_active_attack_cast().is_some_and(|cast| cast.termination().is_some())
+            self.current_active_attack_cast(factory).is_some_and(|cast| cast.termination().is_some())
         }
     }
 
     /// Проекция исполнения для OnFighting, не общий доступ к ресурсу CSkill.
     /// Наличие cast другого AI не превращает Schedule/Idle в вызов CSkill::AI.
-    pub(crate) fn current_active_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
+    pub(crate) fn current_active_attack_cast(&self, factory: &CSkillFactory) -> Option<MonsterBaseAttackCast> {
         if !self.active_ai_attack_pending() { return None; }
-        let skill_id = self.move_shape.current_skill()?.id();
+        let skill_id = self.move_shape.current_skill(factory)?.id();
         self.base_attack_cast.filter(|cast| cast.dispatch().skill_id == skill_id)
     }
 
-    pub(crate) fn active_ai_attack_can_execute(&self) -> bool {
+    pub(crate) fn active_ai_attack_can_execute(&self, factory: &CSkillFactory) -> bool {
         if self.selected_base_ai().is_none() { return false; }
-        if self.active_ai_attack_ended() {
+        if self.active_ai_attack_ended(factory) {
             return false;
         }
-        self.current_active_attack_cast().is_some()
-            || self.move_shape.current_skill().is_some_and(|skill| {
+        self.current_active_attack_cast(factory).is_some()
+            || self.move_shape.current_skill(factory).is_some_and(|skill| {
                 super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill.id()).is_some()
-                    && self.move_shape.immediate_skill_started(skill.id())
+                    && self.move_shape.immediate_skill_started(skill.id(), factory)
             })
     }
 
-    pub(crate) fn finish_active_ai_attack(&mut self, mut now: impl FnMut() -> u32) -> bool {
+    pub(crate) fn finish_active_ai_attack(&mut self, factory: &CSkillFactory, mut now: impl FnMut() -> u32) -> bool {
         if self.selected_base_ai().is_none() { return false; }
-        let has_skill = self.move_shape.current_skill().is_some();
-        let skill_ended = self.active_ai_attack_ended();
+        let has_skill = self.move_shape.current_skill(factory).is_some();
+        let skill_ended = self.active_ai_attack_ended(factory);
         if has_skill && !skill_ended {
             return false;
         }
-        let owns_cast = self.current_active_attack_cast().is_some();
+        let owns_cast = self.current_active_attack_cast(factory).is_some();
         if skill_ended
-            && self.current_active_attack_cast().is_some_and(|cast| cast.termination().is_none())
+            && self.current_active_attack_cast(factory).is_some_and(|cast| cast.termination().is_none())
         {
             self.finish_active_immediate_skill();
         }
@@ -2077,8 +2078,8 @@ impl CMonster {
 
     /// Фиксирует End немедленного self-state навыка независимо от active-cast.
     /// `CSkill::End(1)` фиксирует reuse независимо от активной/фоновой очереди.
-    pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32) {
-        self.move_shape.finish_immediate_skill(skill_id);
+    pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32, factory: &CSkillFactory) {
+        self.move_shape.finish_immediate_skill(skill_id, factory);
         self.skill_last_used_ms.insert(skill_id, now_ms);
     }
 
@@ -2100,10 +2101,10 @@ impl CMonster {
             .is_some_and(|execution| execution.advance(expected, next))
     }
 
-    pub(crate) fn clear_ai_target(&mut self) {
+    pub(crate) fn clear_ai_target(&mut self, factory: &CSkillFactory) {
         let Some(ai) = self.selected_base_ai_mut() else { return; };
         ai.lose_target();
-        self.cancel_base_attack_cast();
+        self.cancel_base_attack_cast(factory);
         if let Some(ai) = self.selected_base_ai_mut() {
             ai.cancel_active_move();
         }
@@ -2112,14 +2113,14 @@ impl CMonster {
         }
     }
 
-    pub(crate) fn lose_ai_target_and_search(&mut self, now_ms: u32) {
-        self.clear_ai_target();
+    pub(crate) fn lose_ai_target_and_search(&mut self, now_ms: u32, factory: &CSkillFactory) {
+        self.clear_ai_target(factory);
         if let Some(ai) = self.selected_base_ai_mut() {
             ai.begin_active_search_enemy(now_ms);
         }
     }
 
-    pub(crate) fn cancel_base_attack_cast(&mut self) {
+    pub(crate) fn cancel_base_attack_cast(&mut self, factory: &CSkillFactory) {
         self.attack_progress = MonsterAttackProgress::default();
         if let Some(mut execution) = self.base_attack_cast.take() {
             let skill_id = execution.dispatch().skill_id;
@@ -2127,7 +2128,7 @@ impl CMonster {
                 self.finish_attack_skill_resources(skill_id);
             }
             if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
-                self.move_shape.finish_immediate_skill(skill_id);
+                self.move_shape.finish_immediate_skill(skill_id, factory);
             }
             self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);

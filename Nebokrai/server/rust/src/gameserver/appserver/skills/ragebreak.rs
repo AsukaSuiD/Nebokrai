@@ -89,7 +89,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_rage_break_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((level, rp)) = game.find_player(player_id).map(|player| (player.learned_skill_level(RAGE_BREAK_SKILL_ID), player.rp())) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((level, rp)) = game.find_player(player_id).map(|player| (player.learned_skill_level(RAGE_BREAK_SKILL_ID, game.skill_factory()), player.rp())) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(RAGE_BREAK_SKILL_ID, level) else { if ai.player_skill_execution(RAGE_BREAK_SKILL_ID).is_some() { finish_player_rage_break(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let rp_loss = properties.query_property(USER_RP_LOSE);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);

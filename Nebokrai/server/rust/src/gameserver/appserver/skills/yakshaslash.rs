@@ -144,13 +144,13 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 /// по числу клеток и общий monster defence/death tail.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, deaths: &mut Vec<MonsterAttackDeath>) -> bool {
-    let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(), monster.monster_projectile_progress()))) else { return false };
+    let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.monster_projectile_progress()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -159,7 +159,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -178,7 +178,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         }
         let maximum = properties.query_property(TARGET_MAX_DISTANCE);
         if (maximum != 0 && source_view.real_distance(Some(target.view)) > maximum as i32) || path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
@@ -196,7 +196,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
     if !progress.fired() {
         if !time_reached(now_ms, cast.started_at_ms(), delay) { return true; }
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let flying_time = properties.query_property(MISSILE_FLYING_TIME).wrapping_mul(path.len() as u32);
@@ -229,7 +229,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, h
 pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_yaksha_slash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
-    let Some((region_id, source_view, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape_view()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID)))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, source_view, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape_view()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID, game.skill_factory())))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let (source_x, source_y) = (source_view.tile_x, source_view.tile_y);
     let Some(properties) = game.skill_base_properties(YAKSHA_SLASH_SKILL_ID, level) else { fail(game, player_id, 2); if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some() { abort_player_yaksha_slash(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_step = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);

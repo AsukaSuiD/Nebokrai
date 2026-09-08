@@ -29,6 +29,17 @@
 //! (0x00440dc0) вызывает m_cHand::Serialize, а World читает этот контейнер
 //! в том же порядке. Используется готовый codec CAmountLimitGoodsContainer,
 //! сохраняющий количество и порядок предметов, известных фабрике.
+//! Общий `AddSkillsToByteArray` (0x00432b80) пишет навыки в порядке
+//! Attack→Defense→Summon→State, внутри категории — в порядке регистрации.
+//! GameSave и initial client используют один обход; `GetNumSkills`
+//! (0x00432aa0) тем же фильтром исключает только Defense с ID 10.
+//! Имя skill-снимка читается из текущих свойств ID/уровня, как GetSkillName
+//! (0x004D86E0). Some хранит прочитанные байты, включая пустое имя; None
+//! требует при публикации локализованный GS0318 либо пустую строку.
+//! LoadBFDefualtProperty (0x00502BC0) после AddSkill отдельно проверяет
+//! GetSkill: успех регистрации не гарантирует разрешение metadata-категории.
+//! Два player-входа продолжают инициализацию без skill-пакета при null,
+//! вместо паники или отката уже добавленного экземпляра.
 //! Organizing identity `m_lFactionID/m_lFacMasterID` обновляется из полного
 //! World `0x7FE06` wire; `IsFactionMaster` сохраняет exact positive-faction и
 //! player-ID equality contract.
@@ -436,7 +447,7 @@ use super::shape::{
 use super::skills::archery::ARCHERY_SKILL_ID;
 use super::skills::baseattack::BASE_ATTACK_SKILL_ID;
 use super::skills::basemagic::BASE_MAGIC_SKILL_ID;
-use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
+use super::skills::skillfactory::{CSkillFactory, SkillCategory, UNKNOWN_SKILL_ID};
 use super::states::automaticrestore::AutomaticRestoreMutation;
 use super::restorestate::ConsumableRestoreMutation;
 use super::teamstate::CTeamState;
@@ -578,7 +589,7 @@ pub(crate) struct BattleFairySkillAdded {
     pub(crate) skill_id: u32,
     pub(crate) skill_level: i32,
     pub(crate) skill_type: u32,
-    pub(crate) skill_name: Vec<u8>,
+    pub(crate) skill_name: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1008,7 +1019,7 @@ pub(crate) struct BattleFairySkillRemoved {
     pub(crate) message_type: u32,
     pub(crate) player_id: i32,
     pub(crate) skill_id: u32,
-    pub(crate) skill_name: Vec<u8>,
+    pub(crate) skill_name: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2466,11 +2477,11 @@ impl CPlayer {
         let owner_id = move_shape.shape().identity().id;
         let realm_appellation_bonus = move_shape
             .skills()
-            .values()
-            .find(|skill| {
+            .filter(|skill| {
                 super::skills::realmappellation::is_bonus_skill(skill.id())
                     && (1..=4).contains(&skill.level())
             })
+            .min_by_key(|skill| skill.id())
             .map(|skill| (skill.id(), skill.level()));
         let mut packet = CVolumeLimitGoodsContainer::new();
         let _empty_release = packet.set_container_dimensions(8, 12);
@@ -3013,12 +3024,7 @@ impl CPlayer {
         for base_index in &self.ci_qing_list {
             LegacyWriter::new(destination).write_u32(*base_index);
         }
-        let skills: Vec<_> = self
-            .move_shape
-            .skills()
-            .values()
-            .filter(|skill| !(skill.skill_type() == 1 && skill.id() == 10))
-            .collect();
+        let skills: Vec<_> = self.serializable_skills().collect();
         append_player_game_save_count(destination, "skill count", skills.len())?;
         for skill in skills {
             let packed = (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16);
@@ -3721,14 +3727,7 @@ impl CPlayer {
             writer.write_bytes(&self.combat_property_wire);
             writer.write_u32(level_experience);
 
-            let skills: Vec<_> = (0..=3)
-                .flat_map(|skill_type| {
-                    self.move_shape.skills().values().filter(move |skill| {
-                        skill.skill_type() == skill_type
-                            && !(skill_type == 1 && skill.id() == 10)
-                    })
-                })
-                .collect();
+            let skills: Vec<_> = self.serializable_skills().collect();
             writer.write_i32(i32::try_from(skills.len()).ok()?);
             for skill in skills {
                 let properties = skill_factory
@@ -7238,11 +7237,11 @@ impl CPlayer {
         self.realm_appellation_skill_level = level;
     }
 
-    pub(crate) fn realm_appellation_entitled(&self, appellation_id: u32) -> bool {
+    pub(crate) fn realm_appellation_entitled(&self, appellation_id: u32, factory: &CSkillFactory) -> bool {
         super::skills::realmappellation::is_title(appellation_id)
             && self
                 .move_shape
-                .skill(appellation_id)
+                .skill(appellation_id, factory)
                 .is_some_and(|skill| skill.level() > 0)
     }
 
@@ -7470,7 +7469,7 @@ impl CPlayer {
         let legacy_result = self
             .move_shape
             .add_skill(skill_id, i32::from(level), factory);
-        let skill = self.move_shape.skill(skill_id)?;
+        let skill = self.move_shape.skill(skill_id, factory)?;
         Some(PlayerRemoteSkillMutation {
             skill_id,
             skill_level: skill.level(),
@@ -7489,7 +7488,7 @@ impl CPlayer {
             return None;
         }
         let legacy_result = self.move_shape.add_skill(skill_id, level, factory);
-        let skill = self.move_shape.skill(skill_id)?;
+        let skill = self.move_shape.skill(skill_id, factory)?;
         Some(PlayerRemoteSkillMutation {
             skill_id,
             skill_level: skill.level(),
@@ -7620,11 +7619,11 @@ impl CPlayer {
         self.player_ai.base_ai().back_stage_skill_id(index)
     }
 
-    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
+    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self, factory: &CSkillFactory) -> Vec<u32> {
         self.player_ai.base_ai_mut().begin_pending_back_stage_skill_ids()
             .into_iter()
-            .filter(|skill_id| self.move_shape.skill(*skill_id).is_some()
-                && !self.move_shape.immediate_skill_ended(*skill_id))
+            .filter(|skill_id| self.move_shape.skill(*skill_id, factory).is_some()
+                && !self.move_shape.immediate_skill_ended(*skill_id, factory))
             .collect()
     }
 
@@ -7822,9 +7821,9 @@ impl CPlayer {
         9
     }
 
-    pub(crate) fn item_skill_level(&self, skill_id: u32) -> i32 {
+    pub(crate) fn item_skill_level(&self, skill_id: u32, factory: &CSkillFactory) -> i32 {
         self.move_shape
-            .skill(skill_id)
+            .skill(skill_id, factory)
             .map_or(0, MoveShapeSkill::level)
     }
 
@@ -7849,12 +7848,12 @@ impl CPlayer {
         self.move_shape.add_skill(skill_id, level, factory)
     }
 
-    pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32) -> bool {
-        self.move_shape.set_item_skill_position(skill_id, position)
+    pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32, factory: &CSkillFactory) -> bool {
+        self.move_shape.set_item_skill_position(skill_id, position, factory)
     }
 
-    pub(crate) fn item_skill_position(&self, skill_id: u32) -> Option<i32> {
-        self.move_shape.skill(skill_id).map(MoveShapeSkill::item_position)
+    pub(crate) fn item_skill_position(&self, skill_id: u32, factory: &CSkillFactory) -> Option<i32> {
+        self.move_shape.skill(skill_id, factory).map(MoveShapeSkill::item_position)
     }
 
     /// `CPlayer::ReUseSkillItem` различает отсутствующий map-ключ и сохранённый
@@ -8538,18 +8537,19 @@ impl CPlayer {
     pub(crate) fn tao_zhuang_skills_for_removal(
         &self,
         setup: &CTaoZhuangSetup,
+        factory: &CSkillFactory,
     ) -> Vec<BattleFairySkillRemoved> {
         setup
             .skill_ids()
             .iter()
             .filter_map(|&skill_id| {
                 self.move_shape
-                    .skill(skill_id)
+                    .skill(skill_id, factory)
                     .map(|skill| BattleFairySkillRemoved {
                         message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
                         player_id: self.player_id(),
                         skill_id,
-                        skill_name: skill.name().to_vec(),
+                        skill_name: skill.name(factory).map(<[u8]>::to_vec),
                     })
             })
             .collect()
@@ -8852,9 +8852,9 @@ impl CPlayer {
         let mut added = Vec::new();
         for (skill_id, level) in skills {
             if self.move_shape.add_skill(skill_id, level as i32, factory)
-                && let Some(skill) = self.move_shape.skill(skill_id)
+                && let Some(skill) = self.move_shape.skill(skill_id, factory)
             {
-                added.push(battle_fairy_skill_snapshot(player_id, skill));
+                added.push(battle_fairy_skill_snapshot(player_id, skill, factory));
             }
         }
         added
@@ -10514,25 +10514,13 @@ impl CPlayer {
         let player_id = self.player_id();
         let mut skills = Vec::with_capacity(3);
         let mut register_skill = |skill: BattleFairyDefaultSkill| {
-            if !self
+            let registered = self
                 .move_shape
-                .add_skill(skill.id, skill.level, skill_factory)
-            {
-                return false;
+                .add_skill(skill.id, skill.level, skill_factory);
+            if let Some(stored) = self.move_shape.skill(skill.id, skill_factory) {
+                skills.push(battle_fairy_skill_snapshot(player_id, stored, skill_factory));
             }
-            let stored = self
-                .move_shape
-                .skill(skill.id)
-                .expect("успешный AddSkill оставляет навык доступным");
-            skills.push(BattleFairySkillAdded {
-                message_type: BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE,
-                player_id,
-                skill_id: stored.id(),
-                skill_level: stored.level(),
-                skill_type: stored.skill_type(),
-                skill_name: stored.name().to_vec(),
-            });
-            true
+            registered
         };
         let report = CBattleFairyContainer::load_default_properties(
             Some(player_id),
@@ -11259,12 +11247,27 @@ impl CPlayer {
         self.move_shape.pets()
     }
 
-    pub(crate) fn learned_skill_level(&self, skill_id: u32) -> i32 {
-        self.move_shape.skill_level(skill_id)
+    pub(crate) fn learned_skill_level(&self, skill_id: u32, factory: &CSkillFactory) -> i32 {
+        self.move_shape.skill_level(skill_id, factory)
     }
 
-    pub(crate) fn learned_skill_level_if_present(&self, skill_id: u32) -> Option<i32> {
-        self.move_shape.skill(skill_id).map(|skill| skill.level())
+    pub(crate) fn learned_skill_level_if_present(&self, skill_id: u32, factory: &CSkillFactory) -> Option<i32> {
+        self.move_shape.skill(skill_id, factory).map(|skill| skill.level())
+    }
+
+    fn serializable_skills(&self) -> impl Iterator<Item = &MoveShapeSkill> {
+        [
+            SkillCategory::Attack,
+            SkillCategory::Defense,
+            SkillCategory::Summon,
+            SkillCategory::State,
+        ]
+        .into_iter()
+        .flat_map(|category| {
+            self.move_shape.skills_in_category(category).iter().filter(move |skill| {
+                category != SkillCategory::Defense || skill.id() != SKILL_BASE_DEFENSE
+            })
+        })
     }
 
     /// Exact `CPlayer::InitSkills`, вызываемый virtual tail-ом полного
@@ -11273,7 +11276,7 @@ impl CPlayer {
     /// атаку со стрельбой либо базовую магию. Уже загруженные записи не
     /// заменяются. Последний `SetHP(GetMaxHP)` полностью восстанавливает HP.
     fn initialize_intrinsic_skills(&mut self, factory: &CSkillFactory) {
-        if self.move_shape.skill(SKILL_BASE_DEFENSE).is_none() {
+        if self.move_shape.skill(SKILL_BASE_DEFENSE, factory).is_none() {
             self.move_shape.add_base_defense_skill(factory);
         }
         let intrinsic = match self.occupation() {
@@ -11283,7 +11286,7 @@ impl CPlayer {
             _ => &[],
         };
         for &skill_id in intrinsic {
-            if self.move_shape.skill(skill_id).is_none() {
+            if self.move_shape.skill(skill_id, factory).is_none() {
                 let _ = self.move_shape.add_skill(skill_id, 1, factory);
             }
         }
@@ -11525,13 +11528,13 @@ impl CPlayer {
                 for (skill_id, _) in war_soul_skill_entries_from_goods(&removed.goods, factory) {
                     let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
                     effects.push(PlayerEquipmentRemoveEffect::WarSoulSkillDetached { skill_id });
-                    if let Some(skill) = self.move_shape.skill(skill_id) {
+                    if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
                         effects.push(PlayerEquipmentRemoveEffect::SkillRemoved(
                             BattleFairySkillRemoved {
                                 message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
                                 player_id,
                                 skill_id,
-                                skill_name: skill.name().to_vec(),
+                                skill_name: skill.name(skill_factory).map(<[u8]>::to_vec),
                             },
                         ));
                     }
@@ -11639,9 +11642,9 @@ impl CPlayer {
                     let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
                     effects
                         .push(PlayerEquipmentAddEffect::WarSoulSkillAttached { skill_id, level });
-                    if let Some(skill) = self.move_shape.skill(skill_id) {
+                    if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
                         effects.push(PlayerEquipmentAddEffect::SkillAdded(
-                            battle_fairy_skill_snapshot(player_id, skill),
+                            battle_fairy_skill_snapshot(player_id, skill, skill_factory),
                         ));
                     }
                 }
@@ -13632,7 +13635,7 @@ impl CPlayer {
             // Native `DelWarSoulSkillInPlayer` вызывает TellClient после
             // DelSkill. Поэтому packet удаления существует лишь если skill
             // пережил отказ category lookup.
-            if let Some(skill) = self.move_shape.skill(skill_id) {
+            if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
                 report
                     .effects
                     .push(BattleFairySkillResetEffect::SkillRemoved(
@@ -13640,7 +13643,7 @@ impl CPlayer {
                             message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
                             player_id,
                             skill_id,
-                            skill_name: skill.name().to_vec(),
+                            skill_name: skill.name(skill_factory).map(<[u8]>::to_vec),
                         },
                     ));
             }
@@ -13690,26 +13693,26 @@ impl CPlayer {
         let new_entries = self.war_soul_skill_entries(factory);
         for (skill_id, level) in new_entries {
             let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
-            if let Some(skill) = self.move_shape.skill(skill_id) {
+            if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
                 tracing::trace!(
                     player_id,
                     skill_id,
                     "навык боевой феи присоединён после сброса"
                 );
                 report.effects.push(BattleFairySkillResetEffect::SkillAdded(
-                    battle_fairy_skill_snapshot(player_id, skill),
+                    battle_fairy_skill_snapshot(player_id, skill, skill_factory),
                 ));
             }
         }
 
-        let Some(selected) = self.move_shape.skill(selected_skill) else {
+        let Some(selected) = self.move_shape.skill(selected_skill, skill_factory) else {
             report.outcome = BattleFairySkillResetOutcome::SelectedSkillUnavailable;
             return report;
         };
         report
             .effects
             .push(BattleFairySkillResetEffect::SelectedSkillLearned(
-                battle_fairy_skill_snapshot(player_id, selected),
+                battle_fairy_skill_snapshot(player_id, selected, skill_factory),
             ));
         let headgear = self
             .equipment
@@ -13763,8 +13766,8 @@ impl CPlayer {
                 continue;
             }
             let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
-            if let Some(skill) = self.move_shape.skill(skill_id) {
-                attached.push(battle_fairy_skill_snapshot(player_id, skill));
+            if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
+                attached.push(battle_fairy_skill_snapshot(player_id, skill, skill_factory));
             }
         }
         attached
@@ -13844,7 +13847,7 @@ impl CPlayer {
 
         let skill_level = item_skill_level.unwrap_or_else(|| {
             self.move_shape
-                .skill(skill_id)
+                .skill(skill_id, skill_factory)
                 .map_or(0, MoveShapeSkill::level)
         });
         if skill_level == 0 {
@@ -15077,23 +15080,13 @@ impl CPlayer {
                 )
                 .expect("успешный add боевой феи оставляет Battle cell доступной");
             let mut register_skill = |skill: BattleFairyDefaultSkill| {
-                if !move_shape.add_skill(skill.id, skill.level, skill_factory) {
-                    return false;
+                let registered = move_shape.add_skill(skill.id, skill.level, skill_factory);
+                if let Some(stored) = move_shape.skill(skill.id, skill_factory) {
+                    skill_effects.push(BattleFairyCombineEffect::SkillAdded(
+                        battle_fairy_skill_snapshot(player_id, stored, skill_factory),
+                    ));
                 }
-                let stored = move_shape
-                    .skill(skill.id)
-                    .expect("успешный AddSkill публикует найденный skill");
-                skill_effects.push(BattleFairyCombineEffect::SkillAdded(
-                    BattleFairySkillAdded {
-                        message_type: BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE,
-                        player_id,
-                        skill_id: stored.id(),
-                        skill_level: stored.level(),
-                        skill_type: stored.skill_type(),
-                        skill_name: stored.name().to_vec(),
-                    },
-                ));
-                true
+                registered
             };
             CBattleFairyContainer::load_default_properties(
                 Some(player_id),
@@ -15164,14 +15157,18 @@ fn push_battle_fairy_upgrade_notification(
     });
 }
 
-fn battle_fairy_skill_snapshot(player_id: i32, skill: &MoveShapeSkill) -> BattleFairySkillAdded {
+fn battle_fairy_skill_snapshot(
+    player_id: i32,
+    skill: &MoveShapeSkill,
+    factory: &CSkillFactory,
+) -> BattleFairySkillAdded {
     BattleFairySkillAdded {
         message_type: BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE,
         player_id,
         skill_id: skill.id(),
         skill_level: skill.level(),
         skill_type: skill.skill_type(),
-        skill_name: skill.name().to_vec(),
+        skill_name: skill.name(factory).map(<[u8]>::to_vec),
     }
 }
 

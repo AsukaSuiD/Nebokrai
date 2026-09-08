@@ -96,7 +96,7 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
         return false;
     }
     let Some(skill) = region.find_monster_by_id(monster_id)
-        .and_then(|monster| monster.move_shape().skill(u32::from(selected_skill_id)))
+        .and_then(|monster| monster.move_shape().skill(u32::from(selected_skill_id), game.skill_factory()))
     else {
         return false;
     };

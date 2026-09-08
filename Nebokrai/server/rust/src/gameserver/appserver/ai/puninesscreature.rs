@@ -112,7 +112,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
         }
         let Some(target_view) = live_target_view(game, region, target) else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.lose_ai_target_and_search(runtime.now_milliseconds());
+                monster.lose_ai_target_and_search(runtime.now_milliseconds(), game.skill_factory());
             }
             return true;
         };
@@ -121,7 +121,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
             if distance > property.chase_range as i32
                 && let Some(monster) = region.find_monster_by_id_mut(monster_id)
             {
-                monster.lose_ai_target_and_search(runtime.now_milliseconds());
+                monster.lose_ai_target_and_search(runtime.now_milliseconds(), game.skill_factory());
             }
             return true;
         }

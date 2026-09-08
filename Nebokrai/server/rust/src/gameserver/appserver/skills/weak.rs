@@ -113,7 +113,7 @@ pub(crate) fn execute_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame
     };
     if skill_id != WEAK_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let skill_level = player.learned_skill_level(skill_id);
+    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
     let Some(region_id) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else { return terminal(QueuedSkillExecutionState::Rejected); };
     let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);

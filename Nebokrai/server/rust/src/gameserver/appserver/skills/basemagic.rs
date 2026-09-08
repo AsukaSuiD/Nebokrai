@@ -186,7 +186,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return rejected();
     };
-    let skill_level = player.learned_skill_level(BASE_MAGIC_SKILL_ID);
+    let skill_level = player.learned_skill_level(BASE_MAGIC_SKILL_ID, game.skill_factory());
     let Some(properties) = game.skill_base_properties(BASE_MAGIC_SKILL_ID, skill_level)
     else {
         return rejected();

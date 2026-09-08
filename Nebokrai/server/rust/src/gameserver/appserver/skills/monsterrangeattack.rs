@@ -129,7 +129,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
     let rejected = || player_range_outcome(QueuedSkillExecutionState::Rejected);
     if dispatch.skill_id() != MONSTER_RANGE_ATTACK_SKILL_ID { return rejected(); }
     let Some((region_id, level, mana)) = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.learned_skill_level(MONSTER_RANGE_ATTACK_SKILL_ID), player.mana()))
+        Some((player.server_region_id()?, player.learned_skill_level(MONSTER_RANGE_ATTACK_SKILL_ID, game.skill_factory()), player.mana()))
     }) else { return rejected() };
     let Some(properties) = game.skill_base_properties(MONSTER_RANGE_ATTACK_SKILL_ID, level).cloned() else {
         end_player_range_attack(game, player_id, ai, runtime, false);
@@ -371,7 +371,7 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-                monster.current_active_attack_cast()?,
+                monster.current_active_attack_cast(game.skill_factory())?,
                 monster.master_info(),
                 monster.is_tamed(),
             ))

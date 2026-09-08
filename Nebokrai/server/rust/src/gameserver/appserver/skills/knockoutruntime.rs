@@ -259,16 +259,16 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
-    let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast())) else { return false };
+    let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
     if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, property, tamed, master, target_identity, &target) {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -287,7 +287,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
             return true;
         }
         if maximum != 0 && maximum.wrapping_add(1) < path_len {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
@@ -304,7 +304,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(DELAY)) { return true; }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
     if maximum != 0 && maximum.wrapping_add(1) < path_len {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     }
     monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, true);
@@ -400,7 +400,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
         PlayerSkillDispatch::Object { skill_id: KNOCK_OUT_SKILL_ID, target } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
         _ => return result(QueuedSkillExecutionState::Rejected),
     };
-    let Some((region_id, sx, sy, level)) = game.find_player(player_id).and_then(|p| Some((p.server_region_id()?, p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.learned_skill_level(KNOCK_OUT_SKILL_ID)))) else { return result(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, sx, sy, level)) = game.find_player(player_id).and_then(|p| Some((p.server_region_id()?, p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.learned_skill_level(KNOCK_OUT_SKILL_ID, game.skill_factory())))) else { return result(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(KNOCK_OUT_SKILL_ID, level) else { failure(game, player_id, 2); return result(QueuedSkillExecutionState::Rejected) };
     let delay = properties.query_property(DELAY); let persist = properties.query_property(PERSIST);
     let reuse = properties.query_property(REUSE); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);

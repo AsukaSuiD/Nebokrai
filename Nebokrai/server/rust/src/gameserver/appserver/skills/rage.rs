@@ -169,7 +169,7 @@ pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
     };
     let level = game
         .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(RAGE_SKILL_ID));
+        .map_or(0, |player| player.learned_skill_level(RAGE_SKILL_ID, game.skill_factory()));
     finish_player_rage(game, player_id, level, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -186,7 +186,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     }
     let Some((level, mana)) = game
         .find_player(player_id)
-        .map(|player| (player.learned_skill_level(RAGE_SKILL_ID), player.mana()))
+        .map(|player| (player.learned_skill_level(RAGE_SKILL_ID, game.skill_factory()), player.mana()))
     else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };

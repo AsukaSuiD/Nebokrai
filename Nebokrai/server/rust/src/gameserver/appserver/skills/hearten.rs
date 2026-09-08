@@ -132,7 +132,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
                 player.server_region_id()?,
                 player.shape().get_tile_x().ok()?,
                 player.shape().get_tile_y().ok()?,
-                player.learned_skill_level(HEARTEN_SKILL_ID),
+                player.learned_skill_level(HEARTEN_SKILL_ID, game.skill_factory()),
                 player.mana(),
             ))
         })

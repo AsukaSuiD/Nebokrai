@@ -99,7 +99,7 @@ pub(crate) fn cancel_player_energy_holding<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_energy_holding_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((level, mana, energy_count)) = game.find_player(player_id).map(|player| (player.learned_skill_level(ENERGY_HOLDING_SKILL_ID), player.mana(), player.energy_holding_state().map_or(0, |state| state.energy_count()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((level, mana, energy_count)) = game.find_player(player_id).map(|player| (player.learned_skill_level(ENERGY_HOLDING_SKILL_ID, game.skill_factory()), player.mana(), player.energy_holding_state().map_or(0, |state| state.energy_count()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(ENERGY_HOLDING_SKILL_ID, level) else { if ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).is_some() { finish_player_energy_holding(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);

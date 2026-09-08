@@ -424,7 +424,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 player.server_region_id()?,
                 player.shape().get_tile_x().ok()?,
                 player.shape().get_tile_y().ok()?,
-                player.learned_skill_level(BOSS_FIEND_PENETRATE_SKILL_ID),
+                player.learned_skill_level(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory()),
                 player.mana(),
             ))
         })
@@ -893,7 +893,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.boss_fiend_penetrate_progress().cloned(),
                 monster.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID),
             ))
@@ -915,7 +915,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -953,7 +953,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }
@@ -987,7 +987,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     if !progress.fired {
         if target.as_ref().is_some_and(|target| target.dead) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }
@@ -1018,7 +1018,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             && path.len() > maximum_distance.wrapping_add(1) as usize
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }

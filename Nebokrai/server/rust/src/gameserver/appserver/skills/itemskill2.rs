@@ -115,7 +115,7 @@ pub(crate) fn cancel_player_item_skill_2<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let item_index = game.find_player(player_id).and_then(|player| {
-        let level = player.item_skill_level(ITEM_SKILL_2_ID);
+        let level = player.item_skill_level(ITEM_SKILL_2_ID, game.skill_factory());
         game.skill_base_properties(ITEM_SKILL_2_ID, level)
             .map(|properties| properties.query_property(ITEM_INDEX))
     });
@@ -137,7 +137,7 @@ pub(crate) const fn is_item_skill_2_dispatch(dispatch: PlayerSkillDispatch) -> b
 
 pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_item_skill_2_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    let Some((region_id, level, mana, source_x, source_y, item_position)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.item_skill_level(ITEM_SKILL_2_ID), player.mana(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.item_skill_position(ITEM_SKILL_2_ID)?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, level, mana, source_x, source_y, item_position)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.item_skill_level(ITEM_SKILL_2_ID, game.skill_factory()), player.mana(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.item_skill_position(ITEM_SKILL_2_ID, game.skill_factory())?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     if item_position < 0 { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(p) = game.skill_base_properties(ITEM_SKILL_2_ID, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let item_index=p.query_property(ITEM_INDEX); let item_amount=p.query_property(ITEM_AMOUNT); let mp_loss=p.query_property(USER_MP_LOSE); let reuse=p.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay=p.query_property(SKILL_USAGE_DELAY_TIME); let maximum=p.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let speed=p.query_property(SKILL_USAGE_SUMMONED_SPEED); let lifetime=p.query_property(SKILL_USAGE_SUMMONED_LIFETIME); let minimum_attack=p.query_property(SKILL_USAGE_MIN_ATTACK) as i32; let maximum_attack=p.query_property(SKILL_USAGE_MAX_ATTACK) as i32; let element_modifier=p.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32; let group=p.query_property(MONSTER_GROUP); let allow_player=p.query_property(ALLOW_PLAYER)!=0; let allow_monster=p.query_property(ALLOW_MONSTER)!=0; let _breakable=p.query_property(SKILL_USAGE_CAN_BE_BREAKED);

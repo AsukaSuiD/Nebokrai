@@ -99,10 +99,10 @@ fn send_monster_visual(game: &CGame, region: &CServerRegion, monster_id: i32, sk
 /// она не расходует MP и не блокирует движение; область получает нулевой
 /// element modifier, как исходный non-player dynamic-cast path.
 pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target: ShapeIdentity, skill_level: u16, properties: &super::skillbaseproperties::CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, entry: &mut Option<i32>) -> bool {
-    let Some((source, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.current_active_attack_cast())) else { return false };
+    let Some((source, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
     let master = MasterInfo { master_type: MONSTER_TYPE, master_id: monster_id, ..MasterInfo::default() };
     let Some(target_view) = resolve_monster_snow_storm_target(game, region, target) else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     };
     let (Ok(source_x), Ok(source_y)) = (source.get_tile_x(), source.get_tile_y()) else { return true };
@@ -121,7 +121,7 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
         }
         let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
         if (maximum != 0 && path.len() > maximum as usize) || path.iter().any(|cell| cell.2 == 2) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
@@ -191,7 +191,7 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
     };
     if skill_id != SNOW_STORM_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let skill_level = player.learned_skill_level(skill_id);
+    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
     let Some(region_id) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else { return terminal(QueuedSkillExecutionState::Rejected); };
     let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);

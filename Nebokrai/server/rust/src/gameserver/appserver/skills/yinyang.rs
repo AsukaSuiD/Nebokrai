@@ -140,7 +140,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     let requested = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
     if requested != skill_id { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let skill_level = player.learned_skill_level(skill_id);
+    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
     let Some(region_id) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
         if execution(player_ai, second).is_some() {

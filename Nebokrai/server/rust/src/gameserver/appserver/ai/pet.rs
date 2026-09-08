@@ -71,6 +71,7 @@ use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 
@@ -401,6 +402,7 @@ pub(crate) fn queue_pet_idle<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,
     monster_id: i32,
     stop_frame: u32,
+    factory: &CSkillFactory,
     runtime: &mut Runtime,
 ) -> bool {
     let Some((alive, has_skill)) = region.find_monster_by_id(monster_id)
@@ -408,7 +410,7 @@ pub(crate) fn queue_pet_idle<Runtime: GameMainLoopRuntime>(
         .map(|pet| {
             (
                 !CMoveShape::is_died(pet.hit_points()),
-                pet.move_shape().current_skill().is_some(),
+                pet.move_shape().current_skill(factory).is_some(),
             )
         }) else {
         return false;

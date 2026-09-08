@@ -60,7 +60,7 @@ pub(crate) fn execute_monster_auto_start_swordship(
         return false;
     };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        monster.move_shape_mut().finish_immediate_skill(skill_id);
+        monster.move_shape_mut().finish_immediate_skill(skill_id, game.skill_factory());
         return true;
     };
     let state = SwordshipState::new(
@@ -71,7 +71,7 @@ pub(crate) fn execute_monster_auto_start_swordship(
     let _ = monster.move_shape_mut().replace_swordship_state(state);
     let _ = game.publish_owned_monster_states(region, monster_id);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().finish_immediate_skill(skill_id);
+        monster.move_shape_mut().finish_immediate_skill(skill_id, game.skill_factory());
     }
     true
 }
@@ -120,7 +120,7 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
 
     let skill_level = game
         .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id));
+        .map_or(0, |player| player.learned_skill_level(skill_id, game.skill_factory()));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };

@@ -110,7 +110,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((level, initial_mana)) = game.find_player(player_id).map(|player| {
-        (player.learned_skill_level(DAUB_POISON_SKILL_ID), player.mana())
+        (player.learned_skill_level(DAUB_POISON_SKILL_ID, game.skill_factory()), player.mana())
     }) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else {
         if player_ai.player_skill_execution(DAUB_POISON_SKILL_ID).is_some() { abort_player_daub_poison(game, player_id); }

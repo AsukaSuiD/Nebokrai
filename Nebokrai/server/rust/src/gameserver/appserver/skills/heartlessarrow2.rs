@@ -269,7 +269,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let id = skill_id(dispatch).expect("dispatcher проверил вариант стрелы");
-    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(id), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
+    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(id, game.skill_factory()), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(id, level) else {

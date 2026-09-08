@@ -188,7 +188,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
     let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(FALLING_STAR_SKILL_ID),
+            player.learned_skill_level(FALLING_STAR_SKILL_ID, game.skill_factory()),
             player.shape().get_tile_x().ok()?,
             player.shape().get_tile_y().ok()?,
         ))

@@ -284,7 +284,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(skill_id),
+            player.learned_skill_level(skill_id, game.skill_factory()),
             player.shape_view()?,
         ))
     }) else {
@@ -625,7 +625,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.is_tamed().then(|| monster.pet_attack_properties(&property)),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(skill_id),
             ))
         })

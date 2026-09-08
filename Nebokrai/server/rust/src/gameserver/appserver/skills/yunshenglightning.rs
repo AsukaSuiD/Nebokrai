@@ -195,7 +195,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 attack_interval_ms,
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.yunsheng_lightning_progress(),
                 monster.skill_last_used_ms(YUNSHENG_LIGHTNING_SKILL_ID),
             ))
@@ -214,7 +214,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         .or_else(|| progress.map(YunShengLightningProgress::destination))
     else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -256,7 +256,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         }
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }
@@ -286,7 +286,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         }
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }
@@ -385,7 +385,7 @@ fn calculate_player_attack(game: &mut CGame, player_id: i32, level: i32, propert
 
 pub(crate) fn execute_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_player_yunsheng_lightning_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(YUNSHENG_LIGHTNING_SKILL_ID), player.mana()))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(YUNSHENG_LIGHTNING_SKILL_ID, game.skill_factory()), player.mana()))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(YUNSHENG_LIGHTNING_SKILL_ID, level).cloned() else { if ai.player_skill_state::<PlayerYunShengLightningExecutionState>(YUNSHENG_LIGHTNING_SKILL_ID).is_some() { restore_player(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let flight = properties.query_property(SKILL_USAGE_MISSILE_FLYING_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
     if ai.player_skill_state::<PlayerYunShengLightningExecutionState>(YUNSHENG_LIGHTNING_SKILL_ID).is_none() { if !skill_is_restored(ai.skill_last_used_ms(YUNSHENG_LIGHTNING_SKILL_ID), reuse, now) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } let Some(destination) = player_destination(game, region_id, dispatch, None) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); return player_terminal(QueuedSkillExecutionState::Rejected) } if mp_loss == 0 { return player_terminal(QueuedSkillExecutionState::Rejected) } if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(YUNSHENG_LIGHTNING_SKILL_ID)); } ai.begin_player_skill_execution(PlayerYunShengLightningExecutionState::begin(dispatch, destination, now)); return player_terminal(QueuedSkillExecutionState::Begun); }

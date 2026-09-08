@@ -114,7 +114,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
     dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_meteor_arrow_dispatch(dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|p|
-        Some((p.server_region_id()?, p.learned_skill_level(METEOR_ARROW_SKILL_ID), p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?)))
+        Some((p.server_region_id()?, p.learned_skill_level(METEOR_ARROW_SKILL_ID, game.skill_factory()), p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?)))
         else { return outcome(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(METEOR_ARROW_SKILL_ID, level) else { if ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().is_some() { abort_player_meteor_arrow(game, player_id); } return outcome(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);

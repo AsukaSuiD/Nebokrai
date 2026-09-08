@@ -142,7 +142,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
                 property,
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.monster_projectile_progress(),
             ))
         })
@@ -153,7 +153,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     let target = resolve_owned_monster_attack_target(game, region, target_identity);
     if target.is_none() && detached_impact.is_none() {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -166,7 +166,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
             if cast.is_some() {
                 let _ = monster.finish_base_attack_cast_with_clock(|| runtime.now_milliseconds());
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -176,7 +176,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
         )
     }) {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -199,7 +199,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
         && path.len() > maximum_distance.wrapping_add(1) as usize
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -266,7 +266,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
             || (minimum_distance != 0 && path.len() < minimum_distance as usize)
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }

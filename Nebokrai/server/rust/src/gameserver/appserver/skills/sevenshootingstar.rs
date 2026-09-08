@@ -276,7 +276,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     if !is_seven_shooting_star_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((
         player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-        player.learned_skill_level(SEVEN_SHOOTING_STAR_SKILL_ID), player.mana(),
+        player.learned_skill_level(SEVEN_SHOOTING_STAR_SKILL_ID, game.skill_factory()), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SEVEN_SHOOTING_STAR_SKILL_ID, level) else {
         return terminal(QueuedSkillExecutionState::Rejected);

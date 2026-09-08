@@ -158,6 +158,7 @@ fn apply_success(
             },
             pet_mode,
             factors,
+            game.skill_factory(),
         ).then(|| {
             let (level, experience) = monster.pet_progress();
             (
@@ -217,7 +218,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
     let Some((region_id, skill_level)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(MONSTER_TAMING_SKILL_ID),
+            player.learned_skill_level(MONSTER_TAMING_SKILL_ID, game.skill_factory()),
         ))
     })
     else {

@@ -108,7 +108,7 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
         game.send_skill_system_info(player_id, b"GS0305");
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(skill_id), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(skill_id, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay = properties.query_property(DELAY_TIME);

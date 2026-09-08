@@ -206,7 +206,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((region_id, source_x, source_y, skill_level)) = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(SPIDER_POISON_SKILL_ID)))
+        Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(SPIDER_POISON_SKILL_ID, game.skill_factory())))
     }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(target) = player_target(game, region_id, dispatch) else {
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -393,7 +393,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
             let pet_attack = monster.is_tamed().then(|| monster.pet_attack_properties(&property));
-            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.current_active_attack_cast(), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID)))
+            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID)))
         })
     else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
@@ -401,7 +401,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -412,7 +412,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -435,7 +435,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         }
         if path_too_long {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
             return true;
         }
@@ -471,7 +471,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) { return true; }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
     if path_too_long {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate); }

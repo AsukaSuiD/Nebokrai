@@ -143,7 +143,7 @@ fn apply_targets<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32,
 
 pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_roar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, level, source_x, source_y, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(ROAR_SKILL_ID), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, level, source_x, source_y, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(ROAR_SKILL_ID, game.skill_factory()), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(ROAR_SKILL_ID, level) else { if ai.player_skill_execution(ROAR_SKILL_ID).is_some() { finish_player_roar(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);

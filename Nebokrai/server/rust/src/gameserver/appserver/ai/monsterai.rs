@@ -130,18 +130,18 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
     let action = monster.begin_reached_stiffen_action();
     if action.interrupts_attack() {
         while let Some((release_target, ended_skill)) = region.find_monster_by_id_mut(monster_id)
-            .and_then(CMonster::prepare_stiffen_attack)
+            .and_then(|monster| monster.prepare_stiffen_attack(game.skill_factory()))
         {
             if ended_skill == Some(crate::gameserver::appserver::skills::littlestar::LITTLE_STAR_SKILL_ID)
                 && let Some(monster) = region.find_monster_by_id(monster_id)
-                && let Some(skill) = monster.move_shape().current_skill()
+                && let Some(skill) = monster.move_shape().current_skill(game.skill_factory())
             {
                 crate::gameserver::appserver::skills::littlestar::send_end(
                     game, region, monster.move_shape().shape(), skill.level() as u16,
                 );
             }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.finish_stiffen_attack(ended_skill, || runtime.now_milliseconds());
+                monster.finish_stiffen_attack(ended_skill, game.skill_factory(), || runtime.now_milliseconds());
             }
             if release_target {
                 release_owned_monster_target(game, region, monster_id, runtime);
@@ -409,7 +409,7 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
                     y: shape.get_tile_y().ok()?,
                 },
                 monster.stop_frame(property),
-                monster.move_shape().current_skill().is_some(),
+                monster.move_shape().current_skill(game.skill_factory()).is_some(),
             ))
         })
     else {
@@ -520,9 +520,9 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
     if distance > chase_range as i32 {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if has_owned_search_enemy(property.ai, pet_ai) {
-                monster.lose_ai_target_and_search(runtime.now_milliseconds());
+                monster.lose_ai_target_and_search(runtime.now_milliseconds(), game.skill_factory());
             } else {
-                monster.clear_ai_target();
+                monster.clear_ai_target(game.skill_factory());
             }
         }
         return false;

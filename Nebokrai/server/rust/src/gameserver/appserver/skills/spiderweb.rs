@@ -343,7 +343,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
                 player.shape().get_tile_x().ok()?,
                 player.shape().get_tile_y().ok()?,
                 i32::from(player.level()),
-                player.learned_skill_level(SPIDER_WEB_SKILL_ID),
+                player.learned_skill_level(SPIDER_WEB_SKILL_ID, game.skill_factory()),
             ))
         })
     else {
@@ -526,9 +526,9 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
     player_terminal(QueuedSkillExecutionState::Completed)
 }
 
-fn cancel_cast(region: &mut CServerRegion, monster_id: i32) {
+fn cancel_cast(region: &mut CServerRegion, monster_id: i32, factory: &super::skillfactory::CSkillFactory) {
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.cancel_base_attack_cast();
+        monster.cancel_base_attack_cast(factory);
     }
 }
 
@@ -556,7 +556,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
                 source_property,
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.current_active_attack_cast(),
+                monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(SPIDER_WEB_SKILL_ID),
                 attack_interval,
             ))
@@ -569,7 +569,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
@@ -590,7 +590,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
-            monster.clear_ai_target();
+            monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
@@ -667,7 +667,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
             monster.move_shape_mut().set_moveable(true);
         }
         let Some(target_level) = target_level(game, region, target_identity) else {
-            cancel_cast(region, monster_id);
+            cancel_cast(region, monster_id, game.skill_factory());
             return true;
         };
         if (source_property.level as i32).wrapping_add(10) < target_level {
@@ -680,7 +680,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
         if (maximum_distance != 0 && path.len() > maximum_distance as usize)
             || path.iter().any(|cell| cell.2 == BLOCK_UNFLY)
         {
-            cancel_cast(region, monster_id);
+            cancel_cast(region, monster_id, game.skill_factory());
             return true;
         }
         let missile_flying_time_ms = properties
@@ -708,7 +708,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
         .find_monster_by_id(monster_id)
         .and_then(|monster| monster.spider_web_progress())
     else {
-        cancel_cast(region, monster_id);
+        cancel_cast(region, monster_id, game.skill_factory());
         return true;
     };
     if !time_reached(

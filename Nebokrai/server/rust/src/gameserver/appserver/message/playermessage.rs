@@ -857,7 +857,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             let current_level = game
                                 .find_player(player_id)
                                 .expect("skill-book player сохранён")
-                                .item_skill_level(skill_id);
+                                .item_skill_level(skill_id, game.skill_factory());
                             if requested_level <= current_level {
                                 consume = false;
                                 let _ = send_item_notice(game, player_id, b"GS0148", &[], 0);
@@ -1018,7 +1018,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                     let _ = game
                                         .find_player_mut(player_id)
                                         .expect("reuse-item player сохранён для позиции")
-                                        .set_item_skill_position(skill_id, i32::from(slot));
+                                        .set_item_skill_position(skill_id, i32::from(slot), &skill_factory);
                                 }
                                 if replaced
                                     && let Some(wire) = item_skill_wire(game, skill_id, skill_level)

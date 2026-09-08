@@ -144,7 +144,7 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if !is_thunder_blow_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region_id, level, initial_mana, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((
-        player.server_region_id()?, player.learned_skill_level(THUNDER_BLOW_SKILL_ID), player.mana(),
+        player.server_region_id()?, player.learned_skill_level(THUNDER_BLOW_SKILL_ID, game.skill_factory()), player.mana(),
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(THUNDER_BLOW_SKILL_ID, level) else {

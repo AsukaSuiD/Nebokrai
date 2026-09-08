@@ -259,7 +259,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if !is_chain_lightning_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((
-        player.server_region_id()?, player.learned_skill_level(CHAIN_LIGHTNING_SKILL_ID),
+        player.server_region_id()?, player.learned_skill_level(CHAIN_LIGHTNING_SKILL_ID, game.skill_factory()),
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CHAIN_LIGHTNING_SKILL_ID, level) else {
