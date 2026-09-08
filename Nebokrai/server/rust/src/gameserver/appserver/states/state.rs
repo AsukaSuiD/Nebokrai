@@ -14,8 +14,13 @@
 //! `CMoveShape` клетки. Базовый wire-префикс сохраняет четыре little-endian
 //! `long` в порядке user type/ID → sufferer type/ID. Остальной корпус сохранён
 //! ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Живое заимствование GetUser использует те же lookup-gates для чтения
+//! visual и изменения movement; исчезнувший источник не заменяется
+//! текущим держателем навыка. Эти адаптеры работают с опубликованным регионом,
+//! не создавая копий owning форм или их ресурсов.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::gameserver::game::CGame;
@@ -119,6 +124,38 @@ pub(crate) fn resolve_state_user(
     identity: ShapeIdentity,
 ) -> Option<ShapeIdentity> {
     resolve_identity_sufferer(game, region_id, identity)
+}
+
+/// Живой GetUser по сохранённым region/type/id, без подстановки держателя
+/// состояния. Региональные объекты здесь принадлежат опубликованному CGame.
+pub(crate) fn resolve_state_move_shape(
+    game: &CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+) -> Option<&CMoveShape> {
+    let identity = resolve_state_user(game, region_id, identity)?;
+    match identity.object_type {
+        400 => Some(game.find_player(identity.id)?.move_shape()),
+        500 => Some(game.find_region(region_id)?.base().find_npc_by_id(identity.id)?.move_shape()),
+        600 => Some(game.find_region(region_id)?.base().find_monster_by_id(identity.id)?.move_shape()),
+        1_100 | 1_200 => Some(game.find_region(region_id)?.stationary_build(identity)?.move_shape()),
+        _ => None,
+    }
+}
+
+pub(crate) fn resolve_state_move_shape_mut(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+) -> Option<&mut CMoveShape> {
+    let identity = resolve_state_user(game, region_id, identity)?;
+    match identity.object_type {
+        400 => Some(game.find_player_mut(identity.id)?.move_shape_mut()),
+        500 => Some(game.find_region_mut(region_id)?.base_mut().find_npc_by_id_mut(identity.id)?.move_shape_mut()),
+        600 => Some(game.find_region_mut(region_id)?.base_mut().find_monster_by_id_mut(identity.id)?.move_shape_mut()),
+        1_100 | 1_200 => Some(game.find_region_mut(region_id)?.stationary_build_mut(identity)?.move_shape_mut()),
+        _ => None,
+    }
 }
 
 /// Byte-exact базовый `CState::Serialize`: user type/ID, затем sufferer type/ID.

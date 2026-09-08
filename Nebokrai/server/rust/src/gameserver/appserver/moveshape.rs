@@ -106,7 +106,11 @@
 //! отдельный immediate-флаг +0x4c не подменяет базовый lifecycle.
 //! Визуальный ресурс CState принадлежит самому экземпляру отдельно от
 //! копируемой скалярной базы. Общий сброс сначала очищает source/target/time,
-//! затем удаляет Option<CVisualEffect> и только потом выставляет ended.
+//! затем удаляет Option<SkillVisualEffect> и только потом выставляет ended.
+//! Closed visual enum сохраняет concrete ресурс отдельно от execution payload:
+//! CRageEffect создаётся до cast-проверок, поэтому принадлежит навыку и при
+//! failed Begin без payload. Update заимствует тот же Option, не извлекает
+//! ресурс для публикации и не дублирует source/ID/level общего экземпляра.
 //! Владеющие формы и регионы не клонируются: временным рассылкам достаточно
 //! упорядоченного снимка адресатов, случайной позиции — заимствования CRegion.
 //! CSkill constructor (0x004D8120) задаёт timestamp +0x40 равным нулю;
@@ -145,7 +149,7 @@ use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
-use super::states::visualeffect::CVisualEffect;
+use super::states::visualeffect::SkillVisualEffect;
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
@@ -375,7 +379,7 @@ pub(crate) struct MoveShapeSkill {
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
     execution: RegisteredSkillExecution,
-    current_visual_effect: Option<CVisualEffect>,
+    current_visual_effect: Option<SkillVisualEffect>,
     last_used_ms: u32,
 }
 
@@ -625,6 +629,10 @@ pub(crate) struct UndeadStateMutation {
 }
 
 impl MoveShapeSkill {
+    pub(crate) fn visual_effect(&self) -> Option<&SkillVisualEffect> {
+        self.current_visual_effect.as_ref()
+    }
+
     /// Общий хвост CSkill::End после concrete cleanup и OnEndSkill.
     /// Владеющий visual не входит в копируемый снимок скалярного lifecycle.
     fn finish_base(&mut self, termination: SkillTermination) {
@@ -5376,6 +5384,27 @@ impl CMoveShape {
         factory: &CSkillFactory,
     ) -> Option<&mut SkillLifecycle> {
         Some(self.skill_mut(skill_id, factory)?.execution.lifecycle_mut())
+    }
+
+    pub(crate) fn skill_visual_effect_mut(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&mut SkillVisualEffect> {
+        self.skill_mut(skill_id, factory)?.current_visual_effect.as_mut()
+    }
+
+    pub(crate) fn replace_skill_visual_effect(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+        effect: SkillVisualEffect,
+    ) -> bool {
+        let Some(skill) = self.skill_mut(skill_id, factory) else {
+            return false;
+        };
+        skill.current_visual_effect = Some(effect);
+        true
     }
 
     pub(crate) fn finish_skill_base(

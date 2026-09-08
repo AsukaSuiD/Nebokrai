@@ -33493,6 +33493,38 @@ impl CGame {
         }
     }
 
+    /// Общий хвост после concrete cleanup и AfterUse, в том числе без payload.
+    /// CPlayer::OnEndSkill — пустой virtual; здесь нет IsEnded-gate и reuse.
+    pub(crate) fn finish_player_skill_base(
+        &mut self,
+        player_id: i32,
+        skill_id: u32,
+        termination: SkillTermination,
+    ) -> bool {
+        self.players.get_mut(&player_id).is_some_and(|player| {
+            player.move_shape_mut().finish_skill_base(skill_id, &self.skill_factory, termination)
+        })
+    }
+
+    pub(crate) fn replace_player_skill_visual_effect(
+        &mut self,
+        player_id: i32,
+        skill_id: u32,
+        effect: crate::gameserver::appserver::states::visualeffect::SkillVisualEffect,
+    ) -> bool {
+        self.players.get_mut(&player_id).is_some_and(|player| {
+            player.move_shape_mut().replace_skill_visual_effect(skill_id, &self.skill_factory, effect)
+        })
+    }
+
+    pub(crate) fn player_skill_visual_effect_mut(
+        &mut self,
+        player_id: i32,
+        skill_id: u32,
+    ) -> Option<&mut crate::gameserver::appserver::states::visualeffect::SkillVisualEffect> {
+        self.players.get_mut(&player_id)?.move_shape_mut().skill_visual_effect_mut(skill_id, &self.skill_factory)
+    }
+
     /// End освобождает только совпавший dispatch собственного экземпляра.
     /// Команда и FIFO, а также независимый reuse не входят в эту операцию.
     pub(crate) fn finish_player_skill_execution(&mut self, player_id: i32, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
@@ -33501,10 +33533,10 @@ impl CGame {
             return false;
         }
         let stage = self.player_skill_execution(player_id, skill_id).map(|kernel| kernel.stage());
+        if !self.finish_player_skill_base(player_id, skill_id, termination) {
+            return false;
+        }
         let Some(player) = self.players.get_mut(&player_id) else { return false };
-        // CPlayer::OnEndSkill — пустой virtual 0x00485540. Derived cleanup
-        // уже выполнен concrete owner-ом до этой общей границы.
-        player.move_shape_mut().finish_skill_base(skill_id, &self.skill_factory, termination);
         player.move_shape_mut().clear_player_execution(skill_id, &self.skill_factory);
         tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка игрока завершено");
         true
@@ -33603,8 +33635,10 @@ impl CGame {
             return false;
         }
         let stage = self.battle_fairy_execution(player_id, skill_id).map(|kernel| kernel.stage());
+        if !self.finish_player_skill_base(player_id, skill_id, termination) {
+            return false;
+        }
         let Some(player) = self.players.get_mut(&player_id) else { return false };
-        player.move_shape_mut().finish_skill_base(skill_id, &self.skill_factory, termination);
         player.move_shape_mut().clear_battle_fairy_execution(skill_id, &self.skill_factory);
         tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка боевой феи завершено");
         true
