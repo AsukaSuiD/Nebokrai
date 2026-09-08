@@ -74,12 +74,10 @@ fn finish_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_front_cell_sword(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(skill_id, now_ms);
-    });
+    finish_front_cell_sword(game, player_id, skill_id, runtime);
 }
 
 pub(crate) fn cancel_player_lightning_sword<Runtime: GameMainLoopRuntime>(
@@ -88,8 +86,7 @@ pub(crate) fn cancel_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai
-        .player_skill_execution(skill_id)
+    let Some(dispatch) = game.player_skill_execution(player_id, skill_id)
         .map(SkillExecutionKernel::dispatch)
     else {
         return false;
@@ -101,7 +98,7 @@ pub(crate) fn cancel_player_lightning_sword<Runtime: GameMainLoopRuntime>(
         player_ai,
         runtime,
     );
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
@@ -140,10 +137,10 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     let target_damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(skill_id).is_none() {
+    if game.player_skill_execution(player_id, skill_id).is_none() {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(skill_id),
+            game.player_skill_last_used_ms(player_id, skill_id),
             cooldown_ms,
             now_ms,
         ) {
@@ -168,17 +165,15 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_execution(skill_id)
+    } else if game.player_skill_execution(player_id, skill_id)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai
-        .player_skill_execution(skill_id)
+    if game.player_skill_execution(player_id, skill_id)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -207,20 +202,19 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
                 .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
         }
         send_visual(game, player_id, definition, level, dispatch, 1);
-        if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
+        if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .player_skill_execution(skill_id)
+    let started_at_ms = game.player_skill_execution(player_id, skill_id)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение молниеносного меча создано");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     send_visual(game, player_id, definition, level, dispatch, 2);
-    if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -259,7 +253,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
             _ => unreachable!("тип цели проверен перед расчётом"),
         }
     }
-    if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_lightning_sword(game, player_id, skill_id, player_ai, runtime);

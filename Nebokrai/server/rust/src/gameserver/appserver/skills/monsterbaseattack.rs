@@ -149,7 +149,7 @@
 //! RNG-вызова нет; BaseAttack/LordFast выполняют его даже при `GetCCH == 0`.
 //! `BaseAttack/MonsterBaseAttack::AI` сравнивают задержку с абсолютным
 //! wrapping DWORD deadline (`0x005B3B0E/0x0051497E`), а не с elapsed-time.
-//! Player-путь `0x2bd` хранит отдельные kernel и reuse в `CPlayerAI`.
+//! Player-путь `0x2bd` хранит kernel и reuse в зарегистрированном навыке CMoveShape.
 //! `CheckCastCondition` (VA `0x00514340`) требует источник и свойства,
 //! проверяет reuse с failure 13 и `GS1143`, но не цель/MP/дальность/путь.
 //! Первая AI-фаза проверяет дальность беззнаковым сравнением и поворачивает
@@ -343,22 +343,22 @@ fn player_base_attack_outcome(state: QueuedSkillExecutionState) -> QueuedSkillEx
 }
 
 fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
+    game: &mut CGame, player_id: i32, runtime: &mut Runtime, success: bool,
 ) {
     if success {
         game.damage_player_weapon(player_id, runtime);
     }
     if success {
-        ai.mark_skill_used(MONSTER_BASE_ATTACK_SKILL_ID, runtime.now_milliseconds());
+        game.mark_player_skill_used(player_id, MONSTER_BASE_ATTACK_SKILL_ID, runtime.now_milliseconds());
     }
 }
 
 pub(crate) fn finish_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
 ) -> bool {
-    let Some(dispatch) = ai.player_skill_execution(MONSTER_BASE_ATTACK_SKILL_ID).map(|kernel| kernel.dispatch()) else { return false };
-    end_player_monster_base_attack(game, player_id, ai, runtime, success);
-    ai.finish_player_skill(dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
+    let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).map(|kernel| kernel.dispatch()) else { return false };
+    end_player_monster_base_attack(game, player_id, runtime, success);
+    game.finish_player_skill(player_id, ai, dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
 }
 
 pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
@@ -372,7 +372,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         Some((player.server_region_id()?, player.learned_skill_level(MONSTER_BASE_ATTACK_SKILL_ID, game.skill_factory()), player.shape_view()?))
     }) else { return rejected() };
     let Some(properties) = game.skill_base_properties(MONSTER_BASE_ATTACK_SKILL_ID, level) else {
-        end_player_monster_base_attack(game, player_id, ai, runtime, false);
+        end_player_monster_base_attack(game, player_id, runtime, false);
         return rejected();
     };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -380,20 +380,20 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(super::basemagic::SKILL_USAGE_CAN_BE_BREAKED);
-    if ai.player_skill_execution(MONSTER_BASE_ATTACK_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(MONSTER_BASE_ATTACK_SKILL_ID), reuse, now) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, MONSTER_BASE_ATTACK_SKILL_ID), reuse, now) {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS1143");
-            end_player_monster_base_attack(game, player_id, ai, runtime, false);
+            end_player_monster_base_attack(game, player_id, runtime, false);
             return rejected();
         }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(MONSTER_BASE_ATTACK_SKILL_ID));
         }
         return player_base_attack_outcome(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_execution(MONSTER_BASE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return rejected();
     }
     let requested = match dispatch {
@@ -404,7 +404,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let target = requested.and_then(|identity| game.base_magic_target_view(region_id, identity).map(|view| (identity, view)));
     if target.is_some_and(|(identity, _)| game.base_magic_target_dead(region_id, identity)) {
         game.send_self_state_skill_failure(0x000b_fe01, player_id, 2);
-        end_player_monster_base_attack(game, player_id, ai, runtime, true);
+        end_player_monster_base_attack(game, player_id, runtime, true);
         return player_base_attack_outcome(QueuedSkillExecutionState::Completed);
     }
     let (fallback_x, fallback_y) = match dispatch {
@@ -412,25 +412,25 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         _ => (0, 0),
     };
     let (target_x, target_y) = target.map_or((fallback_x, fallback_y), |(_, view)| (view.tile_x, view.tile_y));
-    if ai.player_skill_execution(MONSTER_BASE_ATTACK_SKILL_ID).is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
         let distance = target.map_or_else(
             || super::baseattack::real_distance(source.tile_x, source.tile_y, target_x, target_y),
             |(_, view)| source.real_distance(Some(view)),
         );
         if maximum_distance != 0 && maximum_distance < distance as u32 {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0b);
-            end_player_monster_base_attack(game, player_id, ai, runtime, false);
+            end_player_monster_base_attack(game, player_id, runtime, false);
             return rejected();
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.movement_shape_mut().set_direction(get_line_direction(source.tile_x, source.tile_y, target_x, target_y));
         }
         send_start(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level);
-        if let Some(kernel) = ai.player_skill_execution_mut(MONSTER_BASE_ATTACK_SKILL_ID) {
+        if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {
             let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-    let started = ai.player_skill_execution(MONSTER_BASE_ATTACK_SKILL_ID).map(|kernel| kernel.started_at_ms()).expect("базовая атака хранит начало");
+    let started = game.player_skill_execution(player_id, MONSTER_BASE_ATTACK_SKILL_ID).map(|kernel| kernel.started_at_ms()).expect("базовая атака хранит начало");
     if !skill_is_restored(started, delay, runtime.now_milliseconds()) {
         return player_base_attack_outcome(QueuedSkillExecutionState::Pending);
     }
@@ -445,7 +445,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     fire.add_long(target_x);
     fire.add_long(target_y);
     let _ = game.send_player_shape_around(player_id, None, &fire);
-    if let Some(kernel) = ai.player_skill_execution_mut(MONSTER_BASE_ATTACK_SKILL_ID) {
+    if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {
         let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
     }
     if let Some((identity, _)) = target
@@ -465,11 +465,11 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
             _ => {}
         }
     }
-    if let Some(kernel) = ai.player_skill_execution_mut(MONSTER_BASE_ATTACK_SKILL_ID) {
+    if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {
         let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    end_player_monster_base_attack(game, player_id, ai, runtime, true);
+    end_player_monster_base_attack(game, player_id, runtime, true);
     player_base_attack_outcome(QueuedSkillExecutionState::Completed)
 }
 

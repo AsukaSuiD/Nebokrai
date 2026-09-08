@@ -7,6 +7,10 @@
 //! (0x00488E20, WarSoul 0x0048953D..0x00489547). Оба расписания используют
 //! общий object_target: self проходит IsDied/DoesTargetEffective как объект,
 //! а не отклоняется по форме команды. Point сохраняет свой отдельный вход.
+//! Зарегистрированный owner разрешается координатором до допуска: обычный
+//! OnSchedule при null выбирает virtual default игрока и повторяет GetCurrentSkill
+//! (0x00509A34..0x00509A60), а WarSoul при null GetSkill тихо возвращается
+//! (0x005097FB..0x00509804). Ни один вход не создаёт исполнение вне реестра.
 //!
 //! Источник: gameserver.exe + GameServer.pdb, appserver/ai/playerai.cpp,
 //! VA 0x005098d0; CSkill::DoesTargetEffective — 0x004d82e0.
@@ -34,7 +38,7 @@
 //! второй перечень полей CPlayerAI. Общий запрос учитывает также NonFun,
 //! Swordship и немедленные состояния; поддержка внешнего End проверяется
 //! отдельно его dispatcher-ом.
-//! Наличие исполнения читается только из общего хранилища CPlayerAI по ID,
+//! Наличие исполнения читается из зарегистрированного экземпляра CMoveShape,
 //! в том числе для особых состояний семейств. Перечень ниже ограничивает
 //! известные подключённые owners, но не выбирает поле или тип состояния.
 //! Cure (0x005ad590) допускает цель того же типа, что источник, либо монстра-
@@ -69,8 +73,8 @@
 //! его OnBeginSkill (0x0042CC90) переводит в бой любой ID, кроме 0xA.
 //! Поэтому перед конкретными проверками ресурсов фиксируется отдельное
 //! время Begin и выполняется EnterCombatState, но при отказе допуска — нет.
-//! Хранение очереди и kernel
-//! остаётся у CPlayerAI, боевые правила — у существующих владельцев целей.
+//! Очередь остаётся у CPlayerAI, kernel — у зарегистрированного экземпляра
+//! CMoveShape, боевые правила — у существующих владельцев целей.
 //! Объектные и координатные Begin перечисленных ниже конкретных классов
 //! проверены по символам PDB и первым вызовам EXE: без предварительной ветки
 //! они проходят общий Begin Attack/State/SummonSkill (объединённые компилятором
@@ -106,8 +110,8 @@ enum PlayerSkillBeginPolicy {
 }
 
 impl CGame {
-    pub(super) fn player_skill_begin_pending(ai: &CPlayerAI, skill_id: u32) -> bool {
-        Self::materialized_player_skill_active(ai, skill_id) == Some(false)
+    pub(super) fn player_skill_begin_pending(&self, player_id: i32, skill_id: u32) -> bool {
+        self.materialized_player_skill_active(player_id, skill_id) == Some(false)
     }
 
     pub(super) fn begin_player_skill_schedule<Runtime: GameMainLoopRuntime>(
@@ -121,7 +125,7 @@ impl CGame {
         let inherited_begin = Self::player_skill_begin_policy(skill_id)
             == Some(PlayerSkillBeginPolicy::Inherited);
         let needs_begin = inherited_begin
-            && Self::player_skill_begin_pending(ai, skill_id);
+            && self.player_skill_begin_pending(player_id, skill_id);
         if needs_begin {
             ai.set_scheduled_skill_begin(Some((dispatch, runtime.now_milliseconds())));
             self.enter_player_combat_state(player_id);
@@ -136,7 +140,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         if (0x212..=0x224).contains(&dispatch.skill_id())
-            && !ai.battle_fairy_skill_execution_is_materialized()
+            && !self.battle_fairy_skill_execution_is_materialized(player_id, ai)
         {
             ai.set_scheduled_fairy_skill_begin(Some((dispatch, runtime.now_milliseconds())));
             self.enter_player_combat_state(player_id);
@@ -149,7 +153,7 @@ impl CGame {
         dispatch: BattleFairySkillDispatch,
         ai: &CPlayerAI,
     ) -> bool {
-        if ai.battle_fairy_skill_execution_is_materialized()
+        if self.battle_fairy_skill_execution_is_materialized(player_id, ai)
             || !(0x212..=0x224).contains(&dispatch.skill_id())
         {
             return false;
@@ -304,19 +308,18 @@ impl CGame {
         }
     }
 
-    fn materialized_player_skill_active(player_ai: &CPlayerAI, skill_id: u32) -> Option<bool> {
+    fn materialized_player_skill_active(&self, player_id: i32, skill_id: u32) -> Option<bool> {
         Self::player_skill_begin_policy(skill_id)
-            .map(|_| player_ai.player_skill_execution(skill_id).is_some())
+            .map(|_| self.player_skill_execution(player_id, skill_id).is_some())
     }
 
     pub(super) fn reject_player_skill_schedule(
         &mut self,
         player_id: i32,
         dispatch: PlayerSkillDispatch,
-        ai: &CPlayerAI,
     ) -> bool {
         let skill_id = dispatch.skill_id();
-        if Self::materialized_player_skill_active(ai, skill_id) != Some(false) {
+        if self.materialized_player_skill_active(player_id, skill_id) != Some(false) {
             return false;
         }
         let rule = match skill_id {

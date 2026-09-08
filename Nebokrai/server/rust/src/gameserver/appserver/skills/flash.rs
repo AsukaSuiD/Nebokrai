@@ -73,8 +73,8 @@ impl FlashExecutionState {
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_flash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == FLASH_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(FLASH_SKILL_ID, now_ms); }); }
-pub(crate) fn cancel_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false }; finish_player_flash(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, FLASH_SKILL_ID, runtime); }
+pub(crate) fn cancel_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false }; finish_player_flash(game, player_id, player_ai, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 
 fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
@@ -218,22 +218,22 @@ fn attack_path<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
 pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_flash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, mana, rp)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(FLASH_SKILL_ID, game.skill_factory()), player.mana(), player.rp()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(FLASH_SKILL_ID, level) else { if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_some() { finish_player_flash(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(FLASH_SKILL_ID, level) else { if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_some() { finish_player_flash(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let rp_loss = properties.query_property(USER_RP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let interval = properties.query_property(ACTION_INTERVAL); let hit = properties.query_property(USER_HIT_MODIFIER) as i32; let factor = properties.query_property(TARGET_DAMAGE_FACTOR);
-    if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_none() {
+    if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(FLASH_SKILL_ID), reuse, now) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, FLASH_SKILL_ID), reuse, now) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 { failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if player.has_state_by_skill_id(PILLAR_SKILL_ID) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2); game.send_skill_system_info(player_id, b"GS0302"); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(FLASH_SKILL_ID)); }
-        ai.begin_player_skill_execution(FlashExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, FlashExecutionState::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    } else if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
-    if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_some_and(|state| !state.condition_checked) {
+    if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_some_and(|state| !state.condition_checked) {
         let Some(player) = game.find_player(player_id) else { finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some((target_x, target_y)) = target_position(game, region_id, player_id, dispatch) else { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
@@ -250,19 +250,19 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         let destination = *path.last().expect("непустой путь проверен выше");
         let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
         send_visual(game, player_id, level, 2, Some((destination.0, destination.1)));
-        if let Some(state) = ai.player_skill_state_mut::<FlashExecutionState>(FLASH_SKILL_ID) { state.path = path; state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID) { state.path = path; state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    if ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).is_some_and(|state| state.condition_checked && !state.attacked) {
-        let path = ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).map(|state| state.path.clone()).unwrap_or_default();
-        let mut attacked = ai.player_skill_state_mut::<FlashExecutionState>(FLASH_SKILL_ID).map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default();
+    if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_some_and(|state| state.condition_checked && !state.attacked) {
+        let path = game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| state.path.clone()).unwrap_or_default();
+        let mut attacked = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default();
         attack_path(game, player_id, region_id, level, hit, factor, &path, &mut attacked, runtime);
-        if let Some(state) = ai.player_skill_state_mut::<FlashExecutionState>(FLASH_SKILL_ID) { state.attacked_creatures = attacked; state.attacked = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
+        if let Some(state) = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID) { state.attacked_creatures = attacked; state.attacked = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
     }
-    let started = ai.player_skill_state::<FlashExecutionState>(FLASH_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default();
+    let started = game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default();
     if runtime.now_milliseconds() <= started.wrapping_add(interval) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, 3, None);
-    if let Some(state) = ai.player_skill_state_mut::<FlashExecutionState>(FLASH_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(state) = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_flash(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -38,20 +38,20 @@ impl MeteorArrowMassExecutionState {
 fn result(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
 fn weapon_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3) }
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
-fn finish_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    ai.mark_skill_used(crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID, runtime.now_milliseconds());
+    game.mark_player_skill_used(player_id, crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID, runtime.now_milliseconds());
 }
 fn abort_player_meteor_arrow_mass(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 pub(crate) fn complete_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_meteor_arrow_mass(game, player_id, ai, runtime);
-    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    let Some(dispatch) = game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_meteor_arrow_mass(game, player_id, runtime);
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
 }
 pub(crate) fn cancel_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
     abort_player_meteor_arrow_mass(game, player_id);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 fn send_cast(game: &mut CGame, player_id: i32, level: i32, action: u8) {
     let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
@@ -79,12 +79,12 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
     ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_meteor_arrow_mass_dispatch(dispatch) { return result(QueuedSkillExecutionState::Rejected) }
     let Some(level) = game.find_player(player_id).map(|p| p.learned_skill_level(METEOR_ARROW_MASS_SKILL_ID, game.skill_factory())) else { return result(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(METEOR_ARROW_MASS_SKILL_ID, level) else { if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_some() { abort_player_meteor_arrow_mass(game, player_id); } return result(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(METEOR_ARROW_MASS_SKILL_ID, level) else { if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_some() { abort_player_meteor_arrow_mass(game, player_id); } return result(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let amount = properties.query_property(AMOUNT); let limit = properties.query_property(AMOUNT_LIMIT);
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_none() {
-        if !skill_is_restored(ai.skill_last_used_ms(crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID), reuse, runtime.now_milliseconds()) {
+    if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_none() {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID), reuse, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return result(QueuedSkillExecutionState::Rejected);
         }
         let Some(player) = game.find_player(player_id) else { return result(QueuedSkillExecutionState::Rejected) };
@@ -92,19 +92,19 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
         if mp_loss == 0 { return result(QueuedSkillExecutionState::Rejected) }
         if (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return result(QueuedSkillExecutionState::Rejected); }
         let now = runtime.now_milliseconds(); if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(METEOR_ARROW_MASS_SKILL_ID)); }
-        ai.begin_player_skill_execution(MeteorArrowMassExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, MeteorArrowMassExecutionState::begin(dispatch, now));
         return result(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected) }
-    if ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
+    } else if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected) }
+    if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); abort_player_meteor_arrow_mass(game, player_id); return result(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         if game.find_player(player_id).is_none_or(|player| !weapon_valid(game, player)) { game.send_base_magic_failure(player_id, 0x0e); game.send_skill_system_info(player_id, b"GS0297"); abort_player_meteor_arrow_mass(game, player_id); return result(QueuedSkillExecutionState::Rejected); }
         send_cast(game, player_id, level, 1);
-        if let Some(state) = ai.player_skill_state_mut::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_state_mut::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.player_skill_state::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID).copied().expect("накопление создано").kernel().started_at_ms();
+    let started = game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().expect("накопление создано").kernel().started_at_ms();
     if !time_reached(runtime.now_milliseconds(), started, delay) { return result(QueuedSkillExecutionState::Pending) }
     send_cast(game, player_id, level, 2);
     let was_missing = game.find_player(player_id).is_some_and(|player| player.meteor_arrow_state().is_none());
@@ -112,6 +112,6 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
     if was_missing { send_meteor_arrow_state_add(game, player_id, MeteorArrowState::new(limit)); }
     if let Some(state) = state { send_meteor_arrow_state_add(game, player_id, state); }
     if was_missing || state.is_some() { let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); }
-    if let Some(state) = ai.player_skill_state_mut::<MeteorArrowMassExecutionState>(METEOR_ARROW_MASS_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_meteor_arrow_mass(game, player_id, ai, runtime); result(QueuedSkillExecutionState::Completed)
+    if let Some(state) = game.player_skill_state_mut::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_meteor_arrow_mass(game, player_id, runtime); result(QueuedSkillExecutionState::Completed)
 }

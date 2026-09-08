@@ -151,11 +151,11 @@ fn finish_player_little_star<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     level: i32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
     successful: bool,
 ) {
-    if let Some(state) = player_ai.player_skill_state_mut::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) {
         state.path = None;
         state.last_attack_ms = 0;
     }
@@ -164,9 +164,7 @@ fn finish_player_little_star<Runtime: GameMainLoopRuntime>(
     }
     send_player_visual(game, player_id, level, 3, None);
     if successful {
-        finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-            player_ai.mark_skill_used(LITTLE_STAR_SKILL_ID, now_ms);
-        });
+        finish_summon_skill(game, player_id, LITTLE_STAR_SKILL_ID, runtime);
     }
 }
 
@@ -177,8 +175,7 @@ fn end_player_little_star<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     successful: bool,
 ) -> bool {
-    let Some(dispatch) = player_ai
-        .player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID)
+    let Some(dispatch) = game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID)
         .map(|state| state.kernel().dispatch())
     else {
         return false;
@@ -187,7 +184,7 @@ fn end_player_little_star<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(LITTLE_STAR_SKILL_ID, game.skill_factory()));
     finish_player_little_star(game, player_id, level, player_ai, runtime, successful);
-    player_ai.finish_player_skill(dispatch, if successful {
+    game.finish_player_skill(player_id, player_ai, dispatch, if successful {
         SkillTermination::Completed
     } else {
         SkillTermination::Cancelled
@@ -275,7 +272,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(LITTLE_STAR_SKILL_ID, game.skill_factory()), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(LITTLE_STAR_SKILL_ID, level) else {
-        if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some() {
+        if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_some() {
             finish_player_little_star(game, player_id, level, ai, runtime, false);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -292,9 +289,9 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_none() {
+    if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(LITTLE_STAR_SKILL_ID), reuse, now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, LITTLE_STAR_SKILL_ID), reuse, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -309,13 +306,13 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(LITTLE_STAR_SKILL_ID));
         }
-        ai.begin_player_skill_execution(PlayerLittleStarExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, ai, PlayerLittleStarExecutionState::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
+    } else if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+    if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
         let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
             finish_player_little_star(game, player_id, level, ai, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -333,12 +330,12 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_visual(game, player_id, level, 1, None);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started = ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default();
+    let started = game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
-    if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some_and(|state| state.path.is_none()) {
+    if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_some_and(|state| state.path.is_none()) {
         let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
             finish_player_little_star(game, player_id, level, ai, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -348,15 +345,15 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
         path.truncate(maximum_distance as usize);
         let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
         send_player_visual(game, player_id, level, 2, Some(endpoint));
-        if let Some(state) = ai.player_skill_state_mut::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) {
             state.path = Some(path);
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }
 
     let attack_now = runtime.now_milliseconds();
-    if ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).is_some_and(|state| state.attack_due(attack_now, frequency)) {
-        let path = ai.player_skill_state::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID).and_then(|state| state.path.as_deref()).unwrap_or_default().to_vec();
+    if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_some_and(|state| state.attack_due(attack_now, frequency)) {
+        let path = game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).and_then(|state| state.path.as_deref()).unwrap_or_default().to_vec();
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         'cells: for &(x, y, block) in &path {
             if block == BLOCK_UNFLY { break 'cells }
@@ -376,7 +373,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
             }
         }
         let recorded = runtime.now_milliseconds();
-        if let Some(state) = ai.player_skill_state_mut::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) {
             state.last_attack_ms = recorded;
             if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
         }
@@ -384,7 +381,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 
     let expiration_now = runtime.now_milliseconds();
     if started.wrapping_add(delay).wrapping_add(persist) < expiration_now {
-        if let Some(state) = ai.player_skill_state_mut::<PlayerLittleStarExecutionState>(LITTLE_STAR_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID) {
             if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }

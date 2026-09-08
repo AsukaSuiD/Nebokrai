@@ -42,15 +42,12 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { Q
 fn finish_player_pillar<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(PILLAR_SKILL_ID, now_ms);
-    });
+    finish_summon_skill(game, player_id, PILLAR_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_pillar<Runtime: GameMainLoopRuntime>(
@@ -59,11 +56,11 @@ pub(crate) fn cancel_player_pillar<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(PILLAR_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, PILLAR_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    finish_player_pillar(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    finish_player_pillar(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
@@ -87,33 +84,33 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if !is_pillar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(PILLAR_SKILL_ID, game.skill_factory())) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if ai.player_skill_execution(PILLAR_SKILL_ID).is_some() { finish_player_pillar(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if game.player_skill_execution(player_id, PILLAR_SKILL_ID).is_some() { finish_player_pillar(game, player_id, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let keep = properties.query_property(STATE_PERSIST_TIME);
     let damage_factor = (f64::from(properties.query_property(TARGET_DAMAGE_FACTOR))
         * f64::from(0.001_f32)) as f32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if ai.player_skill_execution(PILLAR_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, PILLAR_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds(); let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(PILLAR_SKILL_ID), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, PILLAR_SKILL_ID), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_execution(PILLAR_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); finish_player_pillar(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
-    if ai.player_skill_execution(PILLAR_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
+    } else if game.player_skill_execution(player_id, PILLAR_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); finish_player_pillar(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+    if game.player_skill_execution(player_id, PILLAR_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if u64::from(mana) < u64::from(mp_loss) { failure(game, player_id, 7, mp_loss); finish_player_pillar(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if u64::from(mana) < u64::from(mp_loss) { failure(game, player_id, 7, mp_loss); finish_player_pillar(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, false);
-        if let Some(state) = ai.player_skill_execution_mut(PILLAR_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_execution_mut(player_id, PILLAR_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = ai.player_skill_execution(PILLAR_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
+    let started_at_ms = game.player_skill_execution(player_id, PILLAR_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, true); let now_ms = runtime.now_milliseconds();
     let state = PillarState::new(now_ms, keep, damage_factor); let _ = replace_player_pillar_state(game, player_id, state, now_ms);
-    if let Some(state) = ai.player_skill_execution_mut(PILLAR_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_pillar(game, player_id, ai, runtime);
+    if let Some(state) = game.player_skill_execution_mut(player_id, PILLAR_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_pillar(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

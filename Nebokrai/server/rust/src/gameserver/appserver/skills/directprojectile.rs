@@ -129,9 +129,9 @@ fn restore_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
 }
 
-fn finish<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, _ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(skill_id, now_ms));
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 fn abort(game: &mut CGame, player_id: i32) { restore_movement(game, player_id); }
@@ -142,8 +142,7 @@ pub(super) fn abort_player_direct_projectile_on_region_change(
     ai: &mut CPlayerAI,
     expected_skill_id: u32,
 ) -> bool {
-    let Some((dispatch, skill_id)) = ai
-        .player_skill_state::<PlayerDirectProjectileExecutionState>(expected_skill_id)
+    let Some((dispatch, skill_id)) = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, expected_skill_id)
         .map(|state| (state.kernel().dispatch(), state.skill_id()))
     else {
         return false;
@@ -152,13 +151,13 @@ pub(super) fn abort_player_direct_projectile_on_region_change(
         return false;
     }
     abort(game, player_id);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn cancel_player_direct_projectile<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, execution_skill_id: u32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some((dispatch, skill_id)) = ai.player_skill_state::<PlayerDirectProjectileExecutionState>(execution_skill_id).map(|state| (state.kernel().dispatch(), state.skill_id())) else { return false };
+    let Some((dispatch, skill_id)) = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, execution_skill_id).map(|state| (state.kernel().dispatch(), state.skill_id())) else { return false };
     finish(game, player_id, skill_id, ai, runtime);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn calculate_attack(game: &mut CGame, player_id: i32, skill_id: u32, level: i32, hit_modifier: i32) -> Option<(MasterInfo, AttackInformation)> {
@@ -220,8 +219,8 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
 
-    if ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).is_none() {
-        if !skill_is_restored(ai.skill_last_used_ms(skill_id), reuse_ms, now_ms) {
+    if game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).is_none() {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, skill_id), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d); return terminal(QueuedSkillExecutionState::Rejected)
         }
         let Some(target_position) = destination(game, region_id, dispatch) else { send_failure(game, player_id, 10); return terminal(QueuedSkillExecutionState::Rejected) };
@@ -235,27 +234,27 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
         }
         if live_object_target_dead(game, region_id, dispatch) { send_failure(game, player_id, 10); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        ai.begin_player_skill_execution(PlayerDirectProjectileExecutionState::begin(dispatch, target_position, now_ms));
+        game.begin_player_skill_execution(player_id, ai, PlayerDirectProjectileExecutionState::begin(dispatch, target_position, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    } else if game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if live_object_target_dead(game, region_id, dispatch) {
         send_failure(game, player_id, 10); abort(game, player_id); return terminal(QueuedSkillExecutionState::Rejected)
     }
-    if ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).is_some_and(|state| !state.condition_checked) {
-        let fallback = ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).map(|state| state.destination).unwrap_or((0, 0));
+    if game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.condition_checked) {
+        let fallback = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).map(|state| state.destination).unwrap_or((0, 0));
         let target_position = current_destination(game, region_id, dispatch, fallback);
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_position.0, target_position.1)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_start(game, player_id, skill_id, level, delay_ms);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started_at_ms = ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).map(|state| state.kernel().started_at_ms()).unwrap_or_default();
-    if ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).is_some_and(|state| !state.fired) {
+    let started_at_ms = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).map(|state| state.kernel().started_at_ms()).unwrap_or_default();
+    if game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.fired) {
         if !time_reached(now_ms, started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
         restore_movement(game, player_id);
-        let fallback = ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).map(|state| state.destination).unwrap_or((0, 0));
+        let fallback = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).map(|state| state.destination).unwrap_or((0, 0));
         let target_position = current_destination(game, region_id, dispatch, fallback);
         let path = game.base_magic_path(region_id, source_x, source_y, target_position.0, target_position.1, None);
         if (maximum != 0 && path.len() > maximum.wrapping_add(1) as usize) || (minimum != 0 && path.len() < minimum as usize) {
@@ -279,7 +278,7 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
         }
         let flying_time_ms = missile_unit_ms.wrapping_mul(path_index as u32);
         send_fire(game, player_id, skill_id, level, visual_target, impact, flying_time_ms);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()) {
             state.fired = true; state.destination = target_position; state.impact = impact; state.missile_flying_time_ms = flying_time_ms;
             if skill_id == super::chuckstone::CHUCK_STONE_SKILL_ID {
                 state.kernel_mut().mark_prepared();
@@ -288,10 +287,10 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
         }
     }
 
-    let Some(state) = ai.player_skill_state::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()).copied() else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(state) = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).copied() else { return terminal(QueuedSkillExecutionState::Rejected) };
     if !time_reached(now_ms, started_at_ms, delay_ms.wrapping_add(state.missile_flying_time_ms)) { return terminal(QueuedSkillExecutionState::Pending) }
     attack_impact(game, player_id, region_id, skill_id, level, hit_modifier, state.impact, runtime);
-    if let Some(state) = ai.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(dispatch.skill_id()) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(state) = game.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
     finish(game, player_id, skill_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

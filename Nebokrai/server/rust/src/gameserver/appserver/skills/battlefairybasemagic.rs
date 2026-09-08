@@ -137,7 +137,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         | BattleFairySkillDispatch::Point { skill_level, .. }
         | BattleFairySkillDispatch::Object { skill_level, .. } => skill_level,
     };
-    let starting = player_ai.battle_fairy_base_magic().is_none();
+    let starting = game.battle_fairy_base_magic(player_id).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_end(game, player_id, skill_level);
         if starting {
@@ -170,7 +170,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         }
     };
 
-    if player_ai.battle_fairy_base_magic().is_some()
+    if game.battle_fairy_base_magic(player_id).is_some()
         && game.base_magic_target_view(region_id, target).is_none()
     {
         game.send_battle_fairy_skill_failure(player_id, 10);
@@ -178,7 +178,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         return rejected();
     }
 
-    if player_ai.battle_fairy_base_magic().is_none() {
+    if game.battle_fairy_base_magic(player_id).is_none() {
         if target.object_type == PLAYER_TYPE && target.id == player_id {
             game.send_battle_fairy_skill_failure(player_id, 10);
             game.send_skill_system_info(player_id, b"ZHGS0045");
@@ -202,7 +202,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         }
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.battle_fairy_skill_last_used_ms(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID),
+            game.battle_fairy_skill_last_used_ms(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -253,19 +253,18 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             target,
             started_at_ms,
         );
-        player_ai.begin_battle_fairy_base_magic(execution);
+        game.begin_battle_fairy_base_magic(player_id, player_ai, execution);
         return QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Begun,
             ..pending()
         };
-    } else if player_ai
-        .battle_fairy_base_magic()
+    } else if game.battle_fairy_base_magic(player_id)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return rejected();
     }
 
-    if player_ai.battle_fairy_base_magic()
+    if game.battle_fairy_base_magic(player_id)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         if game.base_magic_target_dead(region_id, target) {
@@ -285,12 +284,11 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         start.add_long(player_id);
         start.add_long(direction);
         let _ = game.send_player_shape_around(player_id, None, &start);
-        if let Some(kernel) = player_ai.battle_fairy_execution_mut(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
+        if let Some(kernel) = game.battle_fairy_execution_mut(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
             let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-    if runtime.now_milliseconds() < player_ai
-            .battle_fairy_base_magic()
+    if runtime.now_milliseconds() < game.battle_fairy_base_magic(player_id)
             .map_or(started_at_ms, |state| state.kernel().started_at_ms())
             .wrapping_add(delay_ms)
     {
@@ -409,7 +407,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой атаки боевой феи");
     }
 
-    if let Some(state) = player_ai.battle_fairy_execution_mut(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
+    if let Some(state) = game.battle_fairy_execution_mut(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
         let _ = state
             .advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state

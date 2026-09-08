@@ -54,22 +54,22 @@ fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
 }
-fn finish_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(METEOR_ARROW_SKILL_ID, now_ms));
+    finish_summon_skill(game, player_id, METEOR_ARROW_SKILL_ID, runtime);
 }
 fn abort_player_meteor_arrow(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
 }
 pub(crate) fn complete_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_meteor_arrow(game, player_id, ai, runtime);
-    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    let Some(dispatch) = game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_meteor_arrow(game, player_id, runtime);
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
 }
 pub(crate) fn cancel_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
     abort_player_meteor_arrow(game, player_id);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
     player.equipment().get_goods(2).is_some_and(|weapon|
@@ -116,12 +116,12 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
     let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|p|
         Some((p.server_region_id()?, p.learned_skill_level(METEOR_ARROW_SKILL_ID, game.skill_factory()), p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?)))
         else { return outcome(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(METEOR_ARROW_SKILL_ID, level) else { if ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().is_some() { abort_player_meteor_arrow(game, player_id); } return outcome(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(METEOR_ARROW_SKILL_ID, level) else { if game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().is_some() { abort_player_meteor_arrow(game, player_id); } return outcome(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let frequency = properties.query_property(TARGET_AFFECT_FREQUENCY); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().is_none() {
+    if game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().is_none() {
         let (destination, target) = match dispatch {
             PlayerSkillDispatch::Point { x, y, .. } => ((x, y), None),
             PlayerSkillDispatch::Object { target, .. } => match target_snapshot(game, region_id, target) {
@@ -129,7 +129,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
                 _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected) }
             }, _ => unreachable!(),
         };
-        if !skill_is_restored(ai.skill_last_used_ms(METEOR_ARROW_SKILL_ID), reuse, runtime.now_milliseconds()) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, METEOR_ARROW_SKILL_ID), reuse, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected)
         }
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
@@ -139,11 +139,11 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
         if mp_loss == 0 { return outcome(QueuedSkillExecutionState::Rejected) }
         if (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return outcome(QueuedSkillExecutionState::Rejected) }
         let now = runtime.now_milliseconds(); if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(METEOR_ARROW_SKILL_ID)); }
-        ai.begin_player_skill_execution(MeteorArrowExecutionState::begin(dispatch, destination, target, now));
+        game.begin_player_skill_execution(player_id, ai, MeteorArrowExecutionState::begin(dispatch, destination, target, now));
         return outcome(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
+    } else if game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
 
-    let state = ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().expect("выполнение метеорной стрелы создано"); let (mut destination, target) = (state.destination, state.target);
+    let state = game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().expect("выполнение метеорной стрелы создано"); let (mut destination, target) = (state.destination, state.target);
     if let Some(target) = target { match target_snapshot(game, region_id, target) {
         Some((x, y, false)) => destination = (x, y),
         _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); abort_player_meteor_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected) }
@@ -159,9 +159,9 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
         }
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); }
         send_start(game, player_id, level);
-        if let Some(state) = ai.player_skill_state_mut::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_state_mut::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.player_skill_state::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID).copied().expect("состояние сохранено").kernel().started_at_ms();
+    let started = game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().expect("состояние сохранено").kernel().started_at_ms();
     if !time_reached(runtime.now_milliseconds(), started, delay) { return outcome(QueuedSkillExecutionState::Pending) }
     let arrows = game.find_player_mut(player_id).and_then(CPlayer::take_meteor_arrow_state).map_or(0, |state| state.arrows().max(0) as u32);
     if arrows == 0 { game.send_base_magic_failure(player_id, 4); game.send_skill_system_info(player_id, b"GS0300"); abort_player_meteor_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected) }
@@ -177,7 +177,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
     phalanx.shape_mut().set_region_id(region_id);
     let result = game.add_meteor_arrow_phalanx(region_id, phalanx, destination.0, destination.1, now, runtime);
     if result.is_some_and(|result| result.is_ok()) { let _ = game.send_meteor_arrow_phalanx_entry(region_id, summon_id, runtime); }
-    if let Some(state) = ai.player_skill_state_mut::<MeteorArrowExecutionState>(METEOR_ARROW_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+    if let Some(state) = game.player_skill_state_mut::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_meteor_arrow(game, player_id, ai, runtime); outcome(QueuedSkillExecutionState::Completed)
+    finish_player_meteor_arrow(game, player_id, runtime); outcome(QueuedSkillExecutionState::Completed)
 }

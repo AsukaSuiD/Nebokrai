@@ -63,31 +63,24 @@ pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecution
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-pub(super) fn finish_rush_owner<Runtime, MarkUsed>(
+pub(super) fn finish_rush_owner<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, mark_used);
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 fn finish_player_rush<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_rush_owner(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(RUSH_SKILL_ID, now_ms);
-    });
+    finish_rush_owner(game, player_id, RUSH_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_rush<Runtime: GameMainLoopRuntime>(
@@ -96,11 +89,11 @@ pub(crate) fn cancel_player_rush<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(RUSH_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, RUSH_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    finish_player_rush(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    finish_player_rush(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
@@ -324,7 +317,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         )))
     else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(RUSH_SKILL_ID, level) else {
-        if ai.player_skill_execution(RUSH_SKILL_ID).is_some() { finish_player_rush(game, player_id, ai, runtime) }
+        if game.player_skill_execution(player_id, RUSH_SKILL_ID).is_some() { finish_player_rush(game, player_id, runtime) }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -336,9 +329,9 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let move_speed = properties.query_property(TARGET_MOVE_SPEED);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.player_skill_execution(RUSH_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, RUSH_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(RUSH_SKILL_ID), reuse, now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, RUSH_SKILL_ID), reuse, now_ms) {
             failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -365,16 +358,16 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(RUSH_SKILL_ID));
         }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_execution(RUSH_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, RUSH_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
     if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
         failure(game, player_id, 7, mp_loss);
-        finish_player_rush(game, player_id, ai, runtime);
+        finish_player_rush(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if let Some(player) = game.find_player_mut(player_id) {
@@ -383,7 +376,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
     if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
         failure(game, player_id, 8, rp_loss);
-        finish_player_rush(game, player_id, ai, runtime);
+        finish_player_rush(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if let Some(player) = game.find_player_mut(player_id) {
@@ -392,11 +385,11 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
     if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) {
         failure(game, player_id, 0x0e, 0);
-        finish_player_rush(game, player_id, ai, runtime);
+        finish_player_rush(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((target_x, target_y)) = destination(game, region_id, player_id, dispatch) else {
-        finish_player_rush(game, player_id, ai, runtime);
+        finish_player_rush(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let direction = get_line_direction(source_x, source_y, target_x, target_y);
@@ -406,12 +399,12 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let Some((destination, impact)) = build_path(
         game, region_id, source_x, source_y, target_x, target_y, maximum,
     ) else {
-        finish_player_rush(game, player_id, ai, runtime);
+        finish_player_rush(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
     send_visual(game, player_id, RUSH_SKILL_ID, level, false, target_identity(dispatch));
-    if let Some(execution) = ai.player_skill_execution_mut(RUSH_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, RUSH_SKILL_ID) {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
     }
 
@@ -420,18 +413,18 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         || real_distance(destination.0, destination.1, impact.0, impact.1) > maximum as i32
     {
         game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2);
-        finish_player_rush(game, player_id, ai, runtime);
+        finish_player_rush(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     apply_targets(
         game, player_id, region_id, impact.0, impact.1, source_level,
         state_time, back_steps, move_speed, runtime,
     );
-    if let Some(execution) = ai.player_skill_execution_mut(RUSH_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, RUSH_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_rush(game, player_id, ai, runtime);
+    finish_player_rush(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

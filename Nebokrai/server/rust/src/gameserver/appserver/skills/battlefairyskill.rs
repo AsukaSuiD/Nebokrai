@@ -32,8 +32,8 @@
 //! Базовая атака 0x224 также различает End(0) при потере цели и End(1)
 //! после попытки Summon (AI 0x005178fb/0x005179df).
 
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use super::basemagic::BASE_MAGIC_EFFECT_MESSAGE;
+use super::kernel::SkillTermination;
 use crate::gameserver::appserver::player::BattleFairySkillDispatch;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
@@ -49,13 +49,14 @@ impl CGame {
         player_id: i32,
     ) -> Option<BattleFairySkillDispatch> {
         let (materialized, dispatch) = {
-            let player = self.find_player_mut(player_id)?;
-            let player_ai = player.player_ai_mut();
-            let materialized = player_ai.battle_fairy_skill_execution_is_materialized();
-            let dispatch = player_ai.cancel_active_battle_fairy_skill();
+            let player_ai = self.find_player(player_id)?.player_ai();
+            let materialized = self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
+            let dispatch = player_ai.current_battle_fairy_skill();
             (materialized, dispatch)
         };
         let dispatch = dispatch?;
+        self.find_player_mut(player_id)?.player_ai_mut().release_current_battle_fairy_command();
+        let _ = self.finish_battle_fairy_execution(player_id, dispatch, SkillTermination::Cancelled);
         if materialized {
             self.send_battle_fairy_skill_end(player_id, dispatch);
         }
@@ -69,7 +70,6 @@ impl CGame {
         &mut self,
         player_id: i32,
         dispatch: BattleFairySkillDispatch,
-        player_ai: &mut CPlayerAI,
         reject_request: bool,
         runtime: &mut Runtime,
     ) {
@@ -77,7 +77,8 @@ impl CGame {
             return;
         }
         self.damage_player_weapon(player_id, runtime);
-        let _ = player_ai.mark_battle_fairy_skill_used(
+        let _ = self.mark_battle_fairy_skill_used(
+            player_id,
             dispatch.skill_id(),
             runtime.now_milliseconds(),
         );

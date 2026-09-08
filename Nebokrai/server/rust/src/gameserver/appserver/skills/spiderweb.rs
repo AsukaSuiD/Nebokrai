@@ -291,13 +291,10 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 fn finish_player_spider_web<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     restore_player_movement(game, player_id);
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(SPIDER_WEB_SKILL_ID, now_ms);
-    });
+    finish_state_skill(game, player_id, SPIDER_WEB_SKILL_ID, runtime);
 }
 
 fn abort_player_spider_web(game: &mut CGame, player_id: i32) {
@@ -310,9 +307,9 @@ pub(crate) fn cancel_player_spider_web<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = game.player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     abort_player_spider_web(game, player_id);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn player_target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<i32> {
@@ -353,7 +350,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         return reject_player_begin(game, player_id, None);
     };
     let Some(properties) = game.skill_base_properties(SPIDER_WEB_SKILL_ID, skill_level).cloned() else {
-        if player_ai.player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID).is_some() {
+        if game.player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID).is_some() {
             abort_player_spider_web(game, player_id);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -370,8 +367,8 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
     let Some(initial_target) = game.base_magic_target_view(region_id, target) else {
         return reject_player_begin(game, player_id, None);
     };
-    if player_ai.player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID).is_none() {
-        if !skill_is_restored(player_ai.skill_last_used_ms(SPIDER_WEB_SKILL_ID), reuse_delay_ms, now_ms) {
+    if game.player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID).is_none() {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, SPIDER_WEB_SKILL_ID), reuse_delay_ms, now_ms) {
             return reject_player_begin(game, player_id, Some(0x0d));
         }
         let path = game.base_magic_path(
@@ -392,10 +389,10 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPIDER_WEB_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(PlayerSpiderWebExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, player_ai, PlayerSpiderWebExecutionState::begin(dispatch, now_ms));
         return player_terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID)
+    } else if game
+        .player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -406,8 +403,8 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         abort_player_spider_web(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai
-        .player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID)
+    if game
+        .player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         if let Some(player) = game.find_player_mut(player_id) {
@@ -420,16 +417,16 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_start(game, player_id, skill_level);
-        if let Some(state) = player_ai.player_skill_state_mut::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-    let started_at_ms = player_ai
-        .player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID)
+    let started_at_ms = game
+        .player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение паутины хранит время начала");
-    if player_ai
-        .player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID)
+    if game
+        .player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID)
         .is_some_and(|state| state.missile_flying_time_ms.is_none())
     {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -446,7 +443,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         };
         if source_level.wrapping_add(10) < target_level {
             send_player_failure(game, player_id, 2);
-            finish_player_spider_web(game, player_id, player_ai, runtime);
+            finish_player_spider_web(game, player_id, runtime);
             return player_terminal(QueuedSkillExecutionState::Completed);
         }
         let Some((live_source_x, live_source_y)) = game.find_player(player_id).and_then(|player| {
@@ -483,15 +480,15 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
             target_view.tile_y,
             missile_flying_time_ms,
         );
-        if let Some(state) = player_ai.player_skill_state_mut::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID) {
             state.missile_flying_time_ms = Some(missile_flying_time_ms);
             state.kernel_mut().mark_prepared();
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }
 
-    let missile_flying_time_ms = player_ai
-        .player_skill_state::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID)
+    let missile_flying_time_ms = game
+        .player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID)
         .and_then(|state| state.missile_flying_time_ms)
         .expect("выстрел паутины хранит время полёта");
     if !time_reached(
@@ -518,11 +515,11 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.movement_shape_mut().set_action(1);
     }
-    if let Some(state) = player_ai.player_skill_state_mut::<PlayerSpiderWebExecutionState>(SPIDER_WEB_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_spider_web(game, player_id, player_ai, runtime);
+    finish_player_spider_web(game, player_id, runtime);
     player_terminal(QueuedSkillExecutionState::Completed)
 }
 

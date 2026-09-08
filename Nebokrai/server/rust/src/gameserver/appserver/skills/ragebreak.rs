@@ -42,15 +42,15 @@ fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkill
 pub(crate) fn is_rage_break_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == RAGE_BREAK_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
 
-fn finish_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(RAGE_BREAK_SKILL_ID, now_ms); });
+    finish_summon_skill(game, player_id, RAGE_BREAK_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(RAGE_BREAK_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_rage_break(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    let Some(dispatch) = game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_rage_break(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn fail(game: &CGame, player_id: i32, code: u8, rp_loss: u32) {
@@ -90,7 +90,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if !is_rage_break_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((level, rp)) = game.find_player(player_id).map(|player| (player.learned_skill_level(RAGE_BREAK_SKILL_ID, game.skill_factory()), player.rp())) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(RAGE_BREAK_SKILL_ID, level) else { if ai.player_skill_execution(RAGE_BREAK_SKILL_ID).is_some() { finish_player_rage_break(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(RAGE_BREAK_SKILL_ID, level) else { if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_some() { finish_player_rage_break(game, player_id, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let rp_loss = properties.query_property(USER_RP_LOSE);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -98,9 +98,9 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     let attack_gain = properties.query_property(TARGET_ATTACK_GAIN) as i32;
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.player_skill_execution(RAGE_BREAK_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(RAGE_BREAK_SKILL_ID), reuse, now) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, RAGE_BREAK_SKILL_ID), reuse, now) {
             fail(game, player_id, 0x0d, rp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -113,35 +113,35 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(RAGE_BREAK_SKILL_ID));
         }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_execution(RAGE_BREAK_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if ai.player_skill_execution(RAGE_BREAK_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let current = game.find_player(player_id).map_or(0, CPlayer::rp);
         if (u32::from(current).wrapping_sub(rp_loss) as i32) < 0 {
             fail(game, player_id, 8, rp_loss);
-            finish_player_rage_break(game, player_id, ai, runtime);
+            finish_player_rage_break(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_rp(u32::from(current).wrapping_sub(rp_loss) as u16); }
         send_cast_visual(game, player_id, level, false);
-        if let Some(state) = ai.player_skill_execution_mut(RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started = ai.player_skill_execution(RAGE_BREAK_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
+    let started = game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
     if started.wrapping_add(delay) > runtime.now_milliseconds() { return terminal(QueuedSkillExecutionState::Pending) }
     send_cast_visual(game, player_id, level, true);
-    if let Some(state) = ai.player_skill_execution_mut(RAGE_BREAK_SKILL_ID) {
+    if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
     }
 
     let now = runtime.now_milliseconds();
     let Some((region_id, tile_x, tile_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
-        finish_player_rage_break(game, player_id, ai, runtime);
+        finish_player_rage_break(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let identity = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
@@ -161,7 +161,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     let _ = game.find_player_mut(player_id).map(|player| player.push_cure_state(cure));
     let _ = game.update_player_properties(player_id);
 
-    if let Some(state) = ai.player_skill_execution_mut(RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_rage_break(game, player_id, ai, runtime);
+    if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_rage_break(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -81,23 +81,23 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
     }
 }
 
-fn finish_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(YAKSHA_SLASH_SKILL_ID, now_ms));
+    finish_summon_skill(game, player_id, YAKSHA_SLASH_SKILL_ID, runtime);
 }
 
 fn abort_player_yaksha_slash(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 
 pub(crate) fn complete_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_yaksha_slash(game, player_id, ai, runtime);
-    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    let Some(dispatch) = game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_yaksha_slash(game, player_id, runtime);
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
     abort_player_yaksha_slash(game, player_id);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn fail(game: &CGame, player_id: i32, code: u8) {
@@ -231,28 +231,28 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
     let Some((region_id, source_view, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape_view()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID, game.skill_factory())))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let (source_x, source_y) = (source_view.tile_x, source_view.tile_y);
-    let Some(properties) = game.skill_base_properties(YAKSHA_SLASH_SKILL_ID, level) else { fail(game, player_id, 2); if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some() { abort_player_yaksha_slash(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(YAKSHA_SLASH_SKILL_ID, level) else { fail(game, player_id, 2); if game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().is_some() { abort_player_yaksha_slash(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_step = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_none() {
+    if game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(YAKSHA_SLASH_SKILL_ID), reuse, now) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, YAKSHA_SLASH_SKILL_ID), reuse, now) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(target_view) = target_view(game, region_id, target) else { fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) };
         if maximum != 0 && source_view.real_distance(Some(target_view)) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(YAKSHA_SLASH_SKILL_ID)); }
-        ai.begin_player_skill_execution(YakshaSlashExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, YakshaSlashExecutionState::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    } else if game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.periodic_state_target_dead(region_id, target) || (target.object_type == PLAYER_TYPE && target.id == player_id) { fail(game, player_id, 10); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
-    if ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
+    if game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
         let Some(target_view) = target_view(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
         let position = (target_view.tile_x, target_view.tile_y);
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, position.0, position.1)); }
         send_cast(game, player_id, level, target, position, None);
-        if let Some(state) = ai.player_skill_state_mut::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_state_mut::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel.started_at_ms()).unwrap_or_default();
-    if !ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| state.kernel().is_prepared()) {
+    let started = game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().map(|state| state.kernel.started_at_ms()).unwrap_or_default();
+    if !game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().is_some_and(|state| state.kernel().is_prepared()) {
         if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
         let Some(target_view) = target_view(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
@@ -261,11 +261,11 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
         let flying_time = missile_step.wrapping_mul(path.len() as u32);
         send_cast(game, player_id, level, target, position, Some(flying_time));
-        if let Some(state) = ai.player_skill_state_mut::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID) { state.missile_flying_time_ms = flying_time; state.kernel_mut().mark_prepared(); let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); }
+        if let Some(state) = game.player_skill_state_mut::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID) { state.missile_flying_time_ms = flying_time; state.kernel_mut().mark_prepared(); let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); }
     }
-    let flying_time = ai.player_skill_state::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID).copied().map_or(0, |state| state.missile_flying_time_ms);
+    let flying_time = game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().map_or(0, |state| state.missile_flying_time_ms);
     if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(flying_time)) { return terminal(QueuedSkillExecutionState::Pending) }
     if let Some((master, attack)) = calculate_attack(game, player_id, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } }
-    if let Some(state) = ai.player_skill_state_mut::<YakshaSlashExecutionState>(YAKSHA_SLASH_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_yaksha_slash(game, player_id, ai, runtime); terminal(QueuedSkillExecutionState::Completed)
+    if let Some(state) = game.player_skill_state_mut::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_yaksha_slash(game, player_id, runtime); terminal(QueuedSkillExecutionState::Completed)
 }

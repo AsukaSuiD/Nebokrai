@@ -47,12 +47,9 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 fn finish_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_immediate_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(THUNDER_BLOW_SKILL_ID, now_ms);
-    });
+    finish_immediate_base_attack(game, player_id, THUNDER_BLOW_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_thunder_blow<Runtime: GameMainLoopRuntime>(
@@ -61,11 +58,11 @@ pub(crate) fn cancel_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, THUNDER_BLOW_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    finish_player_thunder_blow(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    finish_player_thunder_blow(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -160,9 +157,9 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, THUNDER_BLOW_SKILL_ID).is_none() {
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(THUNDER_BLOW_SKILL_ID),
+            game.player_skill_last_used_ms(player_id, THUNDER_BLOW_SKILL_ID),
             cooldown_ms,
             runtime.now_milliseconds(),
         ) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
@@ -179,27 +176,27 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(THUNDER_BLOW_SKILL_ID)); }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, THUNDER_BLOW_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     let Some((target_x, target_y, target)) = destination(game, region_id, dispatch) else {
-        finish_player_thunder_blow(game, player_id, player_ai, runtime);
+        finish_player_thunder_blow(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, THUNDER_BLOW_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss);
-            finish_player_thunder_blow(game, player_id, player_ai, runtime);
+            finish_player_thunder_blow(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None);
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             send_failure(game, player_id, 0x0b, mp_loss);
-            finish_player_thunder_blow(game, player_id, player_ai, runtime);
+            finish_player_thunder_blow(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -208,13 +205,13 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, None);
-        if let Some(state) = player_ai.player_skill_execution_mut(THUNDER_BLOW_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_execution_mut(player_id, THUNDER_BLOW_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение громового удара создано");
+    let started = game.player_skill_execution(player_id, THUNDER_BLOW_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение громового удара создано");
     if !time_reached(runtime.now_milliseconds(), started, delay_ms) { return terminal(QueuedSkillExecutionState::Pending); }
     if target.is_some_and(|identity| target_dead(game, region_id, identity)) {
         send_failure(game, player_id, 10, mp_loss);
-        finish_player_thunder_blow(game, player_id, player_ai, runtime);
+        finish_player_thunder_blow(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     send_visual(game, player_id, level, Some((target.unwrap_or(ShapeIdentity { object_type: 0, id: 0, ex_id: Default::default() }), target_x, target_y)));
@@ -232,11 +229,11 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
         let _ = game.send_thunder_blow_phalanx_entry(region_id, summon_id, runtime);
     }
     tracing::trace!(region_id, player_id, summon_id, ?result, "создана форма громового удара");
-    if let Some(state) = player_ai.player_skill_execution_mut(THUNDER_BLOW_SKILL_ID) {
+    if let Some(state) = game.player_skill_execution_mut(player_id, THUNDER_BLOW_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_thunder_blow(game, player_id, player_ai, runtime);
+    finish_player_thunder_blow(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

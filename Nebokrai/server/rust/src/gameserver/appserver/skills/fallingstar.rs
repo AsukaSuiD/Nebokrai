@@ -89,23 +89,23 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
     }
 }
 
-fn finish_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(FALLING_STAR_SKILL_ID, now_ms));
+    finish_summon_skill(game, player_id, FALLING_STAR_SKILL_ID, runtime);
 }
 
 fn abort_player_falling_star(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 
 pub(crate) fn complete_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     finish_player_falling_star(game, player_id, ai, runtime);
-    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
+    let Some(dispatch) = game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
     abort_player_falling_star(game, player_id);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn send_failure(game: &CGame, player_id: i32, action: u8, mp_loss: u32) {
@@ -196,7 +196,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
         return outcome(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(FALLING_STAR_SKILL_ID, level) else {
-        if ai.player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID).is_some() { abort_player_falling_star(game, player_id); }
+        if game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID).is_some() { abort_player_falling_star(game, player_id); }
         return outcome(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -207,7 +207,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID).is_none() {
+    if game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID).is_none() {
         let (destination, target) = match dispatch {
             PlayerSkillDispatch::SelfTarget { .. } => ((source_x, source_y), None),
             PlayerSkillDispatch::Point { x, y, .. } => ((x, y), None),
@@ -220,7 +220,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             },
         };
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(FALLING_STAR_SKILL_ID), reuse, now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, FALLING_STAR_SKILL_ID), reuse, now_ms) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return outcome(QueuedSkillExecutionState::Rejected);
         }
@@ -258,21 +258,20 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(FALLING_STAR_SKILL_ID));
         }
-        ai.begin_player_skill_execution(FallingStarExecutionState::begin(
+        game.begin_player_skill_execution(player_id, ai, FallingStarExecutionState::begin(
             dispatch,
             destination,
             target,
             now_ms,
         ));
         return outcome(QueuedSkillExecutionState::Begun);
-    } else if ai
-        .player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID)
+    } else if game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)
     {
         return outcome(QueuedSkillExecutionState::Rejected);
     }
 
-    let state = ai.player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID).expect("выполнение падающей звезды создано");
+    let state = game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID).expect("выполнение падающей звезды создано");
     let (mut destination, target) = (state.destination, state.target);
     if let Some(target) = target {
         match target_snapshot(game, region_id, target) {
@@ -321,14 +320,13 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             ));
         }
         send_start(game, player_id, level);
-        if let Some(state) = ai.player_skill_state_mut::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID) {
             state.condition_checked = true;
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = ai
-        .player_skill_state::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID)
+    let started_at_ms = game.player_skill_state::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID)
         .expect("состояние падающей звезды сохранено")
         .kernel()
         .started_at_ms();
@@ -384,7 +382,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
     if result.is_some_and(|result| result.is_ok()) {
         let _ = game.send_meteor_arrow_phalanx_entry(region_id, summon_id, runtime);
     }
-    if let Some(state) = ai.player_skill_state_mut::<FallingStarExecutionState>(FALLING_STAR_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

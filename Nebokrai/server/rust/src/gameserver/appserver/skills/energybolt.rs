@@ -324,15 +324,13 @@ fn finish_player_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(skill_id, now_ms);
-    });
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 pub(crate) fn cancel_player_path_projectile<Runtime: GameMainLoopRuntime>(
@@ -342,14 +340,13 @@ pub(crate) fn cancel_player_path_projectile<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((dispatch, skill_id)) = player_ai
-        .player_skill_state::<PlayerPathProjectileExecutionState>(execution_skill_id)
+    let Some((dispatch, skill_id)) = game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, execution_skill_id)
         .map(|state| (state.kernel().dispatch(), state.skill_id()))
     else {
         return false;
     };
     finish_player_projectile(game, player_id, skill_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 #[allow(clippy::too_many_arguments, reason = "параметры сохраняют формулу конкретного projectile-owner-а")]
@@ -511,7 +508,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(spec.skill_id, game.skill_factory()), player.mana(),
     ))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(spec.skill_id, level) else {
-        if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_some() {
+        if game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).is_some() {
             finish_player_projectile(game, player_id, spec.skill_id, ai, runtime);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -527,7 +524,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_none() {
+    if game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).is_none() {
         let now_ms = runtime.now_milliseconds();
         let self_target = player_object_target(dispatch)
             .is_some_and(|target| target.object_type == PLAYER_TYPE && target.id == player_id);
@@ -536,7 +533,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0286");
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        if !skill_is_restored(ai.skill_last_used_ms(spec.skill_id), reuse, now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, spec.skill_id), reuse, now_ms) {
             send_player_projectile_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -558,22 +555,22 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(spec.skill_id));
         }
-        ai.begin_player_skill_execution(PlayerPathProjectileExecutionState::begin(
+        game.begin_player_skill_execution(player_id, ai, PlayerPathProjectileExecutionState::begin(
             dispatch, now_ms, destination,
         ));
         return player_terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) {
+    } else if game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+    if game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_player_projectile_failure(game, player_id, 7);
             finish_player_projectile(game, player_id, spec.skill_id, ai, runtime);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        let destination = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id())
+        let destination = game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id())
             .map(|state| state.progress.destination())
             .expect("projectile execution хранит координаты назначения");
         if let Some(player) = game.find_player_mut(player_id) {
@@ -584,20 +581,20 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_projectile_start(game, player_id, spec.skill_id, level);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id())
+    let started = game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id())
         .map(|state| state.kernel().started_at_ms())
         .unwrap_or_default();
-    if ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).is_some_and(|state| !state.progress.fired()) {
+    if game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.progress.fired()) {
         if !time_reached(runtime.now_milliseconds(), started, delay) {
             return player_terminal(QueuedSkillExecutionState::Pending);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-        let destination = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id())
+        let destination = game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id())
             .map(|state| state.progress.destination())
             .expect("projectile execution хранит координаты назначения");
         let forced_length = (maximum_distance != 0).then_some(maximum_distance);
@@ -610,19 +607,19 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let target = player_object_target(dispatch);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) {
             state.progress.fire(path, missile_unit, spec.initial_position);
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
-        let progress = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).map(|state| state.progress.clone())
+        let progress = game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).map(|state| state.progress.clone())
             .expect("projectile progress создан перед wire-эффектом");
         send_player_projectile_fire(game, player_id, spec.skill_id, level, target, &progress);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) {
             state.kernel_mut().mark_prepared();
         }
     }
 
-    let mut progress = ai.player_skill_state::<PlayerPathProjectileExecutionState>(dispatch.skill_id()).map(|state| state.progress.clone())
+    let mut progress = game.player_skill_state::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()).map(|state| state.progress.clone())
         .expect("projectile execution сохраняется до завершения");
     let due = delay.wrapping_add(missile_unit.wrapping_mul(progress.current_position as u32));
     if !time_reached(runtime.now_milliseconds(), started, due) {
@@ -630,7 +627,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
     }
     if progress.current_position >= progress.path.len() {
         send_player_projectile_end(game, player_id, spec.skill_id, level, &progress);
-        if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) {
             if state.kernel().stage() == SkillStage::Calculate {
                 let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
             }
@@ -653,7 +650,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             ) {
                 send_player_projectile_end(game, player_id, spec.skill_id, level, &progress);
                 progress.finish_after_collision();
-                if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) { state.progress = progress; }
+                if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) { state.progress = progress; }
                 return player_terminal(QueuedSkillExecutionState::Pending);
             }
         }
@@ -664,7 +661,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         _ => {}
     }
     progress.advance();
-    if let Some(state) = ai.player_skill_state_mut::<PlayerPathProjectileExecutionState>(dispatch.skill_id()) {
+    if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) {
         state.progress = progress;
         if state.kernel().stage() == SkillStage::Calculate {
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);

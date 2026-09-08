@@ -150,12 +150,11 @@ fn finish_player_rage<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     level: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     end_player_rage(game, player_id, level);
     game.damage_player_weapon(player_id, runtime);
-    player_ai.mark_skill_used(RAGE_SKILL_ID, runtime.now_milliseconds());
+    game.mark_player_skill_used(player_id, RAGE_SKILL_ID, runtime.now_milliseconds());
 }
 
 pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
@@ -164,14 +163,14 @@ pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_state::<RageExecutionState>(RAGE_SKILL_ID).map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = game.player_skill_state::<RageExecutionState>(player_id, RAGE_SKILL_ID).map(|state| state.kernel().dispatch()) else {
         return false;
     };
     let level = game
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(RAGE_SKILL_ID, game.skill_factory()));
-    finish_player_rage(game, player_id, level, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    finish_player_rage(game, player_id, level, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
@@ -191,10 +190,10 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
 
-    let beginning_at_ms = ai.player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
+    let beginning_at_ms = game.player_skill_state::<RageExecutionState>(player_id, RAGE_SKILL_ID)
         .is_none().then(|| runtime.now_milliseconds());
-    if ai
-        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
+    if game
+        .player_skill_state::<RageExecutionState>(player_id, RAGE_SKILL_ID)
         .is_some_and(|state| state.kernel().dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -214,7 +213,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     if let Some(started_at_ms) = beginning_at_ms
     {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(RAGE_SKILL_ID), reuse_ms, now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, RAGE_SKILL_ID), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d, 0);
             end_player_rage(game, player_id, level);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -230,40 +229,40 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(RAGE_SKILL_ID));
         }
-        ai.begin_player_skill_execution(RageExecutionState::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, ai, RageExecutionState::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     }
 
     if game.find_player(player_id).is_none_or(|player| player.health() == 0) {
         game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2);
-        finish_player_rage(game, player_id, level, ai, runtime);
+        finish_player_rage(game, player_id, level, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if ai
-        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
+    if game
+        .player_skill_state::<RageExecutionState>(player_id, RAGE_SKILL_ID)
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         send_cast_visual(game, player_id, level, 1, frequency_ms);
-        if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<RageExecutionState>(player_id, RAGE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = ai
-        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
+    let started_at_ms = game
+        .player_skill_state::<RageExecutionState>(player_id, RAGE_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
         .unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
 
-    let last_using_time_ms = ai
-        .player_skill_state::<RageExecutionState>(RAGE_SKILL_ID)
+    let last_using_time_ms = game
+        .player_skill_state::<RageExecutionState>(player_id, RAGE_SKILL_ID)
         .map_or(0, |state| state.last_using_time_ms());
     if last_using_time_ms == 0 {
         send_cast_visual(game, player_id, level, 2, frequency_ms);
-        if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<RageExecutionState>(player_id, RAGE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         }
@@ -280,7 +279,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
     if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
         send_failure(game, player_id, 7, 0);
-        finish_player_rage(game, player_id, level, ai, runtime);
+        finish_player_rage(game, player_id, level, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if let Some(player) = game.find_player_mut(player_id) {
@@ -291,17 +290,17 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .is_none_or(|player| player.maximum_rp() <= player.rp());
     if reached_maximum {
-        if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<RageExecutionState>(player_id, RAGE_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        finish_player_rage(game, player_id, level, ai, runtime);
+        finish_player_rage(game, player_id, level, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     }
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_rp(player.rp().wrapping_add(rp_gain as u16));
     }
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-    if let Some(state) = ai.player_skill_state_mut::<RageExecutionState>(RAGE_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<RageExecutionState>(player_id, RAGE_SKILL_ID) {
         state.mark_used(runtime.now_milliseconds());
     }
     terminal(QueuedSkillExecutionState::Pending)

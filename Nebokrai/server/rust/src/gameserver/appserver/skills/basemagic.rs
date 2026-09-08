@@ -128,12 +128,10 @@ impl BaseMagicExecutionState {
 fn finish_player_base_magic<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(BASE_MAGIC_SKILL_ID, now_ms);
-    });
+    finish_delayed_base_attack(game, player_id, BASE_MAGIC_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_base_magic<Runtime: GameMainLoopRuntime>(
@@ -142,11 +140,11 @@ pub(crate) fn cancel_player_base_magic<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_state::<BaseMagicExecutionState>(BASE_MAGIC_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = game.player_skill_state::<BaseMagicExecutionState>(player_id, BASE_MAGIC_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     finish_player_base_magic(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
@@ -209,7 +207,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
         }
     };
 
-    if player_ai.player_skill_state::<BaseMagicExecutionState>(BASE_MAGIC_SKILL_ID).copied().is_none() {
+    if game.player_skill_state::<BaseMagicExecutionState>(player_id, BASE_MAGIC_SKILL_ID).copied().is_none() {
         if target.object_type == PLAYER_TYPE && target.id == player_id {
             game.send_base_magic_failure(player_id, 10);
             game.send_skill_system_info(player_id, b"GS0286");
@@ -217,7 +215,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
         }
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(BASE_MAGIC_SKILL_ID),
+            game.player_skill_last_used_ms(player_id, BASE_MAGIC_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -255,7 +253,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0290");
             return rejected();
         }
-        player_ai.begin_player_skill_execution(BaseMagicExecutionState::begin(dispatch, target, now_ms));
+        game.begin_player_skill_execution(player_id, player_ai, BaseMagicExecutionState::begin(dispatch, target, now_ms));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(BASE_MAGIC_SKILL_ID));
         }
@@ -264,7 +262,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
             ..pending()
         };
     }
-    let Some(execution) = player_ai.player_skill_state::<BaseMagicExecutionState>(BASE_MAGIC_SKILL_ID).copied() else {
+    let Some(execution) = game.player_skill_state::<BaseMagicExecutionState>(player_id, BASE_MAGIC_SKILL_ID).copied() else {
         return rejected();
     };
     if execution.kernel().dispatch() != dispatch {
@@ -315,7 +313,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
         }
-        if let Some(execution) = player_ai.player_skill_state_mut::<BaseMagicExecutionState>(BASE_MAGIC_SKILL_ID) {
+        if let Some(execution) = game.player_skill_state_mut::<BaseMagicExecutionState>(player_id, BASE_MAGIC_SKILL_ID) {
             let _ = execution.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
             execution.mark_condition_checked();
         }
@@ -431,7 +429,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
         tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой магии");
     }
 
-    if let Some(state) = player_ai.player_skill_state_mut::<BaseMagicExecutionState>(BASE_MAGIC_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<BaseMagicExecutionState>(player_id, BASE_MAGIC_SKILL_ID) {
         let _ = state
             .kernel_mut()
             .advance(SkillStage::Check, SkillStage::Calculate);

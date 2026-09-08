@@ -79,25 +79,22 @@ fn send_visual(game: &mut CGame, player_id: i32, skill_id: u32, skill_level: i32
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.player_skill_execution(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.player_skill_execution(YIN_YANG_SKILL_ID) } }
-fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.player_skill_execution_mut(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.player_skill_execution_mut(YIN_YANG_SKILL_ID) } }
+fn execution(game: &CGame, player_id: i32, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { if second { game.player_skill_execution(player_id, crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { game.player_skill_execution(player_id, YIN_YANG_SKILL_ID) } }
+fn execution_mut(game: &mut CGame, player_id: i32, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { if second { game.player_skill_execution_mut(player_id, crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { game.player_skill_execution_mut(player_id, YIN_YANG_SKILL_ID) } }
 
-fn last_used(ai: &CPlayerAI, second: bool) -> u32 { if second { ai.skill_last_used_ms(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.skill_last_used_ms(YIN_YANG_SKILL_ID) } }
-fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) { if second { ai.mark_skill_used(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID, now); } else { ai.mark_skill_used(YIN_YANG_SKILL_ID, now); } }
+fn last_used(game: &CGame, player_id: i32, second: bool) -> u32 { if second { game.player_skill_last_used_ms(player_id, crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { game.player_skill_last_used_ms(player_id, YIN_YANG_SKILL_ID) } }
 
 fn finish_player_yin_yang<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     second: bool,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        mark_used(player_ai, second, now_ms);
-    });
+    let skill_id = if second { super::yinyang2::YIN_YANG_2_SKILL_ID } else { YIN_YANG_SKILL_ID };
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 fn abort_player_yin_yang(game: &mut CGame, player_id: i32) {
@@ -113,9 +110,9 @@ pub(crate) fn complete_player_yin_yang_family<Runtime: GameMainLoopRuntime>(
     second: bool,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = execution(player_ai, second).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_yin_yang(game, player_id, player_ai, second, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    let Some(dispatch) = execution(game, player_id, second).map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_yin_yang(game, player_id, second, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_yin_yang_family<Runtime: GameMainLoopRuntime>(
@@ -125,11 +122,11 @@ pub(crate) fn cancel_player_yin_yang_family<Runtime: GameMainLoopRuntime>(
     second: bool,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = execution(player_ai, second).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = execution(game, player_id, second).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     abort_player_yin_yang(game, player_id);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_yin_yang<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
@@ -143,7 +140,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
     let Some(region_id) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        if execution(player_ai, second).is_some() {
+        if execution(game, player_id, second).is_some() {
             abort_player_yin_yang(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -157,10 +154,10 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
     let element_scale = properties.query_property(SKILL_USAGE_EM_MODIFIER);
 
-    if execution(player_ai, second).is_none() {
+    if execution(game, player_id, second).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(last_used(player_ai, second), cooldown_ms, cooldown_now_ms) {
+        if !skill_is_restored(last_used(game, player_id, second), cooldown_ms, cooldown_now_ms) {
             send_error(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { send_error(game, player_id, 10, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); };
@@ -171,11 +168,11 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
         if path.iter().any(|cell| cell.2 == 2) { send_error(game, player_id, 0x0f, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
         if mp_loss == 0 || player.mana() < mp_loss { if mp_loss != 0 { send_error(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if execution(player_ai, second).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
+    } else if execution(game, player_id, second).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 
-    if execution(player_ai, second).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if execution(game, player_id, second).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
         if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) { send_error(game, player_id, 10, mp_loss); abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -187,10 +184,10 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         let _ = game.update_player_criminal_state(player_id, GamePlayerFightStatePhase::MoveShapeAi, runtime);
         send_visual(game, player_id, skill_id, skill_level, 1, None);
-        if let Some(execution) = execution_mut(player_ai, second) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = execution_mut(game, player_id, second) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started_at_ms = execution(player_ai, second).map(SkillExecutionKernel::started_at_ms).expect("выполнение инь-ян создано или восстановлено");
+    let started_at_ms = execution(game, player_id, second).map(SkillExecutionKernel::started_at_ms).expect("выполнение инь-ян создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending); }
     let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
     if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) { send_error(game, player_id, 10, mp_loss); abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
@@ -211,8 +208,8 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     phalanx.shape_mut().set_region_id(region_id);
     let summoned = game.add_yin_yang_phalanx(region_id, phalanx, target_x, target_y, summon_started_at_ms, runtime).is_some_and(|result| result.is_ok());
     if summoned { let _ = game.send_yin_yang_phalanx_entry(region_id, summon_id); }
-    if let Some(execution) = execution_mut(player_ai, second) { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_yin_yang(game, player_id, player_ai, second, runtime);
+    if let Some(execution) = execution_mut(game, player_id, second) { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_yin_yang(game, player_id, second, runtime);
     terminal(if summoned { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 

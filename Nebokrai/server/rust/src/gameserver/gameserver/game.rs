@@ -1380,7 +1380,10 @@ use crate::gameserver::appserver::skills::immediatestate::{
     MonsterImmediateSkill,
     execute_player_immediate_state, is_immediate_state_skill,
 };
-use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{
+    BattleFairyExecution, PlayerSkillExecution, PlayerSkillState, SkillExecutionKernel,
+    SkillStage, SkillTermination,
+};
 use crate::gameserver::appserver::skills::knockoutruntime::{
     cancel_player_knock_out, complete_player_knock_out, execute_player_knock_out,
     KNOCK_OUT_SKILL_ID,
@@ -33342,6 +33345,175 @@ impl CGame {
         self.players.get_mut(&player_id)
     }
 
+    // CGame координирует короткие заимствования, но не хранит исполнение.
+    // GetSkill разрешает первый зарегистрированный экземпляр по категории
+    // фабрики; временное извлечение AI не меняет владельца навыка и reuse.
+    pub(crate) fn player_skill_execution(&self, player_id: i32, skill_id: u32) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.find_player(player_id)?.move_shape().player_execution(skill_id, &self.skill_factory)
+            .map(PlayerSkillExecution::kernel)
+    }
+
+    pub(crate) fn player_skill_execution_mut(&mut self, player_id: i32, skill_id: u32) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.players.get_mut(&player_id)?.move_shape_mut().player_execution_mut(skill_id, &self.skill_factory)
+            .map(PlayerSkillExecution::kernel_mut)
+    }
+
+    pub(crate) fn player_skill_state<State: PlayerSkillState>(&self, player_id: i32, skill_id: u32) -> Option<&State> {
+        self.find_player(player_id)?.move_shape().player_execution(skill_id, &self.skill_factory)
+            .and_then(State::from_execution)
+    }
+
+    pub(crate) fn player_skill_state_mut<State: PlayerSkillState>(&mut self, player_id: i32, skill_id: u32) -> Option<&mut State> {
+        self.players.get_mut(&player_id)?.move_shape_mut().player_execution_mut(skill_id, &self.skill_factory)
+            .and_then(State::from_execution_mut)
+    }
+
+    pub(crate) fn begin_player_skill_execution(&mut self, player_id: i32, ai: &CPlayerAI, state: impl Into<PlayerSkillExecution>) -> bool {
+        let mut execution = state.into();
+        execution.kernel_mut().inherit_scheduled_begin(ai.scheduled_skill_begin());
+        self.players.get_mut(&player_id).is_some_and(|player| {
+            player.move_shape_mut().install_player_execution(execution, &self.skill_factory)
+        })
+    }
+
+    pub(crate) fn player_skill_last_used_ms(&self, player_id: i32, skill_id: u32) -> u32 {
+        self.find_player(player_id).map_or(0, |player| player.move_shape().skill_last_used_ms(skill_id, &self.skill_factory))
+    }
+
+    pub(crate) fn mark_player_skill_used(&mut self, player_id: i32, skill_id: u32, now_ms: u32) {
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.move_shape_mut().mark_skill_used(skill_id, now_ms, &self.skill_factory);
+        }
+    }
+
+    /// End освобождает только совпавший dispatch собственного экземпляра.
+    /// Команда и FIFO, а также независимый reuse не входят в эту операцию.
+    pub(crate) fn finish_player_skill_execution(&mut self, player_id: i32, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
+        let skill_id = expected.skill_id();
+        if !self.player_skill_execution(player_id, skill_id).is_some_and(|state| state.dispatch() == expected) {
+            return false;
+        }
+        let Some(mut execution) = self.players.get_mut(&player_id)
+            .and_then(|player| player.move_shape_mut().take_player_execution(skill_id, &self.skill_factory))
+        else { return false };
+        let _ = execution.kernel_mut().terminate(termination);
+        tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
+        true
+    }
+
+    pub(crate) fn finish_player_skill(&mut self, player_id: i32, ai: &mut CPlayerAI, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
+        let finished_execution = self.finish_player_skill_execution(player_id, expected, termination);
+        if ai.current_player_skill() == Some(expected) {
+            ai.release_current_player_command();
+            return true;
+        }
+        finished_execution
+    }
+
+    pub(crate) fn finish_scheduled_player_skill(&mut self, player_id: i32, ai: &mut CPlayerAI, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
+        ai.current_player_skill() == Some(expected)
+            && self.finish_player_skill(player_id, ai, expected, termination)
+    }
+
+    pub(crate) fn player_skill_requires_target_end(&self, player_id: i32, skill_id: u32) -> bool {
+        self.player_skill_execution(player_id, skill_id).is_some_and(|execution| !execution.is_prepared())
+    }
+
+    pub(crate) fn begin_poison_fog(&mut self, player_id: i32, ai: &CPlayerAI, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) -> bool {
+        self.begin_player_skill_execution(player_id, ai, PlayerSkillExecution::PoisonFog { kernel, destination })
+    }
+
+    pub(crate) fn poison_fog_destination(&self, player_id: i32) -> Option<(i32, i32)> {
+        match self.find_player(player_id)?.move_shape().player_execution(POISON_FOG_SKILL_ID, &self.skill_factory)? {
+            PlayerSkillExecution::PoisonFog { destination, .. } => Some(*destination),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn battle_fairy_execution(&self, player_id: i32, skill_id: u32) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.find_player(player_id)?.move_shape().battle_fairy_execution(skill_id, &self.skill_factory)
+            .map(BattleFairyExecution::kernel)
+    }
+
+    pub(crate) fn battle_fairy_execution_mut(&mut self, player_id: i32, skill_id: u32) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.players.get_mut(&player_id)?.move_shape_mut().battle_fairy_execution_mut(skill_id, &self.skill_factory)
+            .map(BattleFairyExecution::kernel_mut)
+    }
+
+    fn insert_battle_fairy_execution(&mut self, player_id: i32, ai: &CPlayerAI, mut execution: BattleFairyExecution) -> bool {
+        execution.kernel_mut().inherit_scheduled_begin(ai.scheduled_fairy_skill_begin());
+        self.players.get_mut(&player_id).is_some_and(|player| {
+            player.move_shape_mut().install_battle_fairy_execution(execution, &self.skill_factory)
+        })
+    }
+
+    pub(crate) fn begin_battle_fairy_state(&mut self, player_id: i32, ai: &CPlayerAI, state: SkillExecutionKernel<BattleFairySkillDispatch>) -> bool {
+        self.insert_battle_fairy_execution(player_id, ai, BattleFairyExecution::State(state))
+    }
+
+    pub(crate) fn begin_battle_fairy_base_magic(&mut self, player_id: i32, ai: &CPlayerAI, state: crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState) -> bool {
+        self.insert_battle_fairy_execution(player_id, ai, BattleFairyExecution::BaseMagic(state))
+    }
+
+    pub(crate) fn battle_fairy_base_magic(&self, player_id: i32) -> Option<crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState> {
+        match self.find_player(player_id)?.move_shape().battle_fairy_execution(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, &self.skill_factory)? {
+            BattleFairyExecution::BaseMagic(state) => Some(*state),
+            BattleFairyExecution::State(_) => None,
+        }
+    }
+
+    pub(crate) fn battle_fairy_skill_last_used_ms(&self, player_id: i32, skill_id: u32) -> u32 {
+        self.player_skill_last_used_ms(player_id, skill_id)
+    }
+
+    pub(crate) fn mark_battle_fairy_skill_used(&mut self, player_id: i32, skill_id: u32, now_ms: u32) -> bool {
+        if !CSkillFactory::is_war_soul_skill(skill_id) {
+            return false;
+        }
+        let Some(player) = self.players.get_mut(&player_id) else { return false };
+        if player.move_shape().skill(skill_id, &self.skill_factory).is_none() {
+            return false;
+        }
+        player.move_shape_mut().mark_skill_used(skill_id, now_ms, &self.skill_factory);
+        true
+    }
+
+    pub(crate) fn selected_battle_fairy_skill_last_used_ms(&self, player_id: i32, ai: &CPlayerAI) -> Option<u32> {
+        let skill_id = ai.selected_battle_fairy_skill_id();
+        CSkillFactory::is_war_soul_skill(skill_id)
+            .then(|| self.battle_fairy_skill_last_used_ms(player_id, skill_id))
+    }
+
+    pub(crate) fn finish_battle_fairy_execution(&mut self, player_id: i32, expected: BattleFairySkillDispatch, termination: SkillTermination) -> bool {
+        let skill_id = expected.skill_id();
+        if !self.battle_fairy_execution(player_id, skill_id).is_some_and(|state| state.dispatch() == expected) {
+            return false;
+        }
+        let Some(mut execution) = self.players.get_mut(&player_id)
+            .and_then(|player| player.move_shape_mut().take_battle_fairy_execution(skill_id, &self.skill_factory))
+        else { return false };
+        let kernel = execution.kernel_mut();
+        let _ = kernel.terminate(termination);
+        tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение навыка боевой феи завершено");
+        true
+    }
+
+    pub(crate) fn finish_battle_fairy_skill(&mut self, player_id: i32, ai: &mut CPlayerAI, expected: BattleFairySkillDispatch, termination: SkillTermination) -> bool {
+        if ai.current_battle_fairy_skill() != Some(expected) {
+            return false;
+        }
+        ai.release_current_battle_fairy_command();
+        self.finish_battle_fairy_execution(player_id, expected, termination);
+        true
+    }
+
+    pub(crate) fn battle_fairy_skill_execution_is_materialized(&self, player_id: i32, ai: &CPlayerAI) -> bool {
+        ai.current_battle_fairy_skill().is_some_and(|dispatch| {
+            self.battle_fairy_execution(player_id, dispatch.skill_id())
+                .is_some_and(|execution| execution.dispatch() == dispatch)
+        })
+    }
+
     pub(crate) fn take_player_auction_scale_goods_ids(
         &mut self,
         player_id: i32,
@@ -37171,7 +37343,10 @@ impl CGame {
                         .players
                         .get(&player_id)
                         .expect("skill dispatch сохраняет canonical player");
-                    let prepared = player.player_ai().player_skill_execution(dispatch.skill_id())
+                    if player.move_shape().skill(dispatch.skill_id(), &self.skill_factory).is_none() {
+                        continue;
+                    }
+                    let prepared = self.player_skill_execution(player_id, dispatch.skill_id())
                         .is_some_and(|execution| execution.is_prepared());
                     let in_background = prepared && (0..)
                         .map_while(|index| player.back_stage_skill_id(index))
@@ -37216,6 +37391,11 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
+                    if self.find_player(player_id).is_none_or(|player| {
+                        player.move_shape().skill(dispatch.skill_id(), &self.skill_factory).is_none()
+                    }) {
+                        continue;
+                    }
                     let outcome = self
                         .players
                         .get_mut(&player_id)
@@ -37863,9 +38043,11 @@ impl CGame {
                 target: ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::default() },
             };
             let started_at_ms = now_milliseconds();
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.player_ai_mut().begin_player_skill_execution(
-                    crate::gameserver::appserver::skills::kernel::SkillExecutionKernel::begin(dispatch, started_at_ms),
+            if let Some(player) = self.players.get_mut(&player_id) {
+                // Автоматический Begin имеет собственные часы, не контекст
+                // выбранной в OnSchedule команды.
+                player.move_shape_mut().install_player_execution(
+                    SkillExecutionKernel::begin(dispatch, started_at_ms).into(), &self.skill_factory,
                 );
             }
             self.enter_player_combat_state(player_id);
@@ -37966,8 +38148,7 @@ impl CGame {
             return false;
         };
         let needs_end = current_skill_id.is_some_and(|skill_id| {
-            self.find_player(player_id)
-                .is_some_and(|player| player.player_ai().player_skill_requires_target_end(skill_id))
+            self.player_skill_requires_target_end(player_id, skill_id)
         });
         let previous_dispatch = self.find_player_mut(player_id).and_then(|player| {
             let dispatch = player.player_ai().current_player_skill();
@@ -37990,12 +38171,10 @@ impl CGame {
             if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
                 return true;
             }
+            let released = previous_dispatch.is_some_and(|dispatch| {
+                self.finish_player_skill_execution(player_id, dispatch, SkillTermination::Cancelled)
+            });
             self.find_player_mut(player_id).is_some_and(|player| {
-                let released = previous_dispatch.is_some_and(|dispatch| {
-                    player
-                        .player_ai_mut()
-                        .finish_player_skill(dispatch, SkillTermination::Cancelled)
-                });
                 if released || player.current_skill_id() == Some(current_skill_id) {
                     player.set_skill_moveable(true);
                     player.set_current_skill_id(None);
@@ -39844,7 +40023,7 @@ impl CGame {
         cause: MaterializedSkillEndCause,
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
-        self.find_player(player_id)?.player_ai().player_skill_execution(skill_id)?;
+        self.player_skill_execution(player_id, skill_id)?;
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
         let explicitly_completed = if cause.uses_nonzero_end() {
             match skill_id {
@@ -40407,6 +40586,8 @@ impl CGame {
                 cancel_player_knock_out(self, player_id, &mut player_ai, runtime)
             }
             GIBE_SKILL_ID => cancel_player_gibe(
+                self,
+                player_id,
                 &mut player_ai,
                 cause.uses_nonzero_end(),
                 runtime,
@@ -40723,10 +40904,8 @@ impl CGame {
         while let Some(skill_id) = self.find_player(player_id)
             .and_then(|player| player.back_stage_skill_id(index))
         {
-            let execution = self.find_player(player_id)
-                .and_then(|player| player.player_ai().player_skill_execution(skill_id));
-            let fairy_execution = self.find_player(player_id)
-                .and_then(|player| player.player_ai().battle_fairy_execution(skill_id));
+            let execution = self.player_skill_execution(player_id, skill_id);
+            let fairy_execution = self.battle_fairy_execution(player_id, skill_id);
             if execution.is_none() && fairy_execution.is_none() {
                 if let Some(player) = self.find_player_mut(player_id) {
                     player.player_ai_mut().base_ai_mut().mark_ended_back_stage_skill(index, skill_id);
@@ -40757,12 +40936,12 @@ impl CGame {
             };
             if let Some(termination) = termination {
                 if let Some(execution) = execution {
-                    player_ai.finish_player_skill_execution(execution.dispatch(), termination);
+                    self.finish_player_skill_execution(player_id, execution.dispatch(), termination);
                 } else if let Some(execution) = fairy_execution {
                     let dispatch = execution.dispatch();
-                    if player_ai.finish_battle_fairy_execution(dispatch, termination) {
+                    if self.finish_battle_fairy_execution(player_id, dispatch, termination) {
                         self.finish_battle_fairy_skill_end_tail(
-                            player_id, dispatch, &mut player_ai,
+                            player_id, dispatch,
                             outcome.state == QueuedSkillExecutionState::Rejected, runtime,
                         );
                     }
@@ -41122,13 +41301,30 @@ impl CGame {
                 });
                 return 1;
             }
+            let mut registered_id = self.find_player(player_id)
+                .and_then(|player| player.move_shape().current_skill(&self.skill_factory))
+                .map(|skill| skill.id());
+            if registered_id.is_none() {
+                let Some(default_id) = self.find_player(player_id)
+                    .map(|player| player.default_attack_skill_id(&self.goods_factory))
+                else { return 0 };
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.set_current_skill_id(Some(default_id));
+                }
+                registered_id = self.find_player(player_id)
+                    .and_then(|player| player.move_shape().current_skill(&self.skill_factory))
+                    .map(|skill| skill.id());
+            }
+            let Some(skill_id) = registered_id else { return 0 };
+            let dispatch = dispatch.with_skill_id(skill_id);
+            player_ai.select_player_skill(dispatch);
             // Native IsEnded перед Begin: живой экземпляр, в том числе
             // уже переданный в фон, не получает лишний AI из OnSchedule.
-            if player_ai.player_skill_execution(dispatch.skill_id()).is_some() {
+            if self.player_skill_execution(player_id, dispatch.skill_id()).is_some() {
                 return 1;
             }
-            let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
-            let begin_was_pending = Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
+            let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch);
+            let begin_was_pending = self.player_skill_begin_pending(player_id, dispatch.skill_id());
             if !schedule_rejected {
                 self.begin_player_skill_schedule(player_id, dispatch, player_ai, runtime);
             }
@@ -41150,7 +41346,7 @@ impl CGame {
                 && !begin_completed
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected
-                && Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
+                && self.player_skill_begin_pending(player_id, dispatch.skill_id());
             if begin_rejected {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }
@@ -41201,9 +41397,9 @@ impl CGame {
         match outcome.state {
             QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
             QueuedSkillExecutionState::Completed =>
-                player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Completed),
+                self.finish_scheduled_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed),
             QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
-                player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Rejected),
+                self.finish_scheduled_player_skill(player_id, player_ai, dispatch, SkillTermination::Rejected),
         }
     }
 
@@ -41313,17 +41509,23 @@ impl CGame {
         // OnSchedule видит ещё занятый Attack. Его снятие в active-фазе
         // не разрешает извлечь следующий запрос в оставшейся части Run.
         if player_ai.finish_battle_fairy_attack(
+            self.battle_fairy_execution(player_id, player_ai.selected_battle_fairy_skill_id()),
             runtime.now_milliseconds(),
         ) {
             return 1;
         }
         let mut execution_count = 0;
-        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule)
+        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule, |id| self.battle_fairy_execution(player_id, id).is_some())
             .filter(|dispatch| dispatch.has_target())
         {
+            if self.find_player(player_id).is_none_or(|player| {
+                player.move_shape().skill(player_ai.selected_battle_fairy_skill_id(), &self.skill_factory).is_none()
+            }) {
+                return 0;
+            }
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
-                && !player_ai.battle_fairy_skill_execution_is_materialized();
+                && !self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
             if !schedule_rejected {
                 self.begin_battle_fairy_skill_schedule(player_id, dispatch, player_ai, runtime);
             }
@@ -41345,7 +41547,7 @@ impl CGame {
                 outcome
             };
             let materialized_end = outcome.state != QueuedSkillExecutionState::Pending
-                && player_ai.battle_fairy_skill_execution_is_materialized();
+                && self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
             if !schedule_rejected
                 && !begin_completed
                 && begin_was_pending
@@ -41357,11 +41559,13 @@ impl CGame {
             self.apply_battle_fairy_skill_contacts(player_id, dispatch, player_ai, &outcome, runtime);
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
-                QueuedSkillExecutionState::Completed => player_ai.finish_battle_fairy_skill(
+                QueuedSkillExecutionState::Completed => self.finish_battle_fairy_skill(
+                    player_id, player_ai,
                     dispatch,
                     SkillTermination::Completed,
                 ),
-                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => player_ai.finish_battle_fairy_skill(
+                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => self.finish_battle_fairy_skill(
+                    player_id, player_ai,
                     dispatch,
                     SkillTermination::Rejected,
                 ),
@@ -41370,7 +41574,6 @@ impl CGame {
                 self.finish_battle_fairy_skill_end_tail(
                     player_id,
                     dispatch,
-                    player_ai,
                     outcome.state == QueuedSkillExecutionState::Rejected,
                     runtime,
                 );
@@ -46834,7 +47037,7 @@ impl CGame {
                                             &mut player_ai,
                                             runtime,
                                         );
-                                        if player_ai.player_skill_execution(skill_id).is_some() {
+                                        if self.player_skill_execution(player_id, skill_id).is_some() {
                                             break;
                                         }
                                     }
@@ -46914,6 +47117,8 @@ impl CGame {
                                 && !change_skill_handled
                                 && player_ai.finish_player_attack(
                                     self.find_player(player_id).and_then(CPlayer::current_skill_id),
+                                    self.find_player(player_id).and_then(CPlayer::current_skill_id)
+                                        .and_then(|id| self.player_skill_execution(player_id, id)),
                                     || runtime.now_milliseconds(),
                                 );
                             let active_action_handled = handled_active_action
@@ -46988,7 +47193,7 @@ impl CGame {
                                 let skill_level =
                                     player.learned_skill_level_if_present(skill_id, &self.skill_factory)?;
                                 let last_used_ms =
-                                    player_ai.selected_battle_fairy_skill_last_used_ms()?;
+                                    self.selected_battle_fairy_skill_last_used_ms(player_id, &player_ai)?;
                                 let properties = self
                                     .skill_factory
                                     .query_skill_base_properties(skill_id, skill_level);

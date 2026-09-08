@@ -53,12 +53,9 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { Q
 fn finish_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(THUNDER_SLASH_SKILL_ID, now_ms);
-    });
+    finish_delayed_base_attack(game, player_id, THUNDER_SLASH_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_thunder_slash<Runtime: GameMainLoopRuntime>(
@@ -67,11 +64,11 @@ pub(crate) fn cancel_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, THUNDER_SLASH_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    finish_player_thunder_slash(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    finish_player_thunder_slash(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 1) }
 
@@ -112,8 +109,8 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(THUNDER_SLASH_SKILL_ID, game.skill_factory()), player.mana(), player.rp(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(THUNDER_SLASH_SKILL_ID, level) else {
-        if ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).is_some() {
-            finish_player_thunder_slash(game, player_id, ai, runtime);
+        if game.player_skill_execution(player_id, THUNDER_SLASH_SKILL_ID).is_some() {
+            finish_player_thunder_slash(game, player_id, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -121,10 +118,10 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME); let frequency = properties.query_property(TARGET_AFFECT_FREQUENCY);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, THUNDER_SLASH_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(THUNDER_SLASH_SKILL_ID), reuse, cooldown_now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, THUNDER_SLASH_SKILL_ID), reuse, cooldown_now_ms) {
             failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -132,47 +129,47 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         if mp_loss != 0 && mana < mp_loss { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if rp_loss != 0 && u32::from(rp) < rp_loss { failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(THUNDER_SLASH_SKILL_ID)); }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    } else if game.player_skill_execution(player_id, THUNDER_SLASH_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else {
-        finish_player_thunder_slash(game, player_id, ai, runtime);
+        finish_player_thunder_slash(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, THUNDER_SLASH_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let Some(player) = game.find_player(player_id) else {
-            finish_player_thunder_slash(game, player_id, ai, runtime);
+            finish_player_thunder_slash(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if !weapon_is_valid(game, player) {
             failure(game, player_id, 0x0e, mp_loss);
-            finish_player_thunder_slash(game, player_id, ai, runtime);
+            finish_player_thunder_slash(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if !end_player_rage_break_state(game, player_id, runtime.now_milliseconds()) {
             failure(game, player_id, 4, mp_loss);
-            finish_player_thunder_slash(game, player_id, ai, runtime);
+            finish_player_thunder_slash(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if mp_loss != 0 && (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             failure(game, player_id, 7, mp_loss);
-            finish_player_thunder_slash(game, player_id, ai, runtime);
+            finish_player_thunder_slash(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if mp_loss != 0 && let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
         if rp_loss != 0 && (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
             failure(game, player_id, 8, rp_loss);
-            finish_player_thunder_slash(game, player_id, ai, runtime);
+            finish_player_thunder_slash(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { if rp_loss != 0 { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); } player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
         let _ = game.publish_player_states(player_id); send_visual(game, player_id, level, None);
-        if let Some(state) = ai.player_skill_execution_mut(THUNDER_SLASH_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = game.player_skill_execution_mut(player_id, THUNDER_SLASH_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.player_skill_execution(THUNDER_SLASH_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
+    let started = game.player_skill_execution(player_id, THUNDER_SLASH_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
     if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, Some((target, target_x, target_y)));
     let direction = game.find_player(player_id).map(|player| player.shape().get_direction()).unwrap_or_default();
@@ -188,7 +185,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
             tracing::trace!(region_id, player_id, summon_id, ?result, "создана форма громового рассечения");
         }
     }
-    if let Some(state) = ai.player_skill_execution_mut(THUNDER_SLASH_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_thunder_slash(game, player_id, ai, runtime);
+    if let Some(state) = game.player_skill_execution_mut(player_id, THUNDER_SLASH_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_thunder_slash(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

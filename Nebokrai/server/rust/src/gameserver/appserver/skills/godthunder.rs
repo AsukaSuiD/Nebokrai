@@ -110,23 +110,21 @@ pub(crate) const fn is_god_thunder_dispatch(dispatch: PlayerSkillDispatch) -> bo
     )
 }
 
-fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-    if second { ai.player_skill_execution(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.player_skill_execution(GOD_THUNDER_SKILL_ID) }
+fn execution(game: &CGame, player_id: i32, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+    if second { game.player_skill_execution(player_id, crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { game.player_skill_execution(player_id, GOD_THUNDER_SKILL_ID) }
 }
-fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-    if second { ai.player_skill_execution_mut(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.player_skill_execution_mut(GOD_THUNDER_SKILL_ID) }
-}
-
-fn last_used(ai: &CPlayerAI, second: bool) -> u32 {
-    if second { ai.skill_last_used_ms(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.skill_last_used_ms(GOD_THUNDER_SKILL_ID) }
-}
-fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) {
-    if second { ai.mark_skill_used(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID, now); } else { ai.mark_skill_used(GOD_THUNDER_SKILL_ID, now); }
+fn execution_mut(game: &mut CGame, player_id: i32, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+    if second { game.player_skill_execution_mut(player_id, crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { game.player_skill_execution_mut(player_id, GOD_THUNDER_SKILL_ID) }
 }
 
-fn finish_player_god_thunder<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, runtime: &mut Runtime) {
+fn last_used(game: &CGame, player_id: i32, second: bool) -> u32 {
+    if second { game.player_skill_last_used_ms(player_id, crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { game.player_skill_last_used_ms(player_id, GOD_THUNDER_SKILL_ID) }
+}
+
+fn finish_player_god_thunder<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _ai: &mut CPlayerAI, second: bool, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| mark_used(ai, second, now_ms));
+    let skill_id = if second { crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID } else { GOD_THUNDER_SKILL_ID };
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 fn abort_player_god_thunder(game: &mut CGame, player_id: i32) {
@@ -134,15 +132,15 @@ fn abort_player_god_thunder(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_player_god_thunder_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = execution(ai, second).map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = execution(game, player_id, second).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_god_thunder(game, player_id, ai, second, runtime);
-    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_god_thunder_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = execution(ai, second).map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = execution(game, player_id, second).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_god_thunder(game, player_id);
-    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_god_thunder<Runtime: GameMainLoopRuntime>(
@@ -163,7 +161,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
-        if execution(ai, second).is_some() { abort_player_god_thunder(game, player_id); }
+        if execution(game, player_id, second).is_some() { abort_player_god_thunder(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse = properties.query_property(REUSE_TIME);
@@ -178,8 +176,8 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
     let element_property = properties.query_property(ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if execution(ai, second).is_none() {
-        if !skill_is_restored(last_used(ai, second), reuse, runtime.now_milliseconds()) {
+    if execution(game, player_id, second).is_none() {
+        if !skill_is_restored(last_used(game, player_id, second), reuse, runtime.now_milliseconds()) {
             fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -197,16 +195,16 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id));
         }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if execution(ai, second).is_none_or(|state| state.dispatch() != dispatch) {
+    } else if execution(game, player_id, second).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     let Some((target_x, target_y, target)) = position(game, region, player_id, dispatch) else {
         abort_player_god_thunder(game, player_id); return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if execution(ai, second).is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if execution(game, player_id, second).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp) as i32) < 0 {
             fail(game, player_id, 7, mp); abort_player_god_thunder(game, player_id);
@@ -219,10 +217,10 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         let _ = game.update_player_criminal_state(player_id, GamePlayerFightStatePhase::MoveShapeAi, runtime);
         visual(game, player_id, skill_id, level, 1, None);
-        if let Some(state) = execution_mut(ai, second) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = execution_mut(game, player_id, second) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started = execution(ai, second).map(SkillExecutionKernel::started_at_ms).expect("божественный гром начат");
+    let started = execution(game, player_id, second).map(SkillExecutionKernel::started_at_ms).expect("божественный гром начат");
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending); }
     if target.is_some_and(|identity| game.periodic_state_target_dead(region, identity)) {
         fail(game, player_id, 10, mp); abort_player_god_thunder(game, player_id);
@@ -256,7 +254,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
         if summoned { let _ = game.send_god_thunder_phalanx_entry(region, summon_id, runtime); }
         summoned
     };
-    if let Some(state) = execution_mut(ai, second) {
+    if let Some(state) = execution_mut(game, player_id, second) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

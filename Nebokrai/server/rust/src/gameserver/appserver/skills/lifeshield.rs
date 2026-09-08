@@ -99,7 +99,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     if game.find_player(player_id).is_none() {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let starting = player_ai.battle_fairy_execution(LIFE_SHIELD_SKILL_ID).is_none();
+    let starting = game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_cast(game, player_id, skill_level, 3);
         if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
@@ -117,11 +117,11 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     let mp_factor = properties.query_property(SKILL_USAGE_TARGET_MP_DECREASE_FACTOR) as u16;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.battle_fairy_execution(LIFE_SHIELD_SKILL_ID).is_none() {
+    if game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.battle_fairy_skill_last_used_ms(LIFE_SHIELD_SKILL_ID),
+            game.battle_fairy_skill_last_used_ms(player_id, LIFE_SHIELD_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -143,17 +143,15 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
                 return reject_before_ai(game);
             }
         }
-        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_battle_fairy_state(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .battle_fairy_execution(LIFE_SHIELD_SKILL_ID)
+    } else if game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai
-        .battle_fairy_execution(LIFE_SHIELD_SKILL_ID)
+    if game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID)
         .is_some_and(|state| state.stage() == SkillStage::Begin)
     {
         if game
@@ -186,13 +184,12 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
             send_goods_update(game, update);
         }
         send_cast(game, player_id, skill_level, 1);
-        if let Some(state) = player_ai.battle_fairy_execution_mut(LIFE_SHIELD_SKILL_ID) {
+        if let Some(state) = game.battle_fairy_execution_mut(player_id, LIFE_SHIELD_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .battle_fairy_execution(LIFE_SHIELD_SKILL_ID)
+    let started_at_ms = game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение щита жизни создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -215,7 +212,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     let _ = game
         .find_player_mut(player_id)
         .and_then(|player| player.replace_life_shield_state(state));
-    if let Some(state) = player_ai.battle_fairy_execution_mut(LIFE_SHIELD_SKILL_ID) {
+    if let Some(state) = game.battle_fairy_execution_mut(player_id, LIFE_SHIELD_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

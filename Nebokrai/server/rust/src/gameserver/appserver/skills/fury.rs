@@ -313,15 +313,15 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     }
 }
 
-fn finish_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(FURY_SKILL_ID, now_ms); });
+    finish_summon_skill(game, player_id, FURY_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(FURY_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = game.player_skill_execution(player_id, FURY_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_fury(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn send_player_failure(game: &CGame, player_id: i32, action: u8, rp_loss: u32) {
@@ -367,7 +367,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(FURY_SKILL_ID, level) else {
-        if player_ai.player_skill_execution(FURY_SKILL_ID).is_some() {
+        if game.player_skill_execution(player_id, FURY_SKILL_ID).is_some() {
             finish_player_fury(game, player_id, player_ai, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -379,9 +379,9 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     let attack_gain = properties.query_property(SKILL_USAGE_TARGET_ATK_GAIN) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(FURY_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, FURY_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.skill_last_used_ms(FURY_SKILL_ID), reuse_ms, now_ms) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, FURY_SKILL_ID), reuse_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d, rp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -393,10 +393,9 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(FURY_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_execution(FURY_SKILL_ID)
+    } else if game.player_skill_execution(player_id, FURY_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -408,8 +407,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai
-        .player_skill_execution(FURY_SKILL_ID)
+    if game.player_skill_execution(player_id, FURY_SKILL_ID)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
@@ -423,13 +421,12 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.publish_player_states(player_id);
         send_player_cast(game, player_id, level, false);
-        if let Some(execution) = player_ai.player_skill_execution_mut(FURY_SKILL_ID) {
+        if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .player_skill_execution(FURY_SKILL_ID)
+    let started_at_ms = game.player_skill_execution(player_id, FURY_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .unwrap_or_default();
     if started_at_ms.wrapping_add(delay_ms) > runtime.now_milliseconds() {
@@ -437,7 +434,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     }
 
     send_player_cast(game, player_id, level, true);
-    if let Some(execution) = player_ai.player_skill_execution_mut(FURY_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -460,7 +457,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         .find_player_mut(player_id)
         .is_some_and(|player| player.restart_rage_break_state(now_ms))
     {
-        if let Some(execution) = player_ai.player_skill_execution_mut(FURY_SKILL_ID) {
+        if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
             let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
         }
         finish_player_fury(game, player_id, player_ai, runtime);
@@ -491,7 +488,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     let _ = game.update_player_properties(player_id);
     let _ = game.publish_player_states(player_id);
 
-    if let Some(execution) = player_ai.player_skill_execution_mut(FURY_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_fury(game, player_id, player_ai, runtime);

@@ -131,15 +131,12 @@ fn send_fire(
 fn finish_player_seal<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(SEAL_SKILL_ID, now_ms);
-    });
+    finish_summon_skill(game, player_id, SEAL_SKILL_ID, runtime);
 }
 
 fn abort_player_seal(game: &mut CGame, player_id: i32) {
@@ -154,9 +151,9 @@ pub(crate) fn complete_player_seal<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_seal(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    let Some(dispatch) = game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_seal(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_seal<Runtime: GameMainLoopRuntime>(
@@ -165,11 +162,11 @@ pub(crate) fn cancel_player_seal<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     abort_player_seal(game, player_id);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -286,7 +283,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         master_info(player),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SEAL_SKILL_ID, level) else {
-        if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_some() {
+        if game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().is_some() {
             abort_player_seal(game, player_id);
         }
         return reject_begin(game, player_id);
@@ -305,9 +302,9 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
     let damage_modifier = properties.query_property(TARGET_FINAL_DAMAGE_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_none() {
+    if game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.skill_last_used_ms(SEAL_SKILL_ID), reuse_delay_ms, runtime.now_milliseconds()) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, SEAL_SKILL_ID), reuse_delay_ms, runtime.now_milliseconds()) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return reject_begin(game, player_id);
@@ -338,9 +335,9 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(SEAL_SKILL_ID));
             player.set_skill_moveable(false);
         }
-        player_ai.begin_player_skill_execution(SealExecutionState::begin(dispatch, target, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SealExecutionState::begin(dispatch, target, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch || state.target != target) {
+    } else if game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch || state.target != target) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -361,7 +358,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
+    if game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -375,14 +372,14 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_start(game, player_id, level);
-        if let Some(state) = player_ai.player_skill_state_mut::<SealExecutionState>(SEAL_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<SealExecutionState>(player_id, SEAL_SKILL_ID) {
             state.condition_checked = true;
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().map(|state| state.kernel().started_at_ms()).expect("выполнение печати создано или восстановлено");
-    if player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().is_some_and(|state| !state.kernel().is_prepared()) {
+    let started_at_ms = game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().map(|state| state.kernel().started_at_ms()).expect("выполнение печати создано или восстановлено");
+    if game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().is_some_and(|state| !state.kernel().is_prepared()) {
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
@@ -390,7 +387,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         let current_source_level = game.find_player(player_id).map_or(0, |player| i32::from(player.level()));
         if current_source_level.wrapping_add(10) < target_level {
             send_failure(game, player_id, 2);
-            finish_player_seal(game, player_id, player_ai, runtime);
+            finish_player_seal(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Completed);
         }
         let Some((current_x, current_y)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
@@ -412,14 +409,14 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         }
         let missile_flying_time_ms = missile_per_cell_ms.wrapping_mul(path.len() as u32);
         send_fire(game, player_id, target, target_x, target_y, level, missile_flying_time_ms);
-        if let Some(state) = player_ai.player_skill_state_mut::<SealExecutionState>(SEAL_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<SealExecutionState>(player_id, SEAL_SKILL_ID) {
             state.kernel_mut().mark_prepared();
             state.missile_flying_time_ms = missile_flying_time_ms;
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
     }
 
-    let missile_flying_time_ms = player_ai.player_skill_state::<SealExecutionState>(SEAL_SKILL_ID).copied().map_or(0, |state| state.missile_flying_time_ms);
+    let missile_flying_time_ms = game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().map_or(0, |state| state.missile_flying_time_ms);
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms.wrapping_add(missile_flying_time_ms)) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
@@ -447,10 +444,10 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
             );
         }
     }
-    if let Some(state) = player_ai.player_skill_state_mut::<SealExecutionState>(SEAL_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<SealExecutionState>(player_id, SEAL_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_seal(game, player_id, player_ai, runtime);
+    finish_player_seal(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

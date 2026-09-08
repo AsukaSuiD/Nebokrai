@@ -12,23 +12,18 @@
 //! навык игрока: пустой слот 0x00485540 не сбрасывает m_pCurrentSkill.
 //! Смена выбора принадлежит OnChangeSkill/OnLoseTarget, не End экземпляра.
 
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::gameserver::game::GameMainLoopRuntime;
 use crate::nets::netserver::message::CMessage;
 
-pub(crate) fn finish_state_skill<Runtime, MarkUsed>(
+pub(crate) fn finish_state_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
+) {
     game.damage_player_weapon(player_id, runtime);
-    mark_used(player_ai, runtime.now_milliseconds());
+    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
 }
 
 impl CGame {

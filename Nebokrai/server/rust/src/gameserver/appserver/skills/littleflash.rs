@@ -133,15 +133,13 @@ fn finish_player_little_flash<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(skill_id, now_ms);
-    });
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 pub(crate) fn cancel_player_little_flash<Runtime: GameMainLoopRuntime>(
@@ -151,14 +149,13 @@ pub(crate) fn cancel_player_little_flash<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((dispatch, skill_id)) = player_ai
-        .player_skill_state::<LittleFlashExecutionState>(execution_skill_id)
+    let Some((dispatch, skill_id)) = game.player_skill_state::<LittleFlashExecutionState>(player_id, execution_skill_id)
         .map(|state| (state.kernel().dispatch(), state.skill_id()))
     else {
         return false;
     };
     finish_player_little_flash(game, player_id, skill_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32, string_id: Option<&[u8]>) {
@@ -340,7 +337,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(skill_id, game.skill_factory()),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
-        if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_some() {
+        if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_some() {
             finish_player_little_flash(game, player_id, skill_id, ai, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -354,9 +351,9 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     let damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_none() {
+    if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(skill_id), reuse, now) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, skill_id), reuse, now) {
             failure(game, player_id, 0x0d, mp_loss, Some(b"GS0278"));
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -368,13 +365,13 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        ai.begin_player_skill_execution(LittleFlashExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, LittleFlashExecutionState::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_none_or(|state| state.kernel.dispatch() != dispatch) {
+    } else if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_some_and(|state| state.kernel.stage() == SkillStage::Begin) {
+    if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| state.kernel.stage() == SkillStage::Begin) {
         let Some((target_x, target_y)) = target_position(game, region_id, variant, dispatch) else {
             failure(game, player_id, 10, mp_loss, None);
             finish_player_little_flash(game, player_id, skill_id, ai, runtime);
@@ -418,27 +415,27 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
             finish_player_little_flash(game, player_id, skill_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        if let Some(state) = ai.player_skill_state_mut::<LittleFlashExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()) {
             state.path = path;
             state.visual_destination = (target_x, target_y);
             let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started = ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).map(|state| state.kernel.started_at_ms()).unwrap_or_default();
-    if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_some_and(|state| !state.attacking_started) {
+    let started = game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).map(|state| state.kernel.started_at_ms()).unwrap_or_default();
+    if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.attacking_started) {
         if !time_reached(runtime.now_milliseconds(), started, delay) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
-        let (destination, final_cell) = ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).and_then(|state| Some((state.visual_destination, *state.path.last()?))).expect("непустой путь проверен");
+        let (destination, final_cell) = game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).and_then(|state| Some((state.visual_destination, *state.path.last()?))).expect("непустой путь проверен");
         send_visual(game, player_id, skill_id, level, 2, destination);
         let _ = game.relocate_player_shape(player_id, region_id, final_cell.0, final_cell.1);
-        if let Some(state) = ai.player_skill_state_mut::<LittleFlashExecutionState>(dispatch.skill_id()) { state.attacking_started = true; }
+        if let Some(state) = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()) { state.attacking_started = true; }
     }
 
-    if ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).is_some_and(|state| !state.attacked) {
-        let path = ai.player_skill_state::<LittleFlashExecutionState>(dispatch.skill_id()).map(|state| state.path.clone()).unwrap_or_default();
-        let mut attacked = ai.player_skill_state_mut::<LittleFlashExecutionState>(dispatch.skill_id()).map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default();
+    if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.attacked) {
+        let path = game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).map(|state| state.path.clone()).unwrap_or_default();
+        let mut attacked = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default();
         attack_path(
             game,
             player_id,
@@ -452,7 +449,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
             &mut attacked,
             runtime,
         );
-        if let Some(state) = ai.player_skill_state_mut::<LittleFlashExecutionState>(dispatch.skill_id()) {
+        if let Some(state) = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()) {
             state.attacked_creatures = attacked;
             state.attacked = true;
             let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate);
@@ -464,7 +461,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     }
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     send_visual(game, player_id, skill_id, level, 3, (0, 0));
-    if let Some(state) = ai.player_skill_state_mut::<LittleFlashExecutionState>(dispatch.skill_id()) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(state) = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_little_flash(game, player_id, skill_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

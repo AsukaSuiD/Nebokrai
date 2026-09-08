@@ -145,7 +145,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let starting = player_ai.battle_fairy_execution(FATAL_BLOW_SKILL_ID).is_none();
+    let starting = game.battle_fairy_execution(player_id, FATAL_BLOW_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, level: i32, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
@@ -191,7 +191,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     let skill_name = properties.skill_name().to_vec();
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.battle_fairy_execution(FATAL_BLOW_SKILL_ID).is_none() {
+    if game.battle_fairy_execution(player_id, FATAL_BLOW_SKILL_ID).is_none() {
         if target.object_type == PLAYER_TYPE && target.id == player_id {
             return reject_before_ai(game, skill_level, 10, b"ZHGS0045");
         }
@@ -207,7 +207,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.battle_fairy_skill_last_used_ms(FATAL_BLOW_SKILL_ID), cooldown_ms, cooldown_now_ms) {
+        if !skill_is_restored(game.battle_fairy_skill_last_used_ms(player_id, FATAL_BLOW_SKILL_ID), cooldown_ms, cooldown_now_ms) {
             return reject_before_ai(game, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
@@ -253,17 +253,15 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
                 return reject_before_ai(game, skill_level, 2, b"");
             }
         }
-        player_ai.begin_battle_fairy_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_battle_fairy_state(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .battle_fairy_execution(FATAL_BLOW_SKILL_ID)
+    } else if game.battle_fairy_execution(player_id, FATAL_BLOW_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai
-        .battle_fairy_execution(FATAL_BLOW_SKILL_ID)
+    if game.battle_fairy_execution(player_id, FATAL_BLOW_SKILL_ID)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         if game.periodic_state_target_dead(region_id, target) {
@@ -288,13 +286,12 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
             send_goods_update(game, &update);
         }
         send_cast(game, player_id, skill_level, 1, None, 0);
-        if let Some(execution) = player_ai.battle_fairy_execution_mut(FATAL_BLOW_SKILL_ID) {
+        if let Some(execution) = game.battle_fairy_execution_mut(player_id, FATAL_BLOW_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .battle_fairy_execution(FATAL_BLOW_SKILL_ID)
+    let started_at_ms = game.battle_fairy_execution(player_id, FATAL_BLOW_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение смертельного удара создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -368,7 +365,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     if summoned {
         let _ = game.send_fatal_blow_phalanx_entry(region_id, summon_id, runtime);
     }
-    if let Some(execution) = player_ai.battle_fairy_execution_mut(FATAL_BLOW_SKILL_ID) {
+    if let Some(execution) = game.battle_fairy_execution_mut(player_id, FATAL_BLOW_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

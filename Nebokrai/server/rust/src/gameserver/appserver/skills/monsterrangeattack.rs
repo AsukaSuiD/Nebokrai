@@ -6,8 +6,8 @@
 //! callback CPlayer +0x158 (0x00485540).
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/skills/monsterrangeattack.cpp`. Player-диспетчер хранит отдельный
-//! kernel и reuse в `CPlayerAI`; monster-расписание использует свой cast.
+//! `appserver/skills/monsterrangeattack.cpp`. Player и monster хранят kernel
+//! и reuse в собственных зарегистрированных экземплярах навыка CMoveShape.
 //! Все варианты Begin центрируют эффект на источнике, а не на цели запроса.
 //! CheckCastCondition (VA `0x00511cf0`) проверяет reuse; игрок дополнительно
 //! требует ненулевую стоимость MP и достаточный запас. Нулевой cost отвергается
@@ -72,19 +72,19 @@ fn player_range_outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutio
 }
 
 fn end_player_range_attack<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
+    game: &mut CGame, player_id: i32, runtime: &mut Runtime, success: bool,
 ) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     if success { game.damage_player_weapon(player_id, runtime); }
-    if success { ai.mark_skill_used(MONSTER_RANGE_ATTACK_SKILL_ID, runtime.now_milliseconds()); }
+    if success { game.mark_player_skill_used(player_id, MONSTER_RANGE_ATTACK_SKILL_ID, runtime.now_milliseconds()); }
 }
 
 pub(crate) fn finish_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
 ) -> bool {
-    let Some(dispatch) = ai.player_skill_execution(MONSTER_RANGE_ATTACK_SKILL_ID).map(|kernel| kernel.dispatch()) else { return false };
-    end_player_range_attack(game, player_id, ai, runtime, success);
-    ai.finish_player_skill(dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
+    let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_RANGE_ATTACK_SKILL_ID).map(|kernel| kernel.dispatch()) else { return false };
+    end_player_range_attack(game, player_id, runtime, success);
+    game.finish_player_skill(player_id, ai, dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
 }
 
 fn calculate_player_range_attack(
@@ -132,7 +132,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
         Some((player.server_region_id()?, player.learned_skill_level(MONSTER_RANGE_ATTACK_SKILL_ID, game.skill_factory()), player.mana()))
     }) else { return rejected() };
     let Some(properties) = game.skill_base_properties(MONSTER_RANGE_ATTACK_SKILL_ID, level).cloned() else {
-        end_player_range_attack(game, player_id, ai, runtime, false);
+        end_player_range_attack(game, player_id, runtime, false);
         return rejected();
     };
     let mp_loss = properties.query_property(2);
@@ -143,46 +143,46 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
         game.send_self_state_skill_failure(0x000b_fe01, player_id, 7);
         game.send_skill_system_info_with_unsigned(player_id, b"GS1144", mp_loss);
     };
-    if ai.player_skill_execution(MONSTER_RANGE_ATTACK_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, MONSTER_RANGE_ATTACK_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.skill_last_used_ms(MONSTER_RANGE_ATTACK_SKILL_ID), reuse, now) {
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, MONSTER_RANGE_ATTACK_SKILL_ID), reuse, now) {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 13);
             game.send_skill_system_info(player_id, b"GS1143");
-            end_player_range_attack(game, player_id, ai, runtime, false);
+            end_player_range_attack(game, player_id, runtime, false);
             return rejected();
         }
         if mp_loss == 0 || (mana.wrapping_sub(mp_loss) as i32) < 0 {
             if mp_loss != 0 { mp_failure(game); }
-            end_player_range_attack(game, player_id, ai, runtime, false);
+            end_player_range_attack(game, player_id, runtime, false);
             return rejected();
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(MONSTER_RANGE_ATTACK_SKILL_ID));
         }
-        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
         return player_range_outcome(QueuedSkillExecutionState::Begun);
-    } else if ai.player_skill_execution(MONSTER_RANGE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, MONSTER_RANGE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return rejected();
     }
-    if ai.player_skill_execution(MONSTER_RANGE_ATTACK_SKILL_ID).is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, MONSTER_RANGE_ATTACK_SKILL_ID).is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
         let remaining = game.find_player(player_id).map_or(0, |player| player.mana()).wrapping_sub(mp_loss);
         if (remaining as i32) < 0 {
             mp_failure(game);
-            end_player_range_attack(game, player_id, ai, runtime, false);
+            end_player_range_attack(game, player_id, runtime, false);
             return rejected();
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(remaining); }
         let _ = game.publish_player_states(player_id);
         super::lordfastattack::send_start(game, player_id, MONSTER_RANGE_ATTACK_SKILL_ID, level);
-        if let Some(kernel) = ai.player_skill_execution_mut(MONSTER_RANGE_ATTACK_SKILL_ID) { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_RANGE_ATTACK_SKILL_ID) { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.player_skill_execution(MONSTER_RANGE_ATTACK_SKILL_ID).map(|kernel| kernel.started_at_ms()).expect("круговая атака хранит начало");
+    let started = game.player_skill_execution(player_id, MONSTER_RANGE_ATTACK_SKILL_ID).map(|kernel| kernel.started_at_ms()).expect("круговая атака хранит начало");
     if !skill_is_restored(started, delay, runtime.now_milliseconds()) {
         return player_range_outcome(QueuedSkillExecutionState::Pending);
     }
     let Some(view) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
-        end_player_range_attack(game, player_id, ai, runtime, false);
+        end_player_range_attack(game, player_id, runtime, false);
         return rejected();
     };
     let mut fire = CMessage::new(0x000b_fe01);
@@ -190,7 +190,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
     fire.add_long(PLAYER_TYPE); fire.add_long(player_id); fire.add_long(0); fire.add_long(0);
     fire.add_long(view.tile_x); fire.add_long(view.tile_y);
     let _ = game.send_player_shape_around(player_id, None, &fire);
-    if let Some(kernel) = ai.player_skill_execution_mut(MONSTER_RANGE_ATTACK_SKILL_ID) { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); }
+    if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_RANGE_ATTACK_SKILL_ID) { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); }
     let mut attacked = Vec::new();
     for (dx, dy) in range_attack_scope_cells() {
         for target in super::flash::cell_views(game, region_id, view.tile_x.wrapping_add(dx), view.tile_y.wrapping_add(dy)) {
@@ -213,11 +213,11 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
             attacked.push(target);
         }
     }
-    if let Some(kernel) = ai.player_skill_execution_mut(MONSTER_RANGE_ATTACK_SKILL_ID) {
+    if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_RANGE_ATTACK_SKILL_ID) {
         let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    end_player_range_attack(game, player_id, ai, runtime, true);
+    end_player_range_attack(game, player_id, runtime, true);
     player_range_outcome(QueuedSkillExecutionState::Completed)
 }
 

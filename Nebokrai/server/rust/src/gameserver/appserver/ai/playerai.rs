@@ -20,34 +20,22 @@
 //! Общая Rust-операция сохраняет два отдельных FIFO и не отменяет текущий ID.
 //! У подключённых WarSoul 0x212..0x224 нет записи prepared (см. battlefairyskill),
 //! поэтому проверка повторного prepared Attack не даёт им дополнительный End.
-//! Сроки одиночных обычных навыков и подключённых семейств хранятся по исходному skill_id в
-//! BTreeMap вместо отдельных полей и getter/setter-каталогов. Отсутствие
-//! записи означает нулевой срок; End обновляет только свой ID, очистка
-//! execution срок не удаляет. Коллекция не определяет порядок исполнения.
-//! У подключённых семейств каждый вариант сохраняет собственный срок.
-//! Подключённые исполнения игрока хранятся по
-//! ID в одной BTreeMap: Begin наследует ранний отсчёт один раз при установке,
-//! доступ и завершение не перечисляют навыки. End сверяет полный dispatch,
-//! оставляет соседние исполнения и не удаляет cooldown. Владельцы с особыми
-//! данными переносятся в типизированные варианты того же хранилища. Туман
-//! сохраняет выбранную в Begin точку вместе с kernel до общего End; остальные
-//! подключённые особые владельцы используют типизированный доступ по ID.
-//! Перечень типов единственный; общие Begin и End не имеют ветки для каждого
-//! навыка. Базовая магия и FireBolt разделяют тип, но не запись исполнения.
-//! Особые состояния семейств также разделены по исходным ID. End получает
-//! ID выбранного варианта от CGame; тип состояния не определяет идентичность.
-//! Варианты простых семейств, в том числе лечения, занимают отдельные ID.
-//! End-диспетчер передаёт выбранный ID владельцу; поиск первого занятого
-//! слота семейства не используется для выбора завершаемого исполнения.
-//! Индексы семейств не участвуют в хранении сроков; состояния исполнения
-//! остаются независимыми от cooldown. Сроки WarSoul хранятся отдельно:
-//! их владелец не подменяется основным навыком игрока.
-//! Исполнения WarSoul также адресуются исходным ID в отдельной BTreeMap.
-//! Общие Begin, доступ к kernel и cleanup не перечисляют concrete навыки;
-//! базовая атака сохраняет свою дополнительную цель в типизированном варианте.
-//! End снимает только совпавший dispatch, не чужой ID и не ожидающую команду.
-//! FIFO и фазы Run остаются у AI, обход коллекции их не заменяет. Источник
-//! границы очистки — CSkill::End (0x004D84C0), очищающий свой экземпляр.
+//! Исполнение и reuse принадлежат зарегистрированному CMoveShape::skill,
+//! а не отдельным картам AI. Один экземпляр хранит типизированное исполнение
+//! игрока, боевого духа либо монстра; очереди и выбранные команды независимы.
+//! Begin наследует ранний отсчёт из краткоживущего контекста расписания.
+//! End сверяет полный dispatch, освобождает только собственное исполнение
+//! и не удаляет reuse; фон не снимает текущую или ожидающую команду.
+//! Реестр выбирает первый экземпляр по native-категории, а не глобальную
+//! запись по ID. Удаление/повторная регистрация не наследует прежний cooldown.
+//! Attack обеих перегрузок (0x00509FF0/0x0050A230) до изменения FIFO
+//! требует существующий GetSkill: отсутствие не создаёт отказ и не снимает
+//! старые запросы. OnSchedule заново разрешает текущий owner; при null
+//! выбирает virtual default игрока с прежней целью (0x00509A34..0x00509A60).
+//! WarSoul не выбирает default при null GetSkill (0x00509804): сохраняет
+//! только что извлечённую цель и ID до следующего допущенного расписания.
+//! Оно очищает цель до проверки пустоты pending FIFO (0x00509780..0x00509789),
+//! поэтому отсутствующий owner не превращается в повторяющийся Begin.
 //! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
 //! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
 //! установке, до первого AI. После вызова владельца контекст очищается даже
@@ -189,195 +177,13 @@
 //! очередь боевой феи исполняются независимо: движение игрока не
 //! приостанавливает стадии феи.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
 use super::baseai::{AiShapeAction, CBaseAI, PassiveStiffenAction};
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
-use crate::gameserver::appserver::skills::agility::AgilityFamilyExecutionState;
-use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
-use crate::gameserver::appserver::skills::armybreak::ArmyBreakExecutionState;
-use crate::gameserver::appserver::skills::flash::FlashExecutionState;
-use crate::gameserver::appserver::skills::swallow::SwallowExecutionState;
-use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
-use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
-use crate::gameserver::appserver::skills::lordfastattack::LordFastAttackExecutionState;
-use crate::gameserver::appserver::skills::seal::SealExecutionState;
-use crate::gameserver::appserver::skills::battlefairybasemagic::{
-    BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, BattleFairyBaseMagicExecutionState,
-};
-use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
-use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
-use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
-use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
-use crate::gameserver::appserver::skills::heartlessarrow::HeartlessArrowExecutionState;
-use crate::gameserver::appserver::skills::heartlessarrow2::HeartlessArrowAreaExecutionState;
-use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionState;
-use crate::gameserver::appserver::skills::lightingarrow2::LightingArrow2ExecutionState;
-use crate::gameserver::appserver::skills::meteorarrowmass::MeteorArrowMassExecutionState;
-use crate::gameserver::appserver::skills::meteorarrow::MeteorArrowExecutionState;
-use crate::gameserver::appserver::skills::rainarrow::RainArrowExecutionState;
-use crate::gameserver::appserver::skills::poisonmoth::PoisonMothExecutionState;
-use crate::gameserver::appserver::skills::bloodrose::BloodRoseExecutionState;
-use crate::gameserver::appserver::skills::scorpion::ScorpionExecutionState;
-use crate::gameserver::appserver::skills::boalock::BoaLockExecutionState;
-use crate::gameserver::appserver::skills::fallingstar::FallingStarExecutionState;
-use crate::gameserver::appserver::skills::explosivearrow::{
-    ExplosiveArrowExecutionState,
-};
-use crate::gameserver::appserver::skills::strike::StrikeExecutionState;
-use crate::gameserver::appserver::skills::yakshaslash::YakshaSlashExecutionState;
-use crate::gameserver::appserver::skills::ghostcut::GhostCutExecutionState;
-use crate::gameserver::appserver::skills::knightcut::KnightCutExecutionState;
-use crate::gameserver::appserver::skills::littleflash::LittleFlashExecutionState;
-use crate::gameserver::appserver::skills::littlestar::PlayerLittleStarExecutionState;
-use crate::gameserver::appserver::skills::energybolt::PlayerPathProjectileExecutionState;
-use crate::gameserver::appserver::skills::directprojectile::PlayerDirectProjectileExecutionState;
-use crate::gameserver::appserver::skills::yunshenglightning::PlayerYunShengLightningExecutionState;
-use crate::gameserver::appserver::skills::monsterthorn::PlayerMonsterThornExecutionState;
-use crate::gameserver::appserver::skills::spidermist::PlayerSpiderMistExecutionState;
-use crate::gameserver::appserver::skills::spiderweb::PlayerSpiderWebExecutionState;
-use crate::gameserver::appserver::skills::summoncreatureskill::PlayerSummonCreatureExecutionState;
-use crate::gameserver::appserver::skills::bossbluequake::PlayerBossBlueQuakeExecutionState;
-use crate::gameserver::appserver::skills::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
-use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
-use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillTermination,
-};
-use crate::gameserver::appserver::skills::rage::RageExecutionState;
-use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
-
-// Типы игровых данных перечислены один раз: из них выводятся хранение,
-// доступ к kernel и безопасное извлечение конкретного состояния. Begin и End общие.
-macro_rules! player_skill_states {
-    ($($variant:ident($state:ty)),+ $(,)?) => {
-        #[derive(Clone, Debug, Eq, PartialEq)]
-        pub(crate) enum PlayerSkillExecution {
-            State(SkillExecutionKernel<PlayerSkillDispatch>),
-            PoisonFog {
-                kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-                destination: (i32, i32),
-            },
-            $($variant($state),)+
-        }
-
-        impl PlayerSkillExecution {
-            fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-                match self {
-                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
-                    $(Self::$variant(state) => state.kernel().clone(),)+
-                }
-            }
-
-            fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-                match self {
-                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
-                    $(Self::$variant(state) => state.kernel_mut(),)+
-                }
-            }
-        }
-
-        $(
-            impl From<$state> for PlayerSkillExecution {
-                fn from(state: $state) -> Self { Self::$variant(state) }
-            }
-
-            impl PlayerSkillState for $state {
-                fn from_execution(execution: &PlayerSkillExecution) -> Option<&Self> {
-                    match execution {
-                        PlayerSkillExecution::$variant(state) => Some(state),
-                        _ => None,
-                    }
-                }
-
-                fn from_execution_mut(execution: &mut PlayerSkillExecution) -> Option<&mut Self> {
-                    match execution {
-                        PlayerSkillExecution::$variant(state) => Some(state),
-                        _ => None,
-                    }
-                }
-            }
-        )+
-    };
-}
-
-pub(crate) trait PlayerSkillState {
-    fn from_execution(execution: &PlayerSkillExecution) -> Option<&Self>;
-    fn from_execution_mut(execution: &mut PlayerSkillExecution) -> Option<&mut Self>;
-}
-
-player_skill_states! {
-    HeartlessArrowArea(HeartlessArrowAreaExecutionState),
-    ExplosiveArrow(ExplosiveArrowExecutionState),
-    AgilityFamily(AgilityFamilyExecutionState),
-    GhostCut(GhostCutExecutionState),
-    ArmyBreak(ArmyBreakExecutionState),
-    LittleFlash(LittleFlashExecutionState),
-    PathProjectile(PlayerPathProjectileExecutionState),
-    DirectProjectile(PlayerDirectProjectileExecutionState),
-    SummonCreature(PlayerSummonCreatureExecutionState),
-    LordFastAttack(LordFastAttackExecutionState),
-    Callosity(CallosityExecutionState),
-    Archery(ArcheryExecutionState),
-    HeartlessArrow(HeartlessArrowExecutionState),
-    LightingArrow(LightingArrowExecutionState),
-    LightingArrow2(LightingArrow2ExecutionState),
-    MeteorArrowMass(MeteorArrowMassExecutionState),
-    MeteorArrow(MeteorArrowExecutionState),
-    RainArrow(RainArrowExecutionState),
-    PoisonMoth(PoisonMothExecutionState),
-    BloodRose(BloodRoseExecutionState),
-    Scorpion(ScorpionExecutionState),
-    BoaLock(BoaLockExecutionState),
-    FallingStar(FallingStarExecutionState),
-    Strike(StrikeExecutionState),
-    YakshaSlash(YakshaSlashExecutionState),
-    BaseMagic(BaseMagicExecutionState),
-    ChainLightning(ChainLightningExecutionState),
-    KnightCut(KnightCutExecutionState),
-    Rage(RageExecutionState),
-    Flash(FlashExecutionState),
-    Swallow(SwallowExecutionState),
-    SevenShootingStar(SevenShootingStarExecutionState),
-    LittleStar(PlayerLittleStarExecutionState),
-    YunshengLightning(PlayerYunShengLightningExecutionState),
-    MonsterThorn(PlayerMonsterThornExecutionState),
-    SpiderMist(PlayerSpiderMistExecutionState),
-    SpiderWeb(PlayerSpiderWebExecutionState),
-    BossBlueQuake(PlayerBossBlueQuakeExecutionState),
-    BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState),
-    SpriteBurn(SpriteBurnExecutionState),
-    ChaosSphere(ChaosSphereExecutionState),
-    Lightning(LightningExecutionState),
-    Seal(SealExecutionState),
-}
-
-impl From<SkillExecutionKernel<PlayerSkillDispatch>> for PlayerSkillExecution {
-    fn from(state: SkillExecutionKernel<PlayerSkillDispatch>) -> Self { Self::State(state) }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BattleFairyExecution {
-    State(SkillExecutionKernel<BattleFairySkillDispatch>),
-    BaseMagic(BattleFairyBaseMagicExecutionState),
-}
-
-impl BattleFairyExecution {
-    fn kernel(&self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
-        match self {
-            Self::State(state) => *state,
-            Self::BaseMagic(state) => state.kernel(),
-        }
-    }
-
-    fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
-        match self {
-            Self::State(state) => state,
-            Self::BaseMagic(state) => state.kernel_mut(),
-        }
-    }
-}
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -393,8 +199,6 @@ pub(crate) enum BattleFairySkillQueueOutcome {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerAI {
-    skill_last_used_ms: BTreeMap<u32, u32>,
-    player_skill_executions: BTreeMap<u32, PlayerSkillExecution>,
     base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
@@ -404,8 +208,6 @@ pub(crate) struct CPlayerAI {
     selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
-    battle_fairy_executions: BTreeMap<u32, BattleFairyExecution>,
-    battle_fairy_last_used_ms: BTreeMap<u32, u32>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -440,43 +242,12 @@ impl CPlayerAI {
         &mut self.base_ai
     }
 
-    /// CSkill хранит независимый срок последнего ненулевого End для каждого ID.
-    /// Отсутствующая запись равна исходному нулю до первого применения.
-    pub(crate) fn skill_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.skill_last_used_ms.get(&skill_id).copied().unwrap_or(0)
+    pub(crate) const fn scheduled_skill_begin(&self) -> Option<(PlayerSkillDispatch, u32)> {
+        self.scheduled_skill_begin
     }
 
-    pub(crate) fn mark_skill_used(&mut self, skill_id: u32, now_ms: u32) {
-        if now_ms == 0 {
-            self.skill_last_used_ms.remove(&skill_id);
-        } else {
-            self.skill_last_used_ms.insert(skill_id, now_ms);
-        }
-    }
-
-    pub(crate) fn player_skill_execution(&self, skill_id: u32) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.player_skill_executions.get(&skill_id).map(PlayerSkillExecution::kernel)
-    }
-
-    pub(crate) fn player_skill_execution_mut(&mut self, skill_id: u32) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.player_skill_executions.get_mut(&skill_id).map(PlayerSkillExecution::kernel_mut)
-    }
-
-    fn insert_player_skill_execution(&mut self, mut execution: PlayerSkillExecution) {
-        execution.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.player_skill_executions.insert(execution.kernel().dispatch().skill_id(), execution);
-    }
-
-    pub(crate) fn begin_player_skill_execution(&mut self, state: impl Into<PlayerSkillExecution>) {
-        self.insert_player_skill_execution(state.into());
-    }
-
-    pub(crate) fn player_skill_state<State: PlayerSkillState>(&self, skill_id: u32) -> Option<&State> {
-        self.player_skill_executions.get(&skill_id).and_then(State::from_execution)
-    }
-
-    pub(crate) fn player_skill_state_mut<State: PlayerSkillState>(&mut self, skill_id: u32) -> Option<&mut State> {
-        self.player_skill_executions.get_mut(&skill_id).and_then(State::from_execution_mut)
+    pub(crate) const fn scheduled_fairy_skill_begin(&self) -> Option<(BattleFairySkillDispatch, u32)> {
+        self.scheduled_fairy_skill_begin
     }
 
     pub(crate) fn set_scheduled_skill_begin(&mut self, begin: Option<(PlayerSkillDispatch, u32)>) {
@@ -593,13 +364,14 @@ impl CPlayerAI {
     pub(crate) fn finish_player_attack(
         &mut self,
         selected_skill_id: Option<u32>,
+        execution: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
         mut now: impl FnMut() -> u32,
     ) -> bool {
         if !self.base_ai.active_attack_pending() {
             return false;
         }
         if let Some(skill_id) = selected_skill_id
-            && let Some(execution) = self.player_skill_execution(skill_id)
+            && let Some(execution) = execution
         {
             if !execution.is_prepared() {
                 return false;
@@ -701,15 +473,6 @@ impl CPlayerAI {
         self.current_player_skill
     }
 
-    pub(crate) fn finish_scheduled_player_skill(
-        &mut self,
-        expected: PlayerSkillDispatch,
-        termination: SkillTermination,
-    ) -> bool {
-        self.current_player_skill == Some(expected)
-            && self.finish_player_skill(expected, termination)
-    }
-
     /// Pop не меняет текущую цель: riding-отказ выполняется до этой границы.
     pub(crate) fn take_pending_player_skill(&mut self) -> Option<PlayerSkillDispatch> {
         self.player_skills.pop_front()
@@ -717,38 +480,6 @@ impl CPlayerAI {
 
     pub(crate) fn select_player_skill(&mut self, dispatch: PlayerSkillDispatch) {
         self.current_player_skill = Some(dispatch);
-    }
-
-    pub(crate) fn finish_player_skill(
-        &mut self,
-        expected: PlayerSkillDispatch,
-        termination: SkillTermination,
-    ) -> bool {
-        let finished_execution = self.finish_player_skill_execution(expected, termination);
-        if self.current_player_skill == Some(expected) {
-            self.current_player_skill = None;
-            return true;
-        }
-        finished_execution
-    }
-
-    /// End освобождает только выбранный CSkill, не остальные экземпляры.
-    /// Фоновое End не снимает текущую или ожидающую команду. Совпадение
-    /// проверяется по полному dispatch, не только типу состояния или ID.
-    pub(crate) fn finish_player_skill_execution(
-        &mut self,
-        expected: PlayerSkillDispatch,
-        termination: SkillTermination,
-    ) -> bool {
-        let skill_id = expected.skill_id();
-        if self.player_skill_execution(skill_id).is_some_and(|state| state.dispatch() == expected)
-            && let Some(mut execution) = self.player_skill_executions.remove(&skill_id)
-        {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
-            return true;
-        }
-        false
     }
 
     pub(crate) fn has_current_object_target(&self, target: super::super::shape::ShapeIdentity) -> bool {
@@ -760,41 +491,27 @@ impl CPlayerAI {
         self.current_player_skill = None;
     }
 
-    /// Общий guard OnLoseTarget: End(1) нужен только живому неподготовленному
-    /// экземпляру, а не сохранённому выбранному ID.
-    pub(crate) fn player_skill_requires_target_end(&self, skill_id: u32) -> bool {
-        self.player_skill_execution(skill_id).is_some_and(|execution| !execution.is_prepared())
-    }
-
-    pub(crate) fn begin_poison_fog(&mut self, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) {
-        self.insert_player_skill_execution(PlayerSkillExecution::PoisonFog { kernel, destination });
-    }
-
-    pub(crate) fn poison_fog_destination(&self) -> Option<(i32, i32)> {
-        use crate::gameserver::appserver::skills::poisonfog::POISON_FOG_SKILL_ID;
-        match self.player_skill_executions.get(&POISON_FOG_SKILL_ID)? {
-            PlayerSkillExecution::PoisonFog { destination, .. } => Some(*destination),
-            _ => None,
-        }
-    }
-
-    /// Свободная WarSoul-очередь допускает выбор одной новой цели независимо
-    /// от сохранённой команды; живой kernel не уничтожается этим выбором.
+    /// Свободная WarSoul-очередь очищает прежнюю цель до проверки нового FIFO;
+    /// живой kernel не уничтожается этим выбором.
     /// Запрет расписания у мёртвого владельца не останавливает активный AI.
     pub(crate) fn begin_next_battle_fairy_skill(
         &mut self,
         can_schedule: bool,
+        has_execution: impl Fn(u32) -> bool,
     ) -> Option<BattleFairySkillDispatch> {
-        if can_schedule && self.base_ai.active_war_soul_actions().is_empty()
-            && let Some(dispatch) = self.battle_fairy_skills.pop_front()
-        {
-            self.current_battle_fairy_skill = Some(dispatch);
-            if let Some(dispatch) = self.current_battle_fairy_skill {
+        if self.base_ai.active_war_soul_actions().is_empty() {
+            if !can_schedule {
+                return None;
+            }
+            self.current_battle_fairy_skill = None;
+            if let Some(dispatch) = self.battle_fairy_skills.pop_front() {
+                self.current_battle_fairy_skill = Some(dispatch);
                 self.selected_battle_fairy_skill_id = dispatch.skill_id();
                 // OnScheduleAboutWarSoul извлёк запрос, но IsEnded запрещает
-                // повторный Begin уже работающего фонового экземпляра.
-                if self.battle_fairy_execution(dispatch.skill_id()).is_some() {
-                    self.current_battle_fairy_skill = None;
+                // повторный Begin уже работающего фонового экземпляра;
+                // выбранная цель при этом сохраняется до нового расписания.
+                if has_execution(dispatch.skill_id()) {
+                    return None;
                 }
             }
         }
@@ -809,6 +526,7 @@ impl CPlayerAI {
     /// End внутри AI оставляет Attack до следующего Run, без ChangeSkill.
     pub(crate) fn finish_battle_fairy_attack(
         &mut self,
+        execution: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
         now_ms: u32,
     ) -> bool {
         let Some(handling) = self.base_ai.active_war_soul_actions().front()
@@ -818,7 +536,7 @@ impl CPlayerAI {
             return false;
         };
         let skill_id = self.selected_battle_fairy_skill_id();
-        if handling == 0 && let Some(execution) = self.battle_fairy_execution(skill_id) {
+        if handling == 0 && let Some(execution) = execution {
             if !execution.is_prepared() {
                 return false;
             }
@@ -839,111 +557,12 @@ impl CPlayerAI {
         }
     }
 
-    /// Возвращает часы конкретного выбранного навыка боевого духа. Все ID
-    /// диапазона `0x212..0x224` уже имеют отдельное типизированное состояние
-    /// исполнения и одну временную отметку.
-    pub(crate) fn selected_battle_fairy_skill_last_used_ms(&self) -> Option<u32> {
-        let skill_id = self.selected_battle_fairy_skill_id();
-        CSkillFactory::is_war_soul_skill(skill_id)
-            .then(|| self.battle_fairy_skill_last_used_ms(skill_id))
+    pub(crate) const fn current_battle_fairy_skill(&self) -> Option<BattleFairySkillDispatch> {
+        self.current_battle_fairy_skill
     }
 
-    pub(crate) fn finish_battle_fairy_skill(
-        &mut self,
-        expected: BattleFairySkillDispatch,
-        termination: SkillTermination,
-    ) -> bool {
-        if self.current_battle_fairy_skill != Some(expected) {
-            return false;
-        }
+    pub(crate) fn release_current_battle_fairy_command(&mut self) {
         self.current_battle_fairy_skill = None;
-        self.finish_battle_fairy_execution(expected, termination);
-        true
-    }
-
-    /// Фоновый End очищает только совпавший экземпляр, не команду WarSoul.
-    pub(crate) fn finish_battle_fairy_execution(
-        &mut self,
-        expected: BattleFairySkillDispatch,
-        termination: SkillTermination,
-    ) -> bool {
-        let skill_id = expected.skill_id();
-        if self.battle_fairy_execution(skill_id).is_some_and(|state| state.dispatch() == expected)
-            && let Some(mut execution) = self.battle_fairy_executions.remove(&skill_id)
-        {
-            let kernel = execution.kernel_mut();
-            let _ = kernel.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение навыка боевой феи завершено");
-            return true;
-        }
-        false
-    }
-
-    /// `true` означает, что выбранная war-soul команда уже прошла concrete
-    /// `Begin` и её терминальный путь обязан выполнить унаследованный `End`.
-    /// Одна только извлечённая команда не эквивалентна native skill execution.
-    pub(crate) fn battle_fairy_skill_execution_is_materialized(&self) -> bool {
-        self.current_battle_fairy_skill.is_some_and(|dispatch| {
-            self.battle_fairy_execution(dispatch.skill_id())
-                .is_some_and(|execution| execution.dispatch() == dispatch)
-        })
-    }
-
-    /// Общая запись `CSkill::End(true)` после оружейного эффекта.
-    /// Диапазон `0x212..=0x224` полностью материализован
-    /// типизированными владельцами, поэтому неизвестный ID остаётся без часов.
-    pub(crate) fn mark_battle_fairy_skill_used(
-        &mut self,
-        skill_id: u32,
-        now_ms: u32,
-    ) -> bool {
-        if !CSkillFactory::is_war_soul_skill(skill_id) {
-            return false;
-        }
-        if now_ms == 0 {
-            self.battle_fairy_last_used_ms.remove(&skill_id);
-        } else {
-            self.battle_fairy_last_used_ms.insert(skill_id, now_ms);
-        }
-        true
-    }
-
-    pub(crate) fn battle_fairy_skill_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.battle_fairy_last_used_ms.get(&skill_id).copied().unwrap_or(0)
-    }
-
-    pub(crate) fn battle_fairy_execution(
-        &self,
-        skill_id: u32,
-    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.battle_fairy_executions.get(&skill_id).map(BattleFairyExecution::kernel)
-    }
-
-    pub(crate) fn battle_fairy_execution_mut(
-        &mut self,
-        skill_id: u32,
-    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.battle_fairy_executions.get_mut(&skill_id).map(BattleFairyExecution::kernel_mut)
-    }
-
-    fn insert_battle_fairy_execution(&mut self, mut execution: BattleFairyExecution) {
-        execution.kernel_mut().inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
-        self.battle_fairy_executions.insert(execution.kernel().dispatch().skill_id(), execution);
-    }
-
-    pub(crate) fn begin_battle_fairy_state(&mut self, state: SkillExecutionKernel<BattleFairySkillDispatch>) {
-        self.insert_battle_fairy_execution(BattleFairyExecution::State(state));
-    }
-
-    pub(crate) fn begin_battle_fairy_base_magic(&mut self, state: BattleFairyBaseMagicExecutionState) {
-        self.insert_battle_fairy_execution(BattleFairyExecution::BaseMagic(state));
-    }
-
-    pub(crate) fn battle_fairy_base_magic(&self) -> Option<BattleFairyBaseMagicExecutionState> {
-        match self.battle_fairy_executions.get(&BATTLE_FAIRY_BASE_MAGIC_SKILL_ID)? {
-            BattleFairyExecution::BaseMagic(state) => Some(*state),
-            BattleFairyExecution::State(_) => None,
-        }
     }
 
     /// Точный последний side effect `OnChangeSkillWithWarSoul` и
@@ -955,17 +574,6 @@ impl CPlayerAI {
 
     pub(crate) const fn battle_fairy_skill_is_active(&self) -> bool {
         self.current_battle_fairy_skill.is_some()
-    }
-
-    /// Общий унаследованный `End(false)` для отмены активного war-soul skill:
-    /// его вызывают spatial удаление духа и повторный запрос уже подготовленного
-    /// навыка. Выбранный skill ID и ещё не начатый FIFO-хвост сохраняются.
-    pub(crate) fn cancel_active_battle_fairy_skill(
-        &mut self,
-    ) -> Option<BattleFairySkillDispatch> {
-        let dispatch = self.current_battle_fairy_skill?;
-        self.finish_battle_fairy_skill(dispatch, SkillTermination::Cancelled)
-            .then_some(dispatch)
     }
 
     #[allow(clippy::too_many_arguments)]

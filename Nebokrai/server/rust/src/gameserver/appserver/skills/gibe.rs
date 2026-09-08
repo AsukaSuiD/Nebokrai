@@ -179,26 +179,25 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let now_ms = runtime.now_milliseconds();
-    if !skill_is_restored(player_ai.skill_last_used_ms(GIBE_SKILL_ID), reuse_delay_ms, now_ms) {
+    if !skill_is_restored(game.player_skill_last_used_ms(player_id, GIBE_SKILL_ID), reuse_delay_ms, now_ms) {
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.player_skill_execution(GIBE_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, GIBE_SKILL_ID).is_none() {
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(GIBE_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_execution(GIBE_SKILL_ID)
+    } else if game.player_skill_execution(player_id, GIBE_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if let Some(execution) = player_ai.player_skill_execution_mut(GIBE_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, GIBE_SKILL_ID) {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
     }
@@ -209,13 +208,13 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
         area_index,
         maximum_distance,
     );
-    if let Some(execution) = player_ai.player_skill_execution_mut(GIBE_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, GIBE_SKILL_ID) {
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     game.restore_region_owner(region);
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-    player_ai.mark_skill_used(GIBE_SKILL_ID, runtime.now_milliseconds());
+    game.mark_player_skill_used(player_id, GIBE_SKILL_ID, runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)
 }
 
@@ -223,15 +222,17 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
 /// выбор игрока сохраняется, а ненулевой End фиксирует
 /// тот же realtime cooldown, что и нормальное синхронное завершение.
 pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
     player_ai: &mut CPlayerAI,
     record_reuse: bool,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(GIBE_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, GIBE_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     if record_reuse {
-        player_ai.mark_skill_used(GIBE_SKILL_ID, runtime.now_milliseconds());
+        game.mark_player_skill_used(player_id, GIBE_SKILL_ID, runtime.now_milliseconds());
     }
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }

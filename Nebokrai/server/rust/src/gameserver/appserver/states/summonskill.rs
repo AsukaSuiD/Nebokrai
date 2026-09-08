@@ -20,48 +20,35 @@
 //! Этот хвост применяется к уже начатому исполнению; он не заменяет полный
 //! End зарегистрированного экземпляра до Begin или после прежнего End.
 
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-fn finish_summon_skill_owner<Runtime, MarkUsed>(
+fn finish_summon_skill_owner<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
     damage_weapon: bool,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
+) {
     if damage_weapon {
         game.damage_player_weapon(player_id, runtime);
     }
-    mark_used(player_ai, runtime.now_milliseconds());
+    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
 }
 
-pub(crate) fn finish_summon_skill<Runtime, MarkUsed>(
+pub(crate) fn finish_summon_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
-    finish_summon_skill_owner(game, player_id, player_ai, runtime, true, mark_used);
+) {
+    finish_summon_skill_owner(game, player_id, skill_id, runtime, true);
 }
 
-pub(crate) fn finish_summon_skill_without_weapon_wear<Runtime, MarkUsed>(
+pub(crate) fn finish_summon_skill_without_weapon_wear<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
-    finish_summon_skill_owner(game, player_id, player_ai, runtime, false, mark_used);
+) {
+    finish_summon_skill_owner(game, player_id, skill_id, runtime, false);
 }

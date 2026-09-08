@@ -11,7 +11,6 @@
 //! Общий `End` возвращает движение, один раз выполняет унаследованный
 //! `AfterUseSkill` с износом оружия и затем `CSummonSkill::End(1)`.
 
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -38,20 +37,16 @@ pub(crate) struct FrontCellSwordDefinition {
     pub(crate) weapon_failure_string: &'static [u8],
 }
 
-pub(crate) fn finish_front_cell_sword<Runtime, MarkUsed>(
+pub(crate) fn finish_front_cell_sword<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, mark_used);
+    finish_summon_skill(game, player_id, skill_id, runtime);
 }
 
 pub(crate) fn master_info(player: &CPlayer) -> MasterInfo {

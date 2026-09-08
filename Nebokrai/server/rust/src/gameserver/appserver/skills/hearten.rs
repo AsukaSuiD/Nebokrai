@@ -83,13 +83,11 @@ fn abort_player_hearten(game: &mut CGame, player_id: i32) {
 fn finish_player_hearten<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     restore_movement(game, player_id);
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(HEARTEN_SKILL_ID, now_ms);
-    });
+    finish_state_skill(game, player_id, HEARTEN_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_hearten<Runtime: GameMainLoopRuntime>(
@@ -98,11 +96,11 @@ pub(crate) fn cancel_player_hearten<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(HEARTEN_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, HEARTEN_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_hearten(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
@@ -164,12 +162,12 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
     let max_hp_gain = properties.query_property(SKILL_USAGE_MAX_HP_GAIN) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(HEARTEN_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, HEARTEN_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(HEARTEN_SKILL_ID),
+            game.player_skill_last_used_ms(player_id, HEARTEN_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -202,10 +200,9 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(HEARTEN_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_execution(HEARTEN_SKILL_ID)
+    } else if game.player_skill_execution(player_id, HEARTEN_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -217,8 +214,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai
-        .player_skill_execution(HEARTEN_SKILL_ID)
+    if game.player_skill_execution(player_id, HEARTEN_SKILL_ID)
         .is_some_and(|state| state.stage() == SkillStage::Begin)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -238,13 +234,12 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.publish_player_states(player_id);
         send_cast(game, player_id, target_id, skill_level, 1);
-        if let Some(state) = player_ai.player_skill_execution_mut(HEARTEN_SKILL_ID) {
+        if let Some(state) = game.player_skill_execution_mut(player_id, HEARTEN_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .player_skill_execution(HEARTEN_SKILL_ID)
+    let started_at_ms = game.player_skill_execution(player_id, HEARTEN_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение воодушевления создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -264,7 +259,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
     }
     let _ = game.publish_player_states(target_id);
     let _ = game.update_player_properties(target_id);
-    if let Some(state) = player_ai.player_skill_execution_mut(HEARTEN_SKILL_ID) {
+    if let Some(state) = game.player_skill_execution_mut(player_id, HEARTEN_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

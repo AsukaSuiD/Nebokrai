@@ -8,12 +8,15 @@
 //! поворачивает игрока и публикует действие 0; после
 //! `SKILL_USAGE_DELAY_TIME` действие 1 предшествует расчёту атаки. Мёртвая
 //! цель завершает навык кодом 2, удалённая цель — кодом `0x0b`.
-//! `SkillExecutionKernel` хранится в `CPlayerAI` и переживает задержку между
-//! тактами. Формулы PvP, RNG и построение пакетов находятся в соседнем
+//! `SkillExecutionKernel` хранится в зарегистрированном экземпляре `CMoveShape`
+//! и переживает задержку между тактами; `CPlayerAI` сохраняет только команду.
+//! Формулы PvP, RNG и построение пакетов находятся в соседнем
 //! модуле исполнения навыка; `CGame` разрешает владельцев и применяет урон.
 //! Общий хвост подтверждённых `CAttackSkill::End` сохраняет восстановление
 //! движения, `AfterUseSkill`, время восстановления и очистку исполнения;
 //! конкретный владелец явно выбирает задержанный или немедленный вариант.
+//! Хвост получает ID завершённого навыка явно: reuse записывается в тот же
+//! зарегистрированный экземпляр, независимо от смены выбранной команды AI.
 //! CSkill::End (0x004D84C0) вызывает virtual +0x158, у CPlayer это пустой
 //! 0x00485540, а не UpdateProperty. Дополнительного пересчёта свойств нет;
 //! изменения от износа оружия обслуживает сам OnWeaponDamaged (0x00441D50).
@@ -200,65 +203,47 @@ pub(crate) fn finish_failed_base_attack(game: &mut CGame, player_id: i32, restor
 /// предшествует фиксации времени восстановления; CSkill::End не сбрасывает
 /// выбранный навык игрока (его +0x158 — пустой ret 0x00485540);
 /// задержанные варианты сначала возвращают движение.
-fn finish_base_attack_owner<Runtime, MarkUsed>(
+fn finish_base_attack_owner<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
     restore_movement: bool,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
+) {
     if restore_movement
         && let Some(player) = game.find_player_mut(player_id)
     {
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
-    mark_used(player_ai, runtime.now_milliseconds());
+    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
 }
 
-pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(
+pub(crate) fn finish_delayed_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
-    finish_base_attack_owner(game, player_id, player_ai, runtime, true, mark_used);
+) {
+    finish_base_attack_owner(game, player_id, skill_id, runtime, true);
 }
 
-pub(crate) fn finish_immediate_base_attack<Runtime, MarkUsed>(
+pub(crate) fn finish_immediate_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    skill_id: u32,
     runtime: &mut Runtime,
-    mark_used: MarkUsed,
-) where
-    Runtime: GameMainLoopRuntime,
-    MarkUsed: FnOnce(&mut CPlayerAI, u32),
-{
-    finish_base_attack_owner(game, player_id, player_ai, runtime, false, mark_used);
+) {
+    finish_base_attack_owner(game, player_id, skill_id, runtime, false);
 }
 
 pub(crate) fn finish_player_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_immediate_base_attack(
-        game,
-        player_id,
-        player_ai,
-        runtime,
-        |player_ai, now_ms| player_ai.mark_skill_used(BASE_ATTACK_SKILL_ID, now_ms),
-    );
+    finish_immediate_base_attack(game, player_id, BASE_ATTACK_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
@@ -267,11 +252,11 @@ pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_base_attack(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn abort_player_base_attack_on_region_change(
@@ -279,13 +264,13 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     player_id: i32,
     player_ai: &mut CPlayerAI,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

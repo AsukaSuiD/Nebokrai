@@ -103,16 +103,16 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.player_skill_execution(skill_id).is_none() {
+    if game.player_skill_execution(player_id, skill_id).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_execution(skill_id)
+    } else if game
+        .player_skill_execution(player_id, skill_id)
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -133,7 +133,7 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
     }
     let _ = game.publish_player_states(player_id);
     let _ = game.update_player_properties(player_id);
-    if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

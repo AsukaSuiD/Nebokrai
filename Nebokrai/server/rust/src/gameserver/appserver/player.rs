@@ -1188,6 +1188,19 @@ macro_rules! skill_dispatch_request {
 
 skill_dispatch_request!(PlayerSkillDispatch, BattleFairySkillDispatch);
 
+impl PlayerSkillDispatch {
+    /// При отсутствии текущего CSkill OnSchedule выбирает default owner,
+    /// но сохраняет уже извлечённую цель; ожидающий FIFO не меняется.
+    pub(crate) const fn with_skill_id(mut self, selected: u32) -> Self {
+        match &mut self {
+            Self::SelfTarget { skill_id, .. }
+            | Self::Point { skill_id, .. }
+            | Self::Object { skill_id, .. } => *skill_id = selected,
+        }
+        self
+    }
+}
+
 impl BattleFairySkillDispatch {
     pub(crate) const fn skill_level(self) -> i32 {
         match self {
@@ -7609,6 +7622,10 @@ impl CPlayer {
 
     pub(crate) const fn movement_shape_mut(&mut self) -> &mut CShape {
         self.move_shape.shape_mut()
+    }
+
+    pub(crate) const fn move_shape(&self) -> &CMoveShape {
+        &self.move_shape
     }
 
     pub(crate) const fn move_shape_mut(&mut self) -> &mut CMoveShape {

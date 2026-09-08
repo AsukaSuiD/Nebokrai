@@ -9,6 +9,9 @@
 //! берётся из фабричного owner-каталога, имя — из актуальных свойств ID/уровня.
 //! Выбранный ID принадлежит CMoveShape, команды — CPlayerAI, а путь, поворот,
 //! формулы, RNG и сетевые эффекты остаются у конкретного владельца навыка.
+//! Типы исполнения игрока и боевого духа отделены от очередей CPlayerAI:
+//! их данные принадлежат зарегистрированному экземпляру CMoveShape. Общий
+//! enum и доступ к kernel не выполняют Begin либо concrete End автоматически.
 //! Kernel описывает уже начатое исполнение, но не подменяет зарегистрированный
 //! экземпляр. Полное состояние CSkill до Begin и после End, как и общий
 //! registered-skill End, ещё требует соединения с реестром CMoveShape.
@@ -26,12 +29,190 @@
 //! CState::Begin (0x005DBD70/0x005DBDD0) читает часы до OnBeginSkill.
 //! При установке нового kernel расписание может передать этот ранний отсчёт,
 //! чтобы проверки ресурсов не сдвигали начало каста. Вызов ограничен
-//! установщиками нового исполнения в AI и привязан к dispatch. Некоторые
+//! установщиками нового исполнения в реестре экземпляров и привязан к dispatch. Некоторые
 //! владельцы до установки уже выполняют первый переход в Check; это не
 //! основание терять исходный отсчёт. Активный AI сюда повторно не входит.
 //! m_bSkillPrepared — независимый флаг CSkill (+0x44), не стадия Attack:
 //! OnFighting (0x005092B0) переносит подготовленный экземпляр в фон до End.
 //! Конкретный owner устанавливает его в подтверждённой точке выпуска.
+
+use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
+
+use super::agility::AgilityFamilyExecutionState;
+use super::archery::ArcheryExecutionState;
+use super::armybreak::ArmyBreakExecutionState;
+use super::basemagic::BaseMagicExecutionState;
+use super::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
+use super::bloodrose::BloodRoseExecutionState;
+use super::boalock::BoaLockExecutionState;
+use super::bossbluequake::PlayerBossBlueQuakeExecutionState;
+use super::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
+use super::callosity::CallosityExecutionState;
+use super::chainlightning::ChainLightningExecutionState;
+use super::chaossphere::ChaosSphereExecutionState;
+use super::directprojectile::PlayerDirectProjectileExecutionState;
+use super::energybolt::PlayerPathProjectileExecutionState;
+use super::explosivearrow::ExplosiveArrowExecutionState;
+use super::fallingstar::FallingStarExecutionState;
+use super::flash::FlashExecutionState;
+use super::ghostcut::GhostCutExecutionState;
+use super::heartlessarrow::HeartlessArrowExecutionState;
+use super::heartlessarrow2::HeartlessArrowAreaExecutionState;
+use super::knightcut::KnightCutExecutionState;
+use super::lightingarrow::LightingArrowExecutionState;
+use super::lightingarrow2::LightingArrow2ExecutionState;
+use super::lightning::LightningExecutionState;
+use super::littleflash::LittleFlashExecutionState;
+use super::littlestar::PlayerLittleStarExecutionState;
+use super::lordfastattack::LordFastAttackExecutionState;
+use super::meteorarrow::MeteorArrowExecutionState;
+use super::meteorarrowmass::MeteorArrowMassExecutionState;
+use super::monsterthorn::PlayerMonsterThornExecutionState;
+use super::poisonmoth::PoisonMothExecutionState;
+use super::rage::RageExecutionState;
+use super::rainarrow::RainArrowExecutionState;
+use super::scorpion::ScorpionExecutionState;
+use super::seal::SealExecutionState;
+use super::sevenshootingstar::SevenShootingStarExecutionState;
+use super::spidermist::PlayerSpiderMistExecutionState;
+use super::spiderweb::PlayerSpiderWebExecutionState;
+use super::spriteburn::SpriteBurnExecutionState;
+use super::strike::StrikeExecutionState;
+use super::summoncreatureskill::PlayerSummonCreatureExecutionState;
+use super::swallow::SwallowExecutionState;
+use super::yakshaslash::YakshaSlashExecutionState;
+use super::yunshenglightning::PlayerYunShengLightningExecutionState;
+
+// Типы игровых данных перечислены один раз: из них выводятся хранение,
+// доступ к kernel и безопасное извлечение конкретного состояния.
+macro_rules! player_skill_states {
+    ($($variant:ident($state:ty)),+ $(,)?) => {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub(crate) enum PlayerSkillExecution {
+            State(SkillExecutionKernel<PlayerSkillDispatch>),
+            PoisonFog {
+                kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+                destination: (i32, i32),
+            },
+            $($variant($state),)+
+        }
+
+        impl PlayerSkillExecution {
+            pub(crate) fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+                match self {
+                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
+                    $(Self::$variant(state) => state.kernel().clone(),)+
+                }
+            }
+
+            pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+                match self {
+                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
+                    $(Self::$variant(state) => state.kernel_mut(),)+
+                }
+            }
+        }
+
+        $(
+            impl From<$state> for PlayerSkillExecution {
+                fn from(state: $state) -> Self { Self::$variant(state) }
+            }
+
+            impl PlayerSkillState for $state {
+                fn from_execution(execution: &PlayerSkillExecution) -> Option<&Self> {
+                    match execution {
+                        PlayerSkillExecution::$variant(state) => Some(state),
+                        _ => None,
+                    }
+                }
+
+                fn from_execution_mut(execution: &mut PlayerSkillExecution) -> Option<&mut Self> {
+                    match execution {
+                        PlayerSkillExecution::$variant(state) => Some(state),
+                        _ => None,
+                    }
+                }
+            }
+        )+
+    };
+}
+
+pub(crate) trait PlayerSkillState {
+    fn from_execution(execution: &PlayerSkillExecution) -> Option<&Self>;
+    fn from_execution_mut(execution: &mut PlayerSkillExecution) -> Option<&mut Self>;
+}
+
+player_skill_states! {
+    HeartlessArrowArea(HeartlessArrowAreaExecutionState),
+    ExplosiveArrow(ExplosiveArrowExecutionState),
+    AgilityFamily(AgilityFamilyExecutionState),
+    GhostCut(GhostCutExecutionState),
+    ArmyBreak(ArmyBreakExecutionState),
+    LittleFlash(LittleFlashExecutionState),
+    PathProjectile(PlayerPathProjectileExecutionState),
+    DirectProjectile(PlayerDirectProjectileExecutionState),
+    SummonCreature(PlayerSummonCreatureExecutionState),
+    LordFastAttack(LordFastAttackExecutionState),
+    Callosity(CallosityExecutionState),
+    Archery(ArcheryExecutionState),
+    HeartlessArrow(HeartlessArrowExecutionState),
+    LightingArrow(LightingArrowExecutionState),
+    LightingArrow2(LightingArrow2ExecutionState),
+    MeteorArrowMass(MeteorArrowMassExecutionState),
+    MeteorArrow(MeteorArrowExecutionState),
+    RainArrow(RainArrowExecutionState),
+    PoisonMoth(PoisonMothExecutionState),
+    BloodRose(BloodRoseExecutionState),
+    Scorpion(ScorpionExecutionState),
+    BoaLock(BoaLockExecutionState),
+    FallingStar(FallingStarExecutionState),
+    Strike(StrikeExecutionState),
+    YakshaSlash(YakshaSlashExecutionState),
+    BaseMagic(BaseMagicExecutionState),
+    ChainLightning(ChainLightningExecutionState),
+    KnightCut(KnightCutExecutionState),
+    Rage(RageExecutionState),
+    Flash(FlashExecutionState),
+    Swallow(SwallowExecutionState),
+    SevenShootingStar(SevenShootingStarExecutionState),
+    LittleStar(PlayerLittleStarExecutionState),
+    YunshengLightning(PlayerYunShengLightningExecutionState),
+    MonsterThorn(PlayerMonsterThornExecutionState),
+    SpiderMist(PlayerSpiderMistExecutionState),
+    SpiderWeb(PlayerSpiderWebExecutionState),
+    BossBlueQuake(PlayerBossBlueQuakeExecutionState),
+    BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState),
+    SpriteBurn(SpriteBurnExecutionState),
+    ChaosSphere(ChaosSphereExecutionState),
+    Lightning(LightningExecutionState),
+    Seal(SealExecutionState),
+}
+
+impl From<SkillExecutionKernel<PlayerSkillDispatch>> for PlayerSkillExecution {
+    fn from(state: SkillExecutionKernel<PlayerSkillDispatch>) -> Self { Self::State(state) }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyExecution {
+    State(SkillExecutionKernel<BattleFairySkillDispatch>),
+    BaseMagic(BattleFairyBaseMagicExecutionState),
+}
+
+impl BattleFairyExecution {
+    pub(crate) fn kernel(&self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
+        match self {
+            Self::State(state) => *state,
+            Self::BaseMagic(state) => state.kernel(),
+        }
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
+        match self {
+            Self::State(state) => state,
+            Self::BaseMagic(state) => state.kernel_mut(),
+        }
+    }
+}
 
 pub(crate) fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
     (f64::from(cost) * 0.0001_f64).trunc() as i64 as u32

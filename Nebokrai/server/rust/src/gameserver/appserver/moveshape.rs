@@ -4,7 +4,7 @@
 //! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
 //! ещё следующий удаляет пометку. Неуспешное исполнение не фиксирует End.
 //! Повторные ID видят общий End зарегистрированного навыка; AutoStart сбрасывает
-//! его перед Begin. Полные исполнения игрока остаются у CPlayerAI.
+//! его перед Begin. Очереди команд игрока остаются у CPlayerAI.
 //! End немедленного навыка отмечает сам owner независимо от active/background;
 //! координатор фонового обхода не выводит завершение из общего bool результата.
 //! Новый Begin сбрасывает этот же признак в AutoStart и допущенном active-пути;
@@ -90,8 +90,11 @@
 //! CSkill::GetSkillName (0x004D86E0) читает актуальные свойства по ID/уровню,
 //! а не имя времени регистрации. None в name означает отсутствие записи;
 //! локализованный GS0318 и пустой fallback разрешаются владельцем публикации.
-//! Исполнение и принадлежащие навыку ресурсы монстра хранятся в каждом
-//! зарегистрированном экземпляре, вместе с отдельным reuse timestamp.
+//! Исполнение игрока, боевого духа либо монстра и принадлежащие навыку ресурсы
+//! хранятся в единственной типизированной ячейке зарегистрированного экземпляра,
+//! вместе с общим для этого экземпляра reuse timestamp. Новая запись не
+//! содержит исполнения; изменяемый monster-доступ лениво создаёт только пустое
+//! состояние монстра, не Begin. Доступ и извлечение не подменяют чужой вариант.
 //! CSkill constructor (0x004D8120) задаёт timestamp +0x40 равным нулю;
 //! новая регистрация не наследует его от удалённого экземпляра того же ID.
 //! Доступ к этим полям использует тот же первый GetSkill по текущей metadata,
@@ -127,6 +130,7 @@ use super::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
 use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
+use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution};
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
@@ -317,9 +321,16 @@ enum ImmediateSkillLifecycle {
     Ended,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RegisteredSkillExecution {
+    Player(PlayerSkillExecution),
+    BattleFairy(BattleFairyExecution),
+    Monster(super::monster::MonsterSkillExecution),
+}
+
 /// Достигнутая common-проекция `CSkill`: identity, level и concrete owner.
 /// Алгоритмы concrete attack/defense/state/summon остаются у skill owners;
-/// ресурсы исполнения монстра и reuse принадлежат каждому экземпляру.
+/// исполнение, его ресурсы и reuse принадлежат каждому экземпляру.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MoveShapeSkill {
     id: u32,
@@ -327,7 +338,7 @@ pub(crate) struct MoveShapeSkill {
     owner: SkillOwner,
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
-    monster_execution: super::monster::MonsterSkillExecution,
+    execution: Option<RegisteredSkillExecution>,
     last_used_ms: u32,
 }
 
@@ -5309,7 +5320,10 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&super::monster::MonsterSkillExecution> {
-        self.skill(skill_id, factory).map(|skill| &skill.monster_execution)
+        match self.skill(skill_id, factory)?.execution.as_ref()? {
+            RegisteredSkillExecution::Monster(execution) => Some(execution),
+            _ => None,
+        }
     }
 
     pub(crate) fn monster_skill_execution_mut(
@@ -5317,7 +5331,115 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut super::monster::MonsterSkillExecution> {
-        self.skill_mut(skill_id, factory).map(|skill| &mut skill.monster_execution)
+        let execution = self.skill_mut(skill_id, factory)?.execution.get_or_insert_with(|| {
+            RegisteredSkillExecution::Monster(Default::default())
+        });
+        match execution {
+            RegisteredSkillExecution::Monster(execution) => Some(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn player_execution(
+        &self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&PlayerSkillExecution> {
+        match self.skill(skill_id, factory)?.execution.as_ref()? {
+            RegisteredSkillExecution::Player(execution) => Some(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn player_execution_mut(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&mut PlayerSkillExecution> {
+        match self.skill_mut(skill_id, factory)?.execution.as_mut()? {
+            RegisteredSkillExecution::Player(execution) => Some(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn install_player_execution(
+        &mut self,
+        execution: PlayerSkillExecution,
+        factory: &CSkillFactory,
+    ) -> bool {
+        let skill_id = execution.kernel().dispatch().skill_id();
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
+        if !matches!(skill.execution, None | Some(RegisteredSkillExecution::Player(_))) {
+            return false;
+        }
+        skill.execution = Some(RegisteredSkillExecution::Player(execution));
+        true
+    }
+
+    pub(crate) fn take_player_execution(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<PlayerSkillExecution> {
+        let execution = &mut self.skill_mut(skill_id, factory)?.execution;
+        match execution.take() {
+            Some(RegisteredSkillExecution::Player(execution)) => Some(execution),
+            other => {
+                *execution = other;
+                None
+            }
+        }
+    }
+
+    pub(crate) fn battle_fairy_execution(
+        &self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&BattleFairyExecution> {
+        match self.skill(skill_id, factory)?.execution.as_ref()? {
+            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn battle_fairy_execution_mut(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&mut BattleFairyExecution> {
+        match self.skill_mut(skill_id, factory)?.execution.as_mut()? {
+            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn install_battle_fairy_execution(
+        &mut self,
+        execution: BattleFairyExecution,
+        factory: &CSkillFactory,
+    ) -> bool {
+        let skill_id = execution.kernel().dispatch().skill_id();
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
+        if !matches!(skill.execution, None | Some(RegisteredSkillExecution::BattleFairy(_))) {
+            return false;
+        }
+        skill.execution = Some(RegisteredSkillExecution::BattleFairy(execution));
+        true
+    }
+
+    pub(crate) fn take_battle_fairy_execution(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<BattleFairyExecution> {
+        let execution = &mut self.skill_mut(skill_id, factory)?.execution;
+        match execution.take() {
+            Some(RegisteredSkillExecution::BattleFairy(execution)) => Some(execution),
+            other => {
+                *execution = other;
+                None
+            }
+        }
     }
 
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {
@@ -5353,7 +5475,7 @@ impl CMoveShape {
                 .expect("CFightDefense входит в native factory"),
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
-            monster_execution: Default::default(),
+            execution: None,
             last_used_ms: 0,
         });
     }
@@ -5442,7 +5564,7 @@ impl CMoveShape {
             owner,
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
-            monster_execution: Default::default(),
+            execution: None,
             last_used_ms: 0,
         });
         true

@@ -79,12 +79,10 @@ fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
 fn finish_player_fire_ball<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(FIRE_BALL_SKILL_ID, now_ms);
-    });
+    finish_delayed_base_attack(game, player_id, FIRE_BALL_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_fire_ball<Runtime: GameMainLoopRuntime>(
@@ -93,11 +91,11 @@ pub(crate) fn cancel_player_fire_ball<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(FIRE_BALL_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, FIRE_BALL_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_fire_ball(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn destination(
@@ -194,7 +192,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(FIRE_BALL_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, FIRE_BALL_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if matches!(dispatch, PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE && target.id == player_id) {
             game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10);
@@ -202,7 +200,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(FIRE_BALL_SKILL_ID),
+            game.player_skill_last_used_ms(player_id, FIRE_BALL_SKILL_ID),
             cooldown_ms,
             runtime.now_milliseconds(),
         ) {
@@ -229,9 +227,9 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(FIRE_BALL_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai.player_skill_execution(FIRE_BALL_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, FIRE_BALL_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -244,7 +242,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
         finish_player_fire_ball(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.player_skill_execution(FIRE_BALL_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, FIRE_BALL_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if !has_mana(mana, mp_loss) {
             send_failure(game, player_id, 7, mp_loss);
@@ -259,12 +257,12 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, None);
-        if let Some(execution) = player_ai.player_skill_execution_mut(FIRE_BALL_SKILL_ID) {
+        if let Some(execution) = game.player_skill_execution_mut(player_id, FIRE_BALL_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai.player_skill_execution(FIRE_BALL_SKILL_ID)
+    let started_at_ms = game.player_skill_execution(player_id, FIRE_BALL_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение огненного шара создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -328,7 +326,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
     }
     tracing::trace!(region_id, player_id, summon_id, ?result, "создан огненный шар");
 
-    if let Some(execution) = player_ai.player_skill_execution_mut(FIRE_BALL_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, FIRE_BALL_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

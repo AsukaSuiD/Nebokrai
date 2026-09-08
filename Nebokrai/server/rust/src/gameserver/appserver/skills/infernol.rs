@@ -90,15 +90,13 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, action: u8) {
 fn finish_player_infernol<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(INFERNOL_SKILL_ID, now_ms);
-    });
+    finish_summon_skill(game, player_id, INFERNOL_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_infernol<Runtime: GameMainLoopRuntime>(
@@ -107,11 +105,11 @@ pub(crate) fn cancel_player_infernol<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(INFERNOL_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = game.player_skill_execution(player_id, INFERNOL_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_infernol(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -282,7 +280,7 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(INFERNOL_SKILL_ID, level) else {
-        if player_ai.player_skill_execution(INFERNOL_SKILL_ID).is_some() {
+        if game.player_skill_execution(player_id, INFERNOL_SKILL_ID).is_some() {
             finish_player_infernol(game, player_id, player_ai, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -296,10 +294,10 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(INFERNOL_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, INFERNOL_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(INFERNOL_SKILL_ID),
+            game.player_skill_last_used_ms(player_id, INFERNOL_SKILL_ID),
             reuse_delay_ms,
             runtime.now_milliseconds(),
         ) {
@@ -319,13 +317,13 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(INFERNOL_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai.player_skill_execution(INFERNOL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, INFERNOL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.player_skill_execution(INFERNOL_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if game.player_skill_execution(player_id, INFERNOL_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -338,13 +336,12 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, 1);
-        if let Some(state) = player_ai.player_skill_execution_mut(INFERNOL_SKILL_ID) {
+        if let Some(state) = game.player_skill_execution_mut(player_id, INFERNOL_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .player_skill_execution(INFERNOL_SKILL_ID)
+    let started_at_ms = game.player_skill_execution(player_id, INFERNOL_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение огненного круга создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -386,7 +383,7 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
         }
         attacked.push(target);
     }
-    if let Some(state) = player_ai.player_skill_execution_mut(INFERNOL_SKILL_ID) {
+    if let Some(state) = game.player_skill_execution_mut(player_id, INFERNOL_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

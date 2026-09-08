@@ -144,9 +144,9 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
 
-    if player_ai.player_skill_execution(skill_id).is_none() {
+    if game.player_skill_execution(player_id, skill_id).is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
-        let last_used_ms = player_ai.skill_last_used_ms(skill_id);
+        let last_used_ms = game.player_skill_last_used_ms(player_id, skill_id);
         if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_base_magic_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
@@ -157,9 +157,9 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai.player_skill_execution(skill_id).is_none_or(|state| state.dispatch() != dispatch) {
+    } else if game.player_skill_execution(player_id, skill_id).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let state = state_from_properties(skill_id, &properties)
@@ -171,14 +171,12 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     if game.update_player_properties(player_id).is_some() {
         let _ = game.restore_player_hp_mp_states(player_id);
     }
-    if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_skill_used(skill_id, now_ms);
-    });
+    finish_state_skill(game, player_id, skill_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

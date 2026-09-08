@@ -79,9 +79,9 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
     }
 }
 
-fn finish_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+fn finish_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
     finish_movement(game, player_id);
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(PROMOTION_SKILL_ID, now_ms));
+    finish_state_skill(game, player_id, PROMOTION_SKILL_ID, runtime);
 }
 
 fn abort_player_promotion(game: &mut CGame, player_id: i32) {
@@ -89,15 +89,15 @@ fn abort_player_promotion(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(PROMOTION_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_promotion(game, player_id, player_ai, runtime);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+    let Some(dispatch) = game.player_skill_execution(player_id, PROMOTION_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_promotion(game, player_id, runtime);
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.player_skill_execution(PROMOTION_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = game.player_skill_execution(player_id, PROMOTION_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_promotion(game, player_id);
-    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 fn is_promotion_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -486,7 +486,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         properties.query_property(SKILL_USAGE_HEAL_RECOVER_COEFFICIENT) as u16;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.player_skill_execution(PROMOTION_SKILL_ID).is_none() {
+    if game.player_skill_execution(player_id, PROMOTION_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let Some(target) = target else {
@@ -497,7 +497,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         };
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.skill_last_used_ms(PROMOTION_SKILL_ID),
+            game.player_skill_last_used_ms(player_id, PROMOTION_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -538,10 +538,10 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(PROMOTION_SKILL_ID));
         }
-        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if player_ai
-        .player_skill_execution(PROMOTION_SKILL_ID)
+    } else if game
+        .player_skill_execution(player_id, PROMOTION_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -560,8 +560,8 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai
-        .player_skill_execution(PROMOTION_SKILL_ID)
+    if game
+        .player_skill_execution(player_id, PROMOTION_SKILL_ID)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -583,13 +583,13 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.publish_player_states(player_id);
         send_cast(game, player_id, target, skill_level, 0);
-        if let Some(execution) = player_ai.player_skill_execution_mut(PROMOTION_SKILL_ID) {
+        if let Some(execution) = game.player_skill_execution_mut(player_id, PROMOTION_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai
-        .player_skill_execution(PROMOTION_SKILL_ID)
+    let started_at_ms = game
+        .player_skill_execution(player_id, PROMOTION_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение усиления создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
@@ -616,11 +616,11 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         );
         let _ = game.update_player_properties(player_id);
     }
-    if let Some(execution) = player_ai.player_skill_execution_mut(PROMOTION_SKILL_ID) {
+    if let Some(execution) = game.player_skill_execution_mut(player_id, PROMOTION_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_promotion(game, player_id, player_ai, runtime);
+    finish_player_promotion(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
