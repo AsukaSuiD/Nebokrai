@@ -122,7 +122,7 @@ fn calculate_player_range_attack(
 
 pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI, runtime: &mut Runtime,
+    _ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
     use super::kernel::skill_is_restored;
@@ -160,7 +160,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(MONSTER_RANGE_ATTACK_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
         return player_range_outcome(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, MONSTER_RANGE_ATTACK_SKILL_ID).is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return rejected();
@@ -349,11 +349,12 @@ pub(crate) fn begin_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
         return MonsterSkillCallOutcome::BeginRejected;
     }
     let target = monster.move_shape().shape().identity();
+    let target_object = Some((monster.move_shape().shape().get_region_id(), target));
     monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
         target,
         skill_id: MONSTER_RANGE_ATTACK_SKILL_ID,
         skill_level,
-    }, started_at_ms), factory);
+    }, started_at_ms), target_object, factory);
     MonsterSkillCallOutcome::Handled
 }
 

@@ -16,6 +16,7 @@
 //! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
 //! контакта и длительность состояния остаются elapsed.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
@@ -291,10 +292,11 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, KNOCK_OUT_SKILL_ID, skill_level, now_ms, game.skill_factory());
+            monster.begin_base_attack_cast(target_identity, KNOCK_OUT_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
         }
         monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, false);
         return true;
@@ -421,7 +423,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
             player.set_skill_moveable(false); player.set_current_skill_id(Some(KNOCK_OUT_SKILL_ID));
             player.movement_shape_mut().set_direction(get_line_direction(sx, sy, target.x, target.y));
         }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
         return result(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, KNOCK_OUT_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected); }
     if target.dead { failure(game, player_id, 10); abort_player_knock_out(game, player_id); return result(QueuedSkillExecutionState::Rejected); }

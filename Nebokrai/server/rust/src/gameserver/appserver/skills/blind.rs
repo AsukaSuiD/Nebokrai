@@ -247,7 +247,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BLIND_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, BLIND_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

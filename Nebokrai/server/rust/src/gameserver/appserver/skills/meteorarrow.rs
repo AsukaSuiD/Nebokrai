@@ -111,7 +111,7 @@ pub(crate) const fn is_meteor_arrow_dispatch(dispatch: PlayerSkillDispatch) -> b
 }
 
 pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32,
-    dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    dispatch: PlayerSkillDispatch, _ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_meteor_arrow_dispatch(dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|p|
         Some((p.server_region_id()?, p.learned_skill_level(METEOR_ARROW_SKILL_ID, game.skill_factory()), p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?)))
@@ -139,7 +139,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
         if mp_loss == 0 { return outcome(QueuedSkillExecutionState::Rejected) }
         if (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return outcome(QueuedSkillExecutionState::Rejected) }
         let now = runtime.now_milliseconds(); if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(METEOR_ARROW_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, MeteorArrowExecutionState::begin(dispatch, destination, target, now));
+        game.begin_player_skill_execution(player_id, MeteorArrowExecutionState::begin(dispatch, destination, target, now));
         return outcome(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<MeteorArrowExecutionState>(player_id, METEOR_ARROW_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
 

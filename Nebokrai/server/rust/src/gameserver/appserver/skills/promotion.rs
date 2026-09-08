@@ -20,6 +20,7 @@
 //! также сравнивает unsigned now с wrapping(start + delay), как cmp/jb 0x0056930F.
 //! Расход MP в AI проверяется по знаку DWORD-разности и сразу публикуется.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::promotionstate::{PromotionState, send_promotion_state_begin};
@@ -345,6 +346,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.begin_base_attack_cast(
@@ -352,6 +354,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
                 PROMOTION_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }
@@ -450,7 +453,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_promotion_dispatch(dispatch) {
@@ -538,7 +541,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(PROMOTION_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game
         .player_skill_execution(player_id, PROMOTION_SKILL_ID)

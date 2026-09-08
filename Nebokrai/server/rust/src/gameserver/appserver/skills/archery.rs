@@ -31,6 +31,7 @@
 //! Reuse записывается отдельным чтением часов внутри общего End после
 //! публикации phalanx; раннее время AI и начало жизни снаряда не подменяют его.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagicphalanx::CBaseMagicPhalanx;
@@ -247,6 +248,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
@@ -255,6 +257,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 skill_id,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }
@@ -381,8 +384,8 @@ impl ArcheryExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-        self.kernel
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
     }
 
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
@@ -538,7 +541,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
                 return rejected();
             }
         }
-        game.begin_player_skill_execution(player_id, player_ai, ArcheryExecutionState::begin(dispatch, target, now_ms));
+        game.begin_player_skill_execution(player_id, ArcheryExecutionState::begin(dispatch, target, now_ms));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
         }

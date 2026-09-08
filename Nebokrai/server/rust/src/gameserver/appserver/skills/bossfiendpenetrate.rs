@@ -32,6 +32,7 @@
 //! cast. Отдельное снятие запрета перед выпуском остаётся у AI; End не
 //! публикует пакет и не повторяет уже применённые удары.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
@@ -487,7 +488,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BOSS_FIEND_PENETRATE_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, PlayerBossFiendPenetrateExecutionState::begin(
+        game.begin_player_skill_execution(player_id, PlayerBossFiendPenetrateExecutionState::begin(
             dispatch,
             destination,
             now_ms,
@@ -950,6 +951,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         }
         let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
         let direction = get_line_direction(source_x, source_y, destination.0, destination.1);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
@@ -958,6 +960,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 BOSS_FIEND_PENETRATE_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
             monster.set_skill_progress(BOSS_FIEND_PENETRATE_SKILL_ID, BossFiendPenetrateProgress::new(

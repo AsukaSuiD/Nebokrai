@@ -1,7 +1,7 @@
 //! Общий исполняемый конвейер навыков GameServer.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
-//! `appserver/states/skill.cpp`, `attackskill.cpp`, `defenseskill.cpp` и
+//! `appserver/states/state.cpp`, `skill.cpp`, `attackskill.cpp`, `defenseskill.cpp` и
 //! `stateskill.cpp`. Подтверждённый общий контракт —
 //! последовательность `Begin → Check → Calculate → Attack → Apply`, хранение
 //! времени начала и одно конечное состояние выполнения. Старую C++-иерархию
@@ -12,10 +12,25 @@
 //! Типы исполнения игрока и боевого духа отделены от очередей CPlayerAI:
 //! их данные принадлежат зарегистрированному экземпляру CMoveShape. Общий
 //! enum и доступ к kernel не выполняют Begin либо concrete End автоматически.
-//! Kernel описывает уже начатое исполнение, но не подменяет зарегистрированный
-//! экземпляр. Полное состояние CSkill до Begin и после End, как и общий
-//! registered-skill End, ещё требует соединения с реестром CMoveShape.
-//! Lifecycle визуальных state-эффектов сохраняет отдельный исходный owner.
+//! SkillLifecycle хранит постоянную базу CState/CSkill. CState constructor
+//! (0x005DBCA0) задаёт ended=true и нулевые source/target/coords/time;
+//! CSkill constructor (0x004D8120) задаёт available=true, prepared=false.
+//! Native сохраняет только type/ID; GUID не вводит дополнительный фильтр.
+//! Begin объектов (0x005DBD70) обновляет лишь ненулевые стороны, Begin точки
+//! (0x005DBDD0) очищает sufferer и сохраняет координаты. Оба сбрасывают ended
+//! до OnBeginSkill; отказ не откатывает базу и не очищает prepared. Успех
+//! CSkill::Begin (0x004D83E0) очищает prepared после callback.
+//! Реестр переносит единственную базу между неактивным экземпляром и concrete
+//! kernel; параллельного базового поля, Arc или обратного копирования нет.
+//! Kernel::begin создаёт только временные данные конкретного исполнения,
+//! без выдуманной identity; это не конструктор зарегистрированного навыка.
+//! CSkill::End(0) (0x004D84C0) разрешает старый GetUser и вызывает OnEndSkill
+//! до очистки полей; он не проверяет IsEnded и сохраняет available/reuse.
+//! reset_after_end ниже выполняет только сброс данных, не callback и не
+//! полный End. Настоящий CVisualEffect пока не материализован: его owned
+//! destructor/delete, как и concrete cleanup, остаётся отдельной обязанностью
+//! caller-а. Пакет эффекта не заменяет этот ресурс. Diagnostic termination
+//! не подменяет native ended; полное подключение registered End ещё требуется.
 //!
 //! Отложенные межвладельческие действия формируются до постановки команды
 //! через `GameEffectJournal`; уже выполняемые синхронно боевые действия в
@@ -27,16 +42,18 @@
 //! включая исходный нулевой timestamp до первого применения; stage, missile
 //! и periodic duration продолжают использовать elapsed-часы.
 //! CState::Begin (0x005DBD70/0x005DBDD0) читает часы до OnBeginSkill.
-//! При установке нового kernel расписание может передать этот ранний отсчёт,
-//! чтобы проверки ресурсов не сдвигали начало каста. Вызов ограничен
-//! установщиками нового исполнения в реестре экземпляров и привязан к dispatch. Некоторые
-//! владельцы до установки уже выполняют первый переход в Check; это не
-//! основание терять исходный отсчёт. Активный AI сюда повторно не входит.
+//! Расписание пишет ранний отсчёт сразу в базу экземпляра, до конкретных
+//! проверок ресурсов. Установщик переносит эту же базу в concrete kernel,
+//! сохраняя уже выполненный первый переход в Check. Отдельного маркера
+//! времени в CPlayerAI нет. Владельцы с собственным Begin пока подключают
+//! базу при успешной установке; их ранние отказы требуют отдельного связывания.
 //! m_bSkillPrepared — независимый флаг CSkill (+0x44), не стадия Attack:
 //! OnFighting (0x005092B0) переносит подготовленный экземпляр в фон до End.
 //! Конкретный owner устанавливает его в подтверждённой точке выпуска.
 
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::public::guid::CGuid;
 
 use super::agility::AgilityFamilyExecutionState;
 use super::archery::ArcheryExecutionState;
@@ -101,7 +118,7 @@ macro_rules! player_skill_states {
             pub(crate) fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
                 match self {
                     Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
-                    $(Self::$variant(state) => state.kernel().clone(),)+
+                    $(Self::$variant(state) => *state.kernel(),)+
                 }
             }
 
@@ -110,6 +127,17 @@ macro_rules! player_skill_states {
                     Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
                     $(Self::$variant(state) => state.kernel_mut(),)+
                 }
+            }
+
+            pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
+                match self {
+                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel.lifecycle(),
+                    $(Self::$variant(state) => state.kernel().lifecycle(),)+
+                }
+            }
+
+            pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
+                self.kernel_mut().lifecycle_mut()
             }
         }
 
@@ -202,7 +230,7 @@ impl BattleFairyExecution {
     pub(crate) fn kernel(&self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
         match self {
             Self::State(state) => *state,
-            Self::BaseMagic(state) => state.kernel(),
+            Self::BaseMagic(state) => *state.kernel(),
         }
     }
 
@@ -211,6 +239,17 @@ impl BattleFairyExecution {
             Self::State(state) => state,
             Self::BaseMagic(state) => state.kernel_mut(),
         }
+    }
+
+    pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
+        match self {
+            Self::State(state) => state.lifecycle(),
+            Self::BaseMagic(state) => state.kernel().lifecycle(),
+        }
+    }
+
+    pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
+        self.kernel_mut().lifecycle_mut()
     }
 }
 
@@ -247,22 +286,165 @@ pub(crate) enum SkillTermination {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SkillLifecycle {
+    user: (i32, ShapeIdentity),
+    sufferer: (i32, ShapeIdentity),
+    destination: (i32, i32),
+    started_at_ms: u32,
+    ended: bool,
+    available: bool,
+    prepared: bool,
+    termination: Option<SkillTermination>,
+}
+
+impl Default for SkillLifecycle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SkillLifecycle {
+    const EMPTY_IDENTITY: ShapeIdentity = ShapeIdentity {
+        object_type: 0,
+        id: 0,
+        ex_id: CGuid::GUID_INVALID,
+    };
+
+    const fn new() -> Self {
+        Self {
+            user: (0, Self::EMPTY_IDENTITY),
+            sufferer: (0, Self::EMPTY_IDENTITY),
+            destination: (0, 0),
+            started_at_ms: 0,
+            ended: true,
+            available: true,
+            prepared: false,
+            termination: None,
+        }
+    }
+
+    const fn for_execution(started_at_ms: u32) -> Self {
+        Self {
+            started_at_ms,
+            ended: false,
+            ..Self::new()
+        }
+    }
+
+    const fn native_identity(identity: ShapeIdentity) -> ShapeIdentity {
+        ShapeIdentity {
+            ex_id: CGuid::GUID_INVALID,
+            ..identity
+        }
+    }
+
+    pub(crate) const fn user(&self) -> (i32, ShapeIdentity) {
+        self.user
+    }
+
+    pub(crate) const fn sufferer(&self) -> (i32, ShapeIdentity) {
+        self.sufferer
+    }
+
+    pub(crate) const fn destination(&self) -> (i32, i32) {
+        self.destination
+    }
+
+    pub(crate) const fn started_at_ms(&self) -> u32 {
+        self.started_at_ms
+    }
+
+    pub(crate) const fn is_ended(&self) -> bool {
+        self.ended
+    }
+
+    pub(crate) const fn is_available(&self) -> bool {
+        self.available
+    }
+
+    pub(crate) fn set_available(&mut self, available: bool) {
+        self.available = available;
+    }
+
+    pub(crate) const fn is_prepared(&self) -> bool {
+        self.prepared
+    }
+
+    pub(crate) fn mark_prepared(&mut self) {
+        self.prepared = true;
+    }
+
+    pub(crate) const fn termination(&self) -> Option<SkillTermination> {
+        self.termination
+    }
+
+    /// Записи CState предшествуют OnBeginSkill. Нулевой объектный аргумент
+    /// сохраняет соответствующую прежнюю сторону, а не очищает её.
+    pub(crate) fn begin_objects(
+        &mut self,
+        source: Option<(i32, ShapeIdentity)>,
+        target: Option<(i32, ShapeIdentity)>,
+        now: impl FnOnce() -> u32,
+    ) {
+        if let Some((region_id, identity)) = source {
+            self.started_at_ms = now();
+            self.user = (region_id, Self::native_identity(identity));
+        }
+        if let Some((region_id, identity)) = target {
+            self.sufferer = (region_id, Self::native_identity(identity));
+            self.destination = (0, 0);
+        }
+        self.ended = false;
+        self.termination = None;
+    }
+
+    pub(crate) fn begin_point(
+        &mut self,
+        source: (i32, ShapeIdentity),
+        destination: (i32, i32),
+        now: impl FnOnce() -> u32,
+    ) {
+        self.started_at_ms = now();
+        self.user = (source.0, Self::native_identity(source.1));
+        self.sufferer = (0, Self::EMPTY_IDENTITY);
+        self.destination = destination;
+        self.ended = false;
+        self.termination = None;
+    }
+
+    pub(crate) fn finish_begin(&mut self, success: bool) -> bool {
+        if success {
+            self.prepared = false;
+        }
+        success
+    }
+
+    /// Только сброс common-данных после внешних OnEndSkill/concrete cleanup.
+    /// Повторный вызов допустим; этот метод сам не исполняет native End.
+    pub(crate) fn reset_after_end(&mut self, termination: SkillTermination) {
+        self.user = (0, Self::EMPTY_IDENTITY);
+        self.sufferer = (0, Self::EMPTY_IDENTITY);
+        self.destination = (0, 0);
+        self.started_at_ms = 0;
+        self.prepared = false;
+        self.ended = true;
+        self.termination = Some(termination);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillExecutionKernel<Dispatch> {
     dispatch: Dispatch,
-    started_at_ms: u32,
     stage: SkillStage,
-    termination: Option<SkillTermination>,
-    prepared: bool,
+    lifecycle: SkillLifecycle,
 }
 
 impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
     pub(crate) const fn begin(dispatch: Dispatch, started_at_ms: u32) -> Self {
         Self {
             dispatch,
-            started_at_ms,
             stage: SkillStage::Begin,
-            termination: None,
-            prepared: false,
+            lifecycle: SkillLifecycle::for_execution(started_at_ms),
         }
     }
 
@@ -271,16 +453,7 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
     }
 
     pub(crate) const fn started_at_ms(self) -> u32 {
-        self.started_at_ms
-    }
-
-    pub(crate) fn inherit_scheduled_begin(&mut self, begin: Option<(Dispatch, u32)>) {
-        if self.termination.is_none()
-            && let Some((dispatch, started_at_ms)) = begin
-            && dispatch == self.dispatch
-        {
-            self.started_at_ms = started_at_ms;
-        }
+        self.lifecycle.started_at_ms()
     }
 
     pub(crate) const fn stage(self) -> SkillStage {
@@ -288,21 +461,21 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
     }
 
     pub(crate) const fn termination(self) -> Option<SkillTermination> {
-        self.termination
+        self.lifecycle.termination()
     }
 
     pub(crate) const fn is_prepared(self) -> bool {
-        self.prepared
+        self.lifecycle.is_prepared()
     }
 
     pub(crate) fn mark_prepared(&mut self) {
-        if self.termination.is_none() {
-            self.prepared = true;
+        if self.lifecycle.termination().is_none() {
+            self.lifecycle.mark_prepared();
         }
     }
 
     pub(crate) fn advance(&mut self, expected: SkillStage, next: SkillStage) -> bool {
-        if self.termination.is_some() || self.stage != expected || next <= expected {
+        if self.lifecycle.termination().is_some() || self.stage != expected || next <= expected {
             return false;
         }
         self.stage = next;
@@ -310,11 +483,28 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
     }
 
     pub(crate) fn terminate(&mut self, termination: SkillTermination) -> bool {
-        if self.termination.is_some() {
+        if self.lifecycle.termination().is_some() {
             return false;
         }
-        self.termination = Some(termination);
-        self.prepared = false;
+        self.lifecycle.reset_after_end(termination);
         true
+    }
+
+    pub(crate) const fn lifecycle(&self) -> &SkillLifecycle {
+        &self.lifecycle
+    }
+
+    pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
+        &mut self.lifecycle
+    }
+
+    pub(crate) fn replace_lifecycle(&mut self, lifecycle: SkillLifecycle) -> SkillLifecycle {
+        std::mem::replace(&mut self.lifecycle, lifecycle)
+    }
+
+    /// Извлечение базы перед сменой варианта владельца. Старое исполнение
+    /// после этой операции не должно продолжаться с пустой базой.
+    pub(crate) fn take_lifecycle(&mut self) -> SkillLifecycle {
+        std::mem::take(&mut self.lifecycle)
     }
 }

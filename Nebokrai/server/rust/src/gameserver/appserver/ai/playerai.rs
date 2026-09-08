@@ -23,9 +23,17 @@
 //! Исполнение и reuse принадлежат зарегистрированному CMoveShape::skill,
 //! а не отдельным картам AI. Один экземпляр хранит типизированное исполнение
 //! игрока, боевого духа либо монстра; очереди и выбранные команды независимы.
-//! Begin наследует ранний отсчёт из краткоживущего контекста расписания.
-//! End сверяет полный dispatch, освобождает только собственное исполнение
-//! и не удаляет reuse; фон не снимает текущую или ожидающую команду.
+//! Единственная SkillLifecycle существует и без concrete-данных, в Inactive;
+//! при установке исполнения она перемещается в его kernel, а при удалении
+//! данных возвращается обратно. Общий Begin пишет source/target, время и
+//! ended до OnBeginSkill; установка kernel не заменяет эту базу поздним
+//! отсчётом. Отдельных timestamp-маркеров расписания в AI нет.
+//! Достигнутый хвост End сверяет полный dispatch, сбрасывает базу перед
+//! удалением собственных concrete-данных и сохраняет reuse; фон не снимает
+//! текущую или ожидающую команду. Полный registered End, включая отказ
+//! Begin без concrete-данных и визуальные ресурсы, ещё требует подключения.
+//! Наличие payload не заменяет native IsEnded: отказ после общего Begin
+//! оставляет уже изменённую базу независимо от установки исполнения.
 //! Реестр выбирает первый экземпляр по native-категории, а не глобальную
 //! запись по ID. Удаление/повторная регистрация не наследует прежний cooldown.
 //! Attack обеих перегрузок (0x00509FF0/0x0050A230) до изменения FIFO
@@ -36,12 +44,10 @@
 //! только что извлечённую цель и ID до следующего допущенного расписания.
 //! Оно очищает цель до проверки пустоты pending FIFO (0x00509780..0x00509789),
 //! поэтому отсутствующий owner не превращается в повторяющийся Begin.
-//! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
-//! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
-//! установке, до первого AI. После вызова владельца контекст очищается даже
-//! при отказе; активные навыки его не наследуют. Очередь феи использует
-//! отдельный типизированный контекст, чтобы два исполнения одного такта
-//! не могли получить отсчёт друг друга.
+//! Отсчёт CState::Begin фиксируется в базе зарегистрированного навыка до
+//! OnBeginSkill. Обычный и WarSoul Begin меняют каждый свой экземпляр;
+//! два исполнения одного такта не используют общий временный контекст.
+//! Отказ не откатывает записанную базу, а активный AI не повторяет Begin.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/ai/playerai.cpp`. Трёхаргументный virtual `MoveTo` RVA
@@ -123,7 +129,7 @@
 //! Освобождение execution также ограничено этой командой: CSkill::End
 //! (0x004D84C0) очищает свой экземпляр, не соседние навыки. Удаление по ID
 //! с проверкой dispatch сохраняет остальные kernel, включая варианты лечения.
-//! Фоновый обход завершает только execution, не активную команду; автонавыки
+//! Фоновый обход завершает базу и concrete-исполнение, не активную команду; автонавыки
 //! AddObject получают тот же kernel при Begin. Очередь повторно разрешает ID
 //! и помечает уже завершённый экземпляр, не применяя дубликат второй раз.
 //! Автоматические состояния выполняются тем же concrete AI, что активные:
@@ -144,7 +150,8 @@
 //! (OnFightingWithWarSoul, 0x00509230). Выбранный ID сохраняется после End.
 //! Prepared-ветвь вызывает общий WhenAddBackStageSkill (слот +0x88,
 //! 0x004C94B0): ID добавляется в ту же FIFO, без отдельного фона WarSoul.
-//! Фоновый End удаляет только экземпляр, сохраняя команды и выбранный ID.
+//! Фоновый End удаляет только concrete-данные, сохраняя зарегистрированный
+//! экземпляр, команды и выбранный ID.
 //! OnChangeSkillWithWarSoul (0x00509310, исходный playerai.cpp:629) выполняет
 //! End(1) выбранного навыка и выбирает 0x224, но источник этого события в
 //! данной паре EXE/PDB не найден. Из 82 прямых вызовов AddAIEvent
@@ -155,8 +162,8 @@
 //! ChangeSkill после End не добавляется. Текущие 19 concrete WarSoul AI
 //! не выставляют prepared; их отдельные Summon также завершаются End(1),
 //! поэтому длительность созданной области не продлевает исполнение навыка.
-//! Подготовленный kernel передаётся в общую фоновую очередь до ChangeSkill,
-//! без End и без повторного Begin. Достигнутые длительные prepared-навыки
+//! ID подготовленного навыка добавляется в общую фоновую очередь до ChangeSkill,
+//! без End, переноса kernel и повторного Begin. Достигнутые длительные prepared-навыки
 //! устанавливают общий флаг в своих подтверждённых точках выпуска. Сам по себе
 //! локальный fired не означает prepared: SkeletonArchery сохраняет активный полёт.
 //! Begin подключённых player/WarSoul адаптеров отделён от первого AI;
@@ -203,8 +210,6 @@ pub(crate) struct CPlayerAI {
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
     current_player_skill: Option<PlayerSkillDispatch>,
-    scheduled_skill_begin: Option<(PlayerSkillDispatch, u32)>,
-    scheduled_fairy_skill_begin: Option<(BattleFairySkillDispatch, u32)>,
     selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
@@ -240,22 +245,6 @@ impl CPlayerAI {
 
     pub(crate) const fn base_ai_mut(&mut self) -> &mut CBaseAI {
         &mut self.base_ai
-    }
-
-    pub(crate) const fn scheduled_skill_begin(&self) -> Option<(PlayerSkillDispatch, u32)> {
-        self.scheduled_skill_begin
-    }
-
-    pub(crate) const fn scheduled_fairy_skill_begin(&self) -> Option<(BattleFairySkillDispatch, u32)> {
-        self.scheduled_fairy_skill_begin
-    }
-
-    pub(crate) fn set_scheduled_skill_begin(&mut self, begin: Option<(PlayerSkillDispatch, u32)>) {
-        self.scheduled_skill_begin = begin;
-    }
-
-    pub(crate) fn set_scheduled_fairy_skill_begin(&mut self, begin: Option<(BattleFairySkillDispatch, u32)>) {
-        self.scheduled_fairy_skill_begin = begin;
     }
 
     pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {

@@ -229,7 +229,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 { failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if player.has_state_by_skill_id(PILLAR_SKILL_ID) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2); game.send_skill_system_info(player_id, b"GS0302"); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(FLASH_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, FlashExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, FlashExecutionState::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 

@@ -114,7 +114,7 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: 
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if u32::try_from(level).is_ok_and(|level| level <= energy_count) { game.send_skill_system_info(player_id, b"GS0299"); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(ENERGY_HOLDING_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, ENERGY_HOLDING_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 

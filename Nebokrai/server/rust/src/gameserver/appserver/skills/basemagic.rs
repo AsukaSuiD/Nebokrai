@@ -104,8 +104,8 @@ impl BaseMagicExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-        self.kernel
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
     }
 
     pub(crate) const fn target(self) -> ShapeIdentity {
@@ -253,7 +253,7 @@ fn execute_player_base_magic_stage<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0290");
             return rejected();
         }
-        game.begin_player_skill_execution(player_id, player_ai, BaseMagicExecutionState::begin(dispatch, target, now_ms));
+        game.begin_player_skill_execution(player_id, BaseMagicExecutionState::begin(dispatch, target, now_ms));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(BASE_MAGIC_SKILL_ID));
         }

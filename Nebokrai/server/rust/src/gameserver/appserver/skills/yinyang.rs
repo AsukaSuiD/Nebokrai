@@ -133,7 +133,7 @@ pub(crate) fn execute_player_yin_yang<Runtime: GameMainLoopRuntime>(game: &mut C
     execute_player_yin_yang_family(game, player_id, dispatch, player_ai, runtime, YIN_YANG_SKILL_ID, false)
 }
 
-pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime, skill_id: u32, second: bool) -> QueuedSkillExecutionOutcome {
+pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime, skill_id: u32, second: bool) -> QueuedSkillExecutionOutcome {
     let requested = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
     if requested != skill_id { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected); };
@@ -168,7 +168,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
         if path.iter().any(|cell| cell.2 == 2) { send_error(game, player_id, 0x0f, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
         if mp_loss == 0 || player.mana() < mp_loss { if mp_loss != 0 { send_error(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if execution(game, player_id, second).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 

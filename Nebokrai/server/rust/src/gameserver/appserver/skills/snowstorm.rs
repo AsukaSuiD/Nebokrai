@@ -20,6 +20,7 @@
 //! Часы reuse читаются внутри End после регистрации области и очистки cast,
 //! отдельно от времени проверки задержки и начала жизни SnowStormPhalanx.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::time_reached;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::snowstormphalanx::CSnowStormPhalanx;
@@ -125,7 +126,8 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().shape_mut().set_direction(direction); monster.begin_base_attack_cast(target, SNOW_STORM_SKILL_ID, skill_level, now_ms, game.skill_factory()); }
+        let target_object = resolve_owned_skill_begin_object(game, region, target);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().shape_mut().set_direction(direction); monster.begin_base_attack_cast(target, SNOW_STORM_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory()); }
         send_monster_visual(game, region, monster_id, skill_level, 1, None);
         return true;
     }
@@ -185,7 +187,7 @@ pub(crate) fn cancel_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut 
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
-pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     let skill_id = match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
     };
@@ -237,7 +239,7 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, SNOW_STORM_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

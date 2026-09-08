@@ -210,7 +210,7 @@ pub(crate) const fn is_mosou_dispatch(dispatch: PlayerSkillDispatch) -> bool {
 
 pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
+    _player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_mosou_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_level, source_x, source_y, initial_mana)) = game.find_player(player_id).and_then(|player| Some((
@@ -252,7 +252,7 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false); player.set_current_skill_id(Some(MOSOU_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, MOSOU_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

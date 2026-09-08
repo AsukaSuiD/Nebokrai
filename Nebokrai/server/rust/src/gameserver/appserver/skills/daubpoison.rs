@@ -136,7 +136,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
             if mp_loss != 0 { player.set_skill_moveable(false); }
             player.set_current_skill_id(Some(DAUB_POISON_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, DAUB_POISON_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

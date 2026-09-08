@@ -3597,6 +3597,10 @@ impl CServerRegion {
         identities
     }
 
+    pub(crate) fn has_registered_shape(&self, identity: ShapeIdentity) -> bool {
+        self.registry.contains(identity)
+    }
+
     /// Безопасно заменяет исходный `CArea::m_pFather`: пара принимается только
     /// если area действительно принадлежит этому server-region.
     pub(crate) fn find_player_ids_in_area_object(

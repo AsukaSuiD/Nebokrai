@@ -24,6 +24,7 @@
 //! CMonster при успехе, отмене и Stiffen; отдельное снятие запрета перед
 //! выпуском сохраняется, а End не откатывает удар и не отправляет эффект.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
@@ -182,9 +183,10 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction); monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, YAKSHA_SLASH_SKILL_ID, skill_level, now_ms, game.skill_factory()); monster.set_skill_progress(YAKSHA_SLASH_SKILL_ID, MonsterProjectileProgress::default(), game.skill_factory());
+            monster.begin_base_attack_cast(target_identity, YAKSHA_SLASH_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory()); monster.set_skill_progress(YAKSHA_SLASH_SKILL_ID, MonsterProjectileProgress::default(), game.skill_factory());
         }
         send_monster_cast(game, region, monster_id, skill_level, target_identity, (target_x, target_y), None);
         return true;
@@ -226,7 +228,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, h
     Some((master, attack))
 }
 
-pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_yaksha_slash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
     let Some((region_id, source_view, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape_view()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID, game.skill_factory())))) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -240,7 +242,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
         if maximum != 0 && source_view.real_distance(Some(target_view)) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(YAKSHA_SLASH_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, YakshaSlashExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, YakshaSlashExecutionState::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.periodic_state_target_dead(region_id, target) || (target.object_type == PLAYER_TYPE && target.id == player_id) { fail(game, player_id, 10); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }

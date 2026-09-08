@@ -147,7 +147,7 @@ pub(crate) fn execute_player_rush_2<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI,
+    _ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_rush_2_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
@@ -183,7 +183,7 @@ pub(crate) fn execute_player_rush_2<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(RUSH_2_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, RUSH_2_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

@@ -1381,7 +1381,7 @@ use crate::gameserver::appserver::skills::immediatestate::{
     execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{
-    BattleFairyExecution, PlayerSkillExecution, PlayerSkillState, SkillExecutionKernel,
+    BattleFairyExecution, PlayerSkillExecution, PlayerSkillState, SkillExecutionKernel, SkillLifecycle,
     SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::skills::knockoutruntime::{
@@ -33368,9 +33368,61 @@ impl CGame {
             .and_then(State::from_execution_mut)
     }
 
-    pub(crate) fn begin_player_skill_execution(&mut self, player_id: i32, ai: &CPlayerAI, state: impl Into<PlayerSkillExecution>) -> bool {
-        let mut execution = state.into();
-        execution.kernel_mut().inherit_scheduled_begin(ai.scheduled_skill_begin());
+    pub(crate) fn player_skill_lifecycle(&self, player_id: i32, skill_id: u32) -> Option<&SkillLifecycle> {
+        self.find_player(player_id)?.move_shape().skill_lifecycle(skill_id, &self.skill_factory)
+    }
+
+    fn player_skill_lifecycle_mut(&mut self, player_id: i32, skill_id: u32) -> Option<&mut SkillLifecycle> {
+        self.players.get_mut(&player_id)?.move_shape_mut().skill_lifecycle_mut(skill_id, &self.skill_factory)
+    }
+
+    fn player_skill_begin_object(&self, source_region: i32, target: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
+        if target.object_type == PLAYER_TYPE {
+            let player = self.find_player(target.id)?;
+            return Some((player.shape().get_region_id(), player.shape().identity()));
+        }
+        crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object(
+            self, self.find_region(source_region)?.base(), target,
+        )
+    }
+
+    /// Только CState-часть Begin: она публикуется перед OnBeginSkill.
+    /// Нулевой объектный target сохраняет прежнюю сторону; point-вход её очищает.
+    pub(crate) fn begin_player_skill_lifecycle(&mut self, player_id: i32, dispatch: PlayerSkillDispatch, started_at_ms: u32) -> bool {
+        let Some(player) = self.find_player(player_id) else { return false };
+        let source = (player.shape().get_region_id(), player.shape().identity());
+        let target = dispatch.object_target().and_then(|target| self.player_skill_begin_object(source.0, target));
+        let Some(lifecycle) = self.player_skill_lifecycle_mut(player_id, dispatch.skill_id()) else { return false };
+        match dispatch {
+            PlayerSkillDispatch::Point { x, y, .. } => lifecycle.begin_point(source, (x, y), || started_at_ms),
+            _ => lifecycle.begin_objects(Some(source), target, || started_at_ms),
+        }
+        true
+    }
+
+    fn begin_battle_fairy_skill_lifecycle(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> bool {
+        let Some(player) = self.find_player(player_id) else { return false };
+        let source = (player.shape().get_region_id(), player.shape().identity());
+        let target = dispatch.object_target().and_then(|target| self.player_skill_begin_object(source.0, target));
+        let Some(lifecycle) = self.player_skill_lifecycle_mut(player_id, dispatch.skill_id()) else { return false };
+        // WarSoul даже для координатного запроса вызывает объектный Begin(null).
+        lifecycle.begin_objects(Some(source), target, || started_at_ms);
+        true
+    }
+
+    pub(crate) fn finish_player_skill_base_begin(&mut self, player_id: i32, skill_id: u32, success: bool) {
+        if let Some(lifecycle) = self.player_skill_lifecycle_mut(player_id, skill_id) {
+            lifecycle.finish_begin(success);
+        }
+    }
+
+    pub(crate) fn begin_player_skill_execution(&mut self, player_id: i32, state: impl Into<PlayerSkillExecution>) -> bool {
+        let execution = state.into();
+        let kernel = execution.kernel();
+        if self.player_skill_lifecycle(player_id, kernel.dispatch().skill_id()).is_some_and(SkillLifecycle::is_ended) {
+            self.begin_player_skill_lifecycle(player_id, kernel.dispatch(), kernel.started_at_ms());
+            self.finish_player_skill_base_begin(player_id, kernel.dispatch().skill_id(), true);
+        }
         self.players.get_mut(&player_id).is_some_and(|player| {
             player.move_shape_mut().install_player_execution(execution, &self.skill_factory)
         })
@@ -33393,11 +33445,14 @@ impl CGame {
         if !self.player_skill_execution(player_id, skill_id).is_some_and(|state| state.dispatch() == expected) {
             return false;
         }
-        let Some(mut execution) = self.players.get_mut(&player_id)
-            .and_then(|player| player.move_shape_mut().take_player_execution(skill_id, &self.skill_factory))
-        else { return false };
-        let _ = execution.kernel_mut().terminate(termination);
-        tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка игрока завершено");
+        let stage = self.player_skill_execution(player_id, skill_id).map(|kernel| kernel.stage());
+        let Some(player) = self.players.get_mut(&player_id) else { return false };
+        let Some(lifecycle) = player.move_shape_mut().skill_lifecycle_mut(skill_id, &self.skill_factory) else { return false };
+        // CPlayer::OnEndSkill — пустой virtual 0x00485540. Derived cleanup
+        // уже выполнен concrete owner-ом до этой общей границы.
+        lifecycle.reset_after_end(termination);
+        player.move_shape_mut().clear_player_execution(skill_id, &self.skill_factory);
+        tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка игрока завершено");
         true
     }
 
@@ -33419,8 +33474,8 @@ impl CGame {
         self.player_skill_execution(player_id, skill_id).is_some_and(|execution| !execution.is_prepared())
     }
 
-    pub(crate) fn begin_poison_fog(&mut self, player_id: i32, ai: &CPlayerAI, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) -> bool {
-        self.begin_player_skill_execution(player_id, ai, PlayerSkillExecution::PoisonFog { kernel, destination })
+    pub(crate) fn begin_poison_fog(&mut self, player_id: i32, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) -> bool {
+        self.begin_player_skill_execution(player_id, PlayerSkillExecution::PoisonFog { kernel, destination })
     }
 
     pub(crate) fn poison_fog_destination(&self, player_id: i32) -> Option<(i32, i32)> {
@@ -33440,19 +33495,23 @@ impl CGame {
             .map(BattleFairyExecution::kernel_mut)
     }
 
-    fn insert_battle_fairy_execution(&mut self, player_id: i32, ai: &CPlayerAI, mut execution: BattleFairyExecution) -> bool {
-        execution.kernel_mut().inherit_scheduled_begin(ai.scheduled_fairy_skill_begin());
+    fn insert_battle_fairy_execution(&mut self, player_id: i32, execution: BattleFairyExecution) -> bool {
+        let kernel = execution.kernel();
+        if self.player_skill_lifecycle(player_id, kernel.dispatch().skill_id()).is_some_and(SkillLifecycle::is_ended) {
+            self.begin_battle_fairy_skill_lifecycle(player_id, kernel.dispatch(), kernel.started_at_ms());
+            self.finish_player_skill_base_begin(player_id, kernel.dispatch().skill_id(), true);
+        }
         self.players.get_mut(&player_id).is_some_and(|player| {
             player.move_shape_mut().install_battle_fairy_execution(execution, &self.skill_factory)
         })
     }
 
-    pub(crate) fn begin_battle_fairy_state(&mut self, player_id: i32, ai: &CPlayerAI, state: SkillExecutionKernel<BattleFairySkillDispatch>) -> bool {
-        self.insert_battle_fairy_execution(player_id, ai, BattleFairyExecution::State(state))
+    pub(crate) fn begin_battle_fairy_state(&mut self, player_id: i32, state: SkillExecutionKernel<BattleFairySkillDispatch>) -> bool {
+        self.insert_battle_fairy_execution(player_id, BattleFairyExecution::State(state))
     }
 
-    pub(crate) fn begin_battle_fairy_base_magic(&mut self, player_id: i32, ai: &CPlayerAI, state: crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState) -> bool {
-        self.insert_battle_fairy_execution(player_id, ai, BattleFairyExecution::BaseMagic(state))
+    pub(crate) fn begin_battle_fairy_base_magic(&mut self, player_id: i32, state: crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState) -> bool {
+        self.insert_battle_fairy_execution(player_id, BattleFairyExecution::BaseMagic(state))
     }
 
     pub(crate) fn battle_fairy_base_magic(&self, player_id: i32) -> Option<crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState> {
@@ -33489,12 +33548,12 @@ impl CGame {
         if !self.battle_fairy_execution(player_id, skill_id).is_some_and(|state| state.dispatch() == expected) {
             return false;
         }
-        let Some(mut execution) = self.players.get_mut(&player_id)
-            .and_then(|player| player.move_shape_mut().take_battle_fairy_execution(skill_id, &self.skill_factory))
-        else { return false };
-        let kernel = execution.kernel_mut();
-        let _ = kernel.terminate(termination);
-        tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение навыка боевой феи завершено");
+        let stage = self.battle_fairy_execution(player_id, skill_id).map(|kernel| kernel.stage());
+        let Some(player) = self.players.get_mut(&player_id) else { return false };
+        let Some(lifecycle) = player.move_shape_mut().skill_lifecycle_mut(skill_id, &self.skill_factory) else { return false };
+        lifecycle.reset_after_end(termination);
+        player.move_shape_mut().clear_battle_fairy_execution(skill_id, &self.skill_factory);
+        tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка боевой феи завершено");
         true
     }
 
@@ -38043,14 +38102,16 @@ impl CGame {
                 target: ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::default() },
             };
             let started_at_ms = now_milliseconds();
+            // Автоматический Begin имеет собственные часы, не контекст
+            // выбранной в OnSchedule команды. База предшествует OnBeginSkill.
+            self.begin_player_skill_lifecycle(player_id, dispatch, started_at_ms);
+            self.enter_player_combat_state(player_id);
+            self.finish_player_skill_base_begin(player_id, *skill_id, true);
             if let Some(player) = self.players.get_mut(&player_id) {
-                // Автоматический Begin имеет собственные часы, не контекст
-                // выбранной в OnSchedule команды.
                 player.move_shape_mut().install_player_execution(
                     SkillExecutionKernel::begin(dispatch, started_at_ms).into(), &self.skill_factory,
                 );
             }
-            self.enter_player_combat_state(player_id);
         }
         skill_ids.len()
     }
@@ -41326,7 +41387,7 @@ impl CGame {
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch);
             let begin_was_pending = self.player_skill_begin_pending(player_id, dispatch.skill_id());
             if !schedule_rejected {
-                self.begin_player_skill_schedule(player_id, dispatch, player_ai, runtime);
+                self.begin_player_skill_schedule(player_id, dispatch, runtime);
             }
             let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
@@ -41337,7 +41398,6 @@ impl CGame {
             } else {
                 self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
             };
-            player_ai.set_scheduled_skill_begin(None);
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
             if begin_completed {
                 player_ai.begin_player_fighting(runtime.now_milliseconds());
@@ -41538,7 +41598,6 @@ impl CGame {
             } else {
                 self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
             };
-            player_ai.set_scheduled_fairy_skill_begin(None);
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
             let outcome = if begin_completed {
                 player_ai.begin_battle_fairy_fighting(runtime.now_milliseconds());

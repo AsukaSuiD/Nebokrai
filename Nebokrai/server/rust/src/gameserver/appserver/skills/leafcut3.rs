@@ -128,7 +128,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
         if !weapon_is_sword(game, player) { return reject_initial(game, player_id, 0x0e, 0, None) }
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { return reject_initial(game, player_id, 7, mp_loss, None) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(LEAF_CUT_3_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
     }
 

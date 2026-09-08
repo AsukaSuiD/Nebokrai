@@ -165,7 +165,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, skill_id)
         .is_none_or(|execution| execution.dispatch() != dispatch)

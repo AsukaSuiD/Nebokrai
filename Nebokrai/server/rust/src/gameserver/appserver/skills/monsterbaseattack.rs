@@ -202,6 +202,7 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     BASE_ATTACK_SKILL_ID as COMMON_BASE_ATTACK_SKILL_ID,
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -363,7 +364,7 @@ pub(crate) fn finish_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI, runtime: &mut Runtime,
+    _ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     use super::lordfastattack::{calculate_attack, master_info, send_start};
     let rejected = || player_base_attack_outcome(QueuedSkillExecutionState::Rejected);
@@ -388,7 +389,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
             end_player_monster_base_attack(game, player_id, runtime, false);
             return rejected();
         }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(MONSTER_BASE_ATTACK_SKILL_ID));
         }
@@ -1345,9 +1346,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
                 return true;
             }
+            let target_object = resolve_owned_skill_begin_object(game, region, monster_shape.identity());
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.move_shape_mut().begin_immediate_skill(skill_id, game.skill_factory());
-                monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, game.skill_factory());
+                monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, target_object, game.skill_factory());
             }
             return true;
         }
@@ -2084,7 +2086,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
     }
     if skill_id == COMMON_BASE_ATTACK_SKILL_ID {
-        super::baseattack::begin_owned_monster_base_attack(region, monster_id, target, skill_level, now_ms, game.skill_factory());
+        super::baseattack::begin_owned_monster_base_attack(game, region, monster_id, target, skill_level, now_ms, game.skill_factory());
         return true;
     }
     let last_used_ms = region
@@ -2098,12 +2100,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let direction = get_line_direction(monster_x, monster_y, target_x, target_y);
+    let target_object = resolve_owned_skill_begin_object(game, region, target);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster
             .move_shape_mut()
             .shape_mut()
             .set_direction(direction);
-        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, game.skill_factory());
+        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, target_object, game.skill_factory());
         if fast_attack {
             monster.set_skill_progress(skill_id, MonsterFastAttackProgress::default(), game.skill_factory());
         }

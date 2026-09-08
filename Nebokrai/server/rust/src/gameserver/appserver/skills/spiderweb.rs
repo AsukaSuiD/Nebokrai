@@ -23,6 +23,7 @@
 //! при успехе, отмене и Stiffen. Отдельный SetMoveable(true) перед полётом
 //! сохраняется; ранний End(0) без живого cast также снимает один запрет.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::monsterattack::{owned_monster_attackable, resolve_owned_monster_attack_target};
@@ -326,7 +327,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_player_spider_web_dispatch(dispatch) {
@@ -389,7 +390,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPIDER_WEB_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, PlayerSpiderWebExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, PlayerSpiderWebExecutionState::begin(dispatch, now_ms));
         return player_terminal(QueuedSkillExecutionState::Begun);
     } else if game
         .player_skill_state::<PlayerSpiderWebExecutionState>(player_id, SPIDER_WEB_SKILL_ID)
@@ -631,6 +632,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
@@ -639,6 +641,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
                 SPIDER_WEB_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }

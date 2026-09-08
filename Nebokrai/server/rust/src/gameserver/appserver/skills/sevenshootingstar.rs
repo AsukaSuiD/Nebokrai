@@ -270,7 +270,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_seven_shooting_star_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
@@ -317,7 +317,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SEVEN_SHOOTING_STAR_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SevenShootingStarExecutionState::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SevenShootingStarExecutionState::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<SevenShootingStarExecutionState>(player_id, SEVEN_SHOOTING_STAR_SKILL_ID)
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

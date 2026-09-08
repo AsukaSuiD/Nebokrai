@@ -16,6 +16,7 @@
 //! и monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
 //! и срок состояния остаются elapsed.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
@@ -187,7 +188,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_sprite_burn_dispatch(dispatch) {
@@ -228,7 +229,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPRITE_BURN_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SpriteBurnExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SpriteBurnExecutionState::begin(dispatch, now_ms));
         return player_terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -387,12 +388,14 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.begin_base_attack_cast(
                 target_identity,
                 SPRITE_BURN_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }

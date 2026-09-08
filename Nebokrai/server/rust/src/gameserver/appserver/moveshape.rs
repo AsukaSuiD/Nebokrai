@@ -15,6 +15,8 @@
 //! (например EnlargeFullMiss::AI 0x0051673b), End снова снимает этот флаг.
 //! Constructor/Begin/End принадлежат одному lifecycle экземпляра;
 //! новый и завершённый immediate-навыки оба удовлетворяют IsEnded.
+//! Достигнутый immediate End снимает derived-флаг и очищает ту же базу
+//! CSkill; отметка не оставляет активный kernel с устаревшим IsEnded=false.
 //! GetDefaultAttackSkillID (RVA 0x000CE240, moveshape.cpp:2464) выбирает
 //! ID 2 только из attack-категории, иначе ID 3 из summon, иначе ID 1.
 //! Прямые проходы intrinsic-категорий не зависят от QuerySkillType.
@@ -92,16 +94,23 @@
 //! локализованный GS0318 и пустой fallback разрешаются владельцем публикации.
 //! Исполнение игрока, боевого духа либо монстра и принадлежащие навыку ресурсы
 //! хранятся в единственной типизированной ячейке зарегистрированного экземпляра,
-//! вместе с общим для этого экземпляра reuse timestamp. Новая запись не
-//! содержит исполнения; изменяемый monster-доступ лениво создаёт только пустое
-//! состояние монстра, не Begin. Доступ и извлечение не подменяют чужой вариант.
+//! вместе с общим для этого экземпляра reuse timestamp. Единственная база
+//! lifecycle хранится в Inactive до concrete Begin, затем перемещается внутрь
+//! kernel игрока, боевого духа либо монстра. Установка concrete-данных сохраняет
+//! эту базу, в том числе уже записанные общим Begin source/target и время.
+//! Неуспешный Begin сам по себе не удаляет прежние concrete-данные.
+//! Удаление только исполнения возвращает ту же базу в Inactive без Begin,
+//! End и callback; завершение базы вызывается владельцем отдельно до удаления.
+//! Изменяемый доступ не создаёт фиктивного monster-kernel и не подменяет
+//! чужой вариант. Общий IsEnded не выводится из наличия concrete-исполнения;
+//! отдельный immediate-флаг +0x4c не подменяет базовый lifecycle.
 //! CSkill constructor (0x004D8120) задаёт timestamp +0x40 равным нулю;
 //! новая регистрация не наследует его от удалённого экземпляра того же ID.
 //! Доступ к этим полям использует тот же первый GetSkill по текущей metadata,
 //! без дополнительного реестра и без поиска по intrinsic-категории. Отсутствие
-//! kernel не означает отсутствия самого registered owner-а. Полная модель
-//! source/target базового CSkill и concrete End без активного исполнения
-//! ещё не подключены: перенос ресурсов сам по себе не реализует StopAllSkills.
+//! kernel не означает отсутствия самого registered owner-а. Полный concrete
+//! End, включая визуальные хвосты без активного исполнения, ещё не подключён:
+//! перенос ресурсов сам по себе не реализует StopAllSkills.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
 //! Полный registered-skill End ещё не подключён; завершение одного текущего
@@ -130,7 +139,7 @@ use super::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
 use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
-use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution};
+use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
@@ -323,9 +332,30 @@ enum ImmediateSkillLifecycle {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RegisteredSkillExecution {
+    Inactive(SkillLifecycle),
     Player(PlayerSkillExecution),
     BattleFairy(BattleFairyExecution),
     Monster(super::monster::MonsterSkillExecution),
+}
+
+impl RegisteredSkillExecution {
+    fn lifecycle(&self) -> &SkillLifecycle {
+        match self {
+            Self::Inactive(lifecycle) => lifecycle,
+            Self::Player(execution) => execution.lifecycle(),
+            Self::BattleFairy(execution) => execution.lifecycle(),
+            Self::Monster(execution) => execution.kernel.lifecycle(),
+        }
+    }
+
+    fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
+        match self {
+            Self::Inactive(lifecycle) => lifecycle,
+            Self::Player(execution) => execution.lifecycle_mut(),
+            Self::BattleFairy(execution) => execution.lifecycle_mut(),
+            Self::Monster(execution) => execution.kernel.lifecycle_mut(),
+        }
+    }
 }
 
 /// Достигнутая common-проекция `CSkill`: identity, level и concrete owner.
@@ -338,7 +368,7 @@ pub(crate) struct MoveShapeSkill {
     owner: SkillOwner,
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
-    execution: Option<RegisteredSkillExecution>,
+    execution: RegisteredSkillExecution,
     last_used_ms: u32,
 }
 
@@ -1285,6 +1315,7 @@ impl CMoveShape {
     pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32, factory: &CSkillFactory) {
         if let Some(skill) = self.skill_mut(skill_id, factory) {
             skill.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
+            skill.execution.lifecycle_mut().reset_after_end(SkillTermination::Completed);
         }
     }
 
@@ -5315,12 +5346,28 @@ impl CMoveShape {
         self.skills[category as usize].iter_mut().find(|skill| skill.id == skill_id)
     }
 
+    pub(crate) fn skill_lifecycle(
+        &self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&SkillLifecycle> {
+        Some(self.skill(skill_id, factory)?.execution.lifecycle())
+    }
+
+    pub(crate) fn skill_lifecycle_mut(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> Option<&mut SkillLifecycle> {
+        Some(self.skill_mut(skill_id, factory)?.execution.lifecycle_mut())
+    }
+
     pub(crate) fn monster_skill_execution(
         &self,
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&super::monster::MonsterSkillExecution> {
-        match self.skill(skill_id, factory)?.execution.as_ref()? {
+        match &self.skill(skill_id, factory)?.execution {
             RegisteredSkillExecution::Monster(execution) => Some(execution),
             _ => None,
         }
@@ -5331,13 +5378,40 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut super::monster::MonsterSkillExecution> {
-        let execution = self.skill_mut(skill_id, factory)?.execution.get_or_insert_with(|| {
-            RegisteredSkillExecution::Monster(Default::default())
-        });
-        match execution {
+        match &mut self.skill_mut(skill_id, factory)?.execution {
             RegisteredSkillExecution::Monster(execution) => Some(execution),
             _ => None,
         }
+    }
+
+    pub(crate) fn install_monster_execution(
+        &mut self,
+        mut execution: super::monster::MonsterSkillExecution,
+        factory: &CSkillFactory,
+    ) -> bool {
+        let skill_id = execution.kernel.dispatch().skill_id;
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
+        if !matches!(skill.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Monster(_)) {
+            return false;
+        }
+        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
+        execution.kernel.replace_lifecycle(lifecycle);
+        skill.execution = RegisteredSkillExecution::Monster(execution);
+        true
+    }
+
+    pub(crate) fn clear_monster_execution(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> bool {
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
+        if !matches!(skill.execution, RegisteredSkillExecution::Monster(_)) {
+            return false;
+        }
+        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
+        skill.execution = RegisteredSkillExecution::Inactive(lifecycle);
+        true
     }
 
     pub(crate) fn player_execution(
@@ -5345,7 +5419,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&PlayerSkillExecution> {
-        match self.skill(skill_id, factory)?.execution.as_ref()? {
+        match &self.skill(skill_id, factory)?.execution {
             RegisteredSkillExecution::Player(execution) => Some(execution),
             _ => None,
         }
@@ -5356,7 +5430,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut PlayerSkillExecution> {
-        match self.skill_mut(skill_id, factory)?.execution.as_mut()? {
+        match &mut self.skill_mut(skill_id, factory)?.execution {
             RegisteredSkillExecution::Player(execution) => Some(execution),
             _ => None,
         }
@@ -5364,31 +5438,32 @@ impl CMoveShape {
 
     pub(crate) fn install_player_execution(
         &mut self,
-        execution: PlayerSkillExecution,
+        mut execution: PlayerSkillExecution,
         factory: &CSkillFactory,
     ) -> bool {
         let skill_id = execution.kernel().dispatch().skill_id();
         let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, None | Some(RegisteredSkillExecution::Player(_))) {
+        if !matches!(skill.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Player(_)) {
             return false;
         }
-        skill.execution = Some(RegisteredSkillExecution::Player(execution));
+        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
+        execution.kernel_mut().replace_lifecycle(lifecycle);
+        skill.execution = RegisteredSkillExecution::Player(execution);
         true
     }
 
-    pub(crate) fn take_player_execution(
+    pub(crate) fn clear_player_execution(
         &mut self,
         skill_id: u32,
         factory: &CSkillFactory,
-    ) -> Option<PlayerSkillExecution> {
-        let execution = &mut self.skill_mut(skill_id, factory)?.execution;
-        match execution.take() {
-            Some(RegisteredSkillExecution::Player(execution)) => Some(execution),
-            other => {
-                *execution = other;
-                None
-            }
+    ) -> bool {
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
+        if !matches!(skill.execution, RegisteredSkillExecution::Player(_)) {
+            return false;
         }
+        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
+        skill.execution = RegisteredSkillExecution::Inactive(lifecycle);
+        true
     }
 
     pub(crate) fn battle_fairy_execution(
@@ -5396,7 +5471,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&BattleFairyExecution> {
-        match self.skill(skill_id, factory)?.execution.as_ref()? {
+        match &self.skill(skill_id, factory)?.execution {
             RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
             _ => None,
         }
@@ -5407,7 +5482,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut BattleFairyExecution> {
-        match self.skill_mut(skill_id, factory)?.execution.as_mut()? {
+        match &mut self.skill_mut(skill_id, factory)?.execution {
             RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
             _ => None,
         }
@@ -5415,31 +5490,32 @@ impl CMoveShape {
 
     pub(crate) fn install_battle_fairy_execution(
         &mut self,
-        execution: BattleFairyExecution,
+        mut execution: BattleFairyExecution,
         factory: &CSkillFactory,
     ) -> bool {
         let skill_id = execution.kernel().dispatch().skill_id();
         let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, None | Some(RegisteredSkillExecution::BattleFairy(_))) {
+        if !matches!(skill.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_)) {
             return false;
         }
-        skill.execution = Some(RegisteredSkillExecution::BattleFairy(execution));
+        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
+        execution.kernel_mut().replace_lifecycle(lifecycle);
+        skill.execution = RegisteredSkillExecution::BattleFairy(execution);
         true
     }
 
-    pub(crate) fn take_battle_fairy_execution(
+    pub(crate) fn clear_battle_fairy_execution(
         &mut self,
         skill_id: u32,
         factory: &CSkillFactory,
-    ) -> Option<BattleFairyExecution> {
-        let execution = &mut self.skill_mut(skill_id, factory)?.execution;
-        match execution.take() {
-            Some(RegisteredSkillExecution::BattleFairy(execution)) => Some(execution),
-            other => {
-                *execution = other;
-                None
-            }
+    ) -> bool {
+        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
+        if !matches!(skill.execution, RegisteredSkillExecution::BattleFairy(_)) {
+            return false;
         }
+        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
+        skill.execution = RegisteredSkillExecution::Inactive(lifecycle);
+        true
     }
 
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {
@@ -5475,7 +5551,7 @@ impl CMoveShape {
                 .expect("CFightDefense входит в native factory"),
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
-            execution: None,
+            execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
             last_used_ms: 0,
         });
     }
@@ -5564,7 +5640,7 @@ impl CMoveShape {
             owner,
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
-            execution: None,
+            execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
             last_used_ms: 0,
         });
         true

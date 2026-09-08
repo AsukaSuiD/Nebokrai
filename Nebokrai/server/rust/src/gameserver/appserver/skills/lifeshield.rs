@@ -70,7 +70,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let terminal = |state| QueuedSkillExecutionOutcome {
@@ -143,7 +143,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
                 return reject_before_ai(game);
             }
         }
-        game.begin_battle_fairy_state(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID)
         .is_none_or(|state| state.dispatch() != dispatch)

@@ -128,7 +128,7 @@ fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
     last_target
 }
 
-pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_poison_moth_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(POISON_MOTH_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(POISON_MOTH_SKILL_ID, level) else { if game.player_skill_state::<PoisonMothExecutionState>(player_id, POISON_MOTH_SKILL_ID).is_none() { send_failure(game, player_id, 2, 0) } else { abort_player_poison_moth(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
@@ -151,7 +151,7 @@ pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mu
         if !weapon_is_crossbow(game, player) { reject(game, 0x0e); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { reject(game, 7); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(POISON_MOTH_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, player_ai, PoisonMothExecutionState::begin(dispatch, now_ms, destination));
+        game.begin_player_skill_execution(player_id, PoisonMothExecutionState::begin(dispatch, now_ms, destination));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<PoisonMothExecutionState>(player_id, POISON_MOTH_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.player_skill_state::<PoisonMothExecutionState>(player_id, POISON_MOTH_SKILL_ID).is_some_and(|state| !state.condition_checked) {

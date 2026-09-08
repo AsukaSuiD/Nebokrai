@@ -34,6 +34,7 @@
 //! их (0x005DBDBA), поэтому до построения пути fallback равен (0, 0),
 //! а не позиции источника. После выпуска сохранённый путь независим от цели.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
@@ -306,7 +307,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(LITTLE_STAR_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, ai, PlayerLittleStarExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, PlayerLittleStarExecutionState::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<PlayerLittleStarExecutionState>(player_id, LITTLE_STAR_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -662,9 +663,10 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
-            monster.begin_base_attack_cast(target_identity, LITTLE_STAR_SKILL_ID, skill_level, now_ms, game.skill_factory());
+            monster.begin_base_attack_cast(target_identity, LITTLE_STAR_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
         }
         let current_source = region.find_monster_by_id(monster_id)
             .map(|monster| monster.move_shape().shape()).unwrap_or(&source);

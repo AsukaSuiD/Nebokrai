@@ -330,7 +330,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, HeartlessArrowAreaExecutionState::begin(dispatch, destination_x, destination_y, started_at_ms));
+        game.begin_player_skill_execution(player_id, HeartlessArrowAreaExecutionState::begin(dispatch, destination_x, destination_y, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<HeartlessArrowAreaExecutionState>(player_id, dispatch.skill_id()).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

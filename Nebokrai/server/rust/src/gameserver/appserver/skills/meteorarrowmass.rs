@@ -76,7 +76,7 @@ pub(crate) const fn is_meteor_arrow_mass_dispatch(dispatch: PlayerSkillDispatch)
         | PlayerSkillDispatch::Object { skill_id: METEOR_ARROW_MASS_SKILL_ID, .. })
 }
 pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    _ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_meteor_arrow_mass_dispatch(dispatch) { return result(QueuedSkillExecutionState::Rejected) }
     let Some(level) = game.find_player(player_id).map(|p| p.learned_skill_level(METEOR_ARROW_MASS_SKILL_ID, game.skill_factory())) else { return result(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(METEOR_ARROW_MASS_SKILL_ID, level) else { if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_some() { abort_player_meteor_arrow_mass(game, player_id); } return result(QueuedSkillExecutionState::Rejected) };
@@ -92,7 +92,7 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
         if mp_loss == 0 { return result(QueuedSkillExecutionState::Rejected) }
         if (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return result(QueuedSkillExecutionState::Rejected); }
         let now = runtime.now_milliseconds(); if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(METEOR_ARROW_MASS_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, MeteorArrowMassExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, MeteorArrowMassExecutionState::begin(dispatch, now));
         return result(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected) }
     if game.player_skill_state::<MeteorArrowMassExecutionState>(player_id, METEOR_ARROW_MASS_SKILL_ID).copied().is_some_and(|state| !state.condition_checked) {

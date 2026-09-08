@@ -11,6 +11,7 @@
 //! выполняет его после сообщения смерти либо при отмене/Stiffen без взрыва;
 //! скрипт, урон и пометка удаления не являются побочными эффектами End.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
@@ -189,6 +190,7 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
         {
             return true;
         }
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(
@@ -196,6 +198,7 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
                 CORPSE_CANDLE_BLASTING_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }

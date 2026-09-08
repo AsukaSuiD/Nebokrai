@@ -80,7 +80,7 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, fire: bool) {
 
 pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI, runtime: &mut Runtime,
+    _ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_pillar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(PILLAR_SKILL_ID, game.skill_factory())) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -94,7 +94,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds(); let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(game.player_skill_last_used_ms(player_id, PILLAR_SKILL_ID), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, PILLAR_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); finish_player_pillar(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }

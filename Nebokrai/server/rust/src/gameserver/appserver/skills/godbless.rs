@@ -134,7 +134,7 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
         if mp_loss == 0 || initial_mana < mp_loss { if mp_loss != 0 { send_failure(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
         if requested_target(game, region_id, player_id, skill_id, dispatch).is_none() { return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, skill_id).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(target) = requested_target(game, region_id, player_id, skill_id, dispatch) else { abort_player_god_bless(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };

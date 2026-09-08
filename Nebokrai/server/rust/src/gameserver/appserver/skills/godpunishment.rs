@@ -99,7 +99,7 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
         if maximum != 0 && game.base_magic_path(region, source.tile_x, source.tile_y, x, y, None).len() > maximum as usize { fail(game, player_id, 0x0b, mp); return terminal(QueuedSkillExecutionState::Rejected); }
         if mp == 0 || player.mana() < mp { if mp != 0 { fail(game, player_id, 7, mp); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(id)); }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, started));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, GOD_PUNISHMENT_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     if game.player_skill_execution(player_id, GOD_PUNISHMENT_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {

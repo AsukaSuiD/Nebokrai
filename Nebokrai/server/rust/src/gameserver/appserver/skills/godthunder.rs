@@ -195,7 +195,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if execution(game, player_id, second).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

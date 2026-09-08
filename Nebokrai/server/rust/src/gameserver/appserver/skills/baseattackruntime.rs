@@ -87,7 +87,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     let now_ms = runtime.now_milliseconds();
     let region_id = player.server_region_id();
     if game.player_skill_execution(player_id, BASE_ATTACK_SKILL_ID).is_none() {
-        game.begin_player_skill_execution(player_id, player_ai, BaseAttackExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, BaseAttackExecutionState::begin(dispatch, now_ms));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(BASE_ATTACK_SKILL_ID));
         }

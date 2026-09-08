@@ -214,7 +214,7 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 { send_failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(KNIGHT_CUT_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, player_ai, KnightCutExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, KnightCutExecutionState::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID).is_none_or(|execution| execution.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 

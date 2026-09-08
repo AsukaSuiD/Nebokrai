@@ -14,6 +14,7 @@
 //! Общий хвост `End` сохраняет отдельные часы: `dispatch.now_ms` относится к
 //! попаданию, а reuse читает runtime после очистки ресурсов и освобождения
 //! движения, как `CSkill::End` (0x4d84c0). Часы попадания не подменяют часы End.
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
@@ -223,6 +224,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
@@ -231,6 +233,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
                 skill_id,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
             monster.set_skill_progress(skill_id, MonsterProjectileProgress::default(), game.skill_factory());

@@ -365,7 +365,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, ai, LittleFlashExecutionState::begin(dispatch, now));
+        game.begin_player_skill_execution(player_id, LittleFlashExecutionState::begin(dispatch, now));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

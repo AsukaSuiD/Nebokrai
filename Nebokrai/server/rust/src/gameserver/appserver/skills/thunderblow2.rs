@@ -224,7 +224,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
@@ -287,7 +287,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(THUNDER_BLOW_2_SKILL_ID));
             player.set_skill_moveable(false);
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, THUNDER_BLOW_2_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

@@ -234,7 +234,7 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
         }
         if live_object_target_dead(game, region_id, dispatch) { send_failure(game, player_id, 10); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        game.begin_player_skill_execution(player_id, ai, PlayerDirectProjectileExecutionState::begin(dispatch, target_position, now_ms));
+        game.begin_player_skill_execution(player_id, PlayerDirectProjectileExecutionState::begin(dispatch, target_position, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 

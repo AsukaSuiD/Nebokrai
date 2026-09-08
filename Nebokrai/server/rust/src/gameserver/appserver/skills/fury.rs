@@ -19,6 +19,7 @@
 //! (unsigned cmp/jb по 0x00536A9C).
 //! Cure добавляется без поиска и замены предыдущей записи: Begin по
 //! 0x00536D26, затем push_back по 0x00536D38. Накопление сохраняется в DB и AI.
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_in_region};
@@ -236,12 +237,14 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
+        let target_object = resolve_owned_skill_begin_object(game, region, self_identity(monster_id));
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.begin_base_attack_cast(
                 self_identity(monster_id),
                 FURY_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }
@@ -393,7 +396,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(FURY_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, FURY_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)

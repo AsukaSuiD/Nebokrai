@@ -24,6 +24,26 @@ use crate::public::guid::CGuid;
 
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 
+/// Факты объектного CState::Begin при временно извлечённом регионе.
+/// Запоминаются только region/type/id, без нового GUID-фильтра. Для
+/// неподвижных CMoveShape реестр региона подтверждает регистрацию;
+/// этот снимок не заменяет последующее разрешение GetSufferer в живой объект.
+pub(crate) fn resolve_owned_skill_begin_object(
+    game: &CGame,
+    region: &CServerRegion,
+    identity: ShapeIdentity,
+) -> Option<(i32, ShapeIdentity)> {
+    let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..identity };
+    let region_id = match identity.object_type {
+        400 => game.find_player(identity.id)?.shape().get_region_id(),
+        500 => region.find_npc_by_id(identity.id)?.move_shape().shape().get_region_id(),
+        600 => region.find_monster_by_id(identity.id)?.move_shape().shape().get_region_id(),
+        1_100 | 1_200 if region.has_registered_shape(identity) => region.id,
+        _ => return None,
+    };
+    Some((region_id, identity))
+}
+
 pub(crate) fn send_owned_state_visual(
     game: &CGame,
     region: &CServerRegion,

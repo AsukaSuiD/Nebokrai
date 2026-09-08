@@ -145,7 +145,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let (skill_id, skill_level, requested_target) = dispatch_fields(dispatch);
@@ -210,7 +210,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             );
             return reject_before_ai(game, target);
         }
-        game.begin_battle_fairy_state(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.battle_fairy_execution(player_id, skill_id).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

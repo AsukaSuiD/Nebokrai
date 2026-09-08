@@ -171,7 +171,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
         if mp_loss == 0 { return terminal(QueuedSkillExecutionState::Rejected) }
         if (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(requested_skill)); }
-        game.begin_player_skill_execution(player_id, player_ai, GhostCutExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, GhostCutExecutionState::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<GhostCutExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.player_skill_state::<GhostCutExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.condition_checked) {

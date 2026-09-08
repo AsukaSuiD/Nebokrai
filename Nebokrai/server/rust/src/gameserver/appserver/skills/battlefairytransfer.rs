@@ -154,7 +154,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
     kind: BattleFairyTransferKind,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let terminal = |state| QueuedSkillExecutionOutcome {
@@ -219,7 +219,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info_with_unsigned(player_id, string_id, value);
             return reject_before_ai(game);
         }
-        game.begin_battle_fairy_state(player_id, player_ai, SkillExecutionKernel::begin(
+        game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(
             dispatch,
             started_at_ms,
         ));

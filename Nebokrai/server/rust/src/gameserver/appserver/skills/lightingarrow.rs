@@ -139,7 +139,7 @@ pub(crate) fn execute_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: 
         if mp_loss != 0 && (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return outcome(QueuedSkillExecutionState::Rejected); }
         let now_ms = runtime.now_milliseconds();
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(LIGHTING_ARROW_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, player_ai, LightingArrowExecutionState::begin(dispatch, destination, target, now_ms));
+        game.begin_player_skill_execution(player_id, LightingArrowExecutionState::begin(dispatch, destination, target, now_ms));
         return outcome(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().is_none_or(|s| s.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected); }
 

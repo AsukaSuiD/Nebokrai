@@ -137,7 +137,7 @@ pub(crate) const fn is_thunder_blow_dispatch(dispatch: PlayerSkillDispatch) -> b
 
 pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
+    _player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_thunder_blow_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region_id, level, initial_mana, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((
@@ -176,7 +176,7 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(THUNDER_BLOW_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, THUNDER_BLOW_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

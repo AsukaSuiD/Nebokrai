@@ -94,8 +94,8 @@ impl BattleFairyBaseMagicExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
-        self.kernel
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<BattleFairySkillDispatch> {
+        &self.kernel
     }
 
     pub(crate) fn kernel_mut(
@@ -113,7 +113,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let rejected = || QueuedSkillExecutionOutcome {
@@ -253,7 +253,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             target,
             started_at_ms,
         );
-        game.begin_battle_fairy_base_magic(player_id, player_ai, execution);
+        game.begin_battle_fairy_base_magic(player_id, execution);
         return QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Begun,
             ..pending()

@@ -177,7 +177,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI,
+    _ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_rage_dispatch(dispatch) {
@@ -229,7 +229,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(RAGE_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, ai, RageExecutionState::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, RageExecutionState::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     }
 

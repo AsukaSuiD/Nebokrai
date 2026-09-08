@@ -75,7 +75,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
         if !weapon_is_compatible(game, player, DEFINITION) { send_failure(game, player_id, DEFINITION, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, DEFINITION, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(INVERSE_CHOPPED_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, INVERSE_CHOPPED_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 

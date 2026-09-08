@@ -75,7 +75,7 @@ impl SealExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> { self.kernel }
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
 }
 
@@ -263,7 +263,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
@@ -335,7 +335,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(SEAL_SKILL_ID));
             player.set_skill_moveable(false);
         }
-        game.begin_player_skill_execution(player_id, player_ai, SealExecutionState::begin(dispatch, target, started_at_ms));
+        game.begin_player_skill_execution(player_id, SealExecutionState::begin(dispatch, target, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<SealExecutionState>(player_id, SEAL_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch || state.target != target) {
         return terminal(QueuedSkillExecutionState::Rejected);

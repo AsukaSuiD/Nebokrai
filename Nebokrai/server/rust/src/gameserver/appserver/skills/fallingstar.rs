@@ -258,7 +258,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(FALLING_STAR_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, ai, FallingStarExecutionState::begin(
+        game.begin_player_skill_execution(player_id, FallingStarExecutionState::begin(
             dispatch,
             destination,
             target,

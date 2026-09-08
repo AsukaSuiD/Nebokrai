@@ -11,6 +11,7 @@
 //! сообщения смерти (0x00582509); общая очистка CMonster также обслуживает
 //! отмену/Stiffen, не взрывая источник и не снимая KnockOutState на целях.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::knockoutstate::{
     KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
@@ -137,6 +138,7 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(
@@ -144,6 +146,7 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
                 SPORE_BLASTING_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }

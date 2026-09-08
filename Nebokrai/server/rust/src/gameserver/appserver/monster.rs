@@ -18,8 +18,8 @@
 //! базовый ChangeSkill; производный SearchEnemy учитывается независимо.
 //! GetCurrentSkill (0x004C9338) определяет и IsEnded, и последующий AI:
 //! завершённый cast другого skill ID не завершает выбранный навык. Если
-//! выбранный навык не имеет достигнутого исполнения, Attack остаётся в FIFO;
-//! отсутствие kernel не подменяет исходный успешный ответ IsEnded.
+//! выбранный навык не имеет достигнутого исполнения, IsEnded читается из
+//! постоянной базы зарегистрированного экземпляра, без создания kernel.
 //! CPet::OnAttackingSchedule (0x004E9A20) и OnStayingSchedule (0x004E9650)
 //! переходят от Tracing/диапазона к Begin без таймера GetAttackSpeed.
 //! Общая точка допуска атаки не проверяет и не обновляет ai_schedule питомца;
@@ -36,9 +36,12 @@
 //! сброса ресурсов; жизнь призванного существа остаётся у CMonster.
 //! Этот перенос хранения не заменяет ещё не подключённый полный обход
 //! registered owners для StopAllSkills и source/common End.
-//! Native constructor создаёт уже IsEnded-навык без Begin. Пока общий base
-//! lifecycle не материализован, отсутствие kernel не различает это состояние
-//! и отказ Begin; новая семантика IsEnded из одного Option не выводится.
+//! Native constructor создаёт уже IsEnded-навык без Begin: Inactive хранит
+//! единственный SkillLifecycle, а настоящий Begin переносит эту же базу в
+//! обязательный kernel Monster-варианта. Source и разрешённый target получают
+//! реальные region/type/ID; null-target сохраняет прежнюю сторону базы.
+//! Время берётся из достигнутого Begin, без дополнительного чтения часов.
+//! Cure снимает только derived-payload с сохранением базы, не имитируя End.
 //! Обычное завершение cast/немедленного навыка не стирает выбранный ID:
 //! CBaseAI::OnFighting (0x004C9320) лишь ставит ChangeSkill после IsEnded.
 //! Выбор меняется отдельным обработчиком очереди; освобождение исполнения
@@ -328,9 +331,9 @@ monster_skill_progress! {
     YunShengLightning(YunShengLightningProgress),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MonsterSkillExecution {
-    pub(crate) kernel: Option<MonsterBaseAttackCast>,
+    pub(crate) kernel: MonsterBaseAttackCast,
     pub(crate) progress: Option<MonsterSkillProgress>,
 }
 
@@ -1654,10 +1657,8 @@ impl CMonster {
                 } else {
                     self.finish_attack_skill_resources(skill_id);
                 }
-                if let Some(execution) = self.move_shape.monster_skill_execution_mut(skill_id, factory)
-                    && let Some(kernel) = execution.kernel.as_mut()
-                {
-                    let _ = kernel.terminate(SkillTermination::Completed);
+                if let Some(lifecycle) = self.move_shape.skill_lifecycle_mut(skill_id, factory) {
+                    lifecycle.reset_after_end(SkillTermination::Completed);
                 }
                 ended_skill = Some(skill_id);
             } else {
@@ -1826,12 +1827,7 @@ impl CMonster {
     pub(crate) fn active_ai_attack_ended(&self, factory: &CSkillFactory) -> bool {
         if self.selected_base_ai().is_none() { return false; }
         let Some(skill) = self.move_shape.current_skill(factory) else { return false };
-        let skill_id = skill.id();
-        if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
-            self.move_shape.immediate_skill_ended(skill_id, factory)
-        } else {
-            self.current_active_attack_cast(factory).is_some_and(|cast| cast.termination().is_some())
-        }
+        self.move_shape.skill_lifecycle(skill.id(), factory).is_some_and(|lifecycle| lifecycle.is_ended())
     }
 
     /// Проекция исполнения для OnFighting, не общий доступ к ресурсу CSkill.
@@ -1862,9 +1858,11 @@ impl CMonster {
             return false;
         }
         if skill_ended
-            && self.current_active_attack_cast(factory).is_some_and(|cast| cast.termination().is_none())
+            && self.current_active_attack_cast(factory).is_some_and(|cast| {
+                super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(cast.dispatch().skill_id).is_some()
+            })
         {
-            self.finish_active_immediate_skill(factory);
+            self.move_shape.shape_mut().set_action(1);
         }
         let completion_ai_type = self.active_primary_ai_type().unwrap_or(0);
         let alive = !CMoveShape::is_died(self.hit_points);
@@ -1913,7 +1911,7 @@ impl CMonster {
     }
 
     pub(crate) fn base_attack_cast(&self, skill_id: u32, factory: &CSkillFactory) -> Option<MonsterBaseAttackCast> {
-        self.move_shape.monster_skill_execution(skill_id, factory)?.kernel
+        Some(self.move_shape.monster_skill_execution(skill_id, factory)?.kernel)
     }
 
     pub(crate) fn begin_base_attack_cast(
@@ -1922,6 +1920,7 @@ impl CMonster {
         skill_id: u32,
         skill_level: u16,
         now_ms: u32,
+        target_object: Option<(i32, ShapeIdentity)>,
         factory: &CSkillFactory,
     ) {
         let mut execution = MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
@@ -1930,15 +1929,31 @@ impl CMonster {
             skill_level,
         }, now_ms);
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
-        self.install_base_attack_cast(execution, factory);
+        self.install_base_attack_cast(execution, target_object, factory);
     }
 
-    pub(crate) fn install_base_attack_cast(&mut self, execution: MonsterBaseAttackCast, factory: &CSkillFactory) {
+    pub(crate) fn install_base_attack_cast(
+        &mut self,
+        execution: MonsterBaseAttackCast,
+        target_object: Option<(i32, ShapeIdentity)>,
+        factory: &CSkillFactory,
+    ) {
         if self.selected_base_ai().is_none() { return; }
         let skill_id = execution.dispatch().skill_id;
         let now_ms = execution.started_at_ms();
-        let Some(stored) = self.move_shape.monster_skill_execution_mut(skill_id, factory) else { return; };
-        stored.kernel = Some(execution);
+        let source = self.move_shape.shape();
+        let source_object = (source.get_region_id(), source.identity());
+        let Some(lifecycle) = self.move_shape.skill_lifecycle_mut(skill_id, factory) else { return; };
+        lifecycle.begin_objects(Some(source_object), target_object, || now_ms);
+        let _ = lifecycle.finish_begin(true);
+        let progress = self.move_shape.monster_skill_execution_mut(skill_id, factory)
+            .and_then(|stored| stored.progress.take());
+        if !self.move_shape.install_monster_execution(MonsterSkillExecution {
+            kernel: execution,
+            progress,
+        }, factory) {
+            return;
+        }
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.register_curable_skill_state(skill_id);
         }
@@ -2057,18 +2072,17 @@ impl CMonster {
         factory: &CSkillFactory,
         reuse_clock: Option<impl FnOnce() -> u32>,
     ) -> Option<MonsterBaseAttackCast> {
-        let mut execution = self.base_attack_cast(skill_id, factory)?;
-        if execution.termination().is_some() {
+        if self.move_shape.monster_skill_execution(skill_id, factory)?.kernel.termination().is_some() {
             return None;
         }
         self.clear_skill_progress(skill_id, factory);
         self.finish_attack_skill_resources(skill_id);
-        let _ = execution.terminate(SkillTermination::Completed);
+        let _ = self.move_shape.monster_skill_execution_mut(skill_id, factory)?
+            .kernel.terminate(SkillTermination::Completed);
         if let Some(now) = reuse_clock {
             self.move_shape.mark_skill_used(skill_id, now(), factory);
         }
-        self.move_shape.monster_skill_execution_mut(skill_id, factory)?.kernel = Some(execution);
-        Some(execution)
+        self.base_attack_cast(skill_id, factory)
     }
 
     /// Фиксирует End немедленного self-state навыка независимо от active-cast.
@@ -2095,8 +2109,7 @@ impl CMonster {
         factory: &CSkillFactory,
     ) -> bool {
         self.move_shape.monster_skill_execution_mut(skill_id, factory)
-            .and_then(|execution| execution.kernel.as_mut())
-            .is_some_and(|execution| execution.advance(expected, next))
+            .is_some_and(|execution| execution.kernel.advance(expected, next))
     }
 
     pub(crate) fn clear_ai_target(&mut self, factory: &CSkillFactory) {
@@ -2121,29 +2134,25 @@ impl CMonster {
     pub(crate) fn cancel_base_attack_cast(&mut self, factory: &CSkillFactory) {
         let Some(skill_id) = self.move_shape.current_skill(factory).map(|skill| skill.id()) else { return; };
         self.clear_skill_progress(skill_id, factory);
-        if let Some(mut execution) = self.base_attack_cast(skill_id, factory) {
-            if execution.termination().is_none() {
-                self.finish_attack_skill_resources(skill_id);
-            }
-            if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
-                self.move_shape.finish_immediate_skill(skill_id, factory);
-            }
-            self.move_shape.set_current_skill_id(None);
-            let _ = execution.terminate(SkillTermination::Cancelled);
-            if let Some(stored) = self.move_shape.monster_skill_execution_mut(skill_id, factory) {
-                stored.kernel = Some(execution);
-            }
+        let Some(termination) = self.move_shape.monster_skill_execution(skill_id, factory)
+            .map(|execution| execution.kernel.termination()) else { return; };
+        if termination.is_none() {
+            self.finish_attack_skill_resources(skill_id);
+        }
+        if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
+            self.move_shape.finish_immediate_skill(skill_id, factory);
+        }
+        self.move_shape.set_current_skill_id(None);
+        if let Some(stored) = self.move_shape.monster_skill_execution_mut(skill_id, factory) {
+            stored.kernel.lifecycle_mut().reset_after_end(termination.unwrap_or(SkillTermination::Cancelled));
         }
     }
 
     /// Удаление CState из Cure не вызывает CSkill::End(int).
     pub(crate) fn remove_curable_attack_cast(&mut self, skill_id: u32, factory: &CSkillFactory) -> bool {
-        let Some(execution) = self.move_shape.monster_skill_execution_mut(skill_id, factory) else { return false; };
-        if execution.kernel.is_none() {
+        if !self.move_shape.clear_monster_execution(skill_id, factory) {
             return false;
         }
-        execution.progress = None;
-        execution.kernel = None;
         self.move_shape.finish_curable_skill_state(skill_id);
         if self.move_shape.current_skill_id() == Some(skill_id) {
             self.move_shape.set_current_skill_id(None);

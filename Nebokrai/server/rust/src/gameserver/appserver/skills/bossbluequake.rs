@@ -30,6 +30,7 @@
 //! затем освобождает текущий навык. Callback CPlayer +0x158 пуст:
 //! дополнительного пересчёта свойств при завершении нет.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
@@ -460,7 +461,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BOSS_BLUE_QUAKE_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, PlayerBossBlueQuakeExecutionState::begin(
+        game.begin_player_skill_execution(player_id, PlayerBossBlueQuakeExecutionState::begin(
             dispatch, now_ms,
         ));
         return player_terminal(QueuedSkillExecutionState::Begun);
@@ -849,10 +850,11 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         }
         let direction = get_line_direction(source.get_tile_x().unwrap_or_default(), source.get_tile_y().unwrap_or_default(), target_x, target_y);
         let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, BOSS_BLUE_QUAKE_SKILL_ID, level, now_ms, game.skill_factory());
+            monster.begin_base_attack_cast(target_identity, BOSS_BLUE_QUAKE_SKILL_ID, level, now_ms, target_object, game.skill_factory());
         }
         source.set_direction(direction);
         send_visual(game, region, &source, level, true);

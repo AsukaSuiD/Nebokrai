@@ -139,7 +139,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let skill_id = match dispatch {
@@ -188,7 +188,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(GIBE_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, GIBE_SKILL_ID)

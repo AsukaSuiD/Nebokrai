@@ -47,6 +47,7 @@
 //! (0x00532425/0x00532836 и 0x0052FF55/0x00530366), не отменяя AI-цель
 //! и Move. До Begin ранние отказы общего schedule ещё требуют согласования.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     SKILL_USAGE_USER_HIT_MODIFIER,
@@ -263,7 +264,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     player_id: i32,
     dispatch: PlayerSkillDispatch,
     skill_id: u32,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     match dispatch {
@@ -371,7 +372,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return player_terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, skill_id).is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -706,13 +707,14 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             drop(path);
             return abort_monster_wide_arc_begin(region, monster_id);
         }
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(false);
             monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
                 target: target_identity,
                 skill_id,
                 skill_level,
-            }, now_ms), game.skill_factory());
+            }, now_ms), target_object, game.skill_factory());
         }
         return MonsterSkillCallOutcome::Handled;
     }

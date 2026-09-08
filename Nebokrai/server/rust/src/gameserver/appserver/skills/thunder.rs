@@ -178,7 +178,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let (skill_level, skill_id) = match dispatch {
@@ -278,7 +278,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             );
             return reject_before_ai(game, 2, b"");
         }
-        game.begin_battle_fairy_state(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.battle_fairy_execution(player_id, THUNDER_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

@@ -74,8 +74,8 @@ impl LightningExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-        self.kernel
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
     }
 
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
@@ -409,7 +409,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(LIGHTNING_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, LightningExecutionState::begin(
+        game.begin_player_skill_execution(player_id, LightningExecutionState::begin(
             dispatch,
             target,
             destination,

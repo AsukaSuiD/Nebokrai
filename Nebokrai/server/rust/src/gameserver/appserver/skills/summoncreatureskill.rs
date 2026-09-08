@@ -28,6 +28,7 @@
 //! и очистки ресурсов, как CSkill::End (0x004D84C0), а не берётся из раннего
 //! now_ms, которым проверялся срок AI. End без reuse не читает эти часы.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
 use super::flash::master_info;
@@ -135,7 +136,7 @@ pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: 
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
-pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     let skill_id = player_skill_id(dispatch);
     if !is_player_summon_creature_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, skill_level, master)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id, game.skill_factory()), master_info(player)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
@@ -158,7 +159,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         }
         let Some(destination) = player_destination(game, region_id, dispatch, (source_x, source_y)) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        game.begin_player_skill_execution(player_id, player_ai, PlayerSummonCreatureExecutionState::begin(dispatch, destination, now_ms));
+        game.begin_player_skill_execution(player_id, PlayerSummonCreatureExecutionState::begin(dispatch, destination, now_ms));
         return player_terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<PlayerSummonCreatureExecutionState>(player_id, dispatch.skill_id()).is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -395,10 +396,11 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
         destination_x,
         destination_y,
     );
+    let target_object = resolve_owned_skill_begin_object(game, region, target);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
-        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, game.skill_factory());
+        monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, target_object, game.skill_factory());
     }
     let source = region
         .find_monster_by_id(monster_id)

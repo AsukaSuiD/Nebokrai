@@ -288,7 +288,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(CHAIN_LIGHTNING_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, ChainLightningExecutionState::begin(dispatch, started_at_ms, x, y));
+        game.begin_player_skill_execution(player_id, ChainLightningExecutionState::begin(dispatch, started_at_ms, x, y));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

@@ -57,8 +57,8 @@ impl CallosityExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-        self.kernel
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
     }
 
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
@@ -175,7 +175,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         };
         player.set_skill_moveable(false);
         player.set_current_skill_id(Some(skill_id));
-        game.begin_player_skill_execution(player_id, player_ai, CallosityExecutionState::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, CallosityExecutionState::begin(dispatch, started_at_ms));
         return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Begun, ..pending() };
     } else if game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied()
         .is_none_or(|state| state.kernel().dispatch() != dispatch)

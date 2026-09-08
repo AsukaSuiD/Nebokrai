@@ -264,7 +264,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_soul_mirror_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
@@ -299,7 +299,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SOUL_MIRROR_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, SOUL_MIRROR_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

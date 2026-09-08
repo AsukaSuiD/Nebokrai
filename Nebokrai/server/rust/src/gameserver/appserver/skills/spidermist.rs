@@ -17,6 +17,7 @@
 //! очистку регистрации навыка и Stiffen-End выполняет общий CMonster;
 //! область тумана остаётся независимой от завершённого навыка.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::flash::master_info;
@@ -215,7 +216,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
+    _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_player_spider_mist_dispatch(dispatch) {
@@ -283,7 +284,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
             // снять `CCure` до создания phalanx.
             player.register_curable_skill_state(SPIDER_MIST_SKILL_ID);
         }
-        game.begin_player_skill_execution(player_id, player_ai, PlayerSpiderMistExecutionState::begin(
+        game.begin_player_skill_execution(player_id, PlayerSpiderMistExecutionState::begin(
             dispatch,
             destination,
             now_ms,
@@ -515,10 +516,11 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let direction = get_line_direction(source_x, source_y, destination_x, destination_y);
+    let target_object = resolve_owned_skill_begin_object(game, region, target);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
-        monster.begin_base_attack_cast(target, SPIDER_MIST_SKILL_ID, skill_level, now_ms, game.skill_factory());
+        monster.begin_base_attack_cast(target, SPIDER_MIST_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
         monster.set_skill_progress(SPIDER_MIST_SKILL_ID, SpiderMistProgress { destination_x, destination_y }, game.skill_factory());
     }
     let source = region

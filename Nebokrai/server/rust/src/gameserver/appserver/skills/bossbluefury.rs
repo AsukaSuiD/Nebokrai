@@ -10,6 +10,7 @@
 //! используют абсолютный срок `CSkill::IsRestored`; cast-delay остаётся
 //! elapsed-проверкой.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     time_reached,
@@ -236,7 +237,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BOSS_BLUE_FURY_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return player_terminal(QueuedSkillExecutionState::Begun);
     }
     if dead {
@@ -375,12 +376,14 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
+        let target_object = resolve_owned_skill_begin_object(game, region, self_identity(monster_id));
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.begin_base_attack_cast(
                 self_identity(monster_id),
                 BOSS_BLUE_FURY_SKILL_ID,
                 skill_level,
                 now_ms,
+                target_object,
                 game.skill_factory(),
             );
         }

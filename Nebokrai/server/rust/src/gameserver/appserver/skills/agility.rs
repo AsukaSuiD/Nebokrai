@@ -57,8 +57,8 @@ impl AgilityFamilyExecutionState {
         }
     }
 
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
-        self.kernel
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
     }
 
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
@@ -197,7 +197,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, AgilityFamilyExecutionState::begin(
+        game.begin_player_skill_execution(player_id, AgilityFamilyExecutionState::begin(
             dispatch,
             started_at_ms,
         ));

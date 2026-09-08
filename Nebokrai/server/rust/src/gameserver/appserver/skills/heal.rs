@@ -338,7 +338,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, skill_id)
         .is_none_or(|execution| execution.dispatch() != dispatch)

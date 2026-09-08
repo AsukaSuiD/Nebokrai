@@ -156,7 +156,7 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
         if target.object_type==PLAYER_TYPE && target.id==player_id { send_failure(game, player_id, 10, b"GS1183", None); return terminal(QueuedSkillExecutionState::Rejected); }
         if !skill_is_restored(game.player_skill_last_used_ms(player_id, ITEM_SKILL_2_ID), reuse, runtime.now_milliseconds()) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
         let path=game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if maximum!=0 && path.len()>maximum as usize { send_failure(game, player_id, 0x0b, b"GS1185", None); return terminal(QueuedSkillExecutionState::Rejected); } if path.iter().any(|cell| cell.2==2) { send_failure(game, player_id, 0x0f, b"GS1186", None); return terminal(QueuedSkillExecutionState::Rejected); } if mp_loss!=0 && !has_mana(mana, mp_loss) { send_failure(game, player_id, 7, b"GS1187", Some(mp_loss)); return terminal(QueuedSkillExecutionState::Rejected); }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, ITEM_SKILL_2_ID).is_none_or(|execution| execution.dispatch()!=dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     if game.player_skill_execution(player_id, ITEM_SKILL_2_ID).is_some_and(|execution| execution.stage()==SkillStage::Begin) {

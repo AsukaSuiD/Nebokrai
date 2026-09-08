@@ -107,7 +107,7 @@ pub(crate) fn cancel_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame,
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
-pub(crate) fn execute_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     let skill_id = match dispatch {
         PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } | PlayerSkillDispatch::SelfTarget { skill_id, .. } => skill_id,
     };
@@ -153,7 +153,7 @@ pub(crate) fn execute_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(skill_id));
         }
-        game.begin_player_skill_execution(player_id, player_ai, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, WEAK_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);

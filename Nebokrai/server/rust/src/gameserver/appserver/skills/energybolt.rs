@@ -33,6 +33,7 @@
 //! CMonster: путь, SetMoveable(true), reuse ненулевого End и Stiffen=4.
 //! Отдельный пакет конца полёта остаётся у AI; сам End его не посылает.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
 use super::fightdefense::truncate_original;
@@ -555,7 +556,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(spec.skill_id));
         }
-        game.begin_player_skill_execution(player_id, ai, PlayerPathProjectileExecutionState::begin(
+        game.begin_player_skill_execution(player_id, PlayerPathProjectileExecutionState::begin(
             dispatch, now_ms, destination,
         ));
         return player_terminal(QueuedSkillExecutionState::Begun);
@@ -987,9 +988,10 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, destination.0, destination.1);
+        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
-            monster.begin_base_attack_cast(target_identity, spec.skill_id, skill_level, now_ms, game.skill_factory());
+            monster.begin_base_attack_cast(target_identity, spec.skill_id, skill_level, now_ms, target_object, game.skill_factory());
             monster.set_skill_progress(spec.skill_id, PathProjectileProgress::new(
                 destination.0,
                 destination.1,

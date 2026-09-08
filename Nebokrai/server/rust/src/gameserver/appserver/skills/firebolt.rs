@@ -223,7 +223,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(FIRE_BOLT_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, player_ai, BaseMagicExecutionState::begin(
+        game.begin_player_skill_execution(player_id, BaseMagicExecutionState::begin(
             dispatch, target, started_at_ms,
         ));
         return terminal(QueuedSkillExecutionState::Begun);

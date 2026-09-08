@@ -45,6 +45,7 @@
 //! Разрешение цели и политика отношений переиспользуют общий monsterattack;
 //! NPC не входят в его боевой снимок и у исходного Attack исключены отдельно.
 
+use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::real_distance_between_points;
@@ -76,6 +77,7 @@ pub(crate) fn owned_monster_base_attack_allowed(
 }
 
 pub(crate) fn begin_owned_monster_base_attack(
+    game: &CGame,
     region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
     monster_id: i32,
     target: crate::gameserver::appserver::shape::ShapeIdentity,
@@ -84,10 +86,11 @@ pub(crate) fn begin_owned_monster_base_attack(
     factory: &super::skillfactory::CSkillFactory,
 ) {
     use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
+    let target_object = resolve_owned_skill_begin_object(game, region, target);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.install_base_attack_cast(MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
             target, skill_id: BASE_ATTACK_SKILL_ID, skill_level,
-        }, started_at_ms), factory);
+        }, started_at_ms), target_object, factory);
     }
 }
 
