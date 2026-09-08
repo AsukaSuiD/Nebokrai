@@ -72,6 +72,10 @@
 //! и SelectAttackSkill (+0x8C → 0x005DD0B0). Поэтому приручение отключает
 //! boss/lord-selector и производный restore-delay AI5/AI103, но сохраняет
 //! исходный список odds, один RNG и общий default/IsRestored.
+//! CCarriage vtable 0x00653F9C наследует те же OnChangeSkill/SelectAttackSkill,
+//! а OnSearchEnemy (+0x18) указывает на RET1 0x0047B150. Обе формы повозки,
+//! первичная AI24 и auxiliary GetAI, проходят этот dispatch без поиска целей;
+//! номер первичного AI разрешается только у активного primary owner-а.
 //! CPet::OnSchedule (0x004E9DC0) выбирает собственные Attack/Follow/Stay:
 //! сохранённый property.ai не включает связывание Цзюмай, пост стража,
 //! стационарный поиск дальности или исключение AI13 из проверки цели.
@@ -253,7 +257,7 @@ use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::yakshaslash::{YAKSHA_SLASH_SKILL_ID, execute_owned_monster_yaksha_slash};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
-use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
+use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::archer::select_archer_enemy;
 use crate::gameserver::appserver::ai::bossblue::{
     choose_boss_blue_attack_skill, select_boss_blue_enemy,
@@ -549,9 +553,9 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 ) -> Option<u16> {
     let monster = region.find_monster_by_id(monster_id)?;
     let default_skill_id = monster.move_shape().default_attack_skill_id() as u16;
-    let tamed = monster.is_tamed();
+    let primary_ai = monster.active_primary_ai_type();
     let roll = game.skill_random_below(10_000);
-    let selected = if !tamed && property.ai == 21 {
+    let selected = if primary_ai == Some(21) {
         choose_boss_blue_attack_skill(
             region,
             monster_id,
@@ -560,7 +564,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             roll,
             default_skill_id,
         )
-    } else if !tamed && property.ai == 23 {
+    } else if primary_ai == Some(23) {
         choose_boss_fiend_attack_skill(
             game,
             region,
@@ -570,7 +574,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             roll,
             runtime,
         )
-    } else if !tamed && property.ai == 19 {
+    } else if primary_ai == Some(19) {
         Some(select_lord_attack_skill(
             monster_health,
             property.maximum_hp,
@@ -606,14 +610,14 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, monster_health, tamed)) = region
+    let Some((property, monster_health, primary_ai)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             Some((
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?
                     .clone(),
                 monster.hit_points(),
-                monster.is_tamed(),
+                monster.active_primary_ai_type(),
             ))
         })
     else {
@@ -630,7 +634,7 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     let Some(selected_skill_id) = selected else {
         return false;
     };
-    if !tamed && inherits_fixed_archer_change_skill(property.ai) {
+    if primary_ai.is_some_and(inherits_fixed_archer_change_skill) {
         if queue_fixed_archer_skill_delay(
             game,
             region,
@@ -684,6 +688,12 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
+    if region.find_monster_by_id(monster_id).is_some_and(|monster| {
+        matches!(monster.active_ai(), Some(ActiveMonsterAi::Carriage
+            | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)))
+    }) {
+        return true;
+    }
     let Some((property, has_target)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {

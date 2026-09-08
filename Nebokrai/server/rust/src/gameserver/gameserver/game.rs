@@ -794,7 +794,6 @@ use crate::gameserver::appserver::ai::carriage::{
     CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMovementPlan,
     plan_carriage_movement,
 };
-use crate::gameserver::appserver::ai::monsterai::find_slip_step;
 use crate::gameserver::appserver::ai::pet::{
     PetLifecycleFacts, PetLifecycleNotice, PetMasterRef, execute_owned_pet_active_search,
     execute_owned_pet_follow, pet_master_ref,
@@ -34459,7 +34458,10 @@ impl CGame {
         let damage = health.min(i32::MAX as u32);
         let current_health = health.wrapping_sub(damage);
         let now_ms = runtime.now_milliseconds();
-        let lord_hurt_plan = (property.ai == 19 && current_health != 0).then(|| {
+        let primary_ai = self.find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+            .and_then(CMonster::active_primary_ai_type);
+        let lord_hurt_plan = (primary_ai == Some(19) && current_health != 0).then(|| {
             crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
                 self,
                 region_id,
@@ -34502,7 +34504,7 @@ impl CGame {
                     critical: false,
                     blast_attack: false,
                 });
-            } else if property.ai == 19 {
+            } else if primary_ai == Some(19) {
                 // AI19 применяет Defense, spatial-step и выбор цели после
                 // освобождения изменяемого заимствования монстра.
             } else {
@@ -38830,9 +38832,8 @@ impl CGame {
         handled
     }
 
-    /// Reached `CCarriage::OnSchedule`: following/staying movement, one-second
-    /// master rebinding, duplicate-owner eviction and disappearance timeout
-    /// execute against the same live player/region/monster owners.
+    /// OnSchedule выбранного CCarriage: FIFO ограничивает только движение,
+    /// но не контроль смерти и хозяина. Фазы общего Run выполняются caller-ом.
     fn run_owned_carriage_lifecycle<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -38850,7 +38851,6 @@ impl CGame {
                     .find_monster_property_by_origin_name(monster.base_property_key()?)?
                     .clone();
                 monster.is_carriage(&property).then(|| {
-                    let stop_frame = monster.stop_frame(&property);
                     (
                         property,
                         monster.move_shape().shape().clone(),
@@ -38858,8 +38858,6 @@ impl CGame {
                         monster.move_shape().is_moveable(),
                         monster.master_info(),
                         monster.carriage_action(),
-                        monster.move_shape().shape().get_speed(),
-                        stop_frame,
                     )
                 })
             });
@@ -38870,25 +38868,19 @@ impl CGame {
             moveable,
             master,
             action,
-            speed,
-            stop_frame,
         )) = snapshot else {
             self.restore_region_owner(owner);
             return false;
         };
-        let now_ms = runtime.now_milliseconds();
         // `CCarriage::OnSchedule` проверяет virtual `CShape::GetState`
         // (vtable slot `+0x74`), а не собственный follow/stay action: смерть
         // удаляет повозку только вне боевого shape-state `1`.
-        let mut vanish_reason =
-            (CMoveShape::is_died(health) && carriage_shape.get_state() != 1).then_some(3);
-        let mut vanish = vanish_reason.is_some();
-        if !vanish
-            && !owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .is_some_and(|monster| monster.advance_carriage_schedule(now_ms))
-        {
+        let died_outside_battle = CMoveShape::is_died(health) && carriage_shape.get_state() != 1;
+        if died_outside_battle {
+            self.evanish_owned_carriage(owner.base_mut(), monster_id, property.index, 3);
+            if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                carriage.set_base_attack_owned_tick(true);
+            }
             self.restore_region_owner(owner);
             return true;
         }
@@ -38901,6 +38893,7 @@ impl CGame {
                         player.shape().clone(),
                         Some(player.active_carriage_id()),
                         player.server_region_id() == Some(region_id),
+                        player.figure(),
                     )
                 }),
             Some(PetMasterRef::Region(identity)) => {
@@ -38908,78 +38901,66 @@ impl CGame {
                     MONSTER_TYPE => owner
                         .base()
                         .find_monster_by_id(identity.id)
-                        .map(|monster| monster.move_shape().shape().clone()),
+                        .and_then(|monster| {
+                            let property = self.find_monster_property_by_origin_name(
+                                monster.base_property_key()?)?;
+                            Some((monster.move_shape().shape().clone(), CMonster::figure(property)))
+                        }),
                     NPC_TYPE => owner
                         .base()
                         .find_npc_by_id(identity.id)
-                        .map(|npc| npc.move_shape().shape().clone()),
+                        .map(|npc| (npc.move_shape().shape().clone(), ShapeFigure::default())),
                     _ => None,
                 };
-                shape.map(|shape| (shape, None, true))
+                shape.map(|(shape, figure)| (shape, None, true, figure))
             }
             None => None,
         };
-        let master_present = master_snapshot
+        let master_present = master_snapshot.as_ref()
+            .is_some_and(|(_, _, same_region, _)| *same_region);
+        let master_owns = master_snapshot
             .as_ref()
-            .is_some_and(|(_, _, same_region)| *same_region);
-        let mut master_owns = master_snapshot
-            .as_ref()
-            .is_some_and(|(_, carriage_id, _)| *carriage_id == Some(monster_id));
+            .is_some_and(|(_, carriage_id, _, _)| *carriage_id == Some(monster_id));
         let master_owns_other = master_snapshot
             .as_ref()
-            .is_some_and(|(_, carriage_id, _)| {
+            .is_some_and(|(_, carriage_id, _, _)| {
                 carriage_id.is_some_and(|carriage_id| carriage_id != 0 && carriage_id != monster_id)
             });
-        if !vanish {
+        if owner.base().find_monster_by_id(monster_id)
+            .is_some_and(CMonster::primary_ai_queues_idle)
+        {
             let movement = plan_carriage_movement(
                 action,
                 moveable,
                 &carriage_shape,
-                master_snapshot.as_ref().map(|(shape, _, _)| shape),
+                master_snapshot.as_ref().map(|(shape, _, _, _)| shape),
                 master_snapshot
                     .as_ref()
-                    .is_some_and(|(_, _, same_region)| *same_region),
+                    .is_some_and(|(_, _, same_region, _)| *same_region),
                 master_snapshot
                     .as_ref()
-                    .and_then(|(_, carriage_id, _)| *carriage_id)
+                    .and_then(|(_, carriage_id, _, _)| *carriage_id)
                     .is_some_and(|carriage_id| carriage_id != 0),
-                self.globe_setup.carriage_stop_distance() as i32,
+                master_snapshot.as_ref().map_or(0, |(shape, _, _, figure)| {
+                    distance_between_shape_geometry(
+                        carriage_shape.get_pos_x(), carriage_shape.get_pos_y(),
+                        CMonster::figure(&property),
+                        shape.get_pos_x(), shape.get_pos_y(), *figure,
+                    )
+                }),
+                self.globe_setup.carriage_stop_distance(),
             );
             match movement {
                 CarriageMovementPlan::None => {}
                 CarriageMovementPlan::Move { x, y } => {
-                    let origin = ShapeAreaCoordinates {
-                        x: carriage_shape.get_tile_x().unwrap_or_default(),
-                        y: carriage_shape.get_tile_y().unwrap_or_default(),
-                    };
-                    if let Some((direction, destination)) = find_slip_step(
-                        self,
-                        owner.base(),
-                        origin,
-                        ShapeAreaCoordinates { x, y },
-                        CMonster::figure(&property),
-                    ) && self.move_owned_monster_step(
-                        owner.base_mut(),
-                        monster_id,
-                        destination.x,
-                        destination.y,
-                        CMonster::figure(&property),
-                    ) && let Some(carriage) =
-                        owner.base_mut().find_monster_by_id_mut(monster_id)
-                    {
-                        carriage.block_carriage_schedule(
-                            now_ms,
-                            crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms(
-                                direction,
-                                speed,
-                                stop_frame,
-                            ),
-                        );
-                    }
+                    crate::gameserver::appserver::ai::monsterai::move_owned_monster_to(
+                        self, owner.base_mut(), monster_id, ShapeAreaCoordinates { x, y }, 0,
+                        || runtime.now_milliseconds(),
+                    );
                 }
                 CarriageMovementPlan::Stand => {
                     if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                        carriage.block_carriage_schedule(now_ms, 1_000);
+                        carriage.begin_active_ai_stand(1_000, runtime.now_milliseconds());
                     }
                 }
                 CarriageMovementPlan::Wait => {
@@ -39011,98 +38992,118 @@ impl CGame {
             }
         }
 
-        let master_close = master_snapshot.as_ref().is_some_and(|(master_shape, _, same_region)| {
-            *same_region &&
-            carriage_shape
-                .get_tile_x()
-                .ok()
-                .zip(carriage_shape.get_tile_y().ok())
-                .zip(
-                    master_shape
-                        .get_tile_x()
-                        .ok()
-                        .zip(master_shape.get_tile_y().ok()),
-                )
-                .is_some_and(|((cx, cy), (mx, my))| {
-                    real_distance(cx, cy, mx, my)
-                        <= self.globe_setup.carriage_stop_distance() as i32
-                })
-        });
-        let master_outcome = if vanish {
-            Default::default()
-        } else {
-            owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .expect("повозка остаётся у вынутого region owner-а")
-                .tick_carriage_master(CarriageMasterFacts {
-                    now_ms,
-                    disappear_time_ms: self.globe_setup.carriage_disappear_time_ms(),
-                    master_present,
-                    master_owns_other,
-                    master_close,
-                })
+        let carriage_shape = owner.base().find_monster_by_id(monster_id)
+            .expect("повозка остаётся у вынутого region owner-а")
+            .move_shape().shape().clone();
+        let master_close = master_snapshot.as_ref().is_some_and(
+            |(master_shape, _, same_region, figure)| {
+                *same_region && distance_between_shape_geometry(
+                    master_shape.get_pos_x(), master_shape.get_pos_y(), *figure,
+                    carriage_shape.get_pos_x(), carriage_shape.get_pos_y(),
+                    CMonster::figure(&property),
+                ) as u32 <= self.globe_setup.carriage_stop_distance()
+            },
+        );
+        let master_facts = CarriageMasterFacts {
+            disappear_time_ms: self.globe_setup.carriage_disappear_time_ms(),
+            master_present,
+            master_owns_other,
+            master_close,
         };
-        if !vanish && master_outcome.checked {
-            if master_outcome.rebound
-                && matches!(master_ref, Some(PetMasterRef::Player(_)))
-                && let Some(player) = self.find_player_mut(master.master_id)
-            {
-                player.bind_active_carriage(monster_id);
-                master_owns = true;
+        let master_outcome = owner
+            .base_mut()
+            .find_monster_by_id_mut(monster_id)
+            .expect("повозка остаётся у вынутого region owner-а")
+            .begin_carriage_master_check(
+                master_facts,
+                || runtime.now_milliseconds(),
+                || {
+                    if matches!(master_ref, Some(PetMasterRef::Player(_)))
+                        && let Some(player) = self.find_player_mut(master.master_id)
+                    {
+                        player.bind_active_carriage(monster_id);
+                    }
+                },
+            );
+        if master_outcome.checked {
+            if master_outcome.duplicate {
+                self.evanish_owned_carriage(owner.base_mut(), monster_id, property.index, 5);
             }
-            if let Some(reason) = master_outcome.vanish_reason {
-                vanish = true;
-                vanish_reason = Some(reason);
+            let timed_out = owner.base_mut().find_monster_by_id_mut(monster_id)
+                .expect("Evanish только помечает повозку, не удаляя owner")
+                .carriage_master_timed_out(master_facts, || runtime.now_milliseconds());
+            if timed_out {
+                self.evanish_owned_carriage(owner.base_mut(), monster_id, property.index, 4);
             }
-        }
-
-        if vanish {
-            if let Some(reason) = vanish_reason {
-                let _ = self.send_carriage_log_snapshot(
-                    master.master_id,
-                    property.index,
-                    region_id,
-                    carriage_shape.get_tile_x().unwrap_or_default(),
-                    carriage_shape.get_tile_y().unwrap_or_default(),
-                    reason,
-                );
-            }
-            if master_owns {
-                // `GS0007` находится только в timeout-ветке reason `4`;
-                // duplicate eviction `5` удаляет повозку без этого notice.
-                if vanish_reason == Some(4) {
-                    let _ = colored_player_notice_message(
-                        0xffff_ffff,
-                        0,
-                        self.get_string_by_id(b"GS0007"),
-                    )
-                    .send_to_player(self.net_server(), master.master_id);
-                }
-                if let Some(player) = self.find_player_mut(master.master_id) {
-                    player.clear_active_carriage(monster_id);
-                }
-            }
-            if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                carriage.stage_for_delete();
-            }
-            let mut vanished = CMessage::new(0x000b_f504);
-            vanished.add_long(MONSTER_TYPE);
-            vanished.add_long(monster_id);
-            vanished.add_long(0);
-            vanished
-                .base_mut()
-                .add(&carriage_shape.get_pos_x().to_bits().to_le_bytes());
-            vanished
-                .base_mut()
-                .add(&carriage_shape.get_pos_y().to_bits().to_le_bytes());
-            let _ = self.send_game_shape_around(owner.base(), &carriage_shape, None, &vanished);
         }
         if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
             carriage.set_base_attack_owned_tick(true);
         }
         self.restore_region_owner(owner);
         true
+    }
+
+    /// Хвост CCarriage::OnSchedule: notice до журнала, затем CMonster::Evanish.
+    /// Evanish не идемпотентен и не обнуляет active_carriage у игрока.
+    fn evanish_owned_carriage(
+        &mut self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        property_index: u32,
+        reason: i32,
+    ) {
+        let Some(carriage) = region.find_monster_by_id(monster_id) else {
+            return;
+        };
+        let shape = carriage.move_shape().shape().clone();
+        let master = carriage.master_info();
+        if reason == 4 && master.master_type == PLAYER_TYPE
+            && self.find_player(master.master_id)
+                .is_some_and(|player| player.active_carriage_id() == monster_id)
+        {
+            let _ = colored_player_notice_message(
+                0xffff_ffff, 0, self.get_string_by_id(b"GS0007"),
+            ).send_to_player(self.net_server(), master.master_id);
+        }
+        let _ = self.send_carriage_log_snapshot(
+            master.master_id, property_index, region.id,
+            shape.get_tile_x().unwrap_or_default(), shape.get_tile_y().unwrap_or_default(),
+            reason,
+        );
+        // NotifyMasterWhenPetDied (0x004E79E0) ищет хозяина в текущем регионе,
+        // а не глобальным GetPetMaster, и удаляет только пару из pet-вектора.
+        if master.master_id != 0 {
+            match master.master_type {
+                PLAYER_TYPE => {
+                    if let Some(player) = self.find_player_mut(master.master_id)
+                        .filter(|player| player.server_region_id() == Some(region.id))
+                    {
+                        player.remove_active_pet(MONSTER_TYPE, monster_id);
+                    }
+                }
+                MONSTER_TYPE => {
+                    if let Some(master) = region.find_monster_by_id_mut(master.master_id) {
+                        master.move_shape_mut().remove_pet(MONSTER_TYPE, monster_id);
+                    }
+                }
+                NPC_TYPE => {
+                    if let Some(master) = region.find_npc_by_id_mut(master.master_id) {
+                        master.move_shape_mut().remove_pet(MONSTER_TYPE, monster_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(carriage) = region.find_monster_by_id_mut(monster_id) {
+            carriage.stage_for_delete();
+        }
+        let mut vanished = CMessage::new(0x000b_f504);
+        vanished.add_long(MONSTER_TYPE);
+        vanished.add_long(monster_id);
+        vanished.add_long(0);
+        vanished.add_ulong(shape.get_pos_x().to_bits());
+        vanished.add_ulong(shape.get_pos_y().to_bits());
+        let _ = self.send_game_shape_around(region, &shape, None, &vanished);
     }
 
     /// Исполняет достигнутую начальную часть `CSummonedCreature::AI`: смерть и
@@ -39488,14 +39489,16 @@ impl CGame {
         monster_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
+        use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
+
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let tamed = owner
+        let pet_ai = owner
             .base()
             .find_monster_by_id(monster_id)
-            .is_some_and(CMonster::is_tamed);
-        if tamed {
+            .is_some_and(|monster| matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet)));
+        if pet_ai {
             self.restore_region_owner(owner);
             let searched = self.run_owned_pet_active_search(region_id, monster_id);
             let Some(mut owner) = self.take_region_owner(region_id) else {
@@ -45075,7 +45078,14 @@ impl CGame {
         now_ms: u32,
         runtime: &mut Runtime,
     ) -> bool {
+        use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
+
         let master = phalanx.master();
+        let attacker = ShapeIdentity {
+            object_type: master.master_type,
+            id: master.master_id,
+            ex_id: CGuid::GUID_INVALID,
+        };
         let Some(property) = self
             .find_region(region_id)
             .and_then(|owner| owner.base().find_monster_by_id(target_id))
@@ -45157,7 +45167,14 @@ impl CGame {
         self.restore_war_soul_defense_projection(master.master_id, restored_war_soul_scales);
         let damage = attack.hp_damage().min(target_health);
         let current_health = target_health - damage;
-        let lord_hurt_plan = (property.ai == 19
+        let (primary_ai, pet_ai) = self.find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(target_id))
+            .map(|monster| (
+                monster.active_primary_ai_type(),
+                matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet)),
+            ))
+            .unwrap_or((None, false));
+        let lord_hurt_plan = (primary_ai == Some(19)
             && attack.full_miss == 0
             && damage != 0
             && current_health != 0)
@@ -45190,40 +45207,34 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         monster.when_been_killed(now_ms);
-                    } else if property.ai == 1 {
+                    } else if pet_ai {
+                        monster.when_pet_been_hurted_by(attacker, now_ms);
+                    } else if primary_ai == Some(1) {
                         monster.when_passive_gladiator_hurted_by(
-                            ShapeIdentity {
-                                object_type: master.master_type,
-                                id: master.master_id,
-                                ex_id: CGuid::GUID_INVALID,
-                            },
+                            attacker,
                             now_ms,
                             false,
                         );
-                    } else if property.ai == 2 {
+                    } else if primary_ai == Some(2) {
                         // Владелец AI2 применит реакцию после освобождения
                         // изменяемого заимствования монстра.
-                    } else if property.ai == 13 {
+                    } else if primary_ai == Some(13) {
                         // Поиск AI13 выполняется после освобождения изменяемого
                         // заимствования монстра.
-                    } else if property.ai == 11 {
+                    } else if primary_ai == Some(11) {
                         // Поиск AI11 выполняется после освобождения изменяемого
                         // заимствования монстра.
-                    } else if property.ai == 20 {
+                    } else if primary_ai == Some(20) {
                         // AI20 разрешает владельца призыва и связывает
                         // близнеца после освобождения изменяемого заимствования.
-                    } else if property.ai == 19 {
+                    } else if primary_ai == Some(19) {
                         // AI19 применяет Defense, spatial-step и выбор цели
                         // после освобождения заимствования монстра.
-                    } else if matches!(property.ai, 8 | 17 | 100 | 101) {
+                    } else if matches!(primary_ai, Some(8 | 17 | 100 | 101)) {
                         monster.when_been_hurted(now_ms);
                     } else {
                         monster.when_been_hurted_by(
-                            ShapeIdentity {
-                                object_type: master.master_type,
-                                id: master.master_id,
-                                ex_id: CGuid::GUID_INVALID,
-                            },
+                            attacker,
                             false,
                             now_ms,
                         );
@@ -45248,7 +45259,7 @@ impl CGame {
             if attack.full_miss == 0
                 && damage != 0
                 && current_health != 0
-                && property.ai == 2
+                && primary_ai == Some(2)
             {
                 crate::gameserver::appserver::ai::smartgladiator::apply_player_hurt_response(
                     self,
@@ -45262,7 +45273,7 @@ impl CGame {
             if attack.full_miss == 0
                 && damage != 0
                 && current_health != 0
-                && property.ai == 11
+                && primary_ai == Some(11)
             {
                 crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt(
                     self,
@@ -45275,7 +45286,7 @@ impl CGame {
             if attack.full_miss == 0
                 && damage != 0
                 && current_health != 0
-                && property.ai == 13
+                && primary_ai == Some(13)
             {
                 crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt(
                     self,
@@ -45288,17 +45299,13 @@ impl CGame {
             if attack.full_miss == 0
                 && damage != 0
                 && current_health != 0
-                && property.ai == 20
+                && primary_ai == Some(20)
             {
                 let _ = retarget_jiumai_after_hurt(
                     self,
                     owner.base_mut(),
                     target_id,
-                    ShapeIdentity {
-                        object_type: master.master_type,
-                        id: master.master_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
+                    attacker,
                     runtime,
                 );
             }
@@ -45307,11 +45314,7 @@ impl CGame {
                     self,
                     owner.base_mut(),
                     target_id,
-                    ShapeIdentity {
-                        object_type: master.master_type,
-                        id: master.master_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
+                    attacker,
                     || runtime.now_milliseconds(),
                     plan,
                 );
@@ -45319,7 +45322,7 @@ impl CGame {
             if attack.full_miss == 0
                 && damage != 0
                 && current_health != 0
-                && matches!(property.ai, 8 | 17 | 100 | 101)
+                && matches!(primary_ai, Some(8 | 17 | 100 | 101))
             {
                 crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
                     self,
@@ -47185,9 +47188,6 @@ impl CGame {
                     },
                     || runtime.now_milliseconds(),
                 );
-                if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {
-                    continue;
-                }
                 if self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
@@ -47195,6 +47195,7 @@ impl CGame {
                 {
                     continue;
                 }
+                let carriage_run = self.run_owned_carriage_lifecycle(region_id, monster_id, runtime);
                 let (ai_type, tamed, pet_action) = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
@@ -47204,7 +47205,7 @@ impl CGame {
                         Some((property.ai, monster.is_tamed(), monster.pet_action()))
                     })
                     .unwrap_or((0, false, 0));
-                if ai_type == 20 && !tamed {
+                if !carriage_run && ai_type == 20 && !tamed {
                     if let Some(mut owner) = self.take_region_owner(region_id) {
                         let _ = crate::gameserver::appserver::ai::jiumai::maintain_jiumai_twin(
                             self, owner.base_mut(), monster_id, runtime);
@@ -47219,7 +47220,7 @@ impl CGame {
                             || (ai_type == 2 && !tamed
                                 && monster.smart_gladiator_ai().is_some_and(|state| state.has_queued_steps())))
                         && monster.base_attack_cast().is_none());
-                if schedule_attempted {
+                if !carriage_run && schedule_attempted {
                     if tamed && pet_action == 1 {
                         let _ = self.run_owned_pet_follow(region_id, monster_id, runtime);
                     } else if ai_type == 7 && !tamed {
@@ -47238,7 +47239,7 @@ impl CGame {
                         let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                     }
                 }
-                if tamed {
+                if !carriage_run && tamed {
                     let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
@@ -47388,6 +47389,10 @@ impl CGame {
                     if !schedule_ready {
                         continue;
                     }
+                }
+                if carriage_run {
+                    // CCarriage::OnIdle пуст, обычный monster OnIdle не вызывается.
+                    continue;
                 }
                 if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
                     continue;

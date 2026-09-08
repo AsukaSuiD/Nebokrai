@@ -182,17 +182,6 @@ pub(crate) fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
 /// Точный одноклеточный `Slip` общего `CBaseAI::MoveTo`: желаемое
 /// направление и семь обходных направлений проверяются в legacy-порядке
 /// против figure-specific move-check клеток региона.
-pub(crate) fn find_slip_step(
-    game: &CGame,
-    region: &CServerRegion,
-    origin: ShapeAreaCoordinates,
-    target: ShapeAreaCoordinates,
-    figure: crate::gameserver::appserver::shape::ShapeFigure,
-) -> Option<(i32, ShapeAreaCoordinates)> {
-    let desired_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
-    find_slip_step_in_direction(game, region, origin, desired_direction, figure)
-}
-
 fn find_slip_step_in_direction(
     game: &CGame,
     region: &CServerRegion,

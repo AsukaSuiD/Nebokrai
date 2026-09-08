@@ -7,6 +7,9 @@
 //! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
 //! Производные hurt-owner-ы вызываются после освобождения mutation-заимствования;
 //! в частности AI19 сохраняет поиск summon-формы и принимает monster-attacker-а.
+//! Выбор реакции проходит через текущий CMonster::GetAI (0x004E6D80), а не
+//! исходный property.ai: auxiliary CCarriage наследует обычный
+//! CMonsterAI::WhenBeenHurted (0x005DCE00), без отложенных реакций первичного ИИ.
 //! Общий хвост кругового/дугового удара и прямого снаряда завершает cast после
 //! обхода целей. По `gameserver.exe + GameServer.pdb`, `CSkill::End` (0x4d84c0)
 //! читает часы reuse после производного cleanup: время попадания из dispatch
@@ -20,6 +23,7 @@ use super::fightdefense::{
 };
 use super::knockoutstate::finish_blind_states_on_defense;
 use super::kernel::SkillStage;
+use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
 use crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt;
 use crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt;
 use crate::gameserver::appserver::ai::smartgladiator::apply_monster_hurt_response;
@@ -388,10 +392,17 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         return;
     }
     let current_health = target_health - damage;
+    let (target_primary_ai, target_pet_ai) = region.find_monster_by_id(target.id)
+        .filter(|_| target.object_type == MONSTER_TYPE)
+        .map(|monster| (
+            monster.active_primary_ai_type(),
+            matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet)),
+        ))
+        .unwrap_or((None, false));
     let lord_hurt_plan = target_monster_property
         .as_ref()
-        .filter(|property| {
-            property.ai == 19 && current_health != 0 && attack.full_miss == 0
+        .filter(|_| {
+            target_primary_ai == Some(19) && current_health != 0 && attack.full_miss == 0
         })
         .map(|property| plan_lord_hurt_response_in_region(game, region, target.id, property));
     let (attacker_is_tamed, passive_attacker_is_owned_creature) = region
@@ -460,51 +471,30 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 id: monster_id,
                 ex_id: CGuid::GUID_INVALID,
             };
-            if target_tamed {
+            if target_pet_ai {
                 monster.when_pet_been_hurted_by(attacker, now_ms);
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| property.ai == 2)
-            {
+            } else if target_primary_ai == Some(2) {
                 // Реакция AI2 требует разрешить отдельного владельца атакующего
                 // после освобождения изменяемого заимствования цели.
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| property.ai == 13)
-            {
+            } else if target_primary_ai == Some(13) {
                 // Поиск AI13 читает соседние категории после освобождения
                 // изменяемого заимствования цели.
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| property.ai == 11)
-            {
+            } else if target_primary_ai == Some(11) {
                 // Поиск AI11 читает владельца города и соседние категории
                 // после освобождения изменяемого заимствования цели.
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| property.ai == 20)
-            {
+            } else if target_primary_ai == Some(20) {
                 // AI20 разрешает атакующего и связывает близнеца после
                 // освобождения изменяемого заимствования цели.
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| property.ai == 19)
-            {
+            } else if target_primary_ai == Some(19) {
                 // AI19 применяет Defense, spatial-step и выбор цели после
                 // освобождения изменяемого заимствования монстра.
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| property.ai == 1)
-            {
+            } else if target_primary_ai == Some(1) {
                 monster.when_passive_gladiator_hurted_by(
                     attacker,
                     now_ms,
                     passive_attacker_is_owned_creature,
                 );
-            } else if target_monster_property
-                .as_ref()
-                .is_some_and(|property| matches!(property.ai, 8 | 17 | 100 | 101))
-            {
+            } else if matches!(target_primary_ai, Some(8 | 17 | 100 | 101)) {
                 monster.when_been_hurted(now_ms);
             } else {
                 monster.when_been_hurted_by(attacker, attacker_is_tamed, now_ms);
@@ -527,18 +517,14 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     if attack.full_miss == 0
         && current_health != 0
         && !target_tamed
-        && target_monster_property
-            .as_ref()
-            .is_some_and(|property| property.ai == 2)
+        && target_primary_ai == Some(2)
     {
         apply_monster_hurt_response(game, region, target.id, monster_id, now_ms);
     }
     if attack.full_miss == 0
         && current_health != 0
         && !target_tamed
-        && target_monster_property
-            .as_ref()
-            .is_some_and(|property| property.ai == 13)
+        && target_primary_ai == Some(13)
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_village_bow_guard_after_hurt(game, region, target.id, property, now_ms);
@@ -546,9 +532,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     if attack.full_miss == 0
         && current_health != 0
         && !target_tamed
-        && target_monster_property
-            .as_ref()
-            .is_some_and(|property| property.ai == 11)
+        && target_primary_ai == Some(11)
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_city_bow_guard_after_hurt(game, region, target.id, property, now_ms);
@@ -556,9 +540,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     if attack.full_miss == 0
         && current_health != 0
         && !target_tamed
-        && target_monster_property
-            .as_ref()
-            .is_some_and(|property| property.ai == 20)
+        && target_primary_ai == Some(20)
     {
         let _ = retarget_jiumai_after_hurt(
             game,
@@ -575,9 +557,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     if attack.full_miss == 0
         && current_health != 0
         && !target_tamed
-        && let (Some(property), Some(plan)) =
-            (target_monster_property.as_ref(), lord_hurt_plan)
-        && property.ai == 19
+        && let Some(plan) = lord_hurt_plan
     {
         let _ = apply_lord_hurt_response(
             game,
@@ -595,9 +575,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     if attack.full_miss == 0
         && current_health != 0
         && !target_tamed
-        && target_monster_property
-            .as_ref()
-            .is_some_and(|property| matches!(property.ai, 8 | 17 | 100 | 101))
+        && matches!(target_primary_ai, Some(8 | 17 | 100 | 101))
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_special_guard_after_hurt(game, region, target.id, property);

@@ -133,6 +133,16 @@
 //! `InitAI` и `GetAI` материализованы типизированным binding-ом из
 //! `ai/aifactory.rs`; `InitSkills` использует канонические `CSkillFactory` и
 //! `CMoveShape`.
+//! `CMonster::GetAI` (0x004E6D80) выбирает единственного текущего владельца:
+//! auxiliary CCarriage сохраняет собственный CBaseAI независимо от первичного.
+//! Если первичный тип тоже AI24, его action и master-таймеры также остаются
+//! независимыми от auxiliary; переключение GetAI не переносит их состояние.
+//! Очереди, цель и сон разрешаются одним селектором при постановке событий и
+//! их обработке. Повозка наследует `WhenBeenHurted` (0x005DCE00) с Defense и
+//! Stiffen и `WhenBeenKilled` (0x004C9460) с Died; события не остаются в
+//! неисполняемой FIFO первичного AI. Её `OnMoving` (0x0047B150) возвращает 1
+//! без SearchEnemy, а `OnBeenHurted` (0x004C8700) не наследует реакцию
+//! сохранённого CPassiveGladiator.
 //! GameSave игрока проверяет наличие auxiliary m_pCarriageAI напрямую
 //! (CPlayer::AddToByteArray, 0x00441291), не тип текущего GetAI.
 //! Auto-start очередь при первом AI-проходе исполняет
@@ -285,6 +295,8 @@ pub(crate) struct CMonster {
     pet_experience: u32,
     pet_behavior: PetBehaviorState,
     carriage_lifecycle: CarriageLifecycleState,
+    primary_carriage_lifecycle: CarriageLifecycleState,
+    auxiliary_carriage_ai: CBaseAI,
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
@@ -468,6 +480,8 @@ impl CMonster {
             pet_experience: 0,
             pet_behavior: PetBehaviorState::default(),
             carriage_lifecycle: CarriageLifecycleState::default(),
+            primary_carriage_lifecycle: CarriageLifecycleState::default(),
+            auxiliary_carriage_ai: CBaseAI::default(),
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
             killed_by: None,
@@ -691,6 +705,35 @@ impl CMonster {
         }
     }
 
+    pub(crate) const fn selected_base_ai(&self) -> &CBaseAI {
+        if matches!(self.active_ai(), Some(ActiveMonsterAi::Carriage)) {
+            &self.auxiliary_carriage_ai
+        } else {
+            &self.base_ai
+        }
+    }
+
+    /// Номер первичного owner-а допустим для virtual dispatch только пока
+    /// GetAI не выбрал отдельный pet/carriage-контроллер.
+    pub(crate) const fn active_primary_ai_type(&self) -> Option<u32> {
+        if matches!(self.active_ai(), Some(ActiveMonsterAi::Primary(_))) {
+            match self.ai_binding {
+                Some(binding) => Some(binding.ai_type()),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn selected_base_ai_mut(&mut self) -> &mut CBaseAI {
+        if matches!(self.active_ai(), Some(ActiveMonsterAi::Carriage)) {
+            &mut self.auxiliary_carriage_ai
+        } else {
+            &mut self.base_ai
+        }
+    }
+
     pub(crate) fn has_pet_ai(&self) -> bool {
         self.ai_binding.is_some_and(MonsterAiBinding::has_pet)
     }
@@ -720,26 +763,44 @@ impl CMonster {
     }
 
     pub(crate) const fn carriage_action(&self) -> i32 {
-        self.carriage_lifecycle.action()
+        self.selected_carriage_lifecycle().action()
     }
 
     pub(crate) const fn set_carriage_action(&mut self, action: i32) {
-        self.carriage_lifecycle.set_action(action);
+        self.selected_carriage_lifecycle_mut().set_action(action);
     }
 
-    pub(crate) fn advance_carriage_schedule(&mut self, now_ms: u32) -> bool {
-        self.carriage_lifecycle.advance_schedule(now_ms)
+    const fn selected_carriage_lifecycle(&self) -> &CarriageLifecycleState {
+        if matches!(self.active_ai(), Some(ActiveMonsterAi::Primary(MonsterAiKind::Carriage))) {
+            &self.primary_carriage_lifecycle
+        } else {
+            &self.carriage_lifecycle
+        }
     }
 
-    pub(crate) const fn block_carriage_schedule(&mut self, now_ms: u32, delay_ms: u32) {
-        self.carriage_lifecycle.block_schedule(now_ms, delay_ms);
+    const fn selected_carriage_lifecycle_mut(&mut self) -> &mut CarriageLifecycleState {
+        if matches!(self.active_ai(), Some(ActiveMonsterAi::Primary(MonsterAiKind::Carriage))) {
+            &mut self.primary_carriage_lifecycle
+        } else {
+            &mut self.carriage_lifecycle
+        }
     }
 
-    pub(crate) fn tick_carriage_master(
+    pub(crate) fn begin_carriage_master_check(
         &mut self,
         facts: CarriageMasterFacts,
+        now: impl FnMut() -> u32,
+        rebind: impl FnMut(),
     ) -> CarriageMasterOutcome {
-        self.carriage_lifecycle.tick_master(facts)
+        self.selected_carriage_lifecycle_mut().begin_master_check(facts, now, rebind)
+    }
+
+    pub(crate) fn carriage_master_timed_out(
+        &mut self,
+        facts: CarriageMasterFacts,
+        now: impl FnMut() -> u32,
+    ) -> bool {
+        self.selected_carriage_lifecycle_mut().master_timed_out(facts, now)
     }
 
     pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {
@@ -860,7 +921,7 @@ impl CMonster {
 
     pub(crate) fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_behavior.begin_target();
-        self.base_ai.set_object_target(target);
+        self.selected_base_ai_mut().set_object_target(target);
     }
 
     pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {
@@ -870,7 +931,7 @@ impl CMonster {
         {
             return false;
         }
-        self.base_ai.set_object_target(target);
+        self.selected_base_ai_mut().set_object_target(target);
         true
     }
 
@@ -963,16 +1024,16 @@ impl CMonster {
     pub(crate) fn refresh_war_guard(&mut self, maximum_hp: u32) {
         self.hit_points = maximum_hp;
         if self.ai_binding.is_some() {
-            self.base_ai.clear_guard_refresh_state();
+            self.selected_base_ai_mut().clear_guard_refresh_state();
         }
     }
 
     pub(crate) fn hibernate_ai(&mut self, now_ms: u32) {
-        self.base_ai.hibernate(now_ms);
+        self.selected_base_ai_mut().hibernate(now_ms);
     }
 
     pub(crate) const fn is_ai_hibernated(&self) -> bool {
-        self.base_ai.is_hibernated()
+        self.selected_base_ai().is_hibernated()
     }
 
     /// `CMonsterAI::WakeUp` сначала завершает сон, затем восстанавливает
@@ -984,7 +1045,7 @@ impl CMonster {
         resume_timer_ms: u32,
         property: &MonsterProperties,
     ) -> bool {
-        let dormancy_interval_ms = self.base_ai.wake_up(now_ms);
+        let dormancy_interval_ms = self.selected_base_ai_mut().wake_up(now_ms);
         let maximum_hp = self.maximum_hp(property);
         let publish_states = self.hit_points != maximum_hp;
         if publish_states {
@@ -1003,8 +1064,8 @@ impl CMonster {
             }
         }
         if matches!(
-            self.ai_binding.map(MonsterAiBinding::primary),
-            Some(MonsterAiKind::BossBlue)
+            self.active_ai(),
+            Some(ActiveMonsterAi::Primary(MonsterAiKind::BossBlue))
         ) {
             self.boss_blue_ai.wake(self.hit_points, maximum_hp);
         }
@@ -1023,6 +1084,9 @@ impl CMonster {
         let binding = MonsterAiBinding::create(property, self.tame_attempt_count);
         let primary = binding.primary();
         self.ai_binding = Some(binding);
+        self.carriage_lifecycle = CarriageLifecycleState::default();
+        self.primary_carriage_lifecycle = CarriageLifecycleState::default();
+        self.auxiliary_carriage_ai = CBaseAI::default();
         self.boss_fiend_ai =
             matches!(primary, MonsterAiKind::BossFiend).then(|| BossFiendAiState::new(now_ms));
         self.passive_gladiator_ai =
@@ -1361,18 +1425,18 @@ impl CMonster {
     ) {
         self.when_been_hurted(now_ms);
         if accepts_hurt_target(self.ai_target(), attacker, attacker_is_tamed) {
-            self.base_ai.set_object_target(attacker);
+            self.selected_base_ai_mut().set_object_target(attacker);
         }
     }
 
     /// Общая часть `CBaseAI::WhenBeenHurted` без политики выбора цели
     /// конкретного производного ИИ.
     pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {
-        self.base_ai.when_been_hurted(now_ms);
+        self.selected_base_ai_mut().when_been_hurted(now_ms);
     }
 
     pub(crate) fn when_been_stiffened(&mut self, delay_ms: u32, now_ms: u32) {
-        self.base_ai.when_been_stiffened(delay_ms, now_ms);
+        self.selected_base_ai_mut().when_been_stiffened(delay_ms, now_ms);
     }
 
     pub(crate) fn when_passive_gladiator_hurted_by(
@@ -1387,27 +1451,29 @@ impl CMonster {
             state.on_hurt(attacker, already_fighting, attacker_is_owned_creature)
         });
         if let Some(selected) = selected {
-            self.base_ai.set_object_target(selected);
+            self.selected_base_ai_mut().set_object_target(selected);
         }
     }
 
     pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
-        self.base_ai.when_been_hurted(now_ms);
+        self.selected_base_ai_mut().when_been_hurted(now_ms);
         if self.pet_behavior.on_hurt(self.ai_target(), attacker) {
-            self.base_ai.set_object_target(attacker);
+            self.selected_base_ai_mut().set_object_target(attacker);
         }
     }
 
     pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
-        self.base_ai.when_been_killed(now_ms);
+        self.selected_base_ai_mut().when_been_killed(now_ms);
     }
 
     pub(crate) fn process_reached_defense_actions(
         &mut self,
         mut now_ms: impl FnMut() -> u32,
     ) -> usize {
-        let passive_gladiator = !self.is_tamed() && self.passive_gladiator_ai.is_some();
-        self.base_ai.process_reached_defense_actions(|ai| {
+        let passive_gladiator = matches!(
+            self.active_ai(), Some(ActiveMonsterAi::Primary(MonsterAiKind::PassiveGladiator))
+        ) && self.passive_gladiator_ai.is_some();
+        self.selected_base_ai_mut().process_reached_defense_actions(|ai| {
             if passive_gladiator {
                 ai.begin_active_search_enemy(now_ms());
             }
@@ -1415,16 +1481,16 @@ impl CMonster {
     }
 
     pub(crate) fn begin_reached_stiffen_action(&mut self) -> PassiveStiffenAction {
-        self.base_ai.begin_reached_stiffen_action()
+        self.selected_base_ai_mut().begin_reached_stiffen_action()
     }
 
     /// Очистка concrete End до доставки эффекта; Attack пока остаётся в FIFO.
     pub(crate) fn prepare_stiffen_attack(&mut self) -> Option<(bool, Option<u32>)> {
-        if !self.base_ai.stiffen_attack_pending() {
+        if !self.selected_base_ai().stiffen_attack_pending() {
             return None;
         }
         let current_skill = self.move_shape.current_skill().map(|skill| skill.id());
-        let release_target = self.base_ai.stiffen_attack_needs_end()
+        let release_target = self.selected_base_ai().stiffen_attack_needs_end()
             && current_skill.is_some();
         let mut ended_skill = None;
         if release_target {
@@ -1468,7 +1534,7 @@ impl CMonster {
                 self.skill_last_used_ms.insert(skill_id, now());
             }
         }
-        self.base_ai.finish_stiffen_attack(false);
+        self.selected_base_ai_mut().finish_stiffen_attack(false);
     }
 
     pub(crate) fn resume_stiffen_after_target_release(&mut self, released: bool) {
@@ -1476,7 +1542,7 @@ impl CMonster {
             let default_skill = self.move_shape.default_attack_skill_id();
             self.move_shape.set_current_skill_id(Some(default_skill));
         }
-        self.base_ai.discard_active_prefix();
+        self.selected_base_ai_mut().discard_active_prefix();
     }
 
     pub(crate) fn finish_reached_stiffen_action(
@@ -1484,59 +1550,64 @@ impl CMonster {
         action: PassiveStiffenAction,
         now: impl FnOnce() -> u32,
     ) -> PassiveStiffenAction {
-        self.base_ai.finish_reached_stiffen_action(action, now)
+        self.selected_base_ai_mut().finish_reached_stiffen_action(action, now)
     }
 
     pub(crate) fn begin_reached_death_action(&mut self) -> bool {
-        self.base_ai.begin_reached_death_action()
+        self.selected_base_ai_mut().begin_reached_death_action()
     }
 
     /// Общий `CMonsterAI::OnLoseTarget` смерти очищает только target-поля и
     /// не отменяет сохранённый `ASA_MOVE`; расширенный `clear_ai_target`
     /// намеренно остаётся для обычных schedule/interruption путей.
     pub(crate) fn release_ai_target_for_death(&mut self) {
-        self.base_ai.lose_target();
+        self.selected_base_ai_mut().lose_target();
     }
 
     pub(crate) fn release_pet_ai_target(&mut self) {
-        self.base_ai.lose_target();
+        self.selected_base_ai_mut().lose_target();
         self.pet_behavior.target_cleared(true);
     }
 
     pub(crate) fn reached_death_action_state(&self) -> PassiveDeathAction {
-        self.base_ai.reached_death_action_state()
+        self.selected_base_ai().reached_death_action_state()
     }
 
     pub(crate) fn finish_reached_death_action(&mut self, now_ms: u32) {
-        self.base_ai.finish_reached_death_action(now_ms);
+        self.selected_base_ai_mut().finish_reached_death_action(now_ms);
     }
 
     pub(crate) fn advance_active_ai_stand(&mut self, now: impl FnOnce() -> u32) -> bool {
-        self.base_ai.advance_active_stand(now)
+        self.selected_base_ai_mut().advance_active_stand(now)
     }
 
     pub(crate) fn advance_handled_active_ai_action(&mut self, now: impl FnOnce() -> u32) -> Option<AiPhaseState> {
-        self.base_ai.advance_handled_active_action(now)
+        self.selected_base_ai_mut().advance_handled_active_action(now)
     }
 
     pub(crate) fn advance_handled_passive_ai_action(&mut self, now: impl FnOnce() -> u32) -> Option<bool> {
-        self.base_ai.advance_handled_passive_action(now)
+        self.selected_base_ai_mut().advance_handled_passive_action(now)
     }
 
     pub(crate) fn active_ai_change_skill_pending(&self) -> bool {
-        self.base_ai.active_change_skill_pending()
+        self.selected_base_ai().active_change_skill_pending()
     }
 
     pub(crate) fn active_ai_search_enemy_pending(&self) -> bool {
-        self.base_ai.active_search_enemy_pending()
+        self.selected_base_ai().active_search_enemy_pending()
     }
 
     pub(crate) fn active_ai_attack_pending(&self) -> bool {
-        self.base_ai.active_attack_pending()
+        self.selected_base_ai().active_attack_pending()
     }
 
     pub(crate) fn queue_search_after_active_move(&mut self, ai_type: u32, now: impl FnOnce() -> u32) {
-        if !self.base_ai.active_move_unhandled() {
+        if matches!(self.active_ai(), Some(ActiveMonsterAi::Carriage
+            | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)))
+        {
+            return;
+        }
+        if !self.selected_base_ai().active_move_unhandled() {
             return;
         }
         let alive = !CMoveShape::is_died(self.hit_points);
@@ -1561,29 +1632,29 @@ impl CMonster {
                 || passive_gladiator_search
         };
         if search {
-            self.base_ai.begin_active_search_enemy(now());
+            self.selected_base_ai_mut().begin_active_search_enemy(now());
         }
     }
 
     pub(crate) fn begin_active_ai_move(&mut self, delay_ms: u32, now_ms: u32) {
-        self.base_ai.begin_active_move(delay_ms, now_ms);
+        self.selected_base_ai_mut().begin_active_move(delay_ms, now_ms);
     }
 
     pub(crate) fn begin_active_ai_stand(&mut self, delay_ms: u32, now_ms: u32) {
-        self.base_ai.begin_active_stand(delay_ms, now_ms);
+        self.selected_base_ai_mut().begin_active_stand(delay_ms, now_ms);
     }
 
     pub(crate) fn begin_active_ai_search_enemy(&mut self, now_ms: u32) {
-        self.base_ai.begin_active_search_enemy(now_ms);
+        self.selected_base_ai_mut().begin_active_search_enemy(now_ms);
     }
 
     pub(crate) fn begin_active_ai_change_skill(&mut self, now_ms: u32) {
-        self.base_ai
+        self.selected_base_ai_mut()
             .add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now_ms);
     }
 
     pub(crate) fn advance_active_ai_move(&mut self, now: impl FnOnce() -> u32) -> bool {
-        self.base_ai.advance_active_move(now)
+        self.selected_base_ai_mut().advance_active_move(now)
     }
 
     pub(crate) fn active_ai_attack_ended(&self) -> bool {
@@ -1628,42 +1699,38 @@ impl CMonster {
             self.base_attack_cast = None;
             self.attack_progress = MonsterAttackProgress::default();
         }
-        let completion_ai_type = if self.is_tamed() {
-            0
-        } else {
-            self.ai_binding.map_or(0, MonsterAiBinding::ai_type)
-        };
+        let completion_ai_type = self.active_primary_ai_type().unwrap_or(0);
         for &action in crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_actions(
             completion_ai_type, !CMoveShape::is_died(self.hit_points), skill_ended,
         ) {
-            self.base_ai.add_ai_event(action, 0, 0, now());
+            self.selected_base_ai_mut().add_ai_event(action, 0, 0, now());
         }
-        self.base_ai.finish_active_attack(now());
+        self.selected_base_ai_mut().finish_active_attack(now());
         true
     }
 
     pub(crate) fn finish_active_ai_change_skill(&mut self, now_ms: u32) {
-        self.base_ai.finish_active_change_skill(now_ms);
+        self.selected_base_ai_mut().finish_active_change_skill(now_ms);
     }
 
     pub(crate) fn finish_active_ai_search_enemy(&mut self, now_ms: u32) {
-        self.base_ai.finish_active_search_enemy(now_ms);
+        self.selected_base_ai_mut().finish_active_search_enemy(now_ms);
     }
 
     pub(crate) fn primary_ai_queues_idle(&self) -> bool {
-        self.base_ai.primary_queues_idle()
+        self.selected_base_ai().primary_queues_idle()
     }
 
     pub(crate) const fn ai_target(&self) -> Option<ShapeIdentity> {
-        if !self.base_ai.has_object_target() {
+        if !self.selected_base_ai().has_object_target() {
             return None;
         }
-        self.base_ai.object_target()
+        self.selected_base_ai().object_target()
     }
 
     pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
         self.pet_behavior.begin_ai_target(self.is_tamed());
-        self.base_ai.set_object_target(target);
+        self.selected_base_ai_mut().set_object_target(target);
     }
 
     pub(crate) const fn base_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
@@ -1693,7 +1760,7 @@ impl CMonster {
         if skill_id == SPIDER_MIST_SKILL_ID {
             self.move_shape.register_curable_skill_state(skill_id);
         }
-        self.base_ai
+        self.selected_base_ai_mut()
             .add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);
     }
 
@@ -1891,15 +1958,15 @@ impl CMonster {
     }
 
     pub(crate) fn clear_ai_target(&mut self) {
-        self.base_ai.lose_target();
+        self.selected_base_ai_mut().lose_target();
         self.cancel_base_attack_cast();
-        self.base_ai.cancel_active_move();
+        self.selected_base_ai_mut().cancel_active_move();
         self.pet_behavior.target_cleared(self.is_tamed());
     }
 
     pub(crate) fn lose_ai_target_and_search(&mut self, now_ms: u32) {
         self.clear_ai_target();
-        self.base_ai.begin_active_search_enemy(now_ms);
+        self.selected_base_ai_mut().begin_active_search_enemy(now_ms);
     }
 
     pub(crate) fn cancel_base_attack_cast(&mut self) {

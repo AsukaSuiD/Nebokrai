@@ -2923,6 +2923,10 @@ impl CServerRegion {
         self.owned_npcs.get(&id)
     }
 
+    pub(crate) fn find_npc_by_id_mut(&mut self, id: i32) -> Option<&mut CNpc> {
+        self.owned_npcs.get_mut(&id)
+    }
+
     /// Возвращает первый matching NPC текущего owned traversal. Повторный
     /// вызов после удаления продолжает очистку со следующего совпадения, как
     /// исходный четырёхкратный lookup в `FourNationWarSys::ClearRegion`.
