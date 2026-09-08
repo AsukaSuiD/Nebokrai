@@ -10,7 +10,14 @@
 //! воспроизводит C++-иерархию и ручное владение указателями: тот же выбор
 //! хранится как типизированное состояние внутри единственного `CMonster`.
 //! `SetOwner` тем самым выражен принадлежностью binding-а монстру, а повторный
-//! `InitAI` атомарно заменяет прежнее состояние.
+//! `InitAI` заменяет все три прежних экземпляра; один лишь новый binding
+//! недостаточен. CMonster::InitAI (0x004E6E10) проверяет property до delete,
+//! затем создаёт primary, pet и carriage в этом порядке. Без property он
+//! сохраняет старые экземпляры; Rust принимает уже разрешённый &property.
+//! SetOwner (0x004C7C90) вызывает Clear до записи owner, но fresh constructor
+//! обнуляет также WarSoul и dormancy timestamps, которые Clear сохраняет.
+//! Донор Luvinia имеет только один m_pAI и обычный factory-type Pet; эта
+//! техническая форма не подменяет три независимых владельца Miracle.
 //!
 //! Два `Catch@...` из EXE относятся только к сгенерированной MSVC очистке
 //! временного `std::vector<CGUID>` и не являются семантикой фабрики.
@@ -104,6 +111,18 @@ pub(crate) enum ActiveMonsterAi {
     Primary(MonsterAiKind),
     Pet,
     Carriage,
+}
+
+impl ActiveMonsterAi {
+    /// Три самостоятельных экземпляра CBaseAI из CMonster::InitAI.
+    /// Тип первичного AI меняет виртуальные методы, но не его слот хранения.
+    pub(crate) const fn storage_index(self) -> usize {
+        match self {
+            Self::Primary(_) => 0,
+            Self::Pet => 1,
+            Self::Carriage => 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

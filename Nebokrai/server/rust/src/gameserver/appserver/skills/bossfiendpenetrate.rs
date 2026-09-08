@@ -893,7 +893,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.boss_fiend_penetrate_progress().cloned(),
                 monster.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID),
             ))

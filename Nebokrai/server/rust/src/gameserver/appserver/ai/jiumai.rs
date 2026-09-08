@@ -143,7 +143,7 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     let Some((twins_id, owner, target)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            if monster.is_tamed() || CMoveShape::is_died(monster.hit_points())
+            if monster.active_primary_ai_type() != Some(20) || CMoveShape::is_died(monster.hit_points())
                 || !monster.primary_ai_queues_idle()
             {
                 return None;

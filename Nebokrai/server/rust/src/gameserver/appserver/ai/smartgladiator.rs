@@ -68,7 +68,7 @@ pub(crate) fn execute_smart_gladiator_retreat<Runtime: GameMainLoopRuntime>(
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            if property.ai != 2 || monster.is_tamed() || monster.ai_target().is_some()
+            if property.ai != 2 || monster.active_primary_ai_type() != Some(2) || monster.ai_target().is_some()
                 || !monster.primary_ai_queues_idle()
             {
                 return None;

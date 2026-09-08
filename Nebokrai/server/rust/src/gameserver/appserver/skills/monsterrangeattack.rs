@@ -371,7 +371,7 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-                monster.base_attack_cast()?,
+                monster.current_active_attack_cast()?,
                 monster.master_info(),
                 monster.is_tamed(),
             ))

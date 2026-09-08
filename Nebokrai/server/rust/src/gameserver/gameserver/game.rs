@@ -666,6 +666,7 @@ macro_rules! player_property_recompute {
     }};
 }
 
+use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
 use crate::gameserver::appserver::ai::playerai::{
     CPlayerAI, PlayerAutoProgress,
 };
@@ -19586,7 +19587,7 @@ impl CGame {
         let membership_tick_ms = context.now_milliseconds();
         let membership = self.with_legacy_random_stream(|game, random| {
             owner.base_mut().add_object_with_area_entry(
-                player.move_shape_mut(),
+                &mut player,
                 facts,
                 area_width,
                 area_height,
@@ -30666,7 +30667,7 @@ impl CGame {
         let membership_tick_ms = context.now_milliseconds();
         let membership = self.with_legacy_random_stream(|game, random| {
             owner.base_mut().add_object_with_area_entry(
-                player.move_shape_mut(),
+                &mut player,
                 facts,
                 area_width,
                 area_height,
@@ -38669,7 +38670,7 @@ impl CGame {
             .base()
             .find_monster_by_id(monster_id)
             .and_then(|monster| {
-                if !monster.is_tamed() {
+                if !matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet)) {
                     return None;
                 }
                 let property =
@@ -40685,14 +40686,16 @@ impl CGame {
     /// SKILL_UNKNOW, затем каждый ID разрешается заново. End не удаляет
     /// запись немедленно; дубликат ID уже видит завершённый экземпляр.
     /// Автонавыки AddObject и подготовленные боевые исполнения используют
-    /// то же хранилище и тот же порядок. Begin в этом обходе не повторяется.
+    /// одно хранилище CBaseAI и тот же порядок. Begin в этом обходе не повторяется.
+    /// Извлечённый CPlayerAI возвращается после каждого skill-callback:
+    /// следующий индекс читается из того же владельца, не из временной формы.
     fn execute_player_back_stage_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
     ) -> usize {
         if let Some(player) = self.find_player_mut(player_id) {
-            player.move_shape_mut().prepare_back_stage_skill_pass();
+            player.player_ai_mut().base_ai_mut().prepare_back_stage_skill_pass();
         }
         let mut index = 0;
         let mut execution_count = 0;
@@ -40705,7 +40708,7 @@ impl CGame {
                 .and_then(|player| player.player_ai().battle_fairy_execution(skill_id));
             if execution.is_none() && fairy_execution.is_none() {
                 if let Some(player) = self.find_player_mut(player_id) {
-                    player.move_shape_mut().mark_ended_back_stage_skill(index, skill_id);
+                    player.player_ai_mut().base_ai_mut().mark_ended_back_stage_skill(index, skill_id);
                 }
                 index += 1;
                 continue;
@@ -40765,7 +40768,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> usize {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().prepare_back_stage_skill_pass();
+            monster.prepare_back_stage_skill_pass();
         }
         let mut index = 0;
         let mut execution_count = 0;
@@ -40773,16 +40776,16 @@ impl CGame {
             let Some((skill_id, skill_level, ended)) = region.find_monster_by_id(monster_id)
                 .and_then(|monster| {
                     let shape = monster.move_shape();
-                    let skill_id = shape.back_stage_skill_id(index)?;
+                    let skill_id = monster.back_stage_skill_id(index)?;
                     Some((skill_id, shape.skill_level(skill_id),
-                        shape.immediate_back_stage_skill_ended(index) || shape.skill(skill_id).is_none()))
+                        shape.immediate_skill_ended(skill_id) || shape.skill(skill_id).is_none()))
                 })
             else {
                 break;
             };
             if ended {
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().mark_ended_back_stage_skill(index, skill_id);
+                    monster.mark_ended_back_stage_skill(index, skill_id);
                 }
                 index += 1;
                 continue;
@@ -41289,11 +41292,6 @@ impl CGame {
         // OnSchedule видит ещё занятый Attack. Его снятие в active-фазе
         // не разрешает извлечь следующий запрос в оставшейся части Run.
         if player_ai.finish_battle_fairy_attack(
-            |skill_id| {
-                if let Some(player) = self.find_player_mut(player_id) {
-                    player.move_shape_mut().add_started_back_stage_skill(skill_id);
-                }
-            },
             runtime.now_milliseconds(),
         ) {
             return 1;
@@ -46895,11 +46893,6 @@ impl CGame {
                                 && !change_skill_handled
                                 && player_ai.finish_player_attack(
                                     self.find_player(player_id).and_then(CPlayer::current_skill_id),
-                                    |skill_id| {
-                                        if let Some(player) = self.find_player_mut(player_id) {
-                                            player.move_shape_mut().add_started_back_stage_skill(skill_id);
-                                        }
-                                    },
                                     || runtime.now_milliseconds(),
                                 );
                             let active_action_handled = handled_active_action
@@ -47188,24 +47181,32 @@ impl CGame {
                     },
                     || runtime.now_milliseconds(),
                 );
+                // CMoveShape::AI после states вызывает только ненулевой GetAI;
+                // tamed sign не участвует ни в этом gate, ни в выборе CPet.
                 if self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
-                    .is_some_and(CMonster::is_ai_hibernated)
+                    .is_none_or(|monster| {
+                        monster.active_ai().is_none() || monster.is_ai_hibernated()
+                    })
                 {
                     continue;
                 }
                 let carriage_run = self.run_owned_carriage_lifecycle(region_id, monster_id, runtime);
-                let (ai_type, tamed, pet_action) = self
+                let (ai_type, pet_ai, pet_action) = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .and_then(|monster| {
                         let property = self
                             .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-                        Some((property.ai, monster.is_tamed(), monster.pet_action()))
+                        Some((
+                            property.ai,
+                            matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet)),
+                            monster.pet_action(),
+                        ))
                     })
                     .unwrap_or((0, false, 0));
-                if !carriage_run && ai_type == 20 && !tamed {
+                if !carriage_run && ai_type == 20 && !pet_ai {
                     if let Some(mut owner) = self.take_region_owner(region_id) {
                         let _ = crate::gameserver::appserver::ai::jiumai::maintain_jiumai_twin(
                             self, owner.base_mut(), monster_id, runtime);
@@ -47216,16 +47217,15 @@ impl CGame {
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .is_some_and(|monster| monster.primary_ai_queues_idle()
                         && (monster.ai_target().is_some()
-                            || (tamed && pet_action == 1)
-                            || (ai_type == 2 && !tamed
-                                && monster.smart_gladiator_ai().is_some_and(|state| state.has_queued_steps())))
-                        && monster.base_attack_cast().is_none());
+                            || (pet_ai && pet_action == 1)
+                            || (ai_type == 2 && !pet_ai
+                                && monster.smart_gladiator_ai().is_some_and(|state| state.has_queued_steps()))));
                 if !carriage_run && schedule_attempted {
-                    if tamed && pet_action == 1 {
+                    if pet_ai && pet_action == 1 {
                         let _ = self.run_owned_pet_follow(region_id, monster_id, runtime);
-                    } else if ai_type == 7 && !tamed {
+                    } else if ai_type == 7 && !pet_ai {
                         let _ = self.run_owned_puniness_creature(region_id, monster_id, runtime);
-                    } else if ai_type == 2 && !tamed
+                    } else if ai_type == 2 && !pet_ai
                         && self.find_region(region_id)
                             .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                             .is_some_and(|monster| monster.ai_target().is_none())
@@ -47239,7 +47239,7 @@ impl CGame {
                         let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                     }
                 }
-                if !carriage_run && tamed {
+                if pet_ai {
                     let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
@@ -47394,13 +47394,12 @@ impl CGame {
                     // CCarriage::OnIdle пуст, обычный monster OnIdle не вызывается.
                     continue;
                 }
-                if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
+                if !pet_ai && self.run_owned_puniness_creature(region_id, monster_id, runtime) {
                     continue;
                 }
                 if self.find_region(region_id)
                         .and_then(|owner| owner.base().find_monster_by_id(monster_id))
-                        .is_some_and(|monster| monster.ai_target().is_none()
-                            && monster.base_attack_cast().is_none())
+                        .is_some_and(|monster| monster.ai_target().is_none())
                 {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }

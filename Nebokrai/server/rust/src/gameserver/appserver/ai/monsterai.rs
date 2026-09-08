@@ -36,6 +36,8 @@
 //! CPet::OnStayingSchedule (0x004E9650) не вызывает Tracing: его диапазон
 //! проверяет общий dispatcher перед Begin. Поэтому помощник преследования
 //! в Stay ничего не делает и не добавляет проверку прямого пути вместо Begin.
+//! Ветвь CPet в Tracing и наличии OnSearchEnemy выбирает текущий GetAI,
+//! а не tamed sign; пустой GetAI не начинает новый шаг преследования.
 //! Та же форма без Tracing у стационарного OnSchedule 0x0060B890:
 //! общий признак владельца задаёт диапазон перед Begin, отсутствие движения
 //! и дополнительного таймера; CheckCast конкретного навыка остаётся отдельным.
@@ -377,8 +379,8 @@ pub(crate) const fn hibernates_without_nearby_players(
         || (ai_type == 2 && smart_gladiator_ready_to_idle)
 }
 
-pub(crate) const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
-    tamed
+pub(crate) const fn has_owned_search_enemy(ai_type: u32, pet_ai: bool) -> bool {
+    pet_ai
         || MonsterAiKind::is_generic_ai_type(ai_type)
         || matches!(
             ai_type,
@@ -473,7 +475,7 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
         monster_view,
         monster_x,
         monster_y,
-        tamed,
+        pet_ai,
         pet_action,
         moveable,
     )) = region.find_monster_by_id(monster_id).and_then(|monster| {
@@ -486,7 +488,7 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
             monster_view,
             monster.move_shape().shape().get_tile_x().ok()?,
             monster.move_shape().shape().get_tile_y().ok()?,
-            monster.is_tamed(),
+            matches!(monster.active_ai()?, ActiveMonsterAi::Pet),
             monster.pet_action(),
             monster.move_shape().is_moveable(),
         ))
@@ -494,7 +496,7 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
         return false;
     };
 
-    if (tamed && pet_action == 2) || (!tamed && uses_stationary_attack_schedule(property.ai)) {
+    if (pet_ai && pet_action == 2) || (!pet_ai && uses_stationary_attack_schedule(property.ai)) {
         return true;
     }
     let target_coordinates = target.coordinates();
@@ -510,14 +512,14 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
     if (maximum_distance == 0 || distance <= maximum_distance as i32) && !path_blocked {
         return true;
     }
-    let chase_range = if tamed {
+    let chase_range = if pet_ai {
         game.globe_setup().maximum_pet_tracing_distance()
     } else {
         property.chase_range
     };
     if distance > chase_range as i32 {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            if has_owned_search_enemy(property.ai, tamed) {
+            if has_owned_search_enemy(property.ai, pet_ai) {
                 monster.lose_ai_target_and_search(runtime.now_milliseconds());
             } else {
                 monster.clear_ai_target();

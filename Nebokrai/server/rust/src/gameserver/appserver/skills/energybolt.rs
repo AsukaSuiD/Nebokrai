@@ -921,7 +921,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 attack_interval_ms,
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.path_projectile_progress().cloned(),
                 monster.skill_last_used_ms(spec.skill_id),
             ))

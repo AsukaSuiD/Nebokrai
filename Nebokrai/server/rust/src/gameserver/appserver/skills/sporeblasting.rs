@@ -92,7 +92,7 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 attack_interval_ms,
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.skill_last_used_ms(SPORE_BLASTING_SKILL_ID),
             ))
         })

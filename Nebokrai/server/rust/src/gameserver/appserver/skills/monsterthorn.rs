@@ -120,7 +120,7 @@ fn begin_monster_ai(
     destination: (i32, i32),
 ) -> bool {
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return false };
-    if !monster.base_attack_cast().is_some_and(|cast| cast.stage() == SkillStage::Begin) {
+    if !monster.current_active_attack_cast().is_some_and(|cast| cast.stage() == SkillStage::Begin) {
         return true;
     }
     let (Ok(x), Ok(y)) = (
@@ -195,7 +195,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
             monster
                 .is_tamed()
                 .then(|| monster.pet_attack_properties(&property)),
-            monster.base_attack_cast(),
+            monster.current_active_attack_cast(),
             monster.skill_last_used_ms(MONSTER_THORN_SKILL_ID),
         ))
     }) else {

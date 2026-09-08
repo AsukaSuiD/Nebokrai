@@ -70,20 +70,28 @@
 //! предоставляет достигнутый `CStateFactory`, а применение состояний остаётся
 //! у этого владельца.
 //!
-//! Реализованные `AddSkill`, `DelSkill`, `ClearSkills`, auto-start background-
-//! очередь, `AddState`, `GetStatesNum` и `UpdateAbnormality` используют это же
-//! хранилище. Фоновая очередь игрока сохраняет порядок и повторные ID:
-//! старые SKILL_UNKNOW удаляются перед обходом, новые пометки — только
-//! на следующем проходе (CPlayerAI::OnExecuteBackStageSkills, 0x004C88E0).
-//! Признак ожидающего Begin принадлежит записи: добавление подготовленного
-//! навыка не переставляет очередь и не повторяет Begin. Частичное извлечение
-//! ID монстра сохраняет порядок и признаки остальных записей. Ещё не восстановленные
-//! классы навыков и ИИ остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
+//! `AddSkill`, `DelSkill`, `ClearSkills` сохраняют общий реестр навыков.
+//! AutoStartPassiveSkill (0x004CDBB0) обходит state-категорию в порядке
+//! вставки, получает concrete GetAI и только при его наличии вызывает
+//! Begin(self, self), затем WhenAddBackStageSkill этого же AI. Сам background-
+//! список принадлежит CBaseAI. Удаление навыка не очищает списки других
+//! владельцев: очередной OnExecute помечает отсутствующий ID как UNKNOWN.
+//! Реестр экземпляров ещё неполон: native AddSkill (0x004D1C70) допускает
+//! повторный ID, когда уровень первого найденного экземпляра равен нулю.
+//! Категорию вставки задаёт concrete constructor; GetSkill/DelSkill выбирают
+//! её отдельно через актуальный QuerySkillType(ID, 1). Уникальная Rust-map
+//! пока не выражает это расхождение и сохраняет insertion-order только state.
+//! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
+//! attack → defense → summon → state, не очищая AI target/FIFO/background.
+//! Полный registered-skill End ещё не подключён; завершение одного текущего
+//! cast не заменяет этот контракт, в том числе перед приручением монстра.
+//! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use indexmap::IndexSet;
 
+use super::ai::baseai::CBaseAI;
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
 use super::exstate::{
     EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
@@ -613,17 +621,10 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct BackStageSkill {
-    skill_id: u32,
-    begin_pending: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
     skills: BTreeMap<u32, MoveShapeSkill>,
     state_skill_order: IndexSet<u32>,
-    back_stage_skill_ids: Vec<BackStageSkill>,
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     state_storage: CanonicalStateStorage,
@@ -825,7 +826,6 @@ impl Default for CMoveShape {
             shape: CShape::default(),
             skills: BTreeMap::new(),
             state_skill_order: IndexSet::new(),
-            back_stage_skill_ids: Vec::new(),
             current_skill_id: None,
             item_skill_ids: Vec::new(),
             state_storage: CanonicalStateStorage::default(),
@@ -1223,7 +1223,7 @@ impl CMoveShape {
     /// Exact `AutoStartPassiveSkill`: state-skill vector обходится в порядке
     /// вставки, а каждый `IsAutoStart != 0` добавляется в background-очередь.
     /// Self-target `Begin(this, this)` в Rust задаётся самим владельцем.
-    pub(crate) fn auto_start_passive_skills(&mut self) -> usize {
+    pub(crate) fn auto_start_passive_skills(&mut self, ai: &mut CBaseAI) -> usize {
         let started: Vec<u32> = self
             .state_skill_order
             .iter()
@@ -1233,41 +1233,9 @@ impl CMoveShape {
         let count = started.len();
         for skill_id in &started {
             self.begin_immediate_skill(*skill_id);
+            ai.add_pending_back_stage_skill(*skill_id);
         }
-        self.back_stage_skill_ids.extend(started.into_iter().map(|skill_id| BackStageSkill { skill_id, begin_pending: true }));
         count
-    }
-
-    /// WhenAddBackStageSkill (0x004C94B0): уже начатый экземпляр не требует
-    /// нового Begin. Признак ожидающего Begin хранится у записи, а не
-    /// общим cursor: подготовленный skill всегда добавляется в конец.
-    pub(crate) fn add_started_back_stage_skill(&mut self, skill_id: u32) {
-        if skill_id != 0x7fff_ffff {
-            self.back_stage_skill_ids.push(BackStageSkill { skill_id, begin_pending: false });
-        }
-    }
-
-    /// OnExecuteBackStageSkills (0x004C88E0) удаляет старые SKILL_UNKNOW
-    /// перед обходом. Новые пометки остаются до следующего прохода.
-    pub(crate) fn prepare_back_stage_skill_pass(&mut self) {
-        self.back_stage_skill_ids.retain(|entry| entry.skill_id != 0x7fff_ffff);
-    }
-
-    pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
-        self.back_stage_skill_ids.get(index).map(|entry| entry.skill_id)
-    }
-
-    pub(crate) fn mark_ended_back_stage_skill(&mut self, index: usize, expected: u32) {
-        if let Some(entry) = self.back_stage_skill_ids.get_mut(index)
-            && entry.skill_id == expected
-        {
-            entry.skill_id = 0x7fff_ffff;
-        }
-    }
-
-    pub(crate) fn immediate_back_stage_skill_ended(&self, index: usize) -> bool {
-        self.back_stage_skill_ids.get(index)
-            .is_some_and(|entry| self.immediate_skill_ended(entry.skill_id))
     }
 
     pub(crate) fn immediate_skill_ended(&self, skill_id: u32) -> bool {
@@ -1288,17 +1256,6 @@ impl CMoveShape {
         if let Some(skill) = self.skills.get_mut(&skill_id) {
             skill.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
         }
-        for entry in &mut self.back_stage_skill_ids {
-            if entry.skill_id == skill_id {
-                entry.begin_pending = false;
-            }
-        }
-    }
-
-    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
-        self.back_stage_skill_ids.iter_mut().filter_map(|entry| {
-            std::mem::take(&mut entry.begin_pending).then_some(entry.skill_id)
-        }).collect()
     }
 
     pub(crate) fn undead_states(&self) -> &[UndeadState] {
@@ -5329,7 +5286,6 @@ impl CMoveShape {
         self.current_skill_id = None;
         self.skills.clear();
         self.state_skill_order.clear();
-        self.back_stage_skill_ids.clear();
     }
 
     /// `CSkillFactory::QuerySkill(SKILL_BASE_DEFENSE, 1)` создавал
@@ -5482,7 +5438,6 @@ impl CMoveShape {
             return false;
         }
         self.state_skill_order.shift_remove(&skill_id);
-        self.back_stage_skill_ids.retain(|entry| entry.skill_id != skill_id);
         self.skills.remove(&skill_id);
         true
     }

@@ -625,7 +625,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.is_tamed().then(|| monster.pet_attack_properties(&property)),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.skill_last_used_ms(skill_id),
             ))
         })

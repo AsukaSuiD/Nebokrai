@@ -432,6 +432,14 @@ pub(crate) struct PlayerEnergyRegeneration {
 }
 
 impl CPlayerAI {
+    pub(crate) const fn base_ai(&self) -> &CBaseAI {
+        &self.base_ai
+    }
+
+    pub(crate) const fn base_ai_mut(&mut self) -> &mut CBaseAI {
+        &mut self.base_ai
+    }
+
     /// CSkill хранит независимый срок последнего ненулевого End для каждого ID.
     /// Отсутствующая запись равна исходному нулю до первого применения.
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32) -> u32 {
@@ -585,7 +593,6 @@ impl CPlayerAI {
     pub(crate) fn finish_player_attack(
         &mut self,
         selected_skill_id: Option<u32>,
-        mut add_background: impl FnMut(u32),
         mut now: impl FnMut() -> u32,
     ) -> bool {
         if !self.base_ai.active_attack_pending() {
@@ -597,7 +604,7 @@ impl CPlayerAI {
             if !execution.is_prepared() {
                 return false;
             }
-            add_background(skill_id);
+            self.base_ai.add_started_back_stage_skill(skill_id);
         }
         self.current_player_skill = None;
         if selected_skill_id.is_some() {
@@ -802,7 +809,6 @@ impl CPlayerAI {
     /// End внутри AI оставляет Attack до следующего Run, без ChangeSkill.
     pub(crate) fn finish_battle_fairy_attack(
         &mut self,
-        mut add_background: impl FnMut(u32),
         now_ms: u32,
     ) -> bool {
         let Some(handling) = self.base_ai.active_war_soul_actions().front()
@@ -816,7 +822,7 @@ impl CPlayerAI {
             if !execution.is_prepared() {
                 return false;
             }
-            add_background(skill_id);
+            self.base_ai.add_started_back_stage_skill(skill_id);
         }
         self.current_battle_fairy_skill = None;
         self.base_ai.finish_war_soul_attack(now_ms);

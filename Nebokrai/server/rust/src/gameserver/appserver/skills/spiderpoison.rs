@@ -393,7 +393,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
             let pet_attack = monster.is_tamed().then(|| monster.pet_attack_properties(&property));
-            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.base_attack_cast(), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID)))
+            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.current_active_attack_cast(), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID)))
         })
     else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {

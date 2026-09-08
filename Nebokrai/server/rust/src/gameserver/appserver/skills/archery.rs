@@ -134,7 +134,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                     .clone(),
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.skill_last_used_ms(skill_id),
             ))
         })

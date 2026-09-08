@@ -99,7 +99,7 @@ fn send_monster_visual(game: &CGame, region: &CServerRegion, monster_id: i32, sk
 /// она не расходует MP и не блокирует движение; область получает нулевой
 /// element modifier, как исходный non-player dynamic-cast path.
 pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target: ShapeIdentity, skill_level: u16, properties: &super::skillbaseproperties::CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, entry: &mut Option<i32>) -> bool {
-    let Some((source, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.base_attack_cast())) else { return false };
+    let Some((source, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.current_active_attack_cast())) else { return false };
     let master = MasterInfo { master_type: MONSTER_TYPE, master_id: monster_id, ..MasterInfo::default() };
     let Some(target_view) = resolve_monster_snow_storm_target(game, region, target) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }

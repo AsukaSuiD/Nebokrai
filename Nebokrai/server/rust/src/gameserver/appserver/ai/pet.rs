@@ -47,9 +47,16 @@
 //! idle-ветви поиска в CPet::OnSchedule (0x004E9DC0) нет; Rust не обходит FIFO.
 //! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
 //! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
+//! Runtime-входы выбираются по GetAI == CPet, а не по tamed sign:
+//! CMonster::GetAI (0x004E6D80) проверяет identity хозяина и auxiliary owner.
+//! Прямые команды сохранённого pet-list по-прежнему адресуют m_pPetAI.
 //! `GetPetMaster` разрешает игрока глобально, а остальные типы — только через
 //! реестр текущего региона; эта же typed-развилка используется унаследованной
 //! повозкой и боевым ограничением преследования.
+//! Конструктор (0x004E9400, записи 0x004E942E/0x004E9435) задаёт числовые
+//! mode=2 и action=1 при нулевых lifecycle-таймерах. Символьное имя PSEM_DEFENSE
+//! в RAW не подменяет подтверждённое значение режима. Прямые m_pPetAI-команды
+//! читают свою цель/FIFO даже тогда, когда GetAI выбирает первичный контроллер.
 //!
 //! Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 //! Декомпилятор: Ghidra 12.1.2
@@ -58,6 +65,7 @@
 //! боевые и событийные ветви `CPet`.
 
 use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -152,7 +160,7 @@ pub(crate) struct PetBehaviorState {
 impl Default for PetBehaviorState {
     fn default() -> Self {
         Self {
-            mode: PET_MODE_ACTIVE,
+            mode: PET_MODE_PASSIVE,
             action: 1,
             lifecycle: PetLifecycleState::default(),
         }
@@ -327,7 +335,7 @@ pub(crate) fn execute_owned_pet_active_search(
     monster_id: i32,
 ) -> bool {
     let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
-        (pet.is_tamed()
+        (matches!(pet.active_ai(), Some(ActiveMonsterAi::Pet))
             && pet.pet_mode() == PET_MODE_ACTIVE
             && pet.ai_target().is_none())
             .then_some(pet.master_info())
@@ -395,12 +403,14 @@ pub(crate) fn queue_pet_idle<Runtime: GameMainLoopRuntime>(
     stop_frame: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((alive, has_skill)) = region.find_monster_by_id(monster_id).map(|pet| {
-        (
-            !CMoveShape::is_died(pet.hit_points()),
-            pet.move_shape().current_skill().is_some(),
-        )
-    }) else {
+    let Some((alive, has_skill)) = region.find_monster_by_id(monster_id)
+        .filter(|pet| matches!(pet.active_ai(), Some(ActiveMonsterAi::Pet)))
+        .map(|pet| {
+            (
+                !CMoveShape::is_died(pet.hit_points()),
+                pet.move_shape().current_skill().is_some(),
+            )
+        }) else {
         return false;
     };
     if !alive {
@@ -452,7 +462,8 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
     let Some((pet_shape, pet_health, master, moveable, property)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            if !monster.is_tamed() || monster.pet_action() != 1
+            if !matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet))
+                || monster.pet_action() != 1
                 || !monster.primary_ai_queues_idle()
             {
                 return None;
@@ -564,34 +575,6 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp
-
-// ============================================================================
-// FUNCTION: CPet::CPet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:19
-// RVA: 0x000E9400
-// ADDRESS: 004e9400
-// PROTOTYPE: undefined __thiscall CPet(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPet::~CPet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:23
-// RVA: 0x000E9450
-// ADDRESS: 004e9450
-// PROTOTYPE: void __thiscall ~CPet(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPet::OnStayingSchedule

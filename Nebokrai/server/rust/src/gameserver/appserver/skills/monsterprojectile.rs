@@ -142,7 +142,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
                 property,
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.monster_projectile_progress(),
             ))
         })

@@ -259,7 +259,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
-    let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.base_attack_cast())) else { return false };
+    let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast())) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();

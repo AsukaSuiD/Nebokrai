@@ -7617,11 +7617,19 @@ impl CPlayer {
     }
 
     pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
-        self.move_shape.back_stage_skill_id(index)
+        self.player_ai.base_ai().back_stage_skill_id(index)
     }
 
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
-        self.move_shape.begin_pending_back_stage_skill_ids()
+        self.player_ai.base_ai_mut().begin_pending_back_stage_skill_ids()
+            .into_iter()
+            .filter(|skill_id| self.move_shape.skill(*skill_id).is_some()
+                && !self.move_shape.immediate_skill_ended(*skill_id))
+            .collect()
+    }
+
+    pub(crate) fn auto_start_passive_skills(&mut self) -> usize {
+        self.move_shape.auto_start_passive_skills(self.player_ai.base_ai_mut())
     }
 
     pub(crate) const fn can_process_ai_destination(&self) -> bool {

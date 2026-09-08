@@ -556,7 +556,7 @@ pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
                 source_property,
                 monster.master_info(),
                 monster.is_tamed(),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.skill_last_used_ms(SPIDER_WEB_SKILL_ID),
                 attack_interval,
             ))

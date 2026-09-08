@@ -7,6 +7,11 @@
 //! при следующем входе, не повторяя AI после background-End. Idle и поиск
 //! без цели сохраняют отдельные производные пути и требуют дальнейшего
 //! согласования полного OnSchedule/OnIdle для всех AI-типов.
+//! Сохранённый cast CMoveShape не определяет фазу вызова: продолжение
+//! доступно только достигнутому Attack выбранного GetAI и совпадающему
+//! зарегистрированному current skill. Пустая FIFO другого AI после смены
+//! хозяина проходит собственные Schedule/Idle, не продолжая и не отменяя
+//! чужое исполнение. Новый Begin заменяет его только в своей обычной точке.
 //! OnFighting уже начатого immediate вызывает тот же owner до target/range
 //! расписания: его sufferer — сам монстр. Фоновый Begin не требует attack-cast,
 //! повторного Begin или наличия боевой цели; завершение FIFO остаётся следующим
@@ -79,7 +84,9 @@
 //! CPet::OnSchedule (0x004E9DC0) выбирает собственные Attack/Follow/Stay:
 //! сохранённый property.ai не включает связывание Цзюмай, пост стража,
 //! стационарный поиск дальности или исключение AI13 из проверки цели.
-//! Эти ветви первичного владельца действуют только до приручения;
+//! Выбор этих методов использует GetAI, а не игровой tamed sign; нулевой
+//! auxiliary pointer не подменяется первичным AI. Признак приручения отдельно
+//! сохраняется для combat/scaling и отношений хозяина.
 //! CPet::OnAttackingSchedule/OnStayingSchedule проверяют допустимость цели.
 //! OnStayingSchedule (0x004E9650) проверяет включительный min/max диапазон
 //! текущего навыка до любого concrete Begin, включая immediate-навыки.
@@ -1000,6 +1007,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
     snow_storm_entry: &mut Option<i32>,
 ) -> bool {
+    let Some(active_ai) = region.find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
+        return false;
+    };
+    let carriage_ai = matches!(active_ai, ActiveMonsterAi::Carriage
+        | ActiveMonsterAi::Primary(MonsterAiKind::Carriage));
+    let pet_ai = matches!(active_ai, ActiveMonsterAi::Pet);
     let immediate = region.find_monster_by_id(monster_id).and_then(|monster| {
         if !monster.active_ai_attack_pending() {
             return None;
@@ -1041,7 +1054,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster_view,
             monster.hit_points(),
             monster.ai_target(),
-            monster.base_attack_cast(),
+            monster.current_active_attack_cast(),
             monster.is_tamed(),
             monster.master_info(),
             pet_attack_properties,
@@ -1053,29 +1066,29 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    if !tamed && property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
-        // Повозкой управляет отдельный производный ИИ; общий поиск цели и
-        // расписание атаки обычного монстра для неё не выполняются.
+    // OnSchedule повозки не начинает атаку; уже зарегистрированное
+    // active-исполнение остаётся у общего OnFighting, включая immediate выше.
+    if carriage_ai && cast.is_none() {
         return false;
     }
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    if !tamed && property.ai == 20 && target.is_none() && cast.is_none()
+    if !pet_ai && property.ai == 20 && target.is_none() && cast.is_none()
         && !ensure_jiumai_twin(game, region, monster_id, &property)
     {
         return false;
     }
-    if cast.is_none() && target.is_some() && (tamed || property.ai != 7)
+    if cast.is_none() && target.is_some() && (pet_ai || property.ai != 7)
         && region.find_monster_by_id(monster_id)
             .is_some_and(|monster| !monster.move_shape().can_fight())
     {
-        if tamed || property.ai != 20 {
+        if pet_ai || property.ai != 20 {
             release_owned_monster_target(game, region, monster_id, runtime);
         }
         return true;
     }
-    if !tamed && MonsterAiKind::from_ai_type(property.ai).has_guard_station() {
+    if !pet_ai && MonsterAiKind::from_ai_type(property.ai).has_guard_station() {
         if target.is_none() && cast.is_none()
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
             && monster.primary_ai_queues_idle()
@@ -1088,7 +1101,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if target.is_none()
         && cast.is_none()
-        && !tamed
+        && !pet_ai
         && hibernates_without_nearby_players(
             property.ai,
             region
@@ -1104,7 +1117,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
     }
-    if target.is_none() && cast.is_none() && !tamed && property.ai == 2
+    if target.is_none() && cast.is_none() && !pet_ai && property.ai == 2
         && region.find_monster_by_id(monster_id)
             .and_then(CMonster::smart_gladiator_ai)
             .is_some_and(|state| state.has_queued_steps())
@@ -1113,7 +1126,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if target.is_none()
         && cast.is_none()
-        && !tamed
+        && !pet_ai
         && matches!(property.ai, 5 | 8 | 11 | 13 | 17 | 100 | 101 | 103)
     {
         return queue_stationary_guard_idle(
@@ -1125,20 +1138,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if target.is_none()
         && cast.is_none()
-        && !tamed
+        && !pet_ai
         && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 9 | 10 | 12 | 14 | 15 | 16 | 18 | 19 | 20 | 104)
             || MonsterAiKind::is_generic_ai_type(property.ai))
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
-    if target.is_none() && cast.is_none() && tamed {
+    if target.is_none() && cast.is_none() && pet_ai {
         return queue_pet_idle(region, monster_id, stop_frame, runtime);
     }
     let schedule_target_view = if cast.is_none() && let Some(target) = target {
         let Some(schedule_target) =
             resolve_owned_monster_attack_target(game, region, target)
         else {
-            if tamed {
+            if pet_ai {
                 lose_pet_target_and_search(
                     region,
                     monster_id,
@@ -1146,7 +1159,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 );
             } else {
                 release_owned_monster_target(game, region, monster_id, runtime);
-                if has_owned_search_enemy(property.ai, tamed)
+                if has_owned_search_enemy(property.ai, pet_ai)
                     && let Some(monster) = region.find_monster_by_id_mut(monster_id)
                 {
                     monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
@@ -1154,11 +1167,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             return true;
         };
-        if tamed && schedule_target.dead {
+        if pet_ai && schedule_target.dead {
             lose_pet_target_and_search(region, monster_id, runtime);
             return true;
         }
-        if tamed && pet_action == 0 {
+        if pet_ai && pet_action == 0 {
             let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region, attacker_master)
                 .unwrap_or((monster_view.tile_x, monster_view.tile_y));
             let anchor_distance = schedule_target.shape.distance_to_point(anchor_x, anchor_y);
@@ -1167,7 +1180,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 return true;
             }
         }
-        let attackable = (!tamed && uses_stationary_attack_schedule(property.ai)) || owned_monster_attackable(
+        let attackable = (!pet_ai && uses_stationary_attack_schedule(property.ai)) || owned_monster_attackable(
             game,
             region.id,
             &property,
@@ -1177,10 +1190,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &schedule_target,
         );
         if schedule_target.dead
-            || ((tamed || !uses_stationary_attack_schedule(property.ai))
+            || ((pet_ai || !uses_stationary_attack_schedule(property.ai))
                 && (schedule_target.god || schedule_target.city_dead || !attackable))
         {
-            if !attackable && tamed {
+            if !attackable && pet_ai {
                 let pet_identity = ShapeIdentity {
                     object_type: MONSTER_TYPE,
                     id: monster_id,
@@ -1198,7 +1211,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     );
                 }
             }
-            if tamed {
+            if pet_ai {
                 lose_pet_target_and_search(
                     region,
                     monster_id,
@@ -1206,7 +1219,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 );
             } else {
                 release_owned_monster_target(game, region, monster_id, runtime);
-                if has_owned_search_enemy(property.ai, tamed)
+                if has_owned_search_enemy(property.ai, pet_ai)
                     && let Some(monster) = region.find_monster_by_id_mut(monster_id)
                 {
                     monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
@@ -1265,7 +1278,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if target.is_none()
         && cast.is_none()
-        && !tamed
+        && !pet_ai
         && matches!(property.ai, 21 | 23)
         && queue_boss_idle(game, region, monster_id, &property, runtime)
     {
@@ -1288,7 +1301,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     if cast.is_none()
-        && ((tamed && pet_action == 2) || (!tamed && uses_stationary_attack_schedule(property.ai)))
+        && ((pet_ai && pet_action == 2) || (!pet_ai && uses_stationary_attack_schedule(property.ai)))
     {
         let Some(target_view) = schedule_target_view else {
             return false;
@@ -1297,7 +1310,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let minimum_distance = skill_properties.query_property(5_004) as i32;
         let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32;
         if distance < minimum_distance || distance > maximum_distance {
-            if tamed {
+            if pet_ai {
                 lose_pet_target_and_search(region, monster_id, runtime);
             } else {
                 release_owned_monster_target(game, region, monster_id, runtime);
@@ -1717,7 +1730,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         carriage: target_carriage,
     }) = target_snapshot
     else {
-        if tamed {
+        if pet_ai {
             lose_pet_target_and_search(region, monster_id, runtime);
         } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
@@ -1725,7 +1738,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if !live_base_attack && (target_dead
-        || ((tamed || !uses_stationary_attack_schedule(property.ai) || cast.is_some())
+        || ((pet_ai || !uses_stationary_attack_schedule(property.ai) || cast.is_some())
             && (target_god
                 || target_city_dead
                 || (!tamed
@@ -1739,7 +1752,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         attacker_master,
                     )))))
     {
-        if tamed {
+        if pet_ai {
             lose_pet_target_and_search(region, monster_id, runtime);
         } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
@@ -1783,7 +1796,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    if !tamed && MonsterAiKind::from_ai_type(property.ai).has_guard_station()
+    if !pet_ai && MonsterAiKind::from_ai_type(property.ai).has_guard_station()
         && cast.is_none()
         && trace_city_sword_target(
             game,
@@ -2043,7 +2056,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         maximum_distance,
         runtime,
     ) {
-        if tamed && pet_action == 2 {
+        if pet_ai && pet_action == 2 {
             lose_pet_target_and_search(region, monster_id, runtime);
         }
         return true;
@@ -2077,7 +2090,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .map(|monster| monster.skill_last_used_ms(skill_id))
         .unwrap_or_default();
     if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
-        if tamed {
+        if pet_ai {
             lose_pet_target_and_search(region, monster_id, runtime);
         }
         return true;

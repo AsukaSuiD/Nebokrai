@@ -47,7 +47,9 @@
 //! registry сохраняет vector и first-erase, остальные map assignment —
 //! уникальные ключи. После `CArea::PlayerEnter` region вызывает точно
 //! подтверждённый virtual `CMoveShape::AutoStartPassiveSkill`; ordered
-//! background-очередь принадлежит самому `CMoveShape`.
+//! background-очередь принадлежит выбранному `CBaseAI`, а не форме.
+//! Технический membership-adapter передаёт целого CMonster/CPlayer, чтобы
+//! сохранить GetAI; голый CMoveShape без такого владельца автостарт не делает.
 //! Завершающую часть GodsBattle для игрока выполняет `CGame` через конкретный
 //! подтип после успешного базового пространственного добавления либо удаления.
 //! `SetPosXY` только пишет `CS_CHANGEAREA`; ИИ региона не допускает повторных
@@ -163,6 +165,7 @@ use super::moveshape::{
     MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
 };
 use super::npc::CNpc;
+use super::player::CPlayer;
 use super::region::{
     CRegion, RegionCellAccessBlock, RegionDecodeError, RegionRandomContext, RegionResourceWrite,
     RegionReturnPoint, RegionStorageBlock,
@@ -601,6 +604,16 @@ impl RegionMembershipShape for CShape {
 
 impl RegionMembershipShape for CMoveShape {
     fn membership_shape_mut(&mut self) -> &mut CShape { self.shape_mut() }
+    fn after_entered_area(&mut self) {}
+}
+
+impl RegionMembershipShape for CMonster {
+    fn membership_shape_mut(&mut self) -> &mut CShape { self.move_shape_mut().shape_mut() }
+    fn after_entered_area(&mut self) { self.auto_start_passive_skills(); }
+}
+
+impl RegionMembershipShape for CPlayer {
+    fn membership_shape_mut(&mut self) -> &mut CShape { self.move_shape_mut().shape_mut() }
     fn after_entered_area(&mut self) { self.auto_start_passive_skills(); }
 }
 
@@ -1346,7 +1359,7 @@ impl CServerRegion {
             ..ShapeRuntimeFacts::default()
         };
         self.add_object(
-            monster.move_shape_mut(),
+            &mut monster,
             facts,
             area_width,
             area_height,
@@ -1430,7 +1443,7 @@ impl CServerRegion {
             ..ShapeRuntimeFacts::default()
         };
         self.add_object(
-            monster.move_shape_mut(),
+            &mut monster,
             facts,
             area_width,
             area_height,

@@ -824,7 +824,7 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     let Some((mut source, property, master, tamed, cast, last_used_ms)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((
         monster.move_shape().shape().clone(),
         game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-        monster.master_info(), monster.is_tamed(), monster.base_attack_cast(), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID),
+        monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID),
     ))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }

@@ -398,7 +398,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             };
             Some((
                 monster.move_shape().shape().clone(),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.spider_mist_progress(),
                 monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID),
                 property.ai,

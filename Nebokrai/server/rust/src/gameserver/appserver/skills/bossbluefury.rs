@@ -345,7 +345,7 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         .map(|monster| {
             (
                 monster.move_shape().shape().clone(),
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.skill_last_used_ms(BOSS_BLUE_FURY_SKILL_ID),
             )
         })

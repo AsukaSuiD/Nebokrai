@@ -294,7 +294,7 @@ pub(crate) fn execute_owned_monster_promotion<Runtime: GameMainLoopRuntime>(
                 monster.move_shape().shape().get_tile_y().ok()?,
                 property.ai,
                 attack_interval_ms,
-                monster.base_attack_cast(),
+                monster.current_active_attack_cast(),
                 monster.skill_last_used_ms(PROMOTION_SKILL_ID),
             ))
         })

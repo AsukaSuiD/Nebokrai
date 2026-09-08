@@ -144,7 +144,7 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 /// по числу клеток и общий monster defence/death tail.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, deaths: &mut Vec<MonsterAttackDeath>) -> bool {
-    let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.base_attack_cast(), monster.monster_projectile_progress()))) else { return false };
+    let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(), monster.monster_projectile_progress()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {

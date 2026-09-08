@@ -78,6 +78,15 @@
 //! при уже достигнутом сроке не задерживает active. Обработанный Defense
 //! возвращает AES_EXEC, поэтому также не запрещает active игрока/монстра.
 //! Фоновая фаза обоих владельцев предшествует passive и не зависит от stun.
+//! WhenAddBackStageSkill (0x004C94B0) хранит ordered ID в vector конкретного
+//! CBaseAI, без дедупликации. CMoveShape владеет самими навыками, не этим
+//! списком: смена GetAI не переносит фон между primary/pet/carriage.
+//! OnExecuteBackStageSkills (0x004C88E0) сначала удаляет старые UNKNOWN,
+//! затем разрешает каждый ID у CMoveShape; отсутствующий/завершённый навык
+//! только помечается UNKNOWN до следующего прохода. Clear (0x004C7F70)
+//! сохраняет список, destructor (0x004C8890) уничтожает его вместе с AI.
+//! Vec заменяет native vector; технический begin_pending сохраняет место
+//! отложенного подключения player-kernel без второй очереди или копии ID.
 //! OnStiffen 0x004C87D9/0x004C87E0 сначала вызывает End(4), затем IsEnded:
 //! Attack остаётся в FIFO, пока concrete владелец не подтвердит завершение.
 //! Для handling != 0 или отсутствующего навыка End не вызывается. Очистка
@@ -171,6 +180,7 @@ pub(crate) struct CBaseAI {
     active_actions: VecDeque<AiEvent>,
     passive_actions: VecDeque<AiEvent>,
     active_war_soul_actions: VecDeque<AiEvent>,
+    back_stage_skill_ids: Vec<BackStageSkill>,
     is_dormant: bool,
     dormancy_time_ms: u32,
     dormancy_interval_ms: u32,
@@ -178,7 +188,51 @@ pub(crate) struct CBaseAI {
     target_type: i32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BackStageSkill {
+    skill_id: u32,
+    begin_pending: bool,
+}
+
 impl CBaseAI {
+    fn add_back_stage_skill(&mut self, skill_id: u32, begin_pending: bool) {
+        if skill_id != 0x7fff_ffff {
+            self.back_stage_skill_ids.push(BackStageSkill { skill_id, begin_pending });
+        }
+    }
+
+    /// Когда Begin уже исполнен, подготовленный навык добавляется в конец
+    /// того же списка и не требует повторного Begin.
+    pub(crate) fn add_started_back_stage_skill(&mut self, skill_id: u32) {
+        self.add_back_stage_skill(skill_id, false);
+    }
+
+    pub(crate) fn add_pending_back_stage_skill(&mut self, skill_id: u32) {
+        self.add_back_stage_skill(skill_id, true);
+    }
+
+    pub(crate) fn prepare_back_stage_skill_pass(&mut self) {
+        self.back_stage_skill_ids.retain(|entry| entry.skill_id != 0x7fff_ffff);
+    }
+
+    pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
+        self.back_stage_skill_ids.get(index).map(|entry| entry.skill_id)
+    }
+
+    pub(crate) fn mark_ended_back_stage_skill(&mut self, index: usize, expected: u32) {
+        if let Some(entry) = self.back_stage_skill_ids.get_mut(index)
+            && entry.skill_id == expected
+        {
+            entry.skill_id = 0x7fff_ffff;
+        }
+    }
+
+    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
+        self.back_stage_skill_ids.iter_mut().filter_map(|entry| {
+            std::mem::take(&mut entry.begin_pending).then_some(entry.skill_id)
+        }).collect()
+    }
+
     /// Точный достигнутый `SetTarget(long, long)` object identity.
     pub(crate) const fn set_object_target(&mut self, target: ShapeIdentity) {
         self.target_type = target.object_type;
@@ -1111,20 +1165,6 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 // RVA: 0x000C9460
 // ADDRESS: 004c9460
 // PROTOTYPE: void __thiscall WhenBeenKilled(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAI::WhenAddBackStageSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1213
-// RVA: 0x000C94B0
-// ADDRESS: 004c94b0
-// PROTOTYPE: void __thiscall WhenAddBackStageSkill(tagSkillID param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
