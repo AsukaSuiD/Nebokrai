@@ -5,13 +5,19 @@
 //! Конкретные идентификаторы и коды свойств принадлежат модулям навыков.
 //! Этот владелец семейства сохраняет общий порядок: проверка экипировки,
 //! задержки повторного применения и запаса MP, необратимое списание и
-//! `0xBF918`, задержка, действия применения 2 и 3, замена состояния и
+//! `0xBF918`, задержка, действие применения 2, замена состояния и
 //! пересчёт свойств. Восстановление использует исходный абсолютный срок
 //! `CSkill::IsRestored`; задержка AI также сравнивает unsigned now с
 //! wrapping-суммой start + delay (CPojia 0x0052a89b, CYufa 0x00524266). `CGame`
 //! используется только для разрешения владельцев и фактической доставки.
 //! Источник: gameserver.exe + GameServer.pdb, CPojia..CYufa::AI
-//! (0x00523fc0..0x0052aac0). Виртуальный End(+0x94) — 0x005246c0.
+//! (0x00523fc0..0x0052aac0). Каждый Begin после базового создаёт собственный
+//! CVisualEffect размером 0x0c и вызывает BeginVisualEffect(1) до CheckCondition.
+//! Общий visual-dispatch сохраняет режимы 0/1, ошибки и живые GetUser/GetSufferer;
+//! состояние на цели имеет отдельный visual. Собственный End(bool,+0x94)
+//! 0x005246c0 при живом GetUser повторяет BeginVisualEffect(1), Update(3),
+//! затем наследуемый End(int). Этот bool-хвост выполняет координатор только
+//! при завершении concrete Begin/AI, не при внешнем вызове int-слота +0x68.
 //! Отказы Po используют End(0); смерть GetSufferer у Yu вызывает End(1),
 //! а отсутствие цели или недостаток MP — End(0). Получатель усиления Yu —
 //! сам владелец, но GetSufferer остаётся объектом запроса: CYujia::Begin
@@ -49,8 +55,6 @@ const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const VISUAL_OBJECT_TYPE: i32 = 700;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyAttributeSkill {
@@ -88,52 +92,6 @@ fn dispatch_fields(dispatch: BattleFairySkillDispatch) -> (u32, i32, Option<Shap
     }
 }
 
-fn send_cast(
-    game: &mut CGame,
-    player_id: i32,
-    target: ShapeIdentity,
-    skill_id: u32,
-    skill_level: i32,
-    action: u8,
-) {
-    let Some(player) = game.find_player(player_id) else { return; };
-    let source = player.shape().identity();
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    match action {
-        1 => {
-            message.add_byte(1);
-            message.add_long(skill_id as i32);
-            message.add_short(skill_level as i16);
-            message.add_long(VISUAL_OBJECT_TYPE);
-            message.add_long(player_id);
-            message.add_long(player.shape().get_direction());
-        }
-        2 => {
-            let (x, y) = game.move_shape_target_tile(player.server_region_id(), target)
-                .unwrap_or_default();
-            message.add_byte(2);
-            message.add_long(skill_id as i32);
-            message.add_short(skill_level as i16);
-            message.add_long(source.object_type);
-            message.add_long(source.id);
-            message.add_long(target.object_type);
-            message.add_long(target.id);
-            message.add_long(x);
-            message.add_long(y);
-        }
-        3 => {
-            message.add_byte(3);
-            message.add_long(skill_id as i32);
-            message.add_short(skill_level as i16);
-            message.add_long(VISUAL_OBJECT_TYPE);
-            message.add_long(player_id);
-            message.add_long(player.shape().get_direction());
-        }
-        _ => return,
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
 fn send_goods_update(game: &mut CGame, update: &crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate) {
     let mut message = CMessage::new(update.message_type as i32);
     message.add_long(update.player_id);
@@ -159,23 +117,19 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     }) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let reject_before_ai = |game: &mut CGame, target: ShapeIdentity| {
-        send_cast(game, player_id, target, skill_id, skill_level, 3);
-        terminal(QueuedSkillExecutionState::Rejected)
-    };
     let target = if definition.kind.targets_self() {
         source_identity
     } else {
         let Some(target) = requested_target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)) else {
-            return reject_before_ai(game, source_identity);
+            return terminal(QueuedSkillExecutionState::Rejected);
         };
         target
     };
     if game.move_shape_target_tile(Some(region_id), target).is_none() {
-        return reject_before_ai(game, target);
+        return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return reject_before_ai(game, target);
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -190,23 +144,23 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             delay_ms,
             now_ms,
         ) {
-            game.send_battle_fairy_skill_failure(player_id, 0x0d);
+            game.update_player_skill_visual(player_id, skill_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
-            return reject_before_ai(game, target);
+            return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(current) = game.find_player(player_id).and_then(|player| player.war_soul_mana(game.goods_factory())) else {
             let text = game.get_string_by_id(b"ZHGS0011");
             let _ = colored_player_notice_message(0xffff_ffff, 0, text).send_to_player(game.net_server(), player_id);
-            return reject_before_ai(game, target);
+            return terminal(QueuedSkillExecutionState::Rejected);
         };
         if current.wrapping_sub(mp_loss as i32) < 0 {
-            game.send_battle_fairy_skill_failure(player_id, 7);
+            game.update_player_skill_visual(player_id, skill_id, 7);
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
                 battle_fairy_mana_text_cost(mp_loss),
             );
-            return reject_before_ai(game, target);
+            return terminal(QueuedSkillExecutionState::Rejected);
         }
         game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
         return terminal(QueuedSkillExecutionState::Begun);
@@ -217,13 +171,11 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     let Some(sufferer) = requested_target
         .filter(|target| game.base_magic_target_view(region_id, *target).is_some())
     else {
-        send_cast(game, player_id, target, skill_id, skill_level, 3);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if game.base_magic_target_dead(region_id, sufferer) {
-        game.send_battle_fairy_skill_failure(player_id, 2);
+        game.update_player_skill_visual(player_id, skill_id, 2);
         game.send_skill_system_info(player_id, b"ZHGS0050");
-        send_cast(game, player_id, target, skill_id, skill_level, 3);
         return terminal(if definition.kind.targets_self() {
             QueuedSkillExecutionState::RejectedAfterUse
         } else {
@@ -236,13 +188,12 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Pending);
         };
         if current.wrapping_sub(mp_loss as i32) < 0 {
-            game.send_battle_fairy_skill_failure(player_id, 7);
+            game.update_player_skill_visual(player_id, skill_id, 7);
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
                 battle_fairy_mana_text_cost(mp_loss),
             );
-            send_cast(game, player_id, target, skill_id, skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let factory = game.goods_factory().clone();
@@ -261,7 +212,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         if goods_before_visual {
             if let Some(update) = update.as_ref() { send_goods_update(game, update); }
         }
-        send_cast(game, player_id, target, skill_id, skill_level, 1);
+        game.update_player_skill_visual(player_id, skill_id, 0);
         if let Some(state) = game.battle_fairy_execution_mut(player_id, skill_id) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -275,11 +226,10 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
-    send_cast(game, player_id, target, skill_id, skill_level, 2);
+    game.update_player_skill_visual(player_id, skill_id, 1);
     let state_started_at_ms = runtime.now_milliseconds();
     let state = BattleFairyAttributeState::new(skill_id, definition.kind, state_started_at_ms, keep_time_ms, value);
     let Some((previous, tile_x, tile_y)) = game.replace_battle_fairy_attribute_state(region_id, target, state) else {
-        send_cast(game, player_id, target, skill_id, skill_level, 3);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if let Some(previous) = previous {
@@ -298,6 +248,5 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    send_cast(game, player_id, target, skill_id, skill_level, 3);
     terminal(QueuedSkillExecutionState::Completed)
 }

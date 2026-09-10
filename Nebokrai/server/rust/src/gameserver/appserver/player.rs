@@ -328,6 +328,14 @@
 //! областей и последующий `0xBF605`; готовность конкретного навыка остаётся
 //! входным фактом. Повреждённое нечисловое состояние блокируется
 //! типизированным результатом до прежнего целочисленного преобразования x87.
+//! `SetWarSoulXY/DelWarSoul` (player.cpp:13071/13109,
+//! 0x0042DF50/0x0042E0A0) завершают выбранный незаконченный навык через
+//! End(int,0), не bool-перегрузку и не удаление AI-команды. Этот callback
+//! выполняет `CGame`: Set только при найденных region/target area, Delete
+//! после проверки equipment[10] GAP_BF_BATTLE_FAIRY==1 до region gate.
+//! `CServerRegion` меняет карту с signed /15; player point обновляется
+//! только при найденной target area для Set либо прежней area для Delete,
+//! независимо от результата CArea::AddWarSoul/DelWarSoul.
 //! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
 //! recall/died флаги нулевой по HP equipped fairy, затем вызывает
 //! `PropertiesChanged`; `CGame` собирает exact `0xBF721` целиком из owned
@@ -11695,9 +11703,8 @@ impl CPlayer {
         }
     }
 
-    /// Завершает принадлежащий `CGame` хвост области. Отзыв всегда копирует
-    /// точку игрока после попытки `DelWarSoul`, даже если прежняя область
-    /// отсутствовала; это буквальная последняя запись `CPlayer::DelWarSoul`.
+    /// Завершает принадлежащий `CGame` хвост области: `spatial_applied`
+    /// означает найденную нужную area, а не изменение её map entry.
     pub(crate) const fn apply_war_soul_action(
         &mut self,
         action: BattleFairyWarSoulAction,
@@ -11709,16 +11716,17 @@ impl CPlayer {
             }
             BattleFairyWarSoulAction::Delete {
                 player_position, ..
-            } => {
+            } if spatial_applied => {
                 self.war_soul_point = player_position;
             }
-            BattleFairyWarSoulAction::SetPosition { .. } => {}
+            BattleFairyWarSoulAction::SetPosition { .. }
+            | BattleFairyWarSoulAction::Delete { .. } => {}
         }
     }
 
-    /// Active WarSoul tail `CPlayer::OnEnterRegion`: после выполненного
-    /// координатором `SetWarSoulXY → End(0)` обе visual float координаты и
-    /// spatial point синхронно возвращаются к клетке хозяина.
+    /// Active WarSoul tail `CPlayer::OnEnterRegion`: visual float координаты
+    /// возвращаются к клетке хозяина; spatial point применяет координатор
+    /// после target-area gate и End(int,0) выбранного навыка.
     pub(crate) fn prepare_war_soul_region_entry(
         &mut self,
     ) -> Option<(BattleFairyWarSoulAction, u32, u32)> {
@@ -16295,34 +16303,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x0002DD20
 // ADDRESS: 0042dd20
 // PROTOTYPE: int __thiscall DeleteSkillItem(ulong param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetWarSoulXY
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13071
-// RVA: 0x0002DF50
-// ADDRESS: 0042df50
-// PROTOTYPE: void __thiscall SetWarSoulXY(tagPOINT param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DelWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13109
-// RVA: 0x0002E0A0
-// ADDRESS: 0042e0a0
-// PROTOTYPE: void __thiscall DelWarSoul(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

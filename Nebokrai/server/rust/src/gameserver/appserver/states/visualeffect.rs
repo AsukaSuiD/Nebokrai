@@ -42,11 +42,16 @@
 //! этими телами; их подключение остаётся у владельцев. Пакет не заменяет Drop.
 //! Повторное присваивание visual безопасно освобождает прежний ресурс, вместо
 //! утечки старого указателя native Begin; дополнительных пакетов Drop не шлёт.
+//! Все 19 BattleFairy Effect также имеют размер 0xC, без собственных полей:
+//! один вид ресурса использует wire-контракт своего зарегистрированного owner-а
+//! в battlefairyskill.rs. BeginVisualEffect(1) предшествует concrete checks;
+//! source, target, уровень и время полёта остаются у навыка, не у visual.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkillVisualEffectKind {
     Rage,
     KnightCut,
+    BattleFairy,
 }
 
 #[derive(Debug, Eq, PartialEq)]

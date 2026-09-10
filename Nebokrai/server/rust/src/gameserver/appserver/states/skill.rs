@@ -21,9 +21,13 @@
 //! по заранее захваченному ключу. Concrete command-tail не разрешает ID заново;
 //! уже снятая им команда не подавляет финализацию того же экземпляра.
 //!
-//! Rage и Knight используют общий End вместе с owned visual. BattleFairy
-//! подключён к derived/AfterUse/base-границе и общей очистке typed payload;
-//! его concrete wire-End пока публикуется до этой границы без owned visual.
+//! Rage, Knight и BattleFairy используют общий End вместе с owned visual.
+//! Собственные End(bool) феи вызывают свой visual-пролог отдельно от политики
+//! End(int); AfterUse/base и освобождение ресурса остаются общими.
+//! Пролог феи переводит concrete AI в Idle до visual и AfterUse, не трогая
+//! lifecycle.ended/source. FatalBlow здесь также обнуляет время полёта;
+//! BFBaseAttack сохраняет его. Общая int-политика Po/Yu/transfer не получает
+//! этого собственного bool-пролога и его сброса полей.
 //! Перенос общей границы в остальные concrete owners, callbacks временно
 //! извлечённого региона/монстра и синхронные DelSkill/ClearSkills ещё требуется.
 //! Наличие модели не заменяет эти callers.
@@ -124,6 +128,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::rage::publish_rage_visual(self, skill, mode),
             SkillVisualEffectKind::KnightCut =>
                 crate::gameserver::appserver::skills::knightcut::publish_knight_cut_visual(self, skill, mode),
+            SkillVisualEffectKind::BattleFairy =>
+                crate::gameserver::appserver::skills::battlefairyskill::publish_battle_fairy_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();
@@ -256,7 +262,20 @@ impl CGame {
         if let Some(available) = policy.available {
             self.registered_skill_mut(address)?.lifecycle_mut().set_available(available);
         }
-        match policy.effect {
+        self.prepare_registered_skill_end_effect(address, policy.effect, argument)?;
+        Some(RegisteredSkillEnd::Ended)
+    }
+
+    pub(crate) fn prepare_registered_skill_end_effect(
+        &mut self, address: RegisteredPlayerSkill, effect: SkillEndEffect, argument: i32,
+    ) -> Option<()> {
+        if matches!(effect, SkillEndEffect::BattleFairyBaseMagic | SkillEndEffect::BattleFairyState
+            | SkillEndEffect::BattleFairyFatal | SkillEndEffect::BattleFairySummon)
+            && let Some(execution) = self.registered_skill_mut(address)?.battle_fairy_execution_state_mut()
+        {
+            execution.prepare_derived_end();
+        }
+        match effect {
             SkillEndEffect::None => {}
             SkillEndEffect::Rage => {
                 if let Some((_, source)) = self.registered_skill_user(address)
@@ -280,6 +299,6 @@ impl CGame {
                 self.update_registered_skill_visual(address, 3);
             }
         }
-        Some(RegisteredSkillEnd::Ended)
+        Some(())
     }
 }

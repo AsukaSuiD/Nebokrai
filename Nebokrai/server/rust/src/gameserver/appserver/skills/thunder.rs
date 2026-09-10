@@ -5,7 +5,7 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunder.cpp`. Здесь находятся проверки цели и пути,
 //! задержка повторного использования, расход MP, стадии
-//! `SkillExecutionKernel`, визуальные пакеты и построение `CThunderPhalanx`.
+//! `SkillExecutionKernel`, режимы owned visual и построение `CThunderPhalanx`.
 //! `CGame` только разрешает владельцев,
 //! регистрирует область в регионе и выполняет сетевую доставку.
 //! Sprite сначала масштабируется через исходное усечение x87 в `i64` с
@@ -21,7 +21,15 @@
 //! При остальных отказах Begin общий ответ `4,2` также следует после End(0);
 //! ошибки уже начатого AI не повторяют ответ расписания.
 //! В Rust внешний 4,2 отправляет только координатор после общего End(0),
-//! включая общий null-target отказ Thunder и Leiming2; здесь остаётся action 3.
+//! включая null-target отказ Thunder и Leiming2; action 3 принадлежит общему
+//! End(int), а режимы Update публикует battlefairyskill.rs из live lifecycle.
+//! CThunderEffect: object Begin выделяет 0xC в 0x00520D9C, вызывает базовый
+//! CVisualEffect(0x005DC200), ставит vtable 0x00657024 и BeginVisualEffect(1)
+//! в 0x00520DD2 до CheckCast. Update 0x00520E30 требует точный тип навыка,
+//! !ended и GetUser; режимы 0/1/3 дают action 1/2/3 из live source/skill level.
+//! Mode 1 передаёт target 0/0 и GetSufferer XY либо saved XY; failure требует
+//! CPlayer, mode 14 молчит. Базовый хвост 0x005212D7→0x005DC1E0 безусловен;
+//! End(int) 0x005222A0 вызывает mode 3 без повторного Begin эффекта.
 //! После попытки Summon (0x00521D30) AI всегда вызывает End(1), как сохранено
 //! в battlefairyskill.rs: неудачная регистрация области — RejectedAfterUse,
 //! а не ранний отказ End(0); lifetime созданной области независим.
@@ -30,7 +38,7 @@
 //! возвращает 0 без 4,2; вызывающий AI всё равно выполняет End(1).
 
 use super::basemagic::{
-    BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
 };
 use super::battlefairytransfer::send_goods_update;
@@ -46,7 +54,6 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const THUNDER_SKILL_ID: u32 = 0x21f;
 pub(crate) const THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
@@ -78,7 +85,6 @@ pub(super) fn thunder_base_damage(target_damage_factor: u32, sprite: i32) -> i32
     )
 }
 const PLAYER_TYPE: i32 = 400;
-const VISUAL_OBJECT_TYPE: i32 = 700;
 const DENIED_STATE_A: u32 = 0x192;
 const DENIED_STATE_B: u32 = 0xd2;
 const DENIED_STATE_C: u32 = 0x67;
@@ -112,56 +118,17 @@ pub(super) fn dispatch_position(
     }
 }
 
-pub(super) fn reject_thunder_null_target(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    skill_level: i32,
-) -> QueuedSkillExecutionOutcome {
-    send_thunder_family_cast(game, player_id, skill_id, skill_level, 3, None);
-    terminal(QueuedSkillExecutionState::Rejected)
-}
-
-pub(super) fn send_thunder_family_cast(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    skill_level: i32,
-    action: u8,
-    target_position: Option<(i32, i32)>,
-) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-    message.add_byte(action);
-    message.add_long(skill_id as i32);
-    message.base_mut().add_short(skill_level as i16);
-    message.add_long(VISUAL_OBJECT_TYPE);
-    message.add_long(player_id);
-    if action == 2 {
-        let Some((x, y)) = target_position else { return };
-        message.add_long(0);
-        message.add_long(0);
-        message.add_long(x);
-        message.add_long(y);
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
 pub(super) fn reject_thunder_family(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    skill_level: i32,
     action: u8,
     string_id: &[u8],
 ) -> QueuedSkillExecutionOutcome {
-    game.send_battle_fairy_skill_failure(player_id, action);
+    game.update_player_skill_visual(player_id, skill_id, u32::from(action));
     if !string_id.is_empty() {
         game.send_skill_system_info(player_id, string_id);
     }
-    send_thunder_family_cast(game, player_id, skill_id, skill_level, 3, None);
     terminal(QueuedSkillExecutionState::Rejected)
 }
 
@@ -203,12 +170,11 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
-        return reject_thunder_null_target(game, player_id, THUNDER_SKILL_ID, skill_level);
+        return terminal(QueuedSkillExecutionState::Rejected);
     }
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
-        if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
+        if action != 2 { game.update_player_skill_visual(player_id, THUNDER_SKILL_ID, u32::from(action)); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
-        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(THUNDER_SKILL_ID, skill_level) else {
@@ -264,7 +230,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 0x0b, b"ZHGS0049");
         }
         if path.iter().any(|cell| cell.2 == 2) {
-            game.send_battle_fairy_skill_failure(player_id, 0x0f);
+            game.update_player_skill_visual(player_id, THUNDER_SKILL_ID, 0x0f);
             game.send_skill_system_info(player_id, b"ZHGS0051");
             return reject_before_ai(game, 2, b"");
         }
@@ -275,7 +241,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 2, b"");
         };
         if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
-            game.send_battle_fairy_skill_failure(player_id, 7);
+            game.update_player_skill_visual(player_id, THUNDER_SKILL_ID, 7);
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
@@ -293,7 +259,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         if let BattleFairySkillDispatch::Object { target, .. } = dispatch
             && game.periodic_state_target_dead(region_id, target)
         {
-            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
+            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, 10, b"ZHGS0050");
         }
         if mp_loss != 0 {
             let goods_factory = game.goods_factory().clone();
@@ -302,18 +268,17 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
                 player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
             });
             let Some(update) = update else {
-                game.send_battle_fairy_skill_failure(player_id, 7);
+                game.update_player_skill_visual(player_id, THUNDER_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
                     battle_fairy_mana_text_cost(mp_loss),
                 );
-                send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
                 return terminal(QueuedSkillExecutionState::Rejected);
             };
             send_goods_update(game, &update);
         }
-        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 1, None);
+        game.update_player_skill_visual(player_id, THUNDER_SKILL_ID, 0);
         if let Some(execution) = game.battle_fairy_execution_mut(player_id, THUNDER_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -329,14 +294,13 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y, target)) =
         dispatch_position(game, region_id, dispatch)
     else {
-        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
+        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, 10, b"ZHGS0050");
     };
     if target.is_some_and(|target| game.periodic_state_target_dead(region_id, target)) {
-        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
+        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, 10, b"ZHGS0050");
     }
-    send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 2, Some((target_x, target_y)));
+    game.update_player_skill_visual(player_id, THUNDER_SKILL_ID, 1);
     let Some(player) = game.find_player(player_id) else {
-        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let Some(sprite) = player.war_soul_goods(game.goods_factory()).map(|goods| {
@@ -346,7 +310,6 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             1,
         )
     }) else {
-        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let scaled_sprite = scaled_battle_fairy_sprite(sprite);
@@ -387,7 +350,6 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {

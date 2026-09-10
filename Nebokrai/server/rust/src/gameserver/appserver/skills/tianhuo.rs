@@ -11,7 +11,7 @@
 //! перегрузки не образуют отдельного исполняемого пути. Здесь находятся проверки состояния и
 //! длины пути, задержка повторного использования, необратимый расход MP,
 //! повторная проверка пути после расхода, поворот игрока, стадии
-//! `SkillExecutionKernel`, точные визуальные пакеты и построение
+//! `SkillExecutionKernel`, режимы owned visual и построение
 //! `CTianhuoPhalanx`. Пакет стадии применения намеренно содержит legacy ID
 //! `0x13A`, хотя ID навыка равен `0x21A`. `CGame` только разрешает владельцев,
 //! регистрирует область, применяет результат к независимым владельцам и
@@ -21,13 +21,20 @@
 //! Отказ объектного Begin (0x005222f0) завершает эффект через End(0), затем
 //! расписание отправляет `4,2`; ошибки начатого AI сохраняют отдельный путь.
 //! В Rust этот внешний 4,2 отправляет только координатор после общего End(0),
-//! в том числе при null-цели; concrete Begin публикует только свои ошибки и End.
+//! в том числе при null-цели; action 3 публикует общий End(int), не этот owner.
+//! CTianhuoEffect: object Begin 0x005222F0 после общей базы выделяет 0xC,
+//! вызывает CVisualEffect(0x005DC200), ставит vtable 0x006570D4 и loop=1
+//! до CheckCast. Update 0x005223B0 требует точный тип навыка, !ended и GetUser;
+//! failure дополнительно требует CPlayer. Режимы 0/1/3 дают action 1/2/3,
+//! mode 1 берёт live GetSufferer либо saved XY и legacy ID 0x13A.
+//! Общий publisher сохраняет ID/level базы; хвост 0x005DC1E0 безусловен.
+//! End(int) 0x005222A0 вызывает mode 3 без rearm; target-state здесь нет.
 //! После попытки Summon (0x00523280) AI всегда вызывает End(1), как сохранено
 //! в battlefairyskill.rs: неудачная регистрация области — RejectedAfterUse,
 //! а не ранний отказ End(0); lifetime созданной области независим.
 
 use super::basemagic::{
-    BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
+    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
     SKILL_USAGE_MIN_ATTACK,
 };
 use super::kernel::{
@@ -37,7 +44,6 @@ use super::thunder::{dispatch_position, master_info, terminal};
 use super::tianhuophalanx::CTianhuoPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
-use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -46,9 +52,6 @@ use crate::public::tools::get_line_direction;
 
 pub(crate) const TIANHUO_SKILL_ID: u32 = 0x21a;
 pub(crate) const TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
-const APPLICATION_VISUAL_SKILL_ID: i32 = 0x13a;
-const PLAYER_TYPE: i32 = 400;
-const VISUAL_OBJECT_TYPE: i32 = 700;
 const DENIED_STATE_A: u32 = 0x192;
 const DENIED_STATE_B: u32 = 0xd2;
 const DENIED_STATE_C: u32 = 0x67;
@@ -58,60 +61,16 @@ const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
 const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 
-fn send_visual(
-    game: &mut CGame,
-    player_id: i32,
-    skill_level: i32,
-    action: u8,
-    target: Option<(ShapeIdentity, i32, i32)>,
-) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-    message.add_byte(action);
-    match action {
-        1 | 3 => {
-            message.add_long(TIANHUO_SKILL_ID as i32);
-            message.base_mut().add_short(skill_level as i16);
-            message.add_long(VISUAL_OBJECT_TYPE);
-            message.add_long(player_id);
-            message.add_long(player.shape().get_direction());
-        }
-        2 => {
-            let (target, x, y) = target.unwrap_or((
-                ShapeIdentity {
-                    object_type: 0,
-                    id: 0,
-                    ex_id: crate::public::guid::CGuid::GUID_INVALID,
-                },
-                0,
-                0,
-            ));
-            message.add_long(APPLICATION_VISUAL_SKILL_ID);
-            message.base_mut().add_short(skill_level as i16);
-            message.add_long(VISUAL_OBJECT_TYPE);
-            message.add_long(player_id);
-            message.add_long(target.object_type);
-            message.add_long(target.id);
-            message.add_long(x);
-            message.add_long(y);
-        }
-        _ => return,
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
 fn reject(
     game: &mut CGame,
     player_id: i32,
-    skill_level: i32,
     action: u8,
     string_id: &[u8],
 ) -> QueuedSkillExecutionOutcome {
-    game.send_battle_fairy_skill_failure(player_id, action);
+    game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, u32::from(action));
     if !string_id.is_empty() {
         game.send_skill_system_info(player_id, string_id);
     }
-    send_visual(game, player_id, skill_level, 3, None);
     terminal(QueuedSkillExecutionState::Rejected)
 }
 
@@ -137,13 +96,11 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
-        send_visual(game, player_id, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
-        if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
+        if action != 2 { game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, u32::from(action)); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
-        send_visual(game, player_id, skill_level, 3, None);
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(TIANHUO_SKILL_ID, skill_level) else {
@@ -205,7 +162,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 2, b"");
         };
         if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
-            game.send_battle_fairy_skill_failure(player_id, 7);
+            game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, 7);
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
@@ -233,13 +190,12 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
                 player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
             });
             let Some(update) = update else {
-                game.send_battle_fairy_skill_failure(player_id, 7);
+                game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
                     battle_fairy_mana_text_cost(mp_loss),
                 );
-                send_visual(game, player_id, skill_level, 3, None);
                 return terminal(QueuedSkillExecutionState::Rejected);
             };
             let mut message = CMessage::new(update.message_type as i32);
@@ -251,7 +207,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         }
         let Some((target_x, target_y, _)) = dispatch_position(game, region_id, dispatch)
         else {
-            return reject(game, player_id, skill_level, 10, b"");
+            return reject(game, player_id, 10, b"");
         };
         if let Some(player) = game.find_player_mut(player_id) {
             let source = player.shape();
@@ -275,9 +231,9 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
+            return reject(game, player_id, 0x0b, b"ZHGS0049");
         }
-        send_visual(game, player_id, skill_level, 1, None);
+        game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, 0);
         if let Some(execution) = game.battle_fairy_execution_mut(player_id, TIANHUO_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -292,28 +248,13 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     }
     let Some((target_x, target_y, target)) = dispatch_position(game, region_id, dispatch)
     else {
-        return reject(game, player_id, skill_level, 10, b"");
+        return reject(game, player_id, 10, b"");
     };
     if target.is_some_and(|target| game.periodic_state_target_dead(region_id, target)) {
-        return reject(game, player_id, skill_level, 10, b"");
+        return reject(game, player_id, 10, b"");
     }
-    send_visual(
-        game,
-        player_id,
-        skill_level,
-        2,
-        Some((
-            target.unwrap_or(ShapeIdentity {
-                object_type: 0,
-                id: 0,
-                ex_id: crate::public::guid::CGuid::GUID_INVALID,
-            }),
-            target_x,
-            target_y,
-        )),
-    );
+    game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, 1);
     let Some(player) = game.find_player(player_id) else {
-        send_visual(game, player_id, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let master = master_info(player);
@@ -348,7 +289,6 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    send_visual(game, player_id, skill_level, 3, None);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {

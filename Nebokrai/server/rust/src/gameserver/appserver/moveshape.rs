@@ -127,7 +127,7 @@
 //! без дополнительного реестра и без поиска по intrinsic-категории. Отсутствие
 //! kernel не означает отсутствия самого registered owner-а. Общий End
 //! в states/skill.rs уже обслуживает Rage/KnightCut, в том числе без payload,
-//! и терминальный BattleFairy; его visual пока не материализован. Остальные
+//! и терминальный BattleFairy с owned visual. Остальные
 //! concrete callers ещё не все используют эту границу.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
@@ -741,6 +741,20 @@ impl MoveShapeSkill {
     pub(crate) fn battle_fairy_dispatch(&self) -> Option<super::player::BattleFairySkillDispatch> {
         match self.execution_dispatch() {
             Some(RegisteredSkillDispatch::BattleFairy(dispatch)) => Some(dispatch),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn battle_fairy_execution_state(&self) -> Option<&BattleFairyExecution> {
+        match &self.execution {
+            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn battle_fairy_execution_state_mut(&mut self) -> Option<&mut BattleFairyExecution> {
+        match &mut self.execution {
+            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
             _ => None,
         }
     }
@@ -5698,10 +5712,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&BattleFairyExecution> {
-        match &self.skill(skill_id, factory)?.execution {
-            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
-            _ => None,
-        }
+        self.skill(skill_id, factory)?.battle_fairy_execution_state()
     }
 
     pub(crate) fn battle_fairy_execution_mut(
@@ -5709,10 +5720,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> Option<&mut BattleFairyExecution> {
-        match &mut self.skill_mut(skill_id, factory)?.execution {
-            RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
-            _ => None,
-        }
+        self.skill_mut(skill_id, factory)?.battle_fairy_execution_state_mut()
     }
 
     pub(crate) fn install_battle_fairy_execution(

@@ -13,10 +13,16 @@
 //! Отказ Begin завершает visual перед внешним 4,2 планировщика; AI-отказ
 //! заканчивается End(0) без повторного общего ответа.
 //! В Rust внешний 4,2 принадлежит только координатору после общего End(0),
-//! а этот владелец сохраняет собственные ошибки ресурса и visual action 3.
+//! а этот владелец передаёт собственные ошибки и режимы 0/1 общему visual-dispatch.
+//! CHuoxieshuEffect/CLingzhishuEffect (Update 0x0051cb80/0x0051bf60) создаются
+//! в Begin после базового вызова: 0x0c, BeginVisualEffect(1), затем CheckCondition.
+//! Их mode 1 пишет реальный тип и ID GetUser дважды, затем его координаты.
+//! Собственный End(bool,+0x94) 0x0051be50 вызывает Update(3) без повторного Begin,
+//! затем наследуемый End(int). Этот хвост concrete Begin/AI выполняет общий
+//! координатор; внешний int-слот +0x68 не превращается в вызов bool-перегрузки.
 
 use super::basemagic::{
-    BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::huoxieshu::HUOXIESHU_SKILL_ID;
@@ -29,7 +35,6 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 
-const VISUAL_OBJECT_TYPE: i32 = 700;
 const SKILL_USAGE_USER_HP_LOSE: u32 = 1;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_TARGET_HP_GAIN: u32 = 31;
@@ -63,7 +68,7 @@ impl BattleFairyTransferKind {
         }
     }
 
-    const fn failure_action(self) -> u8 {
+    const fn failure_action(self) -> u32 {
         match self {
             Self::Health => 6,
             Self::Mana => 7,
@@ -99,44 +104,13 @@ impl BattleFairyTransferKind {
     }
 }
 
-pub(super) fn send_failure(game: &CGame, player_id: i32, action: u8) {
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-    message.add_byte(4);
-    message.add_byte(action);
-    let _ = message.send_to_player(game.net_server(), player_id);
-}
-
-pub(super) fn send_transfer_cast(
+pub(super) fn send_failure(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    skill_level: i32,
-    action: u8,
+    mode: u32,
 ) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-    message.add_byte(action);
-    message.add_long(skill_id as i32);
-    message.base_mut().add_short(skill_level as i16);
-    match action {
-        1 | 3 => {
-            message.add_long(VISUAL_OBJECT_TYPE);
-            message.add_long(player_id);
-            message.add_long(player.shape().get_direction());
-        }
-        2 => {
-            message.add_long(400);
-            message.add_long(player_id);
-            message.add_long(400);
-            message.add_long(player_id);
-            message.add_long(player.shape().get_tile_x().unwrap_or(0));
-            message.add_long(player.shape().get_tile_y().unwrap_or(0));
-        }
-        _ => return,
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+    game.update_player_skill_visual(player_id, skill_id, mode);
 }
 
 pub(super) fn send_goods_update(
@@ -182,12 +156,8 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         } if skill_id == kind.skill_id() => skill_level,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let reject_before_ai = |game: &mut CGame| {
-        send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
-        terminal(QueuedSkillExecutionState::Rejected)
-    };
     let Some(properties) = game.skill_base_properties(kind.skill_id(), skill_level) else {
-        return reject_before_ai(game);
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
     let cost = properties.query_property(kind.cost_usage());
     let gain = properties.query_property(kind.gain_usage());
@@ -206,18 +176,18 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
-            send_failure(game, player_id, 0x0d);
+            send_failure(game, player_id, kind.skill_id(), 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
-            return reject_before_ai(game);
+            return terminal(QueuedSkillExecutionState::Rejected);
         }
         if kind.initial_cost_unavailable(kind.source(player), cost) {
-            send_failure(game, player_id, kind.failure_action());
+            send_failure(game, player_id, kind.skill_id(), kind.failure_action());
             let (string_id, value) = match kind {
                 BattleFairyTransferKind::Health => (b"ZHGS0054".as_slice(), cost.wrapping_add(1)),
                 BattleFairyTransferKind::Mana => (b"ZHGS0052".as_slice(), cost),
             };
             game.send_skill_system_info_with_unsigned(player_id, string_id, value);
-            return reject_before_ai(game);
+            return terminal(QueuedSkillExecutionState::Rejected);
         }
         game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(
             dispatch,
@@ -234,7 +204,6 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         .and_then(|player| player.server_region_id())
         .is_none()
     {
-        send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -249,16 +218,15 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         }
         let current = kind.source(player);
         if kind.runtime_cost_unavailable(current, cost) {
-            send_failure(game, player_id, kind.failure_action());
+            send_failure(game, player_id, kind.skill_id(), kind.failure_action());
             game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", cost);
-            send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
             kind.deduct(player, current, cost);
         }
         let _ = game.publish_player_states(player_id);
-        send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 1);
+        game.update_player_skill_visual(player_id, kind.skill_id(), 0);
         if let Some(state) = game.battle_fairy_execution_mut(player_id, kind.skill_id()) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -279,7 +247,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
     {
         return terminal(QueuedSkillExecutionState::Pending);
     }
-    send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 2);
+    game.update_player_skill_visual(player_id, kind.skill_id(), 1);
     let update = game.find_player_mut(player_id).and_then(|player| match kind {
         BattleFairyTransferKind::Health => {
             player.restore_war_soul_health(gain, &goods_factory, da_kong_key)
@@ -298,6 +266,5 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
     terminal(QueuedSkillExecutionState::Completed)
 }

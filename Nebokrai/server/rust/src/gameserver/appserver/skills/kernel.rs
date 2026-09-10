@@ -2,9 +2,10 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
 //! `appserver/states/state.cpp`, `skill.cpp`, `attackskill.cpp`, `defenseskill.cpp` и
-//! `stateskill.cpp`. Подтверждённый общий контракт —
-//! последовательность `Begin → Check → Calculate → Attack → Apply`, хранение
-//! времени начала и одно конечное состояние выполнения. Старую C++-иерархию
+//! `stateskill.cpp`. Rust-последовательность
+//! `Begin → Check → Calculate → Attack → Apply` упорядочивает достигнутые фазы,
+//! но не воспроизводит числовые поля native-классов. Время начала и конечное
+//! состояние принадлежат единственной базе. Старую C++-иерархию
 //! с виртуальными конструкторами и RTTI не воспроизводим: intrinsic-категория
 //! берётся из фабричного owner-каталога, имя — из актуальных свойств ID/уровня.
 //! Выбранный ID принадлежит CMoveShape, команды — CPlayerAI, а путь, поворот,
@@ -12,13 +13,25 @@
 //! Типы исполнения игрока и боевого духа отделены от очередей CPlayerAI:
 //! их данные принадлежат зарегистрированному экземпляру CMoveShape. Общий
 //! enum и доступ к kernel не выполняют Begin либо concrete End автоматически.
-//! Тот же каталог связывает узкие derived End-переходы и освобождение путей:
+//! Небольшой отдельный каталог BattleFairy выводит enum, доступ к единственному
+//! kernel, From и узкие End-hooks для BaseMagic/FatalBlow. Полётный скаляр
+//! FatalBlow принадлежит concrete исполнению, а общий visual остаётся ресурсом
+//! зарегистрированного навыка. BF End(int) 0x00516FB0/0x0051A700/0x005222A0
+//! обнуляет DWORD +0x4C/+0x50 до visual и AfterUse: у BloodLoss Begin
+//! (0x0051A606) ставит +0x4C=1, а AI (0x0051B433) при нуле сразу выходит;
+//! +0x50 в 0x0051B4B7 отдельно пропускает первую проверку. End(bool)
+//! 0x0051BE50/0x005246C0 очищает BYTE +0x4C/+0x4D, но не подменяет End(int).
+//! Idle представляет выключенную concrete-фазу, не новый Begin и не ended
+//! базы: source/target/time/visual ещё доступны последующим End-действиям.
+//! FatalBlow End дополнительно очищает flying-time; BaseMagic attack-time
+//! сохраняется. Выбор применимого int/bool-пролога остаётся у владельца End.
+//! Каталог Player связывает узкие derived End-переходы и освобождение путей:
 //! scalar/kernel остаётся у экземпляра, а порядок относительно movement/visual
 //! определяет общий End. Hooks не меняют FIFO, selection, базовую available
 //! или самостоятельные региональные phalanx. Ненулевой HeartLessArrow End
 //! может только выпустить удерживаемую стрелу и запретить общий хвост.
 //! Hooks очищают подтверждённые поля существующей Rust-проекции. Отдельные
-//! derived available/condition/skill-casted, пока не представленные у owner-а,
+//! прочие derived available/condition/skill-casted, пока не представленные у owner-а,
 //! не кодируются записью в base available или произвольным откатом stage.
 //! SkillLifecycle хранит постоянную базу CState/CSkill. CState constructor
 //! (0x005DBCA0) задаёт ended=true и нулевые source/target/coords/time;
@@ -38,8 +51,8 @@
 //! удаление visual и лишь после этого выставляет ended. Это не callback и не
 //! полный concrete End. Option<SkillVisualEffect> принадлежит самому экземпляру,
 //! а не копируемой скалярной базе; пакет эффекта не заменяет ресурс.
-//! Подключённый CRageEffect хранит только свою базу; остальные производные
-//! visual остаются отдельной задачей. Diagnostic termination
+//! Данные производных visual не копируются в kernel; общий ресурс хранит
+//! зарегистрированный экземпляр. Diagnostic termination
 //! не подменяет native ended; полное подключение registered End ещё требуется.
 //!
 //! Отложенные межвладельческие действия формируются до постановки команды
@@ -82,6 +95,7 @@ use super::directprojectile::PlayerDirectProjectileExecutionState;
 use super::energybolt::PlayerPathProjectileExecutionState;
 use super::explosivearrow::ExplosiveArrowExecutionState;
 use super::fallingstar::FallingStarExecutionState;
+use super::fatalblow::FatalBlowExecutionState;
 use super::flash::FlashExecutionState;
 use super::ghostcut::GhostCutExecutionState;
 use super::heartlessarrow::HeartlessArrowExecutionState;
@@ -249,37 +263,62 @@ impl From<SkillExecutionKernel<PlayerSkillDispatch>> for PlayerSkillExecution {
     fn from(state: SkillExecutionKernel<PlayerSkillDispatch>) -> Self { Self::State(state) }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyExecution {
-    State(SkillExecutionKernel<BattleFairySkillDispatch>),
-    BaseMagic(BattleFairyBaseMagicExecutionState),
+macro_rules! battle_fairy_skill_states {
+    ($($variant:ident($state:ty) $(prepare($prepare:ident))?),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub(crate) enum BattleFairyExecution {
+            State(SkillExecutionKernel<BattleFairySkillDispatch>),
+            $($variant($state),)+
+        }
+
+        impl BattleFairyExecution {
+            pub(crate) fn kernel(&self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
+                match self {
+                    Self::State(state) => *state,
+                    $(Self::$variant(state) => *state.kernel(),)+
+                }
+            }
+
+            pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
+                match self {
+                    Self::State(state) => state,
+                    $(Self::$variant(state) => state.kernel_mut(),)+
+                }
+            }
+
+            pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
+                match self {
+                    Self::State(state) => state.lifecycle(),
+                    $(Self::$variant(state) => state.kernel().lifecycle(),)+
+                }
+            }
+
+            pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
+                self.kernel_mut().lifecycle_mut()
+            }
+
+            pub(crate) fn prepare_derived_end(&mut self) {
+                self.kernel_mut().clear_phase_for_end();
+                match self {
+                    Self::State(_) => {},
+                    $(Self::$variant(_state) => battle_fairy_skill_states!(@prepare _state $(, $prepare)?),)+
+                }
+            }
+        }
+
+        $(
+            impl From<$state> for BattleFairyExecution {
+                fn from(state: $state) -> Self { Self::$variant(state) }
+            }
+        )+
+    };
+    (@prepare $state:ident) => { {} };
+    (@prepare $state:ident, $method:ident) => { $state.$method() };
 }
 
-impl BattleFairyExecution {
-    pub(crate) fn kernel(&self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
-        match self {
-            Self::State(state) => *state,
-            Self::BaseMagic(state) => *state.kernel(),
-        }
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
-        match self {
-            Self::State(state) => state,
-            Self::BaseMagic(state) => state.kernel_mut(),
-        }
-    }
-
-    pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
-        match self {
-            Self::State(state) => state.lifecycle(),
-            Self::BaseMagic(state) => state.kernel().lifecycle(),
-        }
-    }
-
-    pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
-        self.kernel_mut().lifecycle_mut()
-    }
+battle_fairy_skill_states! {
+    BaseMagic(BattleFairyBaseMagicExecutionState),
+    FatalBlow(FatalBlowExecutionState) prepare(prepare_derived_end),
 }
 
 pub(crate) fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
@@ -300,6 +339,7 @@ pub(crate) const fn skill_is_restored(
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SkillStage {
+    Idle,
     Begin,
     Check,
     Calculate,
@@ -492,6 +532,10 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
 
     pub(crate) const fn stage(self) -> SkillStage {
         self.stage
+    }
+
+    pub(crate) fn clear_phase_for_end(&mut self) {
+        self.stage = SkillStage::Idle;
     }
 
     pub(crate) const fn termination(self) -> Option<SkillTermination> {

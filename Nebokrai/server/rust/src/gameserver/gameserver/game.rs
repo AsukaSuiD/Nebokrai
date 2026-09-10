@@ -837,7 +837,7 @@ use crate::gameserver::appserver::player::{
     BattleFairyObjectMoveOperation, BattleFairyPotentialAllocationEffect,
     BattleFairyPotentialResetEffect, BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, BattleFairySkillResetEffect, BattleFairySkillResetReport,
-    BattleFairySummonEffect, BattleFairySummonOutcome, BattleFairySummonReport,
+    BattleFairySummonEffect, BattleFairySummonReport,
     BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
     CiQingContainerConsumption,
     CiQingHandConsumption, CiQingPacketAddition, CiQingPacketConsumption,
@@ -19508,25 +19508,13 @@ impl CGame {
                     .or_default();
                 team_id
             });
-        let interrupted_war_soul_skill = self.cancel_active_battle_fairy_skill(player_id);
         let war_soul = self
             .find_player_mut(player_id)
             .and_then(CPlayer::prepare_war_soul_region_entry);
+        let mut interrupted_war_soul_skill = false;
         let war_soul_delivery = if let Some((action, x_bits, y_bits)) = war_soul {
-            let spatial_applied = self
-                .find_region_mut(region_id)
-                .and_then(|owner| match action {
-                    BattleFairyWarSoulAction::SetPosition { previous, target } => Some(
-                        owner
-                            .base_mut()
-                            .set_war_soul_position(player_id as u32, previous, target),
-                    ),
-                    BattleFairyWarSoulAction::Delete { .. } => None,
-                })
-                .unwrap_or(false);
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.apply_war_soul_action(action, spatial_applied);
-            }
+            (_, interrupted_war_soul_skill) =
+                self.apply_player_war_soul_action(player_id, Some(region_id), action);
             let mut movement = CMessage::new(0x000b_f605);
             movement.add_long(player_id);
             movement.add_long(700);
@@ -19546,7 +19534,7 @@ impl CGame {
             player_id,
             region_id,
             ?team_snapshot_queued,
-            interrupted_war_soul_skill = interrupted_war_soul_skill.is_some(),
+            interrupted_war_soul_skill,
             ?war_soul_delivery,
             "завершён хвост OnEnterRegion игрока"
         );
@@ -33536,12 +33524,12 @@ impl CGame {
             .map(BattleFairyExecution::kernel_mut)
     }
 
-    fn insert_battle_fairy_execution(&mut self, player_id: i32, execution: BattleFairyExecution) -> bool {
-        let kernel = execution.kernel();
-        if self.player_skill_lifecycle(player_id, kernel.dispatch().skill_id()).is_some_and(SkillLifecycle::is_ended) {
-            self.begin_battle_fairy_skill_lifecycle(player_id, kernel.dispatch(), kernel.started_at_ms());
-            self.finish_player_skill_base_begin(player_id, kernel.dispatch().skill_id(), true);
-        }
+    pub(crate) fn battle_fairy_execution_state_mut(&mut self, player_id: i32, skill_id: u32) -> Option<&mut BattleFairyExecution> {
+        self.players.get_mut(&player_id)?.move_shape_mut().battle_fairy_execution_mut(skill_id, &self.skill_factory)
+    }
+
+    pub(crate) fn insert_battle_fairy_execution(&mut self, player_id: i32, execution: impl Into<BattleFairyExecution>) -> bool {
+        let execution = execution.into();
         self.players.get_mut(&player_id).is_some_and(|player| {
             player.move_shape_mut().install_battle_fairy_execution(execution, &self.skill_factory)
         })
@@ -33558,7 +33546,7 @@ impl CGame {
     pub(crate) fn battle_fairy_base_magic(&self, player_id: i32) -> Option<crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState> {
         match self.find_player(player_id)?.move_shape().battle_fairy_execution(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, &self.skill_factory)? {
             BattleFairyExecution::BaseMagic(state) => Some(*state),
-            BattleFairyExecution::State(_) => None,
+            _ => None,
         }
     }
 
@@ -35464,38 +35452,52 @@ impl CGame {
             let player = self.players.get_mut(&player_id)?;
             player.summon_battle_fairy(battle_fairy_enabled, mode, &self.goods_factory)
         };
-        let interrupted_skill = if report.outcome == BattleFairySummonOutcome::Recalled {
-            self.cancel_active_battle_fairy_skill(player_id)
-        } else {
-            None
-        };
-        if let Some(action) = report.spatial_action {
-            let spatial_applied = report.region_id.is_some_and(|region_id| {
-                let Some(region) = self.regions.get_mut(&region_id) else {
-                    return false;
-                };
-                match action {
-                    BattleFairyWarSoulAction::SetPosition { previous, target } => region
-                        .base_mut()
-                        .set_war_soul_position(player_id as u32, previous, target),
-                    BattleFairyWarSoulAction::Delete { previous, .. } => region
-                        .base_mut()
-                        .delete_war_soul(player_id as u32, previous),
-                }
-            });
-            if let Some(player) = self.players.get_mut(&player_id) {
-                player.apply_war_soul_action(action, spatial_applied);
-            }
-        }
+        let interrupted_skill = report.spatial_action.is_some_and(|action| {
+            self.apply_player_war_soul_action(player_id, report.region_id, action).1
+        });
         self.deliver_battle_fairy_summon_effects(&mut report);
         tracing::debug!(
             player_id,
             mode,
             ?report.outcome,
-            interrupted_skill = interrupted_skill.is_some(),
+            interrupted_skill,
             "призыв боевой феи обработан"
         );
         Some(())
+    }
+
+    /// Общий вызов CPlayer::SetWarSoulXY (0x0042DF50) / DelWarSoul
+    /// (0x0042E0A0): selected End(int,0) предшествует изменению area map.
+    /// Set требует существующей target area; Delete уже допущен goods-owner
+    /// и завершает навык даже без региона. Это не снятие команды CPlayerAI.
+    /// Возвращает отдельно факт пространственного изменения и вызов End.
+    fn apply_player_war_soul_action(
+        &mut self,
+        player_id: i32,
+        region_id: Option<i32>,
+        action: BattleFairyWarSoulAction,
+    ) -> (bool, bool) {
+        let should_end = match action {
+            BattleFairyWarSoulAction::SetPosition { target, .. } => region_id
+                .and_then(|id| self.find_region(id))
+                .is_some_and(|region| region.base().has_war_soul_area(target)),
+            BattleFairyWarSoulAction::Delete { .. } => true,
+        };
+        let interrupted = should_end && self.cancel_active_battle_fairy_skill(player_id);
+        let spatial_applied = region_id
+            .and_then(|id| self.find_region_mut(id))
+            .is_some_and(|region| match action {
+                BattleFairyWarSoulAction::SetPosition { previous, target } => region
+                    .base_mut()
+                    .set_war_soul_position(player_id as u32, previous, target),
+                BattleFairyWarSoulAction::Delete { previous, .. } => region
+                    .base_mut()
+                    .delete_war_soul(player_id as u32, previous),
+            });
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.apply_war_soul_action(action, spatial_applied);
+        }
+        (spatial_applied, interrupted)
     }
 
     /// Reached tail virtual `CPlayer::UpdateProperty`: equipment recompute
@@ -41539,6 +41541,17 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
+        // Собственный End уже выключает concrete AI до visual/AfterUse,
+        // пока база, источник и payload ещё живы. Это не повторный Begin.
+        if self.battle_fairy_execution(player_id, dispatch.skill_id())
+            .is_some_and(|execution| execution.stage() == SkillStage::Idle)
+        {
+            return QueuedSkillExecutionOutcome {
+                state: QueuedSkillExecutionState::Pending,
+                first_contact: false,
+                killing_blow: None,
+            };
+        }
         let execute: fn(
             &mut Self,
             i32,
@@ -44138,20 +44151,8 @@ impl CGame {
             tracing::trace!(player_id, outcome = ?plan.outcome, "следование боевой феи не потребовало пространственного действия");
             return Some(());
         };
-        let spatial_applied = plan.region_id.is_some_and(|region_id| {
-            let Some(region) = self.regions.get_mut(&region_id) else {
-                return false;
-            };
-            match action {
-                BattleFairyWarSoulAction::SetPosition { previous, target } => region
-                    .base_mut()
-                    .set_war_soul_position(player_id as u32, previous, target),
-                BattleFairyWarSoulAction::Delete { .. } => false,
-            }
-        });
-        if let Some(player) = self.players.get_mut(&player_id) {
-            player.apply_war_soul_action(action, spatial_applied);
-        }
+        let (spatial_applied, _) =
+            self.apply_player_war_soul_action(player_id, plan.region_id, action);
         let effects = plan.effects.take_all();
         let effect_count = effects.len();
         for effect in effects {
@@ -44207,20 +44208,8 @@ impl CGame {
         let action = plan
             .spatial_action
             .expect("очистка war-soul мёртвого игрока всегда имеет spatial action");
-        let spatial_applied = plan.region_id.is_some_and(|region_id| {
-            let Some(region) = self.regions.get_mut(&region_id) else {
-                return false;
-            };
-            match action {
-                BattleFairyWarSoulAction::SetPosition { previous, target } => region
-                    .base_mut()
-                    .set_war_soul_position(player_id as u32, previous, target),
-                BattleFairyWarSoulAction::Delete { .. } => false,
-            }
-        });
-        if let Some(player) = self.players.get_mut(&player_id) {
-            player.apply_war_soul_action(action, spatial_applied);
-        }
+        let (spatial_applied, _) =
+            self.apply_player_war_soul_action(player_id, plan.region_id, action);
         tracing::trace!(player_id, outcome = ?plan.outcome, spatial_applied, "очищена позиция мёртвой боевой феи");
         Some(())
     }

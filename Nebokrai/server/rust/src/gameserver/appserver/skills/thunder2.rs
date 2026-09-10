@@ -5,10 +5,10 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunder2.cpp`. Владелец сохраняет проверки цели и пути,
 //! задержку повторного использования, расход MP, ожидание, стадии
-//! `SkillExecutionKernel`, визуальные
-//! пакеты и построение однократной области `CLeimingPhalanx2`. Общие только
-//! для пары громовых навыков построители пакета выполнения и отказа находятся
-//! в `thunder.rs`; формула и жизненный цикл области остаются здесь и в
+//! `SkillExecutionKernel`, режимы owned visual и построение однократной области
+//! `CLeimingPhalanx2`. Общий отказ пары громовых навыков находится
+//! в `thunder.rs`; wire-публикация принадлежит `battlefairyskill.rs`,
+//! формула и жизненный цикл области остаются здесь и в
 //! `thunder2phalanx.rs`. `CGame` разрешает владельцев, регистрирует область,
 //! применяет атаку к целям и выполняет фактическую доставку.
 //! Пара с `CThunder` использует то же усечение sprite через исходный `i64` и
@@ -18,7 +18,16 @@
 //! Отказ объектного Begin завершает эффект через End(0), затем расписание
 //! отправляет `4,2`; отказ уже начатого AI не повторяет этот общий ответ.
 //! В Rust внешний 4,2 отправляет только координатор после общего End(0),
-//! а concrete Begin и общий null-target helper сохраняют visual action 3.
+//! а visual action 3 принадлежит общему End(int), включая null-target отказ.
+//! Effect Leiming2: object Begin выделяет 0xC в 0x0051F9EC, вызывает базовый
+//! CVisualEffect(0x005DC200), ставит vtable 0x00656F74 и BeginVisualEffect(1)
+//! в 0x0051FA22 до CheckCast. Update 0x0051FA80 требует точный тип навыка,
+//! !ended и GetUser; режимы 0/1/3 дают action 1/2/3 из live source/skill level.
+//! Mode 1 передаёт target 0/0 и GetSufferer XY либо saved XY; failure требует
+//! CPlayer, mode 7 намеренно даёт bytes 0,7 (0x0051FC7C/0x0051FC8F), mode 14
+//! молчит. Хвост 0x0051FF33→0x005DC1E0 безусловен; End(int) вызывает mode 3
+//! без повторного Begin. Исходный around временно меняет source type на 700
+//! и возвращает 400; эта транспортная особенность остаётся общему publisher.
 //! AI после virtual Summon(+0x8C) в 0x005208AB сразу вызывает End(1).
 //! Поэтому неудачная регистрация области после попытки Summon возвращает
 //! RejectedAfterUse, сохраняя общий AfterUse и reuse без продления навыка.
@@ -35,8 +44,8 @@ use super::kernel::{
     battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
 };
 use super::thunder::{
-    dispatch_position, master_info, reject_thunder_family, reject_thunder_null_target, scaled_battle_fairy_sprite,
-    send_thunder_family_cast, terminal, thunder_element_modifier,
+    dispatch_position, master_info, reject_thunder_family, scaled_battle_fairy_sprite,
+    terminal, thunder_element_modifier,
 };
 use super::thunder2phalanx::CLeimingPhalanx2;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -60,7 +69,6 @@ const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 fn reject(
     game: &mut CGame,
     player_id: i32,
-    skill_level: i32,
     action: u8,
     string_id: &[u8],
 ) -> QueuedSkillExecutionOutcome {
@@ -68,7 +76,6 @@ fn reject(
         game,
         player_id,
         LEIMING2_SKILL_ID,
-        skill_level,
         action,
         string_id,
     )
@@ -96,12 +103,11 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
-        return reject_thunder_null_target(game, player_id, LEIMING2_SKILL_ID, skill_level);
+        return terminal(QueuedSkillExecutionState::Rejected);
     }
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
-        if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
+        if action != 2 { game.update_player_skill_visual(player_id, LEIMING2_SKILL_ID, u32::from(action)); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
-        send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(LEIMING2_SKILL_ID, skill_level) else {
@@ -155,7 +161,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 0x0b, b"ZHGS0049");
         }
         if path.iter().any(|cell| cell.2 == 2) {
-            game.send_battle_fairy_skill_failure(player_id, 0x0f);
+            game.update_player_skill_visual(player_id, LEIMING2_SKILL_ID, 0x0f);
             game.send_skill_system_info(player_id, b"ZHGS0051");
             return reject_before_ai(game, 2, b"");
         }
@@ -166,7 +172,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             return reject_before_ai(game, 2, b"");
         };
         if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
-            game.send_battle_fairy_skill_failure(player_id, 7);
+            game.update_player_skill_visual(player_id, LEIMING2_SKILL_ID, 7);
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
@@ -190,7 +196,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         if let BattleFairySkillDispatch::Object { target, .. } = dispatch
             && game.periodic_state_target_dead(region_id, target)
         {
-            return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+            return reject(game, player_id, 10, b"ZHGS0050");
         }
         if mp_loss != 0 {
             let goods_factory = game.goods_factory().clone();
@@ -199,22 +205,17 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
                 player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
             });
             let Some(update) = update else {
-                game.send_battle_fairy_skill_failure(player_id, 7);
+                game.update_player_skill_visual(player_id, LEIMING2_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
                     battle_fairy_mana_text_cost(mp_loss),
                 );
-                send_thunder_family_cast(
-                    game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
-                );
                 return terminal(QueuedSkillExecutionState::Rejected);
             };
             send_goods_update(game, &update);
         }
-        send_thunder_family_cast(
-            game, player_id, LEIMING2_SKILL_ID, skill_level, 1, None,
-        );
+        game.update_player_skill_visual(player_id, LEIMING2_SKILL_ID, 0);
         if let Some(execution) = game.battle_fairy_execution_mut(player_id, LEIMING2_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -230,28 +231,19 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y, target)) =
         dispatch_position(game, region_id, dispatch)
     else {
-        return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+        return reject(game, player_id, 10, b"ZHGS0050");
     };
     if target.is_some_and(|target| game.periodic_state_target_dead(region_id, target)) {
-        return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+        return reject(game, player_id, 10, b"ZHGS0050");
     }
-    send_thunder_family_cast(
-        game,
-        player_id,
-        LEIMING2_SKILL_ID,
-        skill_level,
-        2,
-        Some((target_x, target_y)),
-    );
+    game.update_player_skill_visual(player_id, LEIMING2_SKILL_ID, 1);
     let Some(player) = game.find_player(player_id) else {
-        send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let Some(sprite) = player
         .war_soul_goods(game.goods_factory())
         .map(|goods| goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1))
     else {
-        send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let scaled_sprite = scaled_battle_fairy_sprite(sprite);
@@ -292,9 +284,6 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    send_thunder_family_cast(
-        game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
-    );
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {

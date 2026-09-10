@@ -41,6 +41,11 @@
 //! становятся локальной typed-границей, а не platform-dependent trap/UB.
 //! Старый unbounded `GetArea(index)` заменён `Result`, coordinate overload
 //! сохраняет доказанный `nullptr -> Option`.
+//! Spatial-tail `CPlayer::SetWarSoulXY/DelWarSoul` (0x0042DF50/0x0042E0A0)
+//! использует signed деление координат на 15, включая (-1,-1) -> area (0,0).
+//! Наличие нужной области, а не результат Add/DelWarSoul, разрешает запись
+//! player point. Выбранный skill завершается через End(int,0) в `CGame`:
+//! Set — после target-area gate до изменения map, Delete — до region gate.
 //! Старые pointer-valued hash maps выражены registry identity: сами `CShape`
 //! остаются у runtime owner-а и разрешаются через `ShapeResolver`. Это
 //! сознательная смена формы API без копии shared/derived семантики. Player
@@ -3520,10 +3525,15 @@ impl CServerRegion {
         self.areas.get_mut(index)
     }
 
+    pub(crate) fn has_war_soul_area(&self, point: WarSoulPoint) -> bool {
+        self.get_area(point.x / WAR_SOUL_AREA_SPAN, point.y / WAR_SOUL_AREA_SPAN)
+            .is_some()
+    }
+
     /// Материализует spatial tail `CPlayer::SetWarSoulXY`: target area должна
     /// существовать; old entry очищается лишь если её area присутствует, после
     /// чего точка добавляется в target map. Деление на `15` — literal `idiv
-    /// 0xF` из owner-а, а не общий размер region grid.
+    /// 0xF` из owner-а. Возвращается наличие target area, не результат AddWarSoul.
     pub(crate) fn set_war_soul_position(
         &mut self,
         player_id: u32,
@@ -3532,7 +3542,7 @@ impl CServerRegion {
     ) -> bool {
         let target_x = target.x / WAR_SOUL_AREA_SPAN;
         let target_y = target.y / WAR_SOUL_AREA_SPAN;
-        if self.get_area(target_x, target_y).is_none() {
+        if !self.has_war_soul_area(target) {
             return false;
         }
 
@@ -3541,19 +3551,22 @@ impl CServerRegion {
         if let Some(area) = self.get_area_mut(previous_x, previous_y) {
             let _legacy_result = area.del_war_soul(player_id, previous);
         }
-        self.get_area_mut(target_x, target_y)
+        let _legacy_result = self.get_area_mut(target_x, target_y)
             .expect("проверенная target area остаётся в том же grid")
-            .add_war_soul(player_id, target)
+            .add_war_soul(player_id, target);
+        true
     }
 
-    /// Материализует `CPlayer::DelWarSoul`: отсутствие текущей area не
-    /// препятствует caller-у сбросить собственную war-soul point к позиции
-    /// игрока, поэтому здесь возвращается только факт map-operation.
+    /// `CPlayer::DelWarSoul` сбрасывает player point только при найденной area,
+    /// независимо от результата удаления прежней записи из её карты.
     pub(crate) fn delete_war_soul(&mut self, player_id: u32, point: WarSoulPoint) -> bool {
         let area_x = point.x / WAR_SOUL_AREA_SPAN;
         let area_y = point.y / WAR_SOUL_AREA_SPAN;
-        self.get_area_mut(area_x, area_y)
-            .is_some_and(|area| area.del_war_soul(player_id, point))
+        let Some(area) = self.get_area_mut(area_x, area_y) else {
+            return false;
+        };
+        let _legacy_result = area.del_war_soul(player_id, point);
+        true
     }
 
     /// Точный `GetWarSoulXY`: упорядоченная карта одной области боевого духа

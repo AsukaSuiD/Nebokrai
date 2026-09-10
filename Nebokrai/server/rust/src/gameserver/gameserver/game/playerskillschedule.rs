@@ -76,6 +76,12 @@
 //! Даже с координатами war-soul расписание вызывает объектный Begin с null
 //! (0x00509861), а не координатную перегрузку; конкретный owner сохраняет
 //! собственный порядок отказа этого входа.
+//! Во всех 19 Begin после общей базы создаётся собственный CVisualEffect
+//! размера 0xC и вызывается BeginVisualEffect(1), до конкретных проверок.
+//! Общий Rust-ресурс доступен и отказавшему Begin без payload. Установка
+//! concrete-данных переносит уже начатую базу, не вызывает повторный Begin.
+//! При отказе координатор завершает захваченный экземпляр вместе с ресурсом,
+//! затем отправляет внешний 4,2; внутренние отказы остаются у владельца.
 //! Однако после допуска Begin всех 19 навыков феи (0x212..0x224) безусловно
 //! вызывает общий 0x00601A50, затем CSkill::Begin (0x004D83E0). Источник в
 //! OnScheduleAboutWarSoul 0x00509861 — CPlayer, не визуальный объект type 700:
@@ -152,6 +158,12 @@ impl CGame {
             self.begin_battle_fairy_skill_lifecycle(player_id, dispatch, runtime.now_milliseconds());
             self.enter_player_combat_state(player_id);
             self.finish_player_skill_base_begin(player_id, dispatch.skill_id(), true);
+            self.replace_player_skill_visual_effect(
+                player_id, dispatch.skill_id(),
+                crate::gameserver::appserver::states::visualeffect::SkillVisualEffect::new(
+                    crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind::BattleFairy, 1,
+                ),
+            );
         }
     }
 

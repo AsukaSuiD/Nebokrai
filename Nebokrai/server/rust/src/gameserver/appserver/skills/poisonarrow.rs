@@ -12,12 +12,21 @@
 //! первый 4,2 принадлежит Begin, последний — OnScheduleAboutWarSoul.
 //! В Rust внутренний 4,2 перед visual-End остаётся здесь; внешний 4,2
 //! отправляет только координатор после общего End(0), не concrete Begin.
+//! CPoisonArrowEffect: object Begin 0x005190D0 после общей базы выделяет 0xC,
+//! вызывает CVisualEffect(0x005DC200), ставит vtable 0x00656B30 и loop=1
+//! до CheckCast. Update 0x005191A0 требует точный тип навыка, !ended и GetUser;
+//! режимы 0/1/3 дают action 1/2/3, причём mode 1 требует live GetSufferer.
+//! ID/level читаются из базы, failure требует CPlayer. Общий publisher
+//! сохраняет безусловный хвост 0x005DC1E0; mode 13 даёт 4,13, в отличие
+//! от BloodLoss. End(int) 0x0051A700 при наличии source повторно начинает effect
+//! через BeginVisualEffect(1) перед mode 3; здесь остаются режимы Begin/AI,
+//! а visual состояния цели принадлежит poisonarrowstate.rs.
 //! Reuse использует exact `CSkill::IsRestored`; ожидание навыка сравнивает
 //! unsigned now с wrapping(start + delay), cmp/jb 0x00519fa6.
 //! Периодические часы принадлежат владельцу состояния.
 
 use super::basemagic::{
-    BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::battlefairytransfer::send_goods_update;
@@ -28,16 +37,13 @@ use super::poisonarrowstate::{PoisonArrowState, send_poison_arrow_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
-use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const POISON_ARROW_SKILL_ID: u32 = 0x21e;
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
-const VISUAL_OBJECT_TYPE: i32 = 700;
 const DENIED_STATE_A: u32 = 0x192;
 const DENIED_STATE_B: u32 = 0x67;
 const DENIED_STATE_C: u32 = 0xd2;
@@ -52,38 +58,6 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
         first_contact: false,
         killing_blow: None,
     }
-}
-
-fn send_failure(game: &CGame, player_id: i32, action: u8) {
-    game.send_battle_fairy_skill_failure(player_id, action);
-}
-
-fn send_cast(
-    game: &mut CGame,
-    player_id: i32,
-    skill_level: i32,
-    action: u8,
-    target: Option<(ShapeIdentity, i32, i32)>,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-    message.add_byte(action);
-    message.add_long(POISON_ARROW_SKILL_ID as i32);
-    message.base_mut().add_short(skill_level as i16);
-    message.add_long(VISUAL_OBJECT_TYPE);
-    message.add_long(player_id);
-    if action == 2 {
-        let Some((identity, x, y)) = target else { return };
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(x);
-        message.add_long(y);
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -137,15 +111,14 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
     };
     let starting = game.battle_fairy_execution(player_id, POISON_ARROW_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame| {
-        if starting { send_failure(game, player_id, 2); }
-        send_cast(game, player_id, skill_level, 3, None);
+        if starting { game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level) else {
         return reject_before_ai(game);
     };
     let Some(target) = target else {
-        send_failure(game, player_id, 10);
+        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
         game.send_skill_system_info(player_id, b"ZHGS0045");
         return reject_before_ai(game);
     };
@@ -160,7 +133,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
 
     if game.battle_fairy_execution(player_id, POISON_ARROW_SKILL_ID).is_none() {
         if target.id == player_id && target.object_type == PLAYER_TYPE {
-            send_failure(game, player_id, 10);
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
             game.send_skill_system_info(player_id, b"ZHGS0045");
             return reject_before_ai(game);
         }
@@ -181,12 +154,12 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
-            send_failure(game, player_id, 0x0d);
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
             return reject_before_ai(game);
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            send_failure(game, player_id, 10);
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
             game.send_skill_system_info(player_id, b"ZHGS0045");
             return reject_before_ai(game);
         };
@@ -202,12 +175,12 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            send_failure(game, player_id, 0x0b);
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 0x0b);
             game.send_skill_system_info(player_id, b"ZHGS0049");
             return reject_before_ai(game);
         }
         if path.iter().any(|cell| cell.2 == 2) {
-            send_failure(game, player_id, 0x0f);
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 0x0f);
             game.send_skill_system_info_with_text(
                 player_id,
                 b"ZHGS0051",
@@ -223,7 +196,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
                 return reject_before_ai(game);
             };
             if i64::from(current) - i64::from(mp_loss) < 0 {
-                send_failure(game, player_id, 7);
+                game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
@@ -249,8 +222,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             .base_magic_target_view(region_id, target)
             .is_some_and(|_| !game.periodic_state_target_dead(region_id, target));
         if !target_alive {
-            send_failure(game, player_id, 10);
-            send_cast(game, player_id, skill_level, 3, None);
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if mp_loss != 0 {
@@ -260,18 +232,17 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
                 player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
             });
             let Some(update) = update else {
-                send_failure(game, player_id, 7);
+                game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
                     battle_fairy_mana_text_cost(mp_loss),
                 );
-                send_cast(game, player_id, skill_level, 3, None);
                 return terminal(QueuedSkillExecutionState::Rejected);
             };
             send_goods_update(game, &update);
         }
-        send_cast(game, player_id, skill_level, 1, None);
+        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 0);
         if let Some(state) = game.battle_fairy_execution_mut(player_id, POISON_ARROW_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -285,13 +256,11 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-        send_failure(game, player_id, 10);
-        send_cast(game, player_id, skill_level, 3, None);
+        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if game.periodic_state_target_dead(region_id, target) {
-        send_failure(game, player_id, 10);
-        send_cast(game, player_id, skill_level, 3, None);
+        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let source_view = game
@@ -314,7 +283,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         } else {
             0x0f
         };
-        send_failure(game, player_id, action);
+        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, action);
         if action == 0x0b {
             game.send_skill_system_info(player_id, b"ZHGS0049");
         } else {
@@ -324,16 +293,9 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
                 game.periodic_state_target_name(region_id, target),
             );
         }
-        send_cast(game, player_id, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    send_cast(
-        game,
-        player_id,
-        skill_level,
-        2,
-        Some((target, target_view.tile_x, target_view.tile_y)),
-    );
+    game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 1);
     if target.object_type == PLAYER_TYPE {
         let _ = game.player_on_first_skill(player_id, target.id, Some(region_id), runtime);
     }
@@ -357,7 +319,6 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    send_cast(game, player_id, skill_level, 3, None);
     terminal(QueuedSkillExecutionState::Completed)
 }
 
