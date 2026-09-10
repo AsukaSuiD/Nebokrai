@@ -23,6 +23,9 @@
 //! End (0x005AE7A0) возвращает движение перед CSummonSkill::End;
 //! AfterUseSkill (0x005149E0) фиксирует только cooldown предмета. Общий
 //! callback игрока +0x158 пуст: дополнительный UpdateProperty не нужен.
+//! AfterUse/reuse проходят общую границу экземпляра: item-группа читается
+//! заново из текущих properties ID/level (usage 0xC351), а GetUser определяет
+//! владельца cooldown. Кеш item-index, нужный Summon, не передаётся в End.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED};
@@ -90,19 +93,12 @@ fn finish_player_item_skill_2<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     _player_ai: &mut CPlayerAI,
-    item_index: Option<u32>,
     runtime: &mut Runtime,
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    if let Some(item_index) = item_index {
-        let item_used_at_ms = runtime.now_milliseconds();
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.mark_skill_item_used(item_index, item_used_at_ms);
-        }
-    }
-    game.mark_player_skill_used(player_id, ITEM_SKILL_2_ID, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, ITEM_SKILL_2_ID, runtime);
 }
 
 pub(crate) fn cancel_player_item_skill_2<Runtime: GameMainLoopRuntime>(
@@ -114,12 +110,7 @@ pub(crate) fn cancel_player_item_skill_2<Runtime: GameMainLoopRuntime>(
     let Some(dispatch) = game.player_skill_execution(player_id, ITEM_SKILL_2_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    let item_index = game.find_player(player_id).and_then(|player| {
-        let level = player.item_skill_level(ITEM_SKILL_2_ID, game.skill_factory());
-        game.skill_base_properties(ITEM_SKILL_2_ID, level)
-            .map(|properties| properties.query_property(ITEM_INDEX))
-    });
-    finish_player_item_skill_2(game, player_id, player_ai, item_index, runtime);
+    finish_player_item_skill_2(game, player_id, player_ai, runtime);
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
@@ -160,13 +151,13 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
         return terminal(QueuedSkillExecutionState::Begun);
     } else if game.player_skill_execution(player_id, ITEM_SKILL_2_ID).is_none_or(|execution| execution.dispatch()!=dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     if game.player_skill_execution(player_id, ITEM_SKILL_2_ID).is_some_and(|execution| execution.stage()==SkillStage::Begin) {
-        let current=game.find_player(player_id).map_or(0,CPlayer::mana); if !has_mana(current,mp_loss) { send_failure(game,player_id,7,b"GS1187",Some(mp_loss)); finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); return terminal(QueuedSkillExecutionState::Rejected); } if target_dead { send_failure(game,player_id,10,b"GS1188",None); finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); return terminal(QueuedSkillExecutionState::Rejected); }
+        let current=game.find_player(player_id).map_or(0,CPlayer::mana); if !has_mana(current,mp_loss) { send_failure(game,player_id,7,b"GS1187",Some(mp_loss)); finish_player_item_skill_2(game,player_id,player_ai,runtime); return terminal(QueuedSkillExecutionState::Rejected); } if target_dead { send_failure(game,player_id,10,b"GS1188",None); finish_player_item_skill_2(game,player_id,player_ai,runtime); return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player)=game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); player.movement_shape_mut().set_direction(get_line_direction(source_x,source_y,target_x,target_y)); player.set_skill_moveable(false); player.set_current_skill_id(Some(ITEM_SKILL_2_ID)); }
         let _=game.update_player_current_state(player_id,GamePlayerFightStatePhase::MoveShapeAi); send_visual(game,player_id,level,None); if let Some(execution)=game.player_skill_execution_mut(player_id, ITEM_SKILL_2_ID){let _=execution.advance(SkillStage::Begin,SkillStage::Check);}
     }
     let started=game.player_skill_execution(player_id, ITEM_SKILL_2_ID).map(SkillExecutionKernel::started_at_ms).expect("громовой огонь начат"); if !time_reached(runtime.now_milliseconds(),started,delay){return terminal(QueuedSkillExecutionState::Pending);} if let Some(player)=game.find_player_mut(player_id){player.set_skill_moveable(true);}
-    let Some((live_target,live_x,live_y,dead,_))=target_view(game,region_id,dispatch) else {send_failure(game,player_id,10,b"GS1188",None);finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime);return terminal(QueuedSkillExecutionState::Rejected)}; if dead {send_failure(game,player_id,10,b"GS1188",None);finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime);return terminal(QueuedSkillExecutionState::Rejected);}
+    let Some((live_target,live_x,live_y,dead,_))=target_view(game,region_id,dispatch) else {send_failure(game,player_id,10,b"GS1188",None);finish_player_item_skill_2(game,player_id,player_ai,runtime);return terminal(QueuedSkillExecutionState::Rejected)}; if dead {send_failure(game,player_id,10,b"GS1188",None);finish_player_item_skill_2(game,player_id,player_ai,runtime);return terminal(QueuedSkillExecutionState::Rejected);}
     let distance=real_distance(source_x,source_y,live_x,live_y); send_visual(game,player_id,level,Some((live_target,live_x,live_y,distance.wrapping_mul(speed as i32)))); let path=game.base_magic_path(region_id,source_x,source_y,live_x,live_y,Some(distance.max(0) as u32));
     if !path.is_empty() && !path.iter().any(|cell|cell.2==2) { let path=path.into_iter().map(|(x,y,_)|(x,y)).collect::<Vec<_>>(); let soul=game.find_player_mut(player_id).and_then(CPlayer::take_soul_collect_state); let (souls,variable)=soul.map_or((0,0),|state|{send_soul_collect_state_visual(game,region_id,ShapeIdentity{object_type:PLAYER_TYPE,id:player_id,ex_id:Default::default()},source_x,source_y,state,false);(state.souls(),state.variable_percent())}); let master=game.find_player(player_id).map(master_info); if let Some(master)=master { let summon_id=game.allocate_summon_shape_id(); let now=runtime.now_milliseconds(); let mut phalanx=CThunderFirePhalanx::new(summon_id,master,now,lifetime,level,minimum_attack,maximum_attack,element_modifier,path.clone(),speed,souls,variable); phalanx.shape_mut().set_region_id(region_id); if consume_item(game,player_id,item_position as u32,item_index,item_amount) { if let Some((x,y))=path.first().copied(){let result=game.add_thunder_fire_phalanx(region_id,phalanx,x,y,now,runtime);if result.as_ref().is_some_and(|result|result.is_ok()){let _=game.send_thunder_fire_phalanx_entry(region_id,summon_id,runtime);}tracing::trace!(region_id,player_id,summon_id,?result,"создан громовой огонь");}}}}
-    if let Some(execution)=game.player_skill_execution_mut(player_id, ITEM_SKILL_2_ID){let _=execution.advance(SkillStage::Check,SkillStage::Calculate);let _=execution.advance(SkillStage::Calculate,SkillStage::Attack);let _=execution.advance(SkillStage::Attack,SkillStage::Apply);} finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); terminal(QueuedSkillExecutionState::Completed)
+    if let Some(execution)=game.player_skill_execution_mut(player_id, ITEM_SKILL_2_ID){let _=execution.advance(SkillStage::Check,SkillStage::Calculate);let _=execution.advance(SkillStage::Calculate,SkillStage::Attack);let _=execution.advance(SkillStage::Attack,SkillStage::Apply);} finish_player_item_skill_2(game,player_id,player_ai,runtime); terminal(QueuedSkillExecutionState::Completed)
 }

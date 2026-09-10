@@ -20,6 +20,8 @@
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
 //! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
 //! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! Отдельный OnChangeRegion ChuckStone сохраняет ключ до возврата движения
+//! и очищает именно этот экземпляр, не проходя materialized-End dispatcher.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -150,8 +152,9 @@ pub(super) fn abort_player_direct_projectile_on_region_change(
     if skill_id != expected_skill_id {
         return false;
     }
+    let instance = game.registered_player_skill(player_id, expected_skill_id);
     abort(game, player_id);
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
+    game.finish_registered_player_command(instance, ai, dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn cancel_player_direct_projectile<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, execution_skill_id: u32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {

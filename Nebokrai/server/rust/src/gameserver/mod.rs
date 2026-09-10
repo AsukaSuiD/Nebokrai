@@ -388,6 +388,7 @@ pub(crate) mod appserver {
     pub(crate) mod states {
         pub(crate) mod automaticrestore;
         pub(crate) mod attackpower;
+        pub(crate) mod skill;
         pub(crate) mod state;
         pub(crate) mod summonskill;
         pub(crate) mod visualeffect;

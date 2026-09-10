@@ -18,7 +18,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::summonskill::{
-    finish_summon_skill_without_weapon_wear,
+    finish_summon_skill,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -114,7 +114,7 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
 }
 
 fn abort_player_monster_taming(game: &mut CGame, player_id: i32) { finish_movement(game, player_id); }
-fn finish_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) { finish_summon_skill_without_weapon_wear(game, player_id, MONSTER_TAMING_SKILL_ID, runtime); }
+fn finish_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) { finish_summon_skill(game, player_id, MONSTER_TAMING_SKILL_ID, runtime); }
 pub(crate) fn complete_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_monster_taming(game, player_id, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed) }
 pub(crate) fn cancel_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, MONSTER_TAMING_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_monster_taming(game, player_id); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
 

@@ -15,6 +15,9 @@
 //! `CAttackSkill::End(1)` с единичным оружейным `AfterUseSkill` и отдельной
 //! cooldown-ячейкой варианта; `Attack` оружие по числу целей не изнашивает.
 //! Ячейки проверяются абсолютным сроком `CSkill::IsRestored`; рывок остаётся elapsed.
+//! End (0x0055B2B0, PDB layout) сбрасывает attacked/attacking и освобождает
+//! path перед attacked-list. Derived condition/available оригинала не
+//! подменяются стадией kernel или базовым available зарегистрированного навыка.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -93,6 +96,13 @@ pub(crate) struct LittleFlashExecutionState {
 }
 
 impl LittleFlashExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.attacked = false;
+        self.attacking_started = false;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked_creatures));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
         Self {
             kernel: SkillExecutionKernel::begin(dispatch, now_ms),

@@ -11281,7 +11281,7 @@ impl CPlayer {
         ]
         .into_iter()
         .flat_map(|category| {
-            self.move_shape.skills_in_category(category).iter().filter(move |skill| {
+            self.move_shape.skills_in_category(category).filter(move |skill| {
                 category != SkillCategory::Defense || skill.id() != SKILL_BASE_DEFENSE
             })
         })

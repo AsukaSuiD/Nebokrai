@@ -227,10 +227,7 @@ fn finish_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     if successful {
-        game.damage_player_weapon(player_id, runtime);
-    }
-    if successful {
-        game.mark_player_skill_used(player_id, BOSS_BLUE_QUAKE_SKILL_ID, runtime.now_milliseconds());
+        game.after_use_player_skill(player_id, BOSS_BLUE_QUAKE_SKILL_ID, runtime);
     }
 }
 

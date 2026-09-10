@@ -13,6 +13,9 @@
 //! целях: общий унаследованный `AfterUseSkill` делает это один раз из
 //! `End(true)`, после чего обновляются свойства и cooldown. `End(false)` только
 //! освобождает runtime-состояние и не откатывает попадания.
+//! End (0x00577C40, PDB layout) сбрасывает condition/current-position,
+//! end-coordinates и target, освобождает path перед attacked-list. Scope
+//! +0x60 этим хвостом не удаляется; kernel остаётся у зарегистрированного навыка.
 //! Все три варианта сохраняют x87-порядок damage factor: точный `u32 factor`,
 //! `f32 weapon` и `0.01_f32` округляются только итоговой записью в `f32`.
 //! Critical не округляет исходный `i32` в `f32` и усекается лишь перед `int`.
@@ -74,6 +77,15 @@ pub(crate) struct ExplosiveArrowExecutionState {
 }
 
 impl ExplosiveArrowExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.current_position = 0;
+        self.end_tile = (0, 0);
+        self.visual_target = None;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked));
+    }
+
     fn begin(variant: ExplosiveArrowVariant, dispatch: PlayerSkillDispatch, started_at_ms: u32, destination: (i32, i32)) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), variant, condition_checked: false, path: Vec::new(), current_position: 0, destination, end_tile: (0, 0), visual_target: None, attacked: Vec::new(), end_sent: false } }
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }

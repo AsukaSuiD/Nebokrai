@@ -14,6 +14,9 @@
 //! Begin заканчивается возвратом Begun после создания исполнения. Проверки
 //! и эффекты первого AI остаются после этой границы; координатор вызывает AI
 //! в том же Run после постановки Attack, не сдвигая исходное время Begin.
+//! Оба concrete owner наследуют оружейный AfterUseSkill (0x0053CF30):
+//! ненулевой End после возврата движения изнашивает оружие GetUser, затем
+//! фиксирует reuse через общую границу экземпляра. End(0) не делает этого.
 
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
@@ -73,7 +76,7 @@ fn finish_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntim
     runtime: &mut Runtime,
 ) {
     game.finish_self_shield_movement(player_id);
-    game.mark_player_skill_used(player_id, Owner::SKILL_ID, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, Owner::SKILL_ID, runtime);
 }
 
 fn cancel_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(

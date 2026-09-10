@@ -8,8 +8,10 @@
 //! дважды проверяет MP, списывает его до поздней проверки оружия и после
 //! задержки пополняет единственный `MeteorArrowState`. `CGame` доставляет
 //! уже построенные owner-ом пакеты и обновляет внешние свойства игрока.
-//! Унаследованный `CStateSkill::End(true)` фиксирует cooldown без повторного
-//! добавления состояния; `End(false)` только прерывает выполнение. Cooldown
+//! Унаследованный `CStateSkill::End(true)` выполняет оружейный AfterUseSkill
+//! (0x0053CF30) для GetUser, затем фиксирует cooldown без повторного добавления
+//! состояния. Общая граница экземпляра выбирает этот override из фабричного
+//! каталога; `End(false)` только прерывает выполнение. Cooldown
 //! следует абсолютному сроку `CSkill::IsRestored`; задержка стадии остаётся elapsed.
 
 use super::baseattack::time_reached;
@@ -40,7 +42,7 @@ fn weapon_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    game.mark_player_skill_used(player_id, crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, METEOR_ARROW_MASS_SKILL_ID, runtime);
 }
 fn abort_player_meteor_arrow_mass(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
 pub(crate) fn complete_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {

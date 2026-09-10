@@ -15,6 +15,9 @@
 //! раз из `End(true)`, который прекращает оставшиеся клетки, обновляет свойства
 //! и cooldown. `End(false)` не откатывает уже выполненные клеточные атаки, но
 //! не допускает новых и не изнашивает оружие.
+//! End (0x0058C3A0, PDB layout) сбрасывает condition/attacking,
+//! current-position, end-coordinates и target, затем освобождает path.
+//! Базовая available и kernel не заменяются derived полями оригинала.
 //! Damage factor сохраняет x87-порядок `u32 factor × f32 weapon × 0.01_f32`
 //! до записи в `f32`. Критический множитель не округляет исходный урон в
 //! `f32` и усекается к нулю лишь при итоговой записи каждого компонента.
@@ -60,6 +63,15 @@ pub(crate) struct PoisonMothExecutionState {
 }
 
 impl PoisonMothExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.attacking_started = false;
+        self.current_position = 0;
+        self.end_tile = (0, 0);
+        self.visual_target = None;
+        drop(std::mem::take(&mut self.path));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32, destination: (i32, i32)) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), condition_checked: false, attacking_started: false, path: Vec::new(), current_position: 0, destination, end_tile: (0, 0), visual_target: None, end_sent: false }
     }

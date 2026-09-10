@@ -33525,35 +33525,17 @@ impl CGame {
         self.players.get_mut(&player_id)?.move_shape_mut().skill_visual_effect_mut(skill_id, &self.skill_factory)
     }
 
-    /// End освобождает только совпавший dispatch собственного экземпляра.
-    /// Команда и FIFO, а также независимый reuse не входят в эту операцию.
-    pub(crate) fn finish_player_skill_execution(&mut self, player_id: i32, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
-        let skill_id = expected.skill_id();
-        if !self.player_skill_execution(player_id, skill_id).is_some_and(|state| state.dispatch() == expected) {
-            return false;
-        }
-        let stage = self.player_skill_execution(player_id, skill_id).map(|kernel| kernel.stage());
-        if !self.finish_player_skill_base(player_id, skill_id, termination) {
-            return false;
-        }
-        let Some(player) = self.players.get_mut(&player_id) else { return false };
-        player.move_shape_mut().clear_player_execution(skill_id, &self.skill_factory);
-        tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка игрока завершено");
-        true
-    }
-
-    pub(crate) fn finish_player_skill(&mut self, player_id: i32, ai: &mut CPlayerAI, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
-        let finished_execution = self.finish_player_skill_execution(player_id, expected, termination);
+    /// Хвост команды после подтверждённого concrete owner-ом End. Caller уже
+    /// проверил свой dispatch; true означает достигнутый End даже у background,
+    /// которому не принадлежит текущая команда. Payload здесь не ищется по ID:
+    /// внешний coordinator захватил экземпляр до callbacks и завершит его сам.
+    /// Аргументы owner/termination оставлены для существующих concrete callers;
+    /// они не создают скрытого контекста и не передаются через состояние AI.
+    pub(crate) fn finish_player_skill(&mut self, _player_id: i32, ai: &mut CPlayerAI, expected: PlayerSkillDispatch, _termination: SkillTermination) -> bool {
         if ai.current_player_skill() == Some(expected) {
             ai.release_current_player_command();
-            return true;
         }
-        finished_execution
-    }
-
-    pub(crate) fn finish_scheduled_player_skill(&mut self, player_id: i32, ai: &mut CPlayerAI, expected: PlayerSkillDispatch, termination: SkillTermination) -> bool {
-        ai.current_player_skill() == Some(expected)
-            && self.finish_player_skill(player_id, ai, expected, termination)
+        true
     }
 
     pub(crate) fn player_skill_requires_target_end(&self, player_id: i32, skill_id: u32) -> bool {
@@ -38296,6 +38278,7 @@ impl CGame {
         let needs_end = current_skill_id.is_some_and(|skill_id| {
             self.player_skill_requires_target_end(player_id, skill_id)
         });
+        let instance = current_skill_id.and_then(|skill_id| self.registered_player_skill(player_id, skill_id));
         let previous_dispatch = self.find_player_mut(player_id).and_then(|player| {
             let dispatch = player.player_ai().current_player_skill();
             player.player_ai_mut().release_current_player_command();
@@ -38317,8 +38300,8 @@ impl CGame {
             if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
                 return true;
             }
-            let released = previous_dispatch.is_some_and(|dispatch| {
-                self.finish_player_skill_execution(player_id, dispatch, SkillTermination::Cancelled)
+            let released = instance.zip(previous_dispatch).is_some_and(|(instance, dispatch)| {
+                self.finish_registered_player_execution(instance, dispatch, SkillTermination::Cancelled)
             });
             self.find_player_mut(player_id).is_some_and(|player| {
                 if released || player.current_skill_id() == Some(current_skill_id) {
@@ -40161,7 +40144,8 @@ impl CGame {
     /// Передаёт `End(true)` или `End(false)` только уже материализованному
     /// владельцу навыка. Извлечение `CPlayerAI` остаётся здесь как координация
     /// заимствований, а завершение, прерывание и особый выпуск удерживаемой
-    /// атаки принадлежат соответствующему владельцу.
+    /// атаки принадлежат соответствующему владельцу. Ключ и dispatch захвачены
+    /// до callback; общий последний сброс не затрагивает замену того же ID.
     pub(crate) fn end_materialized_player_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -40169,8 +40153,10 @@ impl CGame {
         cause: MaterializedSkillEndCause,
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
-        self.player_skill_execution(player_id, skill_id)?;
+        let instance = self.registered_player_skill(player_id, skill_id)?;
+        let dispatch = self.player_skill_execution(player_id, skill_id)?.dispatch();
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
+        let mut released = false;
         let explicitly_completed = if cause.uses_nonzero_end() {
             match skill_id {
                 LITTLE_STAR_SKILL_ID => Some(complete_player_little_star(
@@ -40179,12 +40165,13 @@ impl CGame {
                 MONSTER_THORN_SKILL_ID => Some(complete_player_monster_thorn(
                     self, player_id, &mut player_ai, runtime,
                 )),
-                HEARTLESS_ARROW_SKILL_ID => Some(complete_or_release_player_heartless_arrow(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
+                HEARTLESS_ARROW_SKILL_ID => {
+                    let result = complete_or_release_player_heartless_arrow(
+                        self, player_id, &mut player_ai, runtime,
+                    );
+                    released = result == Some(crate::gameserver::appserver::states::skill::RegisteredSkillEnd::Released);
+                    Some(result.is_some())
+                }
                 HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                     Some(complete_player_heartless_arrow_area(
                         self,
@@ -40444,6 +40431,13 @@ impl CGame {
             }
         } else {
             None
+        };
+        // Concrete complete-ветви передавали Completed, cancel-ветви —
+        // Cancelled. Ненулевой native аргумент сам по себе этого не определяет.
+        let termination = if explicitly_completed.is_some() {
+            SkillTermination::Completed
+        } else {
+            SkillTermination::Cancelled
         };
         let ended = if let Some(ended) = explicitly_completed {
             ended
@@ -40756,6 +40750,9 @@ impl CGame {
                 }
             }
         };
+        if ended && !released {
+            self.finish_registered_player_execution(instance, dispatch, termination);
+        }
         if let Some(player) = self.find_player_mut(player_id) {
             player.restore_player_ai(player_ai);
         }
@@ -41050,6 +41047,7 @@ impl CGame {
         while let Some(skill_id) = self.find_player(player_id)
             .and_then(|player| player.back_stage_skill_id(index))
         {
+            let instance = self.registered_player_skill(player_id, skill_id);
             let execution = self.player_skill_execution(player_id, skill_id);
             let fairy_execution = self.battle_fairy_execution(player_id, skill_id);
             if execution.is_none() && fairy_execution.is_none() {
@@ -41082,7 +41080,9 @@ impl CGame {
             };
             if let Some(termination) = termination {
                 if let Some(execution) = execution {
-                    self.finish_player_skill_execution(player_id, execution.dispatch(), termination);
+                    if let Some(instance) = instance {
+                        self.finish_registered_player_execution(instance, execution.dispatch(), termination);
+                    }
                 } else if let Some(execution) = fairy_execution {
                     let dispatch = execution.dispatch();
                     if self.finish_battle_fairy_execution(player_id, dispatch, termination) {
@@ -41470,6 +41470,7 @@ impl CGame {
                 return 1;
             }
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch);
+            let instance = self.registered_player_skill(player_id, dispatch.skill_id());
             let begin_was_pending = self.player_skill_begin_pending(player_id, dispatch.skill_id());
             if !schedule_rejected {
                 self.begin_player_skill_schedule(player_id, dispatch, runtime);
@@ -41496,7 +41497,7 @@ impl CGame {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }
             let removed_from_queue = self.finish_player_skill_outcome(
-                player_id, dispatch, player_ai, &outcome, runtime,
+                player_id, instance, dispatch, player_ai, &outcome, runtime,
             );
             if (schedule_rejected || begin_rejected)
                 && removed_from_queue
@@ -41525,27 +41526,33 @@ impl CGame {
         let Some(dispatch) = player_ai.current_player_skill() else {
             return 0;
         };
+        let instance = self.registered_player_skill(player_id, dispatch.skill_id());
         let outcome = self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime);
-        self.finish_player_skill_outcome(player_id, dispatch, player_ai, &outcome, runtime);
+        self.finish_player_skill_outcome(player_id, instance, dispatch, player_ai, &outcome, runtime);
         1
     }
 
     fn finish_player_skill_outcome<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
+        instance: Option<crate::gameserver::appserver::states::skill::RegisteredPlayerSkill>,
         dispatch: PlayerSkillDispatch,
         player_ai: &mut CPlayerAI,
         outcome: &QueuedSkillExecutionOutcome,
         runtime: &mut Runtime,
     ) -> bool {
         self.apply_player_skill_contacts(player_id, dispatch, player_ai, outcome, runtime);
-        match outcome.state {
+        let owned_command = player_ai.current_player_skill() == Some(dispatch);
+        let finished = match outcome.state {
             QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
             QueuedSkillExecutionState::Completed =>
-                self.finish_scheduled_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed),
+                self.finish_registered_player_command(instance, player_ai, dispatch, SkillTermination::Completed),
             QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
-                self.finish_scheduled_player_skill(player_id, player_ai, dispatch, SkillTermination::Rejected),
-        }
+                self.finish_registered_player_command(instance, player_ai, dispatch, SkillTermination::Rejected),
+        };
+        // Сброс старого payload не разрешает расписанию вернуть default attack
+        // поверх другой команды, выбранной callback-ом.
+        owned_command && finished
     }
 
     fn apply_battle_fairy_skill_contacts<Runtime: GameMainLoopRuntime>(

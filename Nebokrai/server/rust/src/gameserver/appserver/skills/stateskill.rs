@@ -11,6 +11,9 @@
 //! здесь он не повторяется. Хвост фиксирует cooldown, но не меняет выбранный
 //! навык игрока: пустой слот 0x00485540 не сбрасывает m_pCurrentSkill.
 //! Смена выбора принадлежит OnChangeSkill/OnLoseTarget, не End экземпляра.
+//! AfterUse и reuse выполняет общая граница зарегистрированного экземпляра:
+//! virtual override берётся из factory-каталога, износ относится к GetUser,
+//! а ключ экземпляра сохраняется через вызванный износом пересчёт экипировки.
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::gameserver::game::GameMainLoopRuntime;
@@ -22,8 +25,7 @@ pub(crate) fn finish_state_skill<Runtime: GameMainLoopRuntime>(
     skill_id: u32,
     runtime: &mut Runtime,
 ) {
-    game.damage_player_weapon(player_id, runtime);
-    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, skill_id, runtime);
 }
 
 impl CGame {

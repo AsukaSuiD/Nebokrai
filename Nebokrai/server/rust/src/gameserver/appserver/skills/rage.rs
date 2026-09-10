@@ -37,10 +37,12 @@ use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTe
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::skills::skillfactory::SkillOwner;
 use crate::gameserver::appserver::states::state::{
-    resolve_state_move_shape, resolve_state_move_shape_mut, resolve_state_user,
+    resolve_state_move_shape, resolve_state_user,
 };
-use crate::gameserver::appserver::states::visualeffect::{CRageEffect, SkillVisualEffect};
+use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -121,16 +123,14 @@ fn send_failure(game: &mut CGame, player_id: i32, action: u8, mp_loss: u32) {
     }
 }
 
-fn publish_rage_visual(
+pub(crate) fn publish_rage_visual(
     game: &CGame,
-    player_id: i32,
+    skill: &MoveShapeSkill,
     mode: u32,
 ) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let Some(skill) = player.move_shape().skill(RAGE_SKILL_ID, game.skill_factory()) else { return };
-    let Some(SkillVisualEffect::Rage(effect)) = skill.visual_effect() else { return };
-    if effect.is_ended() { return; }
-    let Some((region_id, identity)) = rage_user(game, player_id) else { return };
+    let Some(effect) = skill.visual_effect() else { return };
+    if skill.owner() != SkillOwner::CRage || effect.kind() != SkillVisualEffectKind::Rage || effect.is_ended() { return; }
+    let (region_id, identity) = skill.lifecycle().user();
     let Some(source) = resolve_state_move_shape(game, region_id, identity) else { return };
     let source = source.shape();
     let identity = source.identity();
@@ -172,33 +172,11 @@ fn publish_rage_visual(
 }
 
 fn update_rage_visual(game: &mut CGame, player_id: i32, mode: u32) {
-    publish_rage_visual(game, player_id, mode);
-    if let Some(effect) = game.player_skill_visual_effect_mut(player_id, RAGE_SKILL_ID) {
-        effect.update_base_tail();
-    }
+    game.update_player_skill_visual(player_id, RAGE_SKILL_ID, mode);
 }
 
-/// CRage::End (0x005A0790): движение, OnChangeStates (+0x164), затем visual 3.
-/// Ненулевой End после этой части выполняет AfterUse/reuse, нулевой — нет.
-/// Обе ветви затем очищают общую базу и удаляют visual.
-fn cleanup_player_rage(game: &mut CGame, player_id: i32) {
-    if let Some((region_id, identity)) = rage_user(game, player_id) {
-        let resolved = if let Some(source) = resolve_state_move_shape_mut(game, region_id, identity) {
-            source.set_moveable(true);
-            true
-        } else {
-            false
-        };
-        if resolved && identity.object_type == PLAYER_TYPE {
-            let _ = game.publish_player_states(identity.id);
-        }
-    }
-    update_rage_visual(game, player_id, 3);
-}
-
-fn end_player_rage(game: &mut CGame, player_id: i32) {
-    cleanup_player_rage(game, player_id);
-    game.finish_player_skill_base(player_id, RAGE_SKILL_ID, SkillTermination::Rejected);
+fn end_player_rage<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
+    let _ = game.end_registered_player_skill(player_id, RAGE_SKILL_ID, 0, SkillTermination::Rejected, runtime);
 }
 
 fn finish_player_rage<Runtime: GameMainLoopRuntime>(
@@ -206,15 +184,7 @@ fn finish_player_rage<Runtime: GameMainLoopRuntime>(
     player_id: i32,
     runtime: &mut Runtime,
 ) {
-    cleanup_player_rage(game, player_id);
-    if let Some((region_id, identity)) = rage_user(game, player_id)
-        && let Some(source) = resolve_state_user(game, region_id, identity)
-        && source.object_type == PLAYER_TYPE
-    {
-        game.damage_player_weapon(source.id, runtime);
-    }
-    game.mark_player_skill_used(player_id, RAGE_SKILL_ID, runtime.now_milliseconds());
-    game.finish_player_skill_base(player_id, RAGE_SKILL_ID, SkillTermination::Completed);
+    let _ = game.end_registered_player_skill(player_id, RAGE_SKILL_ID, 1, SkillTermination::Completed, runtime);
 }
 
 pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
@@ -252,7 +222,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     if let Some(started_at_ms) = beginning_at_ms {
         game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
         game.replace_player_skill_visual_effect(
-            player_id, RAGE_SKILL_ID, SkillVisualEffect::Rage(CRageEffect::new()),
+            player_id, RAGE_SKILL_ID, SkillVisualEffect::new(SkillVisualEffectKind::Rage, 1),
         );
     }
     if game
@@ -263,7 +233,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     }
 
     let Some(properties) = game.skill_base_properties(RAGE_SKILL_ID, level) else {
-        end_player_rage(game, player_id);
+        end_player_rage(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -278,13 +248,13 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(game.player_skill_last_used_ms(player_id, RAGE_SKILL_ID), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d, 0);
-            end_player_rage(game, player_id);
+            end_player_rage(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss);
-            end_player_rage(game, player_id);
+            end_player_rage(game, player_id, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {

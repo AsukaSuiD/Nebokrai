@@ -15,6 +15,11 @@
 //! владельцев, применяет готовую атаку и выполняет доставку.
 //! End (0x005355F0) возвращает движение до оружейного AfterUseSkill;
 //! callback CPlayer +0x158 пуст и не вызывает UpdateProperty.
+//! Общий AfterUse/reuse сохраняет ключ экземпляра через износ. Часы проверки
+//! истечения не подменяют свежие часы reuse, читаемые после AfterUse.
+//! PDB layout и writes 0x005355F0 подтверждают обнуление last-attack перед
+//! освобождением path. Поле destination ниже — кеш координат Rust, не ещё
+//! один owned путь; его наличие не доказывает наличие visual.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
 //! перед `int`. Восстановление использует абсолютный срок
@@ -58,6 +63,11 @@ pub(crate) struct SevenShootingStarExecutionState {
 }
 
 impl SevenShootingStarExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.last_attack_ms = 0;
+        drop(self.path.take());
+    }
+
     pub(crate) fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
         Self {
             kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
@@ -131,7 +141,7 @@ fn finish<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     if successful {
-        game.damage_player_weapon(player_id, runtime);
+        game.after_use_player_skill(player_id, SEVEN_SHOOTING_STAR_SKILL_ID, runtime);
     }
 }
 
@@ -149,9 +159,6 @@ pub(crate) fn cancel_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
         return false;
     };
     finish(game, player_id, runtime, record_reuse);
-    if record_reuse {
-        game.mark_player_skill_used(player_id, SEVEN_SHOOTING_STAR_SKILL_ID, runtime.now_milliseconds());
-    }
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
@@ -415,7 +422,6 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        game.mark_player_skill_used(player_id, SEVEN_SHOOTING_STAR_SKILL_ID, expiration_now_ms);
         finish(game, player_id, runtime, true);
         terminal(QueuedSkillExecutionState::Completed)
     } else {

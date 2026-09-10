@@ -13,8 +13,8 @@
 //! конкретному навыку. После успешного завершения фиксируется время reuse;
 //! End(0) не вызывает AfterUseSkill и не меняет reuse. `CCorpsePtomaine`,
 //! `CSpriteBurn`, `CGibe`, `CMonsterTaming` и `CPetsControl` переопределяют
-//! `AfterUseSkill` пустой функцией; для них используется явный хвост без
-//! износа оружия.
+//! `AfterUseSkill` пустой функцией. Все overrides выбираются одним concrete
+//! factory-каталогом; служебная передача флага из каждого caller больше не нужна.
 //! Конструктор исходного класса менял лишь vtable и техническую категорию `3`;
 //! в Rust intrinsic-категория принадлежит фабричному owner-каталогу.
 //! Этот хвост применяется к уже начатому исполнению; он не заменяет полный
@@ -22,33 +22,11 @@
 
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-fn finish_summon_skill_owner<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    runtime: &mut Runtime,
-    damage_weapon: bool,
-) {
-    if damage_weapon {
-        game.damage_player_weapon(player_id, runtime);
-    }
-    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
-}
-
 pub(crate) fn finish_summon_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
     runtime: &mut Runtime,
 ) {
-    finish_summon_skill_owner(game, player_id, skill_id, runtime, true);
-}
-
-pub(crate) fn finish_summon_skill_without_weapon_wear<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    runtime: &mut Runtime,
-) {
-    finish_summon_skill_owner(game, player_id, skill_id, runtime, false);
+    game.after_use_player_skill(player_id, skill_id, runtime);
 }

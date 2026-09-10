@@ -78,9 +78,15 @@
 //! Begin(self, self), затем WhenAddBackStageSkill этого же AI. Сам background-
 //! список принадлежит CBaseAI. Удаление навыка не очищает списки других
 //! владельцев: очередной OnExecute помечает отсутствующий ID как UNKNOWN.
-//! Четыре стандартных Vec сохраняют независимые экземпляры, их порядок и
+//! Четыре независимые категории сохраняют экземпляры, их порядок и
 //! повторные ID: native AddSkill (0x004D1C70) допускает
 //! повторный ID, когда уровень первого найденного экземпляра равен нулю.
+//! В каждой категории SlotMap владеет навыками, а Vec ключей задаёт только
+//! native-порядок. Поколенческий SkillSlot переживает сдвиги этого Vec и
+//! не разрешает вложенному callback завершить новую одноимённую регистрацию.
+//! Порядок самого SlotMap не используется; удаление и очистка инвалидируют
+//! ключи, а не пересоздают хранилище с прежними поколениями. Это техническая
+//! замена указателей экземпляров, не дополнительный каталог ID либо owners.
 //! Категорию вставки задаёт concrete constructor; GetSkill (0x004CE2D0)/DelSkill выбирают
 //! её отдельно через актуальный QuerySkillType(ID, 1). Явная &CSkillFactory
 //! сохраняет изменения reload, включая частично декодированный snapshot,
@@ -107,9 +113,9 @@
 //! Визуальный ресурс CState принадлежит самому экземпляру отдельно от
 //! копируемой скалярной базы. Общий сброс сначала очищает source/target/time,
 //! затем удаляет Option<SkillVisualEffect> и только потом выставляет ended.
-//! Closed visual enum сохраняет concrete ресурс отдельно от execution payload:
-//! CRageEffect создаётся до cast-проверок, поэтому принадлежит навыку и при
-//! failed Begin без payload. Update заимствует тот же Option, не извлекает
+//! Общий visual-ресурс с concrete видом живёт отдельно от execution payload:
+//! Rage/KnightCut создают эффект до cast-проверок, поэтому он принадлежит навыку
+//! и при failed Begin без payload. Update заимствует тот же Option, не извлекает
 //! ресурс для публикации и не дублирует source/ID/level общего экземпляра.
 //! Владеющие формы и регионы не клонируются: временным рассылкам достаточно
 //! упорядоченного снимка адресатов, случайной позиции — заимствования CRegion.
@@ -117,13 +123,13 @@
 //! новая регистрация не наследует его от удалённого экземпляра того же ID.
 //! Доступ к этим полям использует тот же первый GetSkill по текущей metadata,
 //! без дополнительного реестра и без поиска по intrinsic-категории. Отсутствие
-//! kernel не означает отсутствия самого registered owner-а. Полный concrete
-//! End, включая визуальные хвосты без активного исполнения, ещё не подключён:
-//! перенос ресурсов сам по себе не реализует StopAllSkills.
+//! kernel не означает отсутствия самого registered owner-а. Общий End
+//! в states/skill.rs уже обслуживает Rage/KnightCut, в том числе без payload;
+//! остальные concrete callers ещё не все используют эту границу.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
-//! Полный registered-skill End ещё не подключён; завершение одного текущего
-//! cast не заменяет этот контракт, в том числе перед приручением монстра.
+//! Runtime StopAllSkills ещё не подключён; завершение одного текущего cast
+//! не заменяет этот контракт, в том числе перед приручением монстра.
 //! В Luvinia Application/MoveShape.cpp AddSkill/DelSkill остались пустыми,
 //! а StopAllSkills работает с другой active-module map и удаляет её записи.
 //! Старый GetSkill сохранился в отключённом OtherMessage; world factory
@@ -133,6 +139,7 @@
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use indexmap::IndexSet;
+use slotmap::{SlotMap, new_key_type};
 
 use super::ai::baseai::CBaseAI;
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
@@ -383,6 +390,63 @@ pub(crate) struct MoveShapeSkill {
     last_used_ms: u32,
 }
 
+new_key_type! {
+    struct SkillEntity;
+}
+
+/// Адрес конкретного экземпляра в одной категории данного CMoveShape.
+/// После удаления ключ не разрешается в новую запись с тем же ID или индексом.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SkillSlot {
+    category: SkillCategory,
+    entity: SkillEntity,
+}
+
+#[derive(Debug, Default)]
+struct SkillCollection {
+    instances: SlotMap<SkillEntity, MoveShapeSkill>,
+    order: Vec<SkillEntity>,
+}
+
+impl PartialEq for SkillCollection {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for SkillCollection {}
+
+impl Drop for SkillCollection {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+impl SkillCollection {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &MoveShapeSkill> {
+        self.order.iter().map(|entity| {
+            self.instances.get(*entity)
+                .expect("порядок категории содержит только живые экземпляры навыков")
+        })
+    }
+
+    fn push(&mut self, skill: MoveShapeSkill) {
+        self.order.push(self.instances.insert(skill));
+    }
+
+    fn remove(&mut self, index: usize) -> MoveShapeSkill {
+        let entity = self.order.remove(index);
+        self.instances.remove(entity)
+            .expect("удаляемый индекс категории принадлежит живому экземпляру навыка")
+    }
+
+    fn clear(&mut self) {
+        for entity in self.order.drain(..) {
+            drop(self.instances.remove(entity));
+        }
+    }
+}
+
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
 /// Serialize (0x005d64f0) сохраняет остаток в живом keeptime без смены старта;
 /// AI (0x005d7c80) использует строгие абсолютные wrapping сроки.
@@ -629,13 +693,76 @@ pub(crate) struct UndeadStateMutation {
 }
 
 impl MoveShapeSkill {
+    pub(crate) const fn owner(&self) -> SkillOwner {
+        self.owner
+    }
+
+    pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
+        self.execution.lifecycle()
+    }
+
+    pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
+        self.execution.lifecycle_mut()
+    }
+
+    pub(crate) fn player_state<State: super::skills::kernel::PlayerSkillState>(&self) -> Option<&State> {
+        match &self.execution {
+            RegisteredSkillExecution::Player(execution) => State::from_execution(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn player_dispatch(&self) -> Option<super::player::PlayerSkillDispatch> {
+        match &self.execution {
+            RegisteredSkillExecution::Player(execution) => Some(execution.kernel().dispatch()),
+            _ => None,
+        }
+    }
+
+    /// Убирает только payload этого экземпляра, без повторного поиска по ID.
+    /// Общая база, visual и reuse не получают дополнительных End-переходов.
+    pub(crate) fn clear_player_execution(&mut self) -> bool {
+        if !matches!(self.execution, RegisteredSkillExecution::Player(_)) {
+            return false;
+        }
+        let lifecycle = std::mem::take(self.execution.lifecycle_mut());
+        self.execution = RegisteredSkillExecution::Inactive(lifecycle);
+        true
+    }
+
+    pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
+        if let RegisteredSkillExecution::Player(execution) = &mut self.execution
+            && !execution.prepare_derived_end(argument)
+        {
+            return false;
+        }
+        if is_auto_start_state_skill(self.id) {
+            self.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
+        }
+        true
+    }
+
+    pub(crate) fn clear_end_paths(&mut self) {
+        if let RegisteredSkillExecution::Player(execution) = &mut self.execution {
+            execution.clear_end_paths();
+        }
+    }
+
+    pub(crate) fn mark_used(&mut self, now_ms: u32) {
+        self.last_used_ms = now_ms;
+    }
+
+    pub(crate) fn visual_effect_mut(&mut self) -> Option<&mut SkillVisualEffect> {
+        self.current_visual_effect.as_mut()
+    }
+
     pub(crate) fn visual_effect(&self) -> Option<&SkillVisualEffect> {
         self.current_visual_effect.as_ref()
     }
 
     /// Общий хвост CSkill::End после concrete cleanup и OnEndSkill.
     /// Владеющий visual не входит в копируемый снимок скалярного lifecycle.
-    fn finish_base(&mut self, termination: SkillTermination) {
+    pub(crate) fn finish_base(&mut self, termination: SkillTermination) {
         let visual = &mut self.current_visual_effect;
         self.execution
             .lifecycle_mut()
@@ -708,7 +835,7 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
-    skills: [Vec<MoveShapeSkill>; 4],
+    skills: [SkillCollection; 4],
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     state_storage: CanonicalStateStorage,
@@ -1303,8 +1430,8 @@ impl CMoveShape {
         self.skills.iter().flat_map(|category| category.iter())
     }
 
-    pub(crate) fn skills_in_category(&self, category: SkillCategory) -> &[MoveShapeSkill] {
-        &self.skills[category as usize]
+    pub(crate) fn skills_in_category(&self, category: SkillCategory) -> impl ExactSizeIterator<Item = &MoveShapeSkill> {
+        self.skills[category as usize].iter()
     }
 
     /// `AutoStartPassiveSkill`: state-вектор обходится в порядке
@@ -1312,7 +1439,10 @@ impl CMoveShape {
     /// Self-target `Begin(this, this)` в Rust задаётся самим владельцем.
     pub(crate) fn auto_start_passive_skills(&mut self, ai: &mut CBaseAI) -> usize {
         let mut count = 0;
-        for skill in &mut self.skills[SkillCategory::State as usize] {
+        let state_skills = &mut self.skills[SkillCategory::State as usize];
+        for entity in &state_skills.order {
+            let skill = state_skills.instances.get_mut(*entity)
+                .expect("порядок state-категории содержит живые экземпляры навыков");
             if is_auto_start_state_skill(skill.id) {
                 skill.immediate_lifecycle = ImmediateSkillLifecycle::Begun;
                 ai.add_pending_back_stage_skill(skill.id);
@@ -2015,7 +2145,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn clear_persisted_runtime_state(&mut self) {
-        self.skills.iter_mut().for_each(Vec::clear);
+        self.skills.iter_mut().for_each(SkillCollection::clear);
         self.current_skill_id = None;
         self.item_skill_ids.clear();
         self.ex_states.clear();
@@ -5361,13 +5491,36 @@ impl CMoveShape {
     }
 
     pub(crate) fn skill(&self, skill_id: u32, factory: &CSkillFactory) -> Option<&MoveShapeSkill> {
-        let category = SkillCategory::from_raw(factory.query_skill_type(skill_id, 1))?;
-        self.skills_in_category(category).iter().find(|skill| skill.id == skill_id)
+        self.skill_at(self.skill_slot(skill_id, factory)?)
     }
 
     fn skill_mut(&mut self, skill_id: u32, factory: &CSkillFactory) -> Option<&mut MoveShapeSkill> {
+        self.skill_at_mut(self.skill_slot(skill_id, factory)?)
+    }
+
+    pub(crate) fn skill_slot(&self, skill_id: u32, factory: &CSkillFactory) -> Option<SkillSlot> {
         let category = SkillCategory::from_raw(factory.query_skill_type(skill_id, 1))?;
-        self.skills[category as usize].iter_mut().find(|skill| skill.id == skill_id)
+        let index = self.skills[category as usize].iter().position(|skill| skill.id == skill_id)?;
+        self.skill_slot_at(category, index)
+    }
+
+    /// Прямой native-обход берёт текущий индекс категории, без QuerySkillType.
+    /// Возвращённый ключ сохраняет идентичность через последующие callbacks.
+    pub(crate) fn skill_slot_at(&self, category: SkillCategory, index: usize) -> Option<SkillSlot> {
+        let entity = *self.skills[category as usize].order.get(index)?;
+        Some(SkillSlot { category, entity })
+    }
+
+    pub(crate) fn skill_count_in_category(&self, category: SkillCategory) -> usize {
+        self.skills[category as usize].order.len()
+    }
+
+    pub(crate) fn skill_at(&self, slot: SkillSlot) -> Option<&MoveShapeSkill> {
+        self.skills[slot.category as usize].instances.get(slot.entity)
+    }
+
+    pub(crate) fn skill_at_mut(&mut self, slot: SkillSlot) -> Option<&mut MoveShapeSkill> {
+        self.skills[slot.category as usize].instances.get_mut(slot.entity)
     }
 
     pub(crate) fn skill_lifecycle(
@@ -5515,13 +5668,7 @@ impl CMoveShape {
         skill_id: u32,
         factory: &CSkillFactory,
     ) -> bool {
-        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, RegisteredSkillExecution::Player(_)) {
-            return false;
-        }
-        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
-        skill.execution = RegisteredSkillExecution::Inactive(lifecycle);
-        true
+        self.skill_mut(skill_id, factory).is_some_and(MoveShapeSkill::clear_player_execution)
     }
 
     pub(crate) fn battle_fairy_execution(
@@ -5633,9 +5780,9 @@ impl CMoveShape {
 
     /// GetDefaultAttackSkillID (0x004CE240): порядок категорий важнее порядка ID.
     pub(crate) fn default_attack_skill_id(&self) -> u32 {
-        if self.skills_in_category(SkillCategory::Attack).iter().any(|skill| skill.id == 2) {
+        if self.skills_in_category(SkillCategory::Attack).any(|skill| skill.id == 2) {
             2
-        } else if self.skills_in_category(SkillCategory::Summon).iter().any(|skill| skill.id == 3) {
+        } else if self.skills_in_category(SkillCategory::Summon).any(|skill| skill.id == 3) {
             3
         } else {
             1
@@ -5720,7 +5867,8 @@ impl CMoveShape {
             return false;
         };
         let skills = &mut self.skills[category as usize];
-        if let Some(index) = skills.iter().position(|skill| skill.id == skill_id) {
+        let index = skills.iter().position(|skill| skill.id == skill_id);
+        if let Some(index) = index {
             skills.remove(index);
         }
         true

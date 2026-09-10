@@ -23,6 +23,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::skills::kernel::SkillLifecycle;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -124,6 +125,21 @@ pub(crate) fn resolve_state_user(
     identity: ShapeIdentity,
 ) -> Option<ShapeIdentity> {
     resolve_identity_sufferer(game, region_id, identity)
+}
+
+/// GetSufferer сначала пытается разрешить сохранённую identity, затем клетку
+/// в сохранённом регионе источника. Наличие живого GetUser не является gate.
+pub(crate) fn resolve_skill_sufferer(
+    game: &CGame,
+    lifecycle: &SkillLifecycle,
+) -> Option<(i32, ShapeIdentity)> {
+    let (region, identity) = lifecycle.sufferer();
+    if let Some(identity) = resolve_identity_sufferer(game, region, identity) {
+        return Some((region, identity));
+    }
+    let (region, _) = lifecycle.user();
+    let (x, y) = lifecycle.destination();
+    Some((region, resolve_coordinate_sufferer(game, region, x, y)?))
 }
 
 /// Живой GetUser по сохранённым region/type/id, без подстановки держателя

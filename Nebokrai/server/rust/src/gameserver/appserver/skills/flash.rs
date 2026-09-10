@@ -16,6 +16,9 @@
 //! `AfterUseSkill` делает это один раз в подтверждённом хвосте
 //! `CSummonSkill::End(1)`, после освобождения обоих path-наборов и возврата
 //! движения.
+//! End (0x00598EE0, PDB layout) обнуляет condition/attacked и освобождает
+//! path, затем attacked-list. Kernel и базовая available не являются этими
+//! derived полями; независимый RageBreak уже обработан своим владельцем.
 //! Общая для трёх вариантов формула сохраняет беззнаковый коэффициент в
 //! исходной x87-цепочке до единственной записи в `float` и усекает критический
 //! множитель к нулю перед `int`. Восстановление использует абсолютный срок
@@ -63,6 +66,13 @@ pub(crate) struct FlashExecutionState {
 }
 
 impl FlashExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.attacked = false;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked_creatures));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), condition_checked: false, attacked: false, path: Vec::new(), attacked_creatures: Vec::new() }
     }

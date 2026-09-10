@@ -146,10 +146,7 @@ fn finish_player_spider_poison<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     if successful {
-        game.damage_player_weapon(player_id, runtime);
-    }
-    if successful {
-        game.mark_player_skill_used(player_id, SPIDER_POISON_SKILL_ID, runtime.now_milliseconds());
+        game.after_use_player_skill(player_id, SPIDER_POISON_SKILL_ID, runtime);
     }
 }
 

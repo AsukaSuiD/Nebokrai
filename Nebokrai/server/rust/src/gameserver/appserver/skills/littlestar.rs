@@ -88,6 +88,11 @@ pub(crate) struct PlayerLittleStarExecutionState {
     last_attack_ms: u32,
 }
 impl PlayerLittleStarExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.last_attack_ms = 0;
+        drop(self.path.take());
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), path: None, last_attack_ms: 0 }
     }
@@ -400,6 +405,11 @@ pub(crate) struct LittleStarProgress {
 }
 
 impl LittleStarProgress {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.last_attack_ms = 0;
+        drop(std::mem::take(&mut self.path));
+    }
+
     fn new(path: Vec<(i32, i32, u8)>) -> Self {
         Self {
             path,

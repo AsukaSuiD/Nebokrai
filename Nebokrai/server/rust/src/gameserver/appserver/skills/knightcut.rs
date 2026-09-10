@@ -13,7 +13,29 @@
 //! Успешный `AddKnightCutState` отдельно вызывает атакующий `IncreaseRp(1, 0)`
 //! до дальнейших боевых последствий; это единственное начисление RP у
 //! state-only удара.
-//! Завершение использует подтверждённый общий хвост `CSummonSkill::End(1)`.
+//! Все Begin сначала меняют общую базу и вызывают OnBeginSkill: point
+//! 0x0059B880 → 0x005DFC00, typed 0x0059B940 → 0x005DFB00, object
+//! 0x0059BA30 → 0x00601A50. Затем выделяется CKnightCutEffect размером 0xC,
+//! вызывается базовый constructor 0x005DC200, назначается vtable 0x0065BC40
+//! и BeginVisualEffect(1), и только после этого CheckCastCondition 0x0059BEE0.
+//! Ранние часы Begin не заменяют отдельные поздние часы проверки reuse.
+//! Эффект не добавляет полей к базовому visual и принадлежит самому навыку,
+//! в том числе при отказе без execution payload. Default direction равен -1.
+//! CKnightCutEffect::Update (0x0059BAF0) разрешает сохранённого GetUser:
+//! mode 0/1 даёт action 1/2; 2/7/8/13/14 — отказ только source-player.
+//! Остальные режимы, включая 3, не отправляют пакет. Общий visual Update
+//! вызывается после каждой ветви, в том числе ended и отсутствующего source.
+//! End(int) 0x00546090 возвращает движение живому GetUser, затем использует
+//! общий хвост состояния: ненулевой аргумент вызывает AfterUse/reuse, нулевой
+//! их пропускает; оба очищают базу и удаляют visual без отдельного пакета.
+//! Отказы Begin и первого AI (MP/RP/оружие), отсутствие свойств или source
+//! вызывают End(0): 0x0059B900/0x0059B9C6/0x0059BAA9,
+//! 0x0059C644, 0x0059CB25/0x0059CB31. Успешный scope — End(1), 0x0059CB1C.
+//! Это не откатывает MP, уже списанную до проверки RP и оружия.
+//! Первый AI определяет направление через общий GetSufferer (0x0059C732),
+//! затем через сохранённые xy (0x0059C74D), включая (0, 0); SelfTarget не
+//! подменяется клеткой перед игроком. Перед visual 0 записывается available
+//! из свойства 10006 (0x0059C78C), затем отмечается выполненная первая фаза.
 //! Для monster-цели `time_percent` сначала сохраняется в `f32`, затем duration
 //! умножается в x87 на него и `0.01f32` и усекается к нулю.
 
@@ -26,10 +48,13 @@ use super::knightcutstate::{KnightCutState, replace_monster_knight_cut_state, re
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::region::RegionSecurity;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::appserver::skills::skillfactory::SkillOwner;
+use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape, resolve_state_user};
+use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -88,8 +113,12 @@ fn weapon_is_compatible(game: &CGame, player: &CPlayer) -> bool {
     })
 }
 
-fn send_failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
+fn send_failure(game: &mut CGame, player_id: i32, code: u8, amount: u32) {
+    game.update_player_skill_visual(player_id, KNIGHT_CUT_SKILL_ID, u32::from(code));
+    let Some((region_id, identity)) = game.player_skill_lifecycle(player_id, KNIGHT_CUT_SKILL_ID).map(|lifecycle| lifecycle.user()) else { return };
+    let Some(source) = resolve_state_user(game, region_id, identity) else { return };
+    if source.object_type != PLAYER_TYPE { return; }
+    let player_id = source.id;
     match code {
         7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", amount),
         8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", amount),
@@ -99,35 +128,58 @@ fn send_failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
     }
 }
 
-fn finish_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    finish_summon_skill(game, player_id, KNIGHT_CUT_SKILL_ID, runtime);
+fn end_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
+    let _ = game.end_registered_player_skill(player_id, KNIGHT_CUT_SKILL_ID, 0, SkillTermination::Rejected, runtime);
+}
+
+fn finish_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
+    let _ = game.end_registered_player_skill(player_id, KNIGHT_CUT_SKILL_ID, 1, SkillTermination::Completed, runtime);
 }
 
 pub(crate) fn cancel_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some(dispatch) = game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_knight_cut(game, player_id, player_ai, runtime);
+    let _ = game.end_registered_player_skill(player_id, KNIGHT_CUT_SKILL_ID, 1, SkillTermination::Cancelled, runtime);
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
-fn destination(game: &CGame, region_id: i32, player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
-    match dispatch {
-        PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)),
-        PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)),
-        PlayerSkillDispatch::SelfTarget { .. } => game.find_player(player_id).and_then(|player| { let face = player.shape().get_face_position().ok()?; Some((face.x, face.y)) }),
-    }
+fn destination(game: &CGame, player_id: i32) -> Option<(i32, i32)> {
+    let lifecycle = game.player_skill_lifecycle(player_id, KNIGHT_CUT_SKILL_ID)?;
+    let target = resolve_skill_sufferer(game, lifecycle)
+        .and_then(|(region_id, identity)| resolve_state_move_shape(game, region_id, identity))
+        .and_then(|target| Some((target.shape().get_tile_x().ok()?, target.shape().get_tile_y().ok()?)));
+    Some(target.unwrap_or(lifecycle.destination()))
 }
 
-fn send_visual(game: &mut CGame, player_id: i32, level: i32, direction: i32, apply: bool) {
-    let Some((identity, source)) = game.find_player(player_id).map(|player| (player.shape().identity(), player.shape().clone())) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(if apply { 2 } else { 1 });
-    message.add_long(KNIGHT_CUT_SKILL_ID as i32); message.add_short(level as i16);
+pub(crate) fn publish_knight_cut_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    if skill.owner() != SkillOwner::CKnightCut
+        || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::KnightCut || effect.is_ended())
+    { return; }
+    let (region_id, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region_id, identity) else { return };
+    let source = source.shape();
+    let identity = source.identity();
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    if matches!(mode, 2 | 7 | 8 | 13 | 14) {
+        if identity.object_type == PLAYER_TYPE {
+            message.add_byte(0);
+            message.add_byte(mode as u8);
+            let _ = message.send_to_player(game.net_server(), identity.id);
+        }
+        return;
+    }
+    let action = match mode { 0 => 1, 1 => 2, _ => return };
+    message.add_byte(action);
+    message.add_long(skill.id() as i32); message.add_short(skill.level() as i16);
     message.add_long(identity.object_type); message.add_long(identity.id);
-    if apply {
-        let front = CShape::get_direction_position(direction, ShapeAreaCoordinates { x: source.get_tile_x().unwrap_or_default(), y: source.get_tile_y().unwrap_or_default() }).unwrap_or(ShapeAreaCoordinates { x: source.get_tile_x().unwrap_or_default(), y: source.get_tile_y().unwrap_or_default() });
+    if action == 2 {
+        let (Ok(x), Ok(y)) = (source.get_tile_x(), source.get_tile_y()) else { return };
+        let direction = skill.player_state::<KnightCutExecutionState>().map_or(-1, |state| state.direction);
+        let front = CShape::get_direction_position(direction, ShapeAreaCoordinates { x, y }).unwrap_or(ShapeAreaCoordinates { x, y });
         message.add_long(0); message.add_long(0); message.add_long(front.x); message.add_long(front.y);
-    } else { message.add_long(direction); }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+    } else { message.add_long(source.get_direction()); }
+    if let Some(region) = game.find_region(source.get_region_id()) {
+        let _ = game.send_game_shape_around(region.base(), source, None, &message);
+    }
 }
 
 fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<Target> {
@@ -196,46 +248,74 @@ fn apply_target(game: &mut CGame, region_id: i32, player_id: i32, target: Target
     game.restore_region_owner(owner);
 }
 
-pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_knight_cut_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, level, source_level, source_x, source_y, initial_mana, initial_rp)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(KNIGHT_CUT_SKILL_ID, game.skill_factory()), player.level(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(), player.rp()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(KNIGHT_CUT_SKILL_ID, level) else { if game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID).is_some() { finish_player_knight_cut(game, player_id, player_ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(KNIGHT_CUT_SKILL_ID, game.skill_factory())) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let beginning_at_ms = game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID)
+        .is_none().then(|| runtime.now_milliseconds());
+    if let Some(started_at_ms) = beginning_at_ms {
+        if !game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms) {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        game.replace_player_skill_visual_effect(
+            player_id, KNIGHT_CUT_SKILL_ID, SkillVisualEffect::new(SkillVisualEffectKind::KnightCut, 1),
+        );
+    } else if game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID)
+        .is_some_and(|execution| execution.kernel().dispatch() != dispatch)
+    { return terminal(QueuedSkillExecutionState::Rejected); }
+    let Some(properties) = game.skill_base_properties(KNIGHT_CUT_SKILL_ID, level) else {
+        end_player_knight_cut(game, player_id, runtime);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
     let mp_loss = properties.query_property(USER_MP_LOSE); let rp_loss = properties.query_property(USER_RP_LOSE);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let persist = properties.query_property(STATE_PERSIST_TIME); let time_percent = properties.query_property(TIME_PERCENT);
     let back_steps = properties.query_property(TARGET_BACK_STEP); let move_speed = properties.query_property(TARGET_MOVE_SPEED);
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID).is_none() {
+    if let Some(started_at_ms) = beginning_at_ms {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, KNIGHT_CUT_SKILL_ID), reuse, now_ms) { send_failure(game, player_id, 0x0d, 0); return terminal(QueuedSkillExecutionState::Rejected) }
-        let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
-        if !weapon_is_compatible(game, player) { send_failure(game, player_id, 0x0e, 0); return terminal(QueuedSkillExecutionState::Rejected) }
-        if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
-        if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 { send_failure(game, player_id, 8, rp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, KNIGHT_CUT_SKILL_ID), reuse, now_ms) { send_failure(game, player_id, 0x0d, 0); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        let Some(player) = game.find_player(player_id) else { end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
+        if !weapon_is_compatible(game, player) { send_failure(game, player_id, 0x0e, 0); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if mp_loss != 0 && (player.mana().wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if rp_loss != 0 && (u32::from(player.rp()).wrapping_sub(rp_loss) as i32) < 0 { send_failure(game, player_id, 8, rp_loss); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(KNIGHT_CUT_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, KnightCutExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(player_id, KnightCutExecutionState::begin(dispatch, started_at_ms));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID).is_none_or(|execution| execution.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    }
+
+    let Some((region_id, source_level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.level(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
+        end_player_knight_cut(game, player_id, runtime);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
 
     if game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID).is_some_and(|execution| execution.kernel().stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); finish_player_knight_cut(game, player_id, player_ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 { send_failure(game, player_id, 8, rp_loss); finish_player_knight_cut(game, player_id, player_ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 { send_failure(game, player_id, 8, rp_loss); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_rp(rp.wrapping_sub(rp_loss as u16)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        if game.find_player(player_id).is_none_or(|player| !weapon_is_compatible(game, player)) { send_failure(game, player_id, 0x0e, 0); finish_player_knight_cut(game, player_id, player_ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
-        let (target_x, target_y) = destination(game, region_id, player_id, dispatch).unwrap_or((source_x, source_y));
+        if game.find_player(player_id).is_none_or(|player| !weapon_is_compatible(game, player)) { send_failure(game, player_id, 0x0e, 0); end_player_knight_cut(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        let Some((target_x, target_y)) = destination(game, player_id) else {
+            end_player_knight_cut(game, player_id, runtime);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(direction); }
-        if let Some(execution) = game.player_skill_state_mut::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID) { execution.direction = direction; let _ = execution.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
-        send_visual(game, player_id, level, direction, false);
+        if let Some(execution) = game.player_skill_state_mut::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID) {
+            execution.direction = direction;
+            execution.kernel_mut().lifecycle_mut().set_available(can_be_breaked != 0);
+        }
+        game.update_player_skill_visual(player_id, KNIGHT_CUT_SKILL_ID, 0);
+        if let Some(execution) = game.player_skill_state_mut::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID) { let _ = execution.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
     let Some(execution) = game.player_skill_state::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID) else { return terminal(QueuedSkillExecutionState::Rejected) };
     if !time_reached(runtime.now_milliseconds(), execution.kernel().started_at_ms(), delay) { return terminal(QueuedSkillExecutionState::Pending) }
-    let direction = execution.direction; send_visual(game, player_id, level, direction, true);
+    let direction = execution.direction;
+    game.update_player_skill_visual(player_id, KNIGHT_CUT_SKILL_ID, 1);
     if let Some(execution) = game.player_skill_state_mut::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID) { let _ = execution.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
     let master = game.find_player(player_id).map(master_info).unwrap_or_default();
     let reank = game.find_player(player_id).map_or(0, |player| u32::from(player.combat_properties().reank));
@@ -254,5 +334,5 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
         apply_target(game, region_id, player_id, target, KnightCutState::new(now_ms, duration), destination, move_speed, now_ms);
     }
     if let Some(execution) = game.player_skill_state_mut::<KnightCutExecutionState>(player_id, KNIGHT_CUT_SKILL_ID) { let _ = execution.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_knight_cut(game, player_id, player_ai, runtime); terminal(QueuedSkillExecutionState::Completed)
+    finish_player_knight_cut(game, player_id, runtime); terminal(QueuedSkillExecutionState::Completed)
 }

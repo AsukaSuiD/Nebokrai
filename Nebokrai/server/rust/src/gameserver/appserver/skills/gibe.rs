@@ -17,6 +17,8 @@
 //! `CSkill::IsRestored`; стадийная задержка остаётся elapsed.
 //! End (0x005AFA40) использует пустой AfterUseSkill (0x00601A70), а общий
 //! callback игрока +0x158 также пуст: ни износа, ни UpdateProperty при End нет.
+//! Общая граница AfterUse/reuse выбирает этот пустой override из фабричного
+//! каталога; время записывается в тот же экземпляр без отдельного хвоста CGibe.
 
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::monster_attackable_by_monster;
@@ -214,7 +216,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     }
     game.restore_region_owner(region);
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-    game.mark_player_skill_used(player_id, GIBE_SKILL_ID, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, GIBE_SKILL_ID, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 
@@ -232,7 +234,7 @@ pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
         return false;
     };
     if record_reuse {
-        game.mark_player_skill_used(player_id, GIBE_SKILL_ID, runtime.now_milliseconds());
+        game.after_use_player_skill(player_id, GIBE_SKILL_ID, runtime);
     }
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }

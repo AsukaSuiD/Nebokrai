@@ -153,8 +153,7 @@ fn finish_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    game.damage_player_weapon(player_id, runtime);
-    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, skill_id, runtime);
 }
 
 fn abort_player_wide_arc_attack(game: &mut CGame, player_id: i32) {

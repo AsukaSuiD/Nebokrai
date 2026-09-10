@@ -9,6 +9,8 @@
 //! `End(true)` прекращает оставшиеся клетки и фиксирует cooldown, тогда как
 //! внутренний `End(false)` сохраняет уже нанесённые необратимые эффекты, но не
 //! запускает новые клетки и не фиксирует cooldown.
+//! End (0x0052B410, PDB layout) очищает condition и счётчики клеток,
+//! затем освобождает path и attacked-list; базовая available сохраняется.
 //! Беззнаковый коэффициент урона остаётся в расширенной точности x87 до
 //! единственной записи в `float`; критический урон также вычисляется в x87 и
 //! усекается к нулю при записи в `i32`. Cooldown использует абсолютный срок
@@ -58,6 +60,14 @@ pub(crate) struct LightingArrow2ExecutionState {
 }
 
 impl LightingArrow2ExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.attack_cell_count = 0;
+        self.current_cell = 0;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked_creatures));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, condition_checked: false, path: Vec::new(), attack_cell_count: 0, current_cell: 0, attacked_creatures: Vec::new() }
     }

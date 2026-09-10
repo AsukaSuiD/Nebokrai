@@ -14,6 +14,8 @@
 //! в регионе, но выстрел не изнашивает оружие и не обновляет reuse.
 //! m_bSkillPrepared выставлен лишь на синхронный Summon и сбрасывается End;
 //! отдельного фонового исполнения этого навыка между AI-тактами нет.
+//! End (0x0058DE90, PDB layout) обнуляет condition и angle, освобождает
+//! right/center/left именно в этом порядке. Региональный phalanx не удаляется.
 //! Cooldown использует абсолютный
 //! срок `CSkill::IsRestored`; задержка исполнения остаётся elapsed.
 
@@ -44,6 +46,14 @@ const SUMMONED_LIFETIME: u32 = 30_001; const SUMMONED_SPEED: u32 = 30_002;
     condition_checked: bool, angle_bits: u32, left: Vec<RainArrowCell>, center: Vec<RainArrowCell>, right: Vec<RainArrowCell>,
 }
 impl RainArrowExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.angle_bits = 0.0_f32.to_bits();
+        drop(std::mem::take(&mut self.right));
+        drop(std::mem::take(&mut self.center));
+        drop(std::mem::take(&mut self.left));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), target: Option<ShapeIdentity>, now: u32) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, now), destination, target, condition_checked: false,
             angle_bits: 0.0f32.to_bits(), left: Vec::new(), center: Vec::new(), right: Vec::new() }

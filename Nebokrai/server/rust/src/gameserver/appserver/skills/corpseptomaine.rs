@@ -34,7 +34,7 @@ use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecu
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::states::summonskill::{
-    finish_summon_skill_without_weapon_wear,
+    finish_summon_skill,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -254,7 +254,7 @@ fn send_player_failure(game: &CGame, player_id: i32, action: u8) { game.send_sel
 fn send_player_start(game: &mut CGame, player_id: i32, level: i32) { let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return }; let mut message = CMessage::new(0x000b_fe01); message.add_byte(1); message.add_long(CORPSE_PTOMAINE_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(direction); let _ = game.send_player_shape_around(player_id, None, &message); }
 fn send_player_fire(game: &mut CGame, player_id: i32, level: i32, center: (i32, i32)) { let mut message = CMessage::new(0x000b_fe01); message.add_byte(2); message.add_long(CORPSE_PTOMAINE_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(0); message.add_long(0); message.add_long(center.0); message.add_long(center.1); let _ = game.send_player_shape_around(player_id, None, &message); }
 fn restore_player(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
-fn finish_player<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player(game, player_id); finish_summon_skill_without_weapon_wear(game, player_id, CORPSE_PTOMAINE_SKILL_ID, runtime); }
+fn finish_player<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player(game, player_id); finish_summon_skill(game, player_id, CORPSE_PTOMAINE_SKILL_ID, runtime); }
 pub(crate) fn cancel_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, CORPSE_PTOMAINE_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_player(game, player_id, ai, runtime); game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled) }
 
 pub(crate) fn execute_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {

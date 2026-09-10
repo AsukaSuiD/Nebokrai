@@ -18,6 +18,10 @@
 //! CPlayer::OnWeaponDamaged`, обновлением свойств и cooldown конкретного
 //! идентификатора. Reuse использует exact `CSkill::IsRestored`, а полёт
 //! остаётся elapsed.
+//! End (0x0053BF50, PDB layout) сбрасывает missile/current-position,
+//! end-coordinates, visual target и attacking, затем освобождает attack-path.
+//! Указатель scope +0x74 не удаляется этим хвостом; registered payload и
+//! базовая available не заменяются новым конструктором.
 //! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
 //! сохранённой `f32`-константы, затем усекается к нулю.
 //! Множитель собранных душ также остаётся в x87: signed `souls` умножается на
@@ -130,6 +134,10 @@ pub(crate) struct PlayerPathProjectileExecutionState {
 }
 
 impl PlayerPathProjectileExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.progress.clear_end_paths();
+    }
+
     fn begin(
         dispatch: PlayerSkillDispatch,
         now_ms: u32,
@@ -159,6 +167,16 @@ impl PlayerPathProjectileExecutionState {
 }
 
 impl PathProjectileProgress {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.fired = false;
+        self.missile_flying_time_ms = 0;
+        self.current_position = 0;
+        self.end_x = 0;
+        self.end_y = 0;
+        self.visual_target = None;
+        drop(std::mem::take(&mut self.path));
+    }
+
     pub(crate) const fn new(destination_x: i32, destination_y: i32) -> Self {
         Self {
             destination_x,

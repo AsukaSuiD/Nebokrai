@@ -11,6 +11,9 @@
 //! `AfterUseSkill` делает это один раз из `End(true)`, после чего обновляются
 //! свойства и cooldown. `End(false)` только освобождает runtime-состояние и не
 //! откатывает попадания.
+//! End (0x00577C40, PDB layout) сбрасывает condition/current-position,
+//! end-coordinates и target, освобождает path перед attacked-list. Scope
+//! +0x60 сохраняется; поля packet-кеша не заменяют owned visual или kernel.
 //! Damage factor сохраняет x87-порядок `u32 factor × f32 weapon × 0.01_f32`
 //! до единственной записи в `f32`. Критический множитель не округляет исходный
 //! урон в `f32` и усекается к нулю только при итоговой записи каждого компонента.
@@ -61,6 +64,15 @@ pub(crate) struct BloodRoseExecutionState {
 }
 
 impl BloodRoseExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.current_position = 0;
+        self.end_tile = (0, 0);
+        self.visual_target = None;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32, destination: (i32, i32)) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), condition_checked: false, path: Vec::new(), current_position: 0, destination, end_tile: (0, 0), visual_target: None, attacked: Vec::new(), end_sent: false }
     }

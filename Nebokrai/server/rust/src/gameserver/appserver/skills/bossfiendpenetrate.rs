@@ -22,6 +22,9 @@
 //! клеточные задержки остаются elapsed-проверками.
 //! End (0x0052B410) освобождает пути и возвращает движение до оружейного
 //! AfterUseSkill. Callback игрока +0x158 пуст и не пересчитывает свойства.
+//! PDB layout и writes End подтверждают сброс condition/attacking,
+//! числа и текущего индекса клеток; обе vector-аллокации освобождаются.
+//! Scalar kernel и базовое available сохраняются для общего хвоста End.
 //! Выпуск игрока устанавливает prepared (0x0052C279) после эффекта 1;
 //! последующие клетки обходятся тем же экземпляром в общей фоновой очереди.
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
@@ -88,6 +91,14 @@ pub(crate) struct PlayerBossFiendPenetrateExecutionState {
     attacked: Vec<ShapeIdentity>,
 }
 impl PlayerBossFiendPenetrateExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.attack_cell_count = 0;
+        self.current_cell = 0;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
         Self {
             kernel: SkillExecutionKernel::begin(dispatch, now_ms),
@@ -228,10 +239,7 @@ fn finish_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
 ) {
     restore_player_movement(game, player_id);
     if successful {
-        game.damage_player_weapon(player_id, runtime);
-    }
-    if successful {
-        game.mark_player_skill_used(player_id, BOSS_FIEND_PENETRATE_SKILL_ID, runtime.now_milliseconds());
+        game.after_use_player_skill(player_id, BOSS_FIEND_PENETRATE_SKILL_ID, runtime);
     }
 }
 
@@ -668,6 +676,14 @@ pub(crate) struct BossFiendPenetrateProgress {
 }
 
 impl BossFiendPenetrateProgress {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.fired = false;
+        self.attack_cell_count = 0;
+        self.current_cell = 0;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked));
+    }
+
     pub(crate) const fn new(destination_x: i32, destination_y: i32) -> Self {
         Self {
             destination_x,

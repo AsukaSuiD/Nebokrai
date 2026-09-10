@@ -12,6 +12,9 @@
 //! перегрузок `Attack` не изнашивает оружие на отдельных целях: все три
 //! варианта делают это один раз через унаследованный `AfterUseSkill` в общем
 //! подтверждённом `End`, после освобождения пути и возврата движения.
+//! End (0x0059D6B0, PDB layout) сбрасывает condition, attacking, missile и
+//! current-position, освобождает сначала attack-path, затем attacked-list.
+//! Очистка ниже сохраняет kernel; derived available +0x4C не подменяет базовую.
 //! Все три варианта сохраняют беззнаковый коэффициент в исходной x87-цепочке
 //! до единственной записи в `float` и усекают критический множитель к нулю
 //! перед `int`. Физический RNG у всех трёх получает исходную DWORD-ширину
@@ -59,6 +62,13 @@ pub(crate) struct GhostCutExecutionState {
 }
 
 impl GhostCutExecutionState {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.current_position = 0;
+        drop(std::mem::take(&mut self.path));
+        drop(std::mem::take(&mut self.attacked));
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), condition_checked: false, path: Vec::new(), current_position: 0, attacked: Vec::new() }
     }

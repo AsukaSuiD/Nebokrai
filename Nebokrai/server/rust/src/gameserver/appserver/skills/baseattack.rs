@@ -24,7 +24,9 @@
 //! не является соответствием нашим CSkill/AfterUseSkill.
 //! При входе в другой регион исходный `OnChangeRegion` выполняет `End(false)`:
 //! движение возвращается и исполнение освобождается без износа оружия и фиксации
-//! времени восстановления. Координатный `Begin` разрешает первый `CMoveShape`
+//! времени восстановления. Этот отдельный caller сохраняет ключ экземпляра,
+//! поскольку не проходит общий materialized-End dispatcher.
+//! Координатный `Begin` разрешает первый `CMoveShape`
 //! клетки через точный `CState::GetSufferer` без fallback к заклинателю.
 //! Объектное исполнение навыка монстром проходит `monsterbaseattack`: ID `1`
 //! сохраняется, физический разброс исключает верхнюю границу, а critical-roll
@@ -218,8 +220,7 @@ fn finish_base_attack_owner<Runtime: GameMainLoopRuntime>(
     {
         player.set_skill_moveable(true);
     }
-    game.damage_player_weapon(player_id, runtime);
-    game.mark_player_skill_used(player_id, skill_id, runtime.now_milliseconds());
+    game.after_use_player_skill(player_id, skill_id, runtime);
 }
 
 pub(crate) fn finish_delayed_base_attack<Runtime: GameMainLoopRuntime>(
@@ -270,10 +271,11 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     let Some(dispatch) = game.player_skill_execution(player_id, BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
+    let instance = game.registered_player_skill(player_id, BASE_ATTACK_SKILL_ID);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
+    game.finish_registered_player_command(instance, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

@@ -14,6 +14,9 @@
 //! `AfterUseSkill`. Отказная отмена использует `End(0)` без износа,
 //! cooldown и применения отложенной атаки. Cooldown использует абсолютный
 //! срок `CSkill::IsRestored`; удержание и полёт сохраняют elapsed-семантику.
+//! Обычный хвост End (0x00591AF7) обнуляет condition/attacking/skill-casted,
+//! missile/hold, но не уничтожает registered payload. PDB m_bAvailable
+//! +0x50 — derived поле, не базовое CSkill::m_bAvailable +0x3C.
 //! Процентный damage factor сохраняется в `f32` только после расширенного
 //! x87-умножения; критический урон усекается к нулю при записи в `i32`.
 //! При переносе яда DWORD-произведение уровня оружия и модификатора остаётся
@@ -26,6 +29,9 @@
 //! Успешный Begin возвращает Begun после инициализации исполнения. Первый
 //! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
 //! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! Explicit End возвращает отдельный Released для выпуска удерживаемой стрелы:
+//! coordinator не снимает команду и не освобождает payload этой ветви. Ended
+//! разрешает общий терминальный сброс исходного экземпляра после callbacks.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -40,6 +46,7 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::skill::RegisteredSkillEnd;
 use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -69,6 +76,21 @@ pub(crate) struct HeartlessArrowExecutionState {
 }
 
 impl HeartlessArrowExecutionState {
+    pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
+        if argument != 0 && self.condition_checked && !self.attacking_started {
+            self.attacking_started = true;
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.condition_checked = false;
+        self.attacking_started = false;
+        self.missile_flying_time_ms = 0;
+        self.hold_time_ms = 0;
+    }
+
     fn begin(dispatch: PlayerSkillDispatch, target: ShapeIdentity, started_at_ms: u32) -> Self {
         Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), target, condition_checked: false, attacking_started: false, hold_time_ms: 0, missile_flying_time_ms: 0 }
     }
@@ -95,18 +117,17 @@ fn abort_player_heartless_arrow(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
 }
 
-pub(crate) fn complete_or_release_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some((dispatch, releases_charge)) = game.player_skill_state::<HeartlessArrowExecutionState>(player_id, HEARTLESS_ARROW_SKILL_ID).copied().map(|state| (
-        state.kernel().dispatch(),
-        state.condition_checked && !state.attacking_started,
-    )) else { return false };
-    if releases_charge {
-        if let Some(state) = game.player_skill_state_mut::<HeartlessArrowExecutionState>(player_id, HEARTLESS_ARROW_SKILL_ID) { state.attacking_started = true; }
+pub(crate) fn complete_or_release_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> Option<RegisteredSkillEnd> {
+    let Some((dispatch, completes)) = game.player_skill_state_mut::<HeartlessArrowExecutionState>(player_id, HEARTLESS_ARROW_SKILL_ID).map(|state| (
+        state.kernel().dispatch(), state.prepare_derived_end(1),
+    )) else { return None };
+    if !completes {
         tracing::trace!(player_id, "ненулевой End выпустил удерживаемую стрелу");
-        return true;
+        return Some(RegisteredSkillEnd::Released);
     }
     finish_player_heartless_arrow(game, player_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
+    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed);
+    Some(RegisteredSkillEnd::Ended)
 }
 
 pub(crate) fn cancel_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {

@@ -20,6 +20,8 @@
 //! End (0x005AE7A0) сначала возвращает движение, затем при успехе вызывает
 //! оружейный AfterUseSkill. Пустой callback CPlayer +0x158 не заменён
 //! пересчётом свойств; удаление региональной стены не является частью End.
+//! AfterUse/reuse принадлежат общей границе экземпляра: свежие часы reuse
+//! читаются после износа, а не перед ним, и не записываются в замену навыка.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
@@ -113,7 +115,7 @@ fn finish<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     if successful {
-        game.damage_player_weapon(player_id, runtime);
+        game.after_use_player_skill(player_id, FIRE_WALL_SKILL_ID, runtime);
     }
 }
 
@@ -128,9 +130,6 @@ pub(crate) fn cancel_player_fire_wall<Runtime: GameMainLoopRuntime>(
         return false;
     };
     finish(game, player_id, runtime, record_reuse);
-    if record_reuse {
-        game.mark_player_skill_used(player_id, FIRE_WALL_SKILL_ID, runtime.now_milliseconds());
-    }
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
@@ -316,7 +315,6 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    game.mark_player_skill_used(player_id, FIRE_WALL_SKILL_ID, runtime.now_milliseconds());
     finish(game, player_id, runtime, true);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed

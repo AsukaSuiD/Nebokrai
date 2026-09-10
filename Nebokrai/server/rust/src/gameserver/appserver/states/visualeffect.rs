@@ -1,4 +1,4 @@
-//! Владеющие visual-ресурсы `CVisualEffect` и `CRageEffect` GameServer.
+//! Общее владение visual-ресурсами навыков GameServer.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/states/visualeffect.h/.cpp`.
@@ -17,10 +17,15 @@
 //! выделяет 0xC байт (0x005A0859), вызывает base constructor (0x005A0877),
 //! назначает vtable 0x0065BEF0 и skill+0x34 (0x005A0888), затем вызывает
 //! BeginVisualEffect(1) (0x005A0897) до CheckCastCondition. AI ресурс не создаёт.
-//! Здесь закрытый enum сохраняет concrete тип, а CRageEffect владеет ровно
-//! одной базой. Source, skill ID, level и свойства не кешируются в ресурсе.
+//! CKnightCutEffect из `appserver/skills/knightcut.cpp` также не добавляет
+//! полей: три Begin выделяют 0xC байт (0x0059B8B0/0x0059B975/0x0059BA59),
+//! вызывают тот же constructor, назначают vtable 0x0065BC40 и skill+0x34,
+//! затем BeginVisualEffect(1) перед CheckCastCondition. Derived Update
+//! (0x0059BAF0) сходится в base tail 0x0059BE8E даже без source/при ended.
+//! Здесь concrete вид и одна общая база сохраняются одним owned ресурсом.
+//! Source, skill ID, level и свойства не кешируются в ресурсе.
 //! Derived Update(mode) (0x005A0900) выполняет свои gates и публикацию через
-//! Rage/CGame owner, затем обязательно вызывает update_base_tail, включая
+//! concrete/CGame owner, затем обязательно вызывает update_base_tail, включая
 //! ended/missing-source ветви. Режим 3 сам не завершает visual; при loop=1
 //! base tail не меняет ended. Одноаргументный Update остаётся базовым.
 //!
@@ -31,37 +36,34 @@
 //! ended=true, затем loop=0. Освобождение памяти остаётся обычному Rust owner-у.
 //! Option<SkillVisualEffect> принадлежит зарегистрированному экземпляру навыка,
 //! не concrete execution payload. Поэтому failed Begin без payload сохраняет
-//! настоящий ресурс до End. Enum и оба ресурса не копируются; обычный Drop
-//! CRageEffect вызывает Drop его базы. Остальные concrete ресурсы не заменены
+//! настоящий ресурс до End. Вид выбирает только derived-публикацию; хранение,
+//! Begin, общий Update и Drop не дублируются между эффектами. Ресурс не
+//! копируется; обычный Drop вызывает Drop его базы. Остальные эффекты не заменены
 //! этими телами; их подключение остаётся у владельцев. Пакет не заменяет Drop.
 //! Повторное присваивание visual безопасно освобождает прежний ресурс, вместо
 //! утечки старого указателя native Begin; дополнительных пакетов Drop не шлёт.
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum SkillVisualEffect {
-    Rage(CRageEffect),
-}
-
-impl SkillVisualEffect {
-    /// Общий хвост вызывается после concrete публикации, даже если та
-    /// ничего не отправила. Сам ресурс остаётся в Option своего навыка.
-    pub(crate) fn update_base_tail(&mut self) {
-        match self {
-            Self::Rage(effect) => effect.update_base_tail(),
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillVisualEffectKind {
+    Rage,
+    KnightCut,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CRageEffect {
+pub(crate) struct SkillVisualEffect {
+    kind: SkillVisualEffectKind,
     base: CVisualEffect,
 }
 
-impl CRageEffect {
-    pub(crate) const fn new() -> Self {
+impl SkillVisualEffect {
+    pub(crate) const fn new(kind: SkillVisualEffectKind, loop_value: i32) -> Self {
         let mut base = CVisualEffect::new();
-        base.begin_visual_effect(1);
-        Self { base }
+        base.begin_visual_effect(loop_value);
+        Self { kind, base }
+    }
+
+    pub(crate) const fn kind(&self) -> SkillVisualEffectKind {
+        self.kind
     }
 
     pub(crate) const fn is_ended(&self) -> bool {
@@ -70,6 +72,10 @@ impl CRageEffect {
 
     pub(crate) const fn update_base_tail(&mut self) {
         self.base.update_visual_effect();
+    }
+
+    pub(crate) const fn begin_visual_effect(&mut self, loop_value: i32) {
+        self.base.begin_visual_effect(loop_value);
     }
 }
 

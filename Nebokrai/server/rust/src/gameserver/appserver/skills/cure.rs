@@ -36,6 +36,8 @@
 //! движение и не фиксируют reuse. Rust удаляет только совпавшее исполнение
 //! и его state-запись; ссылку выбора на удалённый экземпляр обнуляет безопасно,
 //! не сохраняя native dangling pointer. Созданный phalanx остаётся независимым.
+//! Эта отдельная граница не проходит skill-End dispatcher: captured ключ
+//! SpiderMist очищается здесь до пересчёта свойств и не разрешается повторно.
 
 use super::fightdefense::truncate_original;
 use super::bossbluequakestate::{
@@ -246,12 +248,13 @@ fn finish_active_spider_mist_on_cure<Runtime: GameMainLoopRuntime>(
     player_id: i32,
     _runtime: &mut Runtime,
 ) -> bool {
+    let instance = game.registered_player_skill(player_id, SPIDER_MIST_SKILL_ID);
     let Some(mut player_ai) = game.find_player_mut(player_id).map(CPlayer::take_player_ai) else {
         return false;
     };
     let finished = game.player_skill_execution(player_id, SPIDER_MIST_SKILL_ID)
         .map(SkillExecutionKernel::dispatch)
-        .is_some_and(|dispatch| game.finish_player_skill(player_id, &mut player_ai, dispatch, SkillTermination::Cancelled));
+        .is_some_and(|dispatch| game.finish_registered_player_command(instance, &mut player_ai, dispatch, SkillTermination::Cancelled));
     if let Some(player) = game.find_player_mut(player_id) {
         player.restore_player_ai(player_ai);
         if finished {

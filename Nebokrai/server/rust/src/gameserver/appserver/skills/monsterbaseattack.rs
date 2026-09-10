@@ -347,10 +347,7 @@ fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, runtime: &mut Runtime, success: bool,
 ) {
     if success {
-        game.damage_player_weapon(player_id, runtime);
-    }
-    if success {
-        game.mark_player_skill_used(player_id, MONSTER_BASE_ATTACK_SKILL_ID, runtime.now_milliseconds());
+        game.after_use_player_skill(player_id, MONSTER_BASE_ATTACK_SKILL_ID, runtime);
     }
 }
 

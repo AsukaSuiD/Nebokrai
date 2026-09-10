@@ -12,6 +12,14 @@
 //! Типы исполнения игрока и боевого духа отделены от очередей CPlayerAI:
 //! их данные принадлежат зарегистрированному экземпляру CMoveShape. Общий
 //! enum и доступ к kernel не выполняют Begin либо concrete End автоматически.
+//! Тот же каталог связывает узкие derived End-переходы и освобождение путей:
+//! scalar/kernel остаётся у экземпляра, а порядок относительно movement/visual
+//! определяет общий End. Hooks не меняют FIFO, selection, базовую available
+//! или самостоятельные региональные phalanx. Ненулевой HeartLessArrow End
+//! может только выпустить удерживаемую стрелу и запретить общий хвост.
+//! Hooks очищают подтверждённые поля существующей Rust-проекции. Отдельные
+//! derived available/condition/skill-casted, пока не представленные у owner-а,
+//! не кодируются записью в base available или произвольным откатом stage.
 //! SkillLifecycle хранит постоянную базу CState/CSkill. CState constructor
 //! (0x005DBCA0) задаёт ended=true и нулевые source/target/coords/time;
 //! CSkill constructor (0x004D8120) задаёт available=true, prepared=false.
@@ -106,7 +114,7 @@ use super::yunshenglightning::PlayerYunShengLightningExecutionState;
 // Типы игровых данных перечислены один раз: из них выводятся хранение,
 // доступ к kernel и безопасное извлечение конкретного состояния.
 macro_rules! player_skill_states {
-    ($($variant:ident($state:ty)),+ $(,)?) => {
+    ($($variant:ident($state:ty) $(prepare($prepare:ident))? $(paths($paths:ident))?),+ $(,)?) => {
         #[derive(Clone, Debug, Eq, PartialEq)]
         pub(crate) enum PlayerSkillExecution {
             State(SkillExecutionKernel<PlayerSkillDispatch>),
@@ -142,6 +150,20 @@ macro_rules! player_skill_states {
             pub(crate) fn lifecycle_mut(&mut self) -> &mut SkillLifecycle {
                 self.kernel_mut().lifecycle_mut()
             }
+
+            pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
+                match self {
+                    Self::State(_) | Self::PoisonFog { .. } => true,
+                    $(Self::$variant(_state) => player_skill_states!(@prepare _state, _argument $(, $prepare)?),)+
+                }
+            }
+
+            pub(crate) fn clear_end_paths(&mut self) {
+                match self {
+                    Self::State(_) | Self::PoisonFog { .. } => {},
+                    $(Self::$variant(_state) => player_skill_states!(@paths _state $(, $paths)?),)+
+                }
+            }
         }
 
         $(
@@ -166,6 +188,10 @@ macro_rules! player_skill_states {
             }
         )+
     };
+    (@prepare $state:ident, $argument:ident) => { true };
+    (@prepare $state:ident, $argument:ident, $method:ident) => { $state.$method($argument) };
+    (@paths $state:ident) => { {} };
+    (@paths $state:ident, $method:ident) => { $state.$method() };
 }
 
 pub(crate) trait PlayerSkillState {
@@ -175,25 +201,25 @@ pub(crate) trait PlayerSkillState {
 
 player_skill_states! {
     HeartlessArrowArea(HeartlessArrowAreaExecutionState),
-    ExplosiveArrow(ExplosiveArrowExecutionState),
+    ExplosiveArrow(ExplosiveArrowExecutionState) paths(clear_end_paths),
     AgilityFamily(AgilityFamilyExecutionState),
-    GhostCut(GhostCutExecutionState),
+    GhostCut(GhostCutExecutionState) paths(clear_end_paths),
     ArmyBreak(ArmyBreakExecutionState),
-    LittleFlash(LittleFlashExecutionState),
-    PathProjectile(PlayerPathProjectileExecutionState),
+    LittleFlash(LittleFlashExecutionState) paths(clear_end_paths),
+    PathProjectile(PlayerPathProjectileExecutionState) paths(clear_end_paths),
     DirectProjectile(PlayerDirectProjectileExecutionState),
     SummonCreature(PlayerSummonCreatureExecutionState),
     LordFastAttack(LordFastAttackExecutionState),
     Callosity(CallosityExecutionState),
     Archery(ArcheryExecutionState),
-    HeartlessArrow(HeartlessArrowExecutionState),
+    HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end) paths(clear_end_paths),
     LightingArrow(LightingArrowExecutionState),
-    LightingArrow2(LightingArrow2ExecutionState),
+    LightingArrow2(LightingArrow2ExecutionState) paths(clear_end_paths),
     MeteorArrowMass(MeteorArrowMassExecutionState),
     MeteorArrow(MeteorArrowExecutionState),
-    RainArrow(RainArrowExecutionState),
-    PoisonMoth(PoisonMothExecutionState),
-    BloodRose(BloodRoseExecutionState),
+    RainArrow(RainArrowExecutionState) paths(clear_end_paths),
+    PoisonMoth(PoisonMothExecutionState) paths(clear_end_paths),
+    BloodRose(BloodRoseExecutionState) paths(clear_end_paths),
     Scorpion(ScorpionExecutionState),
     BoaLock(BoaLockExecutionState),
     FallingStar(FallingStarExecutionState),
@@ -203,16 +229,16 @@ player_skill_states! {
     ChainLightning(ChainLightningExecutionState),
     KnightCut(KnightCutExecutionState),
     Rage(RageExecutionState),
-    Flash(FlashExecutionState),
+    Flash(FlashExecutionState) paths(clear_end_paths),
     Swallow(SwallowExecutionState),
-    SevenShootingStar(SevenShootingStarExecutionState),
-    LittleStar(PlayerLittleStarExecutionState),
+    SevenShootingStar(SevenShootingStarExecutionState) paths(clear_end_paths),
+    LittleStar(PlayerLittleStarExecutionState) paths(clear_end_paths),
     YunshengLightning(PlayerYunShengLightningExecutionState),
     MonsterThorn(PlayerMonsterThornExecutionState),
     SpiderMist(PlayerSpiderMistExecutionState),
     SpiderWeb(PlayerSpiderWebExecutionState),
     BossBlueQuake(PlayerBossBlueQuakeExecutionState),
-    BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState),
+    BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState) paths(clear_end_paths),
     SpriteBurn(SpriteBurnExecutionState),
     ChaosSphere(ChaosSphereExecutionState),
     Lightning(LightningExecutionState),

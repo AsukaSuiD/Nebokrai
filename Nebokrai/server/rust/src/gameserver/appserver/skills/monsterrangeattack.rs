@@ -75,8 +75,7 @@ fn end_player_range_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, runtime: &mut Runtime, success: bool,
 ) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    if success { game.damage_player_weapon(player_id, runtime); }
-    if success { game.mark_player_skill_used(player_id, MONSTER_RANGE_ATTACK_SKILL_ID, runtime.now_milliseconds()); }
+    if success { game.after_use_player_skill(player_id, MONSTER_RANGE_ATTACK_SKILL_ID, runtime); }
 }
 
 pub(crate) fn finish_player_monster_range_attack<Runtime: GameMainLoopRuntime>(

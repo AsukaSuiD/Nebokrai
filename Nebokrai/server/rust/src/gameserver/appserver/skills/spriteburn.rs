@@ -39,7 +39,7 @@ use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
     skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill_without_weapon_wear;
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -126,7 +126,7 @@ fn finish_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill_without_weapon_wear(game, player_id, SPRITE_BURN_SKILL_ID, runtime);
+    finish_summon_skill(game, player_id, SPRITE_BURN_SKILL_ID, runtime);
 }
 
 pub(crate) fn cancel_player_sprite_burn<Runtime: GameMainLoopRuntime>(
