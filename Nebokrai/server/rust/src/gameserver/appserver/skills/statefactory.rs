@@ -7,11 +7,17 @@
 //! последовательное продвижение по GameSave wire. Неизвестный ID, переменная
 //! запись без терминатора и усечённый payload останавливают типизацию до
 //! спорной записи: исходный хвост остаётся в `LegacyStateCodec`.
+//! Для Cure, защитных щитов и расходуемого восстановления та же ветвь factory
+//! задаёт concrete decoder: один проход CMoveShape переносит эти записи в общую
+//! арену в wire-порядке. Остальные семейства пока материализуются старым путём
+//! у CMoveShape; отсутствие decoder здесь не означает пустой игровой End.
 //!
 //! CRT allocation, RTTI, vtable и exception plumbing не воспроизводятся.
 
 use crate::gameserver::appserver::chbystate::CHANGE_BODY_STATE_ID;
 use crate::gameserver::appserver::exstate::{EX_STATE_ID, EX_STATE_NEW_ID};
+use crate::gameserver::appserver::moveshape::StateData;
+use crate::gameserver::appserver::restorestate::ConsumableRestoreState;
 use crate::gameserver::appserver::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID};
 use crate::gameserver::appserver::ridestate::RIDE_STATE_ID;
 use crate::gameserver::appserver::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
@@ -32,7 +38,7 @@ use super::bossbluefurystate::{BOSS_BLUE_FURY_STATE_BYTES, BOSS_BLUE_FURY_STATE_
 use super::bossbluequakestate::{BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID};
 use super::callosity::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
 use super::callositystate::CALLOSITY_STATE_BYTES;
-use super::curestate::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
+use super::curestate::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID, CureState};
 use super::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID};
 use super::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
 use super::enlargefullmissstate::ENLARGE_FULL_MISS_STATE_BYTES;
@@ -56,11 +62,11 @@ use super::leafcutstate::{LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
 use super::leafcutstate2::{LEAF_CUT_2_STATE_BYTES, LEAF_CUT_2_STATE_ID};
 use super::leafcutstate3::{LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
 use super::lifeshield::LIFE_SHIELD_SKILL_ID;
-use super::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
+use super::lifeshieldstate::{LIFE_SHIELD_STATE_BYTES, LifeShieldState};
 use super::machineshield::MACHINE_SHIELD_SKILL_ID;
-use super::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
+use super::machineshieldstate::{MACHINE_SHIELD_STATE_BYTES, MachineShieldState};
 use super::manashield::MANA_SHIELD_SKILL_ID;
-use super::manashieldstate::MANA_SHIELD_STATE_BYTES;
+use super::manashieldstate::{MANA_SHIELD_STATE_BYTES, ManaShieldState};
 use super::meteorarrowstate::{METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use super::origin::ORIGIN_SKILL_ID;
 use super::originstate::ORIGIN_STATE_BYTES;
@@ -69,7 +75,8 @@ use super::poisonarrow::POISON_ARROW_SKILL_ID;
 use super::poisonarrowstate::POISON_ARROW_STATE_BYTES;
 use super::poisonfogstate::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use super::promotion::PROMOTION_SKILL_ID;
-use super::promotionstate::PROMOTION_STATE_BYTES;
+use super::promotionstate::{PROMOTION_STATE_BYTES, PromotionState};
+use super::shieldstate::DefenseShieldState;
 use super::ragebreakstate::{RAGE_BREAK_STATE_BYTES, RAGE_BREAK_STATE_ID};
 use super::roarstate::{ROAR_STATE_BYTES, ROAR_STATE_ID};
 use super::rushstate::{RUSH_STATE_BYTES, RUSH_STATE_ID};
@@ -103,8 +110,19 @@ fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.try_into().ok()?))
 }
 
-fn record_size(payload: &[u8], cursor: usize, state_id: u32) -> Option<usize> {
-    Some(match state_id {
+struct StateRecordLayout {
+    bytes: usize,
+    decode: Option<fn(&[u8], usize) -> Option<StateData>>,
+}
+
+impl StateRecordLayout {
+    fn typed(bytes: usize, decode: fn(&[u8], usize) -> Option<StateData>) -> Self {
+        Self { bytes, decode: Some(decode) }
+    }
+}
+
+fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRecordLayout> {
+    let bytes = match state_id {
         CHANGE_BODY_STATE_ID => 124,
         EX_STATE_ID => 44,
         EX_STATE_NEW_ID => 56,
@@ -139,21 +157,53 @@ fn record_size(payload: &[u8], cursor: usize, state_id: u32) -> Option<usize> {
         RAGE_BREAK_STATE_ID => RAGE_BREAK_STATE_BYTES,
         FURY_STATE_SKILL_ID => FURY_STATE_BYTES,
         HEAL_SKILL_ID | HEAL_2_SKILL_ID | SUPER_HEAL_SKILL_ID | SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
-        state_id if state_id == RESTORE_HP_STATE_ID as u32 => RESTORE_HP_STATE_BYTES,
-        state_id if state_id == RESTORE_MP_STATE_ID as u32 => RESTORE_MP_STATE_BYTES,
+        state_id if state_id == RESTORE_HP_STATE_ID as u32 => {
+            return Some(StateRecordLayout::typed(RESTORE_HP_STATE_BYTES, |bytes, offset| {
+                ConsumableRestoreState::decode(bytes, offset).map(StateData::ConsumableRestore)
+            }));
+        }
+        state_id if state_id == RESTORE_MP_STATE_ID as u32 => {
+            return Some(StateRecordLayout::typed(RESTORE_MP_STATE_BYTES, |bytes, offset| {
+                ConsumableRestoreState::decode(bytes, offset).map(StateData::ConsumableRestore)
+            }));
+        }
         state_id if is_automatic_restore_state_id(state_id) => AUTOMATIC_RESTORE_STATE_BYTES,
         PARTICULAR_STATE_ID => PARTICULAR_STATE_BYTES,
         state_id if state_id == TEAM_STATE_ID as u32 => CTeamState::serialized_size(payload, cursor)?,
-        CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
+        CURE_STATE_SKILL_ID => {
+            return Some(StateRecordLayout::typed(CURE_STATE_BYTES, |bytes, offset| {
+                CureState::decode(bytes, offset).ok().map(StateData::Cure)
+            }));
+        }
         ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
         TAIJI_SKILL_ID => TAIJI_STATE_BYTES,
         ENLARGE_MAX_HP_SKILL_ID => ENLARGE_MAX_HP_STATE_BYTES,
         ENLARGE_MAX_MP_SKILL_ID => ENLARGE_MAX_MP_STATE_BYTES,
         ORIGIN_SKILL_ID => ORIGIN_STATE_BYTES,
-        MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,
-        MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
-        LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,
-        PROMOTION_SKILL_ID => PROMOTION_STATE_BYTES,
+        MACHINE_SHIELD_SKILL_ID => {
+            return Some(StateRecordLayout::typed(MACHINE_SHIELD_STATE_BYTES, |bytes, offset| {
+                MachineShieldState::decode(bytes, offset, 0).ok()
+                    .map(|state| StateData::DefenseShield(DefenseShieldState::Machine(state)))
+            }));
+        }
+        MANA_SHIELD_SKILL_ID => {
+            return Some(StateRecordLayout::typed(MANA_SHIELD_STATE_BYTES, |bytes, offset| {
+                ManaShieldState::decode(bytes, offset, 0).ok()
+                    .map(|state| StateData::DefenseShield(DefenseShieldState::Mana(state)))
+            }));
+        }
+        LIFE_SHIELD_SKILL_ID => {
+            return Some(StateRecordLayout::typed(LIFE_SHIELD_STATE_BYTES, |bytes, offset| {
+                LifeShieldState::decode(bytes, offset, 0).ok()
+                    .map(|state| StateData::DefenseShield(DefenseShieldState::Life(state)))
+            }));
+        }
+        PROMOTION_SKILL_ID => {
+            return Some(StateRecordLayout::typed(PROMOTION_STATE_BYTES, |bytes, offset| {
+                PromotionState::decode(bytes, offset, 0).ok()
+                    .map(|state| StateData::DefenseShield(DefenseShieldState::Promotion(state)))
+            }));
+        }
         HEARTEN_SKILL_ID => HEARTEN_STATE_BYTES,
         super::agility::AGILITY_SKILL_ID | super::natural::NATURAL_SKILL_ID
         | super::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
@@ -174,7 +224,14 @@ fn record_size(payload: &[u8], cursor: usize, state_id: u32) -> Option<usize> {
             16 + name.iter().take(256).position(|byte| *byte == 0)? + 1
         }
         _ => return None,
-    })
+    };
+    Some(StateRecordLayout { bytes, decode: None })
+}
+
+pub(crate) fn decode_state_record(payload: &[u8], offset: usize) -> Option<StateData> {
+    let layout = record_layout(payload, offset, read_u32(payload, offset)?)?;
+    let _ = payload.get(offset..offset.checked_add(layout.bytes)?)?;
+    (layout.decode?)(payload, offset)
 }
 
 /// Возвращает только доказанные начала записей в исходном порядке.
@@ -186,8 +243,8 @@ pub(crate) fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
     let mut cursor = 4usize;
     for _ in 0..declared_count {
         let Some(state_id) = read_u32(payload, cursor) else { break };
-        let Some(size) = record_size(payload, cursor, state_id) else { break };
-        let Some(end) = cursor.checked_add(size).filter(|end| *end <= payload.len()) else { break };
+        let Some(layout) = record_layout(payload, cursor, state_id) else { break };
+        let Some(end) = cursor.checked_add(layout.bytes).filter(|end| *end <= payload.len()) else { break };
         offsets.push(cursor);
         cursor = end;
     }

@@ -46,10 +46,19 @@
 //! повторные экземпляры одного ID. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
-//! Замена Cure сохраняет позицию удалённой записи через отдельный offset:
-//! между End и установкой нового экземпляра слот отсутствует в проекции.
+//! Cure, защитные щиты и расходуемое восстановление используют общую арену
+//! `AppliedStateEntries`: поколенческий ключ задаёт экземпляр, отдельный список
+//! сохраняет исходную позицию и пустые места после удаления. Остальные семейства
+//! ниже пока ожидают переноса; полный ClearAllStates ещё не подключён.
+//! Замена Cure сохраняет runtime-позицию и отдельный offset DB-записи:
+//! между End и установкой нового экземпляра runtime-слот остаётся пустым.
+//! Уплотнение выполняется в начале UpdateAbnormality и mutable GameSave,
+//! как в 0x004CFD00/0x004D10F0. Клиентский snapshot не меняет позиции:
+//! он может выполняться внутри End, пока Cure ещё хранит место замены.
 //! Vec::splice возвращает DB-запись на место, сдвигая сохранённые смещения
 //! соседей без их повторной загрузки и без сброса runtime-таймеров.
+//! У повторных защитных щитов удаление, DB-сериализация и клиентский life
+//! выбирают экземпляр по порядковому номеру среди того же ID, а не первый ID.
 //! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
 //! паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
@@ -154,6 +163,9 @@
 //! хранит конфигурации. Эти формы не заменяют четыре owner-вектора Miracle.
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
+mod state_storage;
+pub(crate) use state_storage::{AppliedState, AppliedStateEntries, StateAddress, StateBatch, StateData, StateKey};
+
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use indexmap::IndexSet;
@@ -168,7 +180,7 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
-use super::restorestate::{ConsumableRestoreMutation, ConsumableRestoreStateStorage};
+use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreMutation, ConsumableRestoreState};
 use super::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
 use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
 use super::scriptstate::ScriptMoveState;
@@ -298,7 +310,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
     BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID,
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory, SkillOwner};
-use crate::gameserver::appserver::skills::statefactory::known_state_record_offsets;
+use crate::gameserver::appserver::skills::statefactory::{decode_state_record, known_state_record_offsets};
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
@@ -960,6 +972,7 @@ impl DerefMut for LegacyStateCodec {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CanonicalStateStorage {
+    state_entries: AppliedStateEntries,
     persistent_agility_family_state: Option<PersistentAgilityFamilyState>,
     agility_state_2: Option<AgilityState2>,
     callosity_state: Option<CallosityFamilyState>,
@@ -974,7 +987,6 @@ pub(crate) struct CanonicalStateStorage {
     rage_break_state: Option<RageBreakState>,
     boss_blue_fury_state: Option<BossBlueFuryState>,
     boss_blue_quake_state: Option<BossBlueQuakeState>,
-    cure_states: Vec<CureState>,
     daub_poison_state: Option<DaubPoisonState>,
     seal_state: Option<SealState>,
     curable_state_order: IndexSet<u32>,
@@ -1006,14 +1018,13 @@ pub(crate) struct CanonicalStateStorage {
     strike_states: Vec<StrikeState>,
     wuxing_states: Vec<WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
-    consumable_restore_states: ConsumableRestoreStateStorage,
+    consumable_restore_intervals: ConsumableRestoreIntervals,
     particular_states: Vec<ParticularState>,
     team_recruitment_states: Vec<CTeamState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     tian_shen_xia_fan_state: Option<TianShenXiaFanState>,
     wangsheng_state: Option<WangshengState>,
     periodic_attack_order: IndexSet<u32>,
-    defense_shields: Vec<DefenseShieldState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
@@ -1306,12 +1317,16 @@ impl CMoveShape {
         let mut restore_index = 0usize;
         let mut particular_index = 0usize;
         let mut team_index = 0usize;
+        let mut state_occurrences = BTreeMap::<u32, usize>::new();
         for offset in offsets {
             let state_id = read_i32(&states, offset)?;
+            let next_occurrence = state_occurrences.entry(state_id as u32).or_default();
+            let occurrence = *next_occurrence;
+            *next_occurrence += 1;
             if state_id == RESTORE_HP_STATE_ID || state_id == RESTORE_MP_STATE_ID {
-                let (typed_state_id, client_time) = self
-                    .consumable_restore_states
-                    .client_snapshot_record(restore_index, &mut timed_state_now_milliseconds)?;
+                let state = self.state_entries.iter::<ConsumableRestoreState>().nth(restore_index)?;
+                let typed_state_id = state.state_id();
+                let client_time = state.client_state_time(&mut timed_state_now_milliseconds);
                 if typed_state_id != state_id {
                     return None;
                 }
@@ -1349,9 +1364,9 @@ impl CMoveShape {
                 now_ms,
                 &mut timed_state_now_milliseconds,
             )?);
-            writer.write_u32(self.client_state_additional_data(state_id as u32));
+            writer.write_u32(self.client_state_additional_data(state_id as u32, occurrence));
         }
-        if restore_index != self.consumable_restore_states.len() {
+        if restore_index != self.state_entries.iter::<ConsumableRestoreState>().count() {
             return None;
         }
         if particular_index != self.particular_states.len()
@@ -1452,7 +1467,7 @@ impl CMoveShape {
     /// Exact virtual `CState::GetAdditionalData`: persisted tail не является
     /// client-проекцией. Override-ы берутся из соответствующего typed owner-а;
     /// остальные состояния используют нулевую базовую реализацию.
-    fn client_state_additional_data(&self, state_id: u32) -> u32 {
+    fn client_state_additional_data(&self, state_id: u32, occurrence: usize) -> u32 {
         match state_id {
             WEAK_STATE_ID => self
                 .weak_state
@@ -1476,9 +1491,10 @@ impl CMoveShape {
                     | super::skills::manashield::MANA_SHIELD_SKILL_ID
                     | super::skills::lifeshield::LIFE_SHIELD_SKILL_ID
             ) => self
-                .defense_shields
-                .iter()
-                .find(|state| state.skill_id() == id)
+                .state_entries
+                .iter::<DefenseShieldState>()
+                .filter(|state| state.skill_id() == id)
+                .nth(occurrence)
                 .map_or(default_additional_data(), |state| match state {
                     DefenseShieldState::Life(state) => state.life() as u32,
                     DefenseShieldState::Machine(state) => state.life() as u32,
@@ -1574,6 +1590,7 @@ impl CMoveShape {
         now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
+        let _ = self.compact_state_slots();
         let payload = self.serialized_ex_states(now_ms, timed_state_now_milliseconds);
         for state in &mut self.extended_states {
             state.commit_saved_time(now_ms);
@@ -1619,22 +1636,15 @@ impl CMoveShape {
             }
         }
         let mut restore_occurrences = BTreeMap::<i32, usize>::new();
-        for index in 0..self.consumable_restore_states.len() {
-            let Some(state_id) = self.consumable_restore_states.state_id(index) else {
-                continue;
-            };
+        for state in self.state_entries.iter::<ConsumableRestoreState>() {
+            let state_id = state.state_id();
             let occurrence = restore_occurrences.entry(state_id).or_default();
             let offset = known_state_record_offsets(&payload)
                 .into_iter()
                 .filter(|offset| read_i32(&payload, *offset) == Some(state_id))
                 .nth(*occurrence);
             *occurrence += 1;
-            let Some(record) = self
-                .consumable_restore_states
-                .persisted_record(index, &mut timed_state_now_milliseconds)
-            else {
-                continue;
-            };
+            let record = state.encoded(&mut timed_state_now_milliseconds);
             if let Some(offset) = offset
                 && let Some(destination) = payload.get_mut(offset..offset + record.len())
             {
@@ -1820,35 +1830,34 @@ impl CMoveShape {
         if let Some(state) = self.poison_arrow_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
-        for state in &self.defense_shields {
+        let mut shield_occurrences = BTreeMap::<u32, usize>::new();
+        for state in self.state_entries.iter::<DefenseShieldState>() {
+            let state_id = state.skill_id();
+            let occurrence = shield_occurrences.entry(state_id).or_default();
+            let offset = known_state_record_offsets(&payload)
+                .into_iter()
+                .filter(|offset| read_u32(&payload, *offset) == Some(state_id))
+                .nth(*occurrence);
+            *occurrence += 1;
+            let mut update_record = |record: &[u8]| {
+                if let Some(offset) = offset
+                    && let Some(destination) = payload.get_mut(offset..offset + record.len())
+                {
+                    destination.copy_from_slice(record);
+                }
+            };
             match state {
                 DefenseShieldState::Mana(state) => {
-                    update_known_state_record(
-                        &mut payload,
-                        state.skill_id(),
-                        &state.encoded(&mut timed_state_now_milliseconds),
-                    );
+                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
                 }
                 DefenseShieldState::Machine(state) => {
-                    update_known_state_record(
-                        &mut payload,
-                        state.skill_id(),
-                        &state.encoded(&mut timed_state_now_milliseconds),
-                    );
+                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
                 }
                 DefenseShieldState::Life(state) => {
-                    update_known_state_record(
-                        &mut payload,
-                        state.skill_id(),
-                        &state.encoded(&mut timed_state_now_milliseconds),
-                    );
+                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
                 }
                 DefenseShieldState::Promotion(state) => {
-                    update_known_state_record(
-                        &mut payload,
-                        state.skill_id(),
-                        &state.encoded(&mut timed_state_now_milliseconds),
-                    );
+                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
                 }
             }
         }
@@ -1875,8 +1884,13 @@ impl CMoveShape {
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory) {
         let known_offsets = known_state_record_offsets(&states);
         let state_owner = self.shape.identity();
-        self.consumable_restore_states =
-            ConsumableRestoreStateStorage::decode_known(&states, &known_offsets);
+        self.state_entries.clear();
+        for state in known_offsets.iter().copied()
+            .filter_map(|offset| decode_state_record(&states, offset))
+        {
+            self.state_entries.append_data(state);
+        }
+        self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
         self.automatic_restore_states = known_offsets
             .iter()
             .copied()
@@ -2118,12 +2132,6 @@ impl CMoveShape {
             .filter(|offset| read_u32(&states, *offset) == Some(FURY_STATE_SKILL_ID))
             .filter_map(|offset| FuryState::decode(&states, offset).ok())
             .collect();
-        self.cure_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| read_u32(&states, *offset) == Some(CURE_STATE_SKILL_ID))
-            .filter_map(|offset| CureState::decode(&states, offset).ok())
-            .collect();
         self.enlarge_full_miss_state = known_offsets
             .iter()
             .copied()
@@ -2192,32 +2200,6 @@ impl CMoveShape {
         if self.poison_arrow_state.is_some() {
             self.periodic_attack_order.insert(super::skills::poisonarrow::POISON_ARROW_SKILL_ID);
         }
-        self.defense_shields.clear();
-        self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
-            match read_u32(&states, offset) {
-                Some(super::skills::lifeshield::LIFE_SHIELD_SKILL_ID) => {
-                    LifeShieldState::decode(&states, offset, 0)
-                        .ok()
-                        .map(DefenseShieldState::Life)
-                }
-                Some(super::skills::manashield::MANA_SHIELD_SKILL_ID) => {
-                    ManaShieldState::decode(&states, offset, 0)
-                        .ok()
-                        .map(DefenseShieldState::Mana)
-                }
-                Some(super::skills::machineshield::MACHINE_SHIELD_SKILL_ID) => {
-                    MachineShieldState::decode(&states, offset, 0)
-                        .ok()
-                        .map(DefenseShieldState::Machine)
-                }
-                Some(super::skills::promotion::PROMOTION_SKILL_ID) => {
-                    PromotionState::decode(&states, offset, 0)
-                        .ok()
-                        .map(DefenseShieldState::Promotion)
-                }
-                _ => None,
-            }
-        }));
         self.battle_fairy_attribute_states = known_offsets
             .iter()
             .copied()
@@ -2256,7 +2238,7 @@ impl CMoveShape {
         self.rage_break_state = None;
         self.boss_blue_fury_state = None;
         self.boss_blue_quake_state = None;
-        self.cure_states.clear();
+        self.state_entries.clear();
         self.seal_state = None;
         self.curable_state_order.clear();
         self.poison_arrow_state = None;
@@ -2288,12 +2270,11 @@ impl CMoveShape {
         self.automatic_restore_states.clear();
         self.particular_states.clear();
         self.team_recruitment_states.clear();
-        self.consumable_restore_states = ConsumableRestoreStateStorage::default();
+        self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
         self.battle_fairy_attribute_states.clear();
         self.tian_shen_xia_fan_state = None;
         self.wangsheng_state = None;
         self.periodic_attack_order.clear();
-        self.defense_shields.clear();
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
@@ -2340,7 +2321,7 @@ impl CMoveShape {
         self.state_storage.ride_state.is_some()
     }
 
-    pub(crate) const fn has_materialized_abnormality(&self) -> bool {
+    pub(crate) fn has_materialized_abnormality(&self) -> bool {
         self.state_storage.agility_state_2.is_some()
             || self.state_storage.hearten_state.is_some()
             || !self.state_storage.heal_states.is_empty()
@@ -2348,7 +2329,7 @@ impl CMoveShape {
             || self.state_storage.rage_break_state.is_some()
             || self.state_storage.boss_blue_fury_state.is_some()
             || self.state_storage.boss_blue_quake_state.is_some()
-            || !self.state_storage.cure_states.is_empty()
+            || self.state_storage.state_entries.first::<CureState>().is_some()
             || self.state_storage.daub_poison_state.is_some()
             || self.state_storage.seal_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
@@ -2377,9 +2358,9 @@ impl CMoveShape {
             || !self.state_storage.strike_states.is_empty()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.particular_states.is_empty()
-            || !self.state_storage.consumable_restore_states.is_empty()
+            || self.state_storage.state_entries.iter::<ConsumableRestoreState>().next().is_some()
             || !self.state_storage.team_recruitment_states.is_empty()
-            || !self.state_storage.defense_shields.is_empty()
+            || self.state_storage.state_entries.first::<DefenseShieldState>().is_some()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
             || !self.state_storage.undead_states.is_empty()
@@ -2421,7 +2402,7 @@ impl CMoveShape {
         interval_ms: u32,
         now_ms: impl FnMut() -> u32,
     ) -> bool {
-        let Some(record) = self.consumable_restore_states.begin_health(
+        let Some(state) = self.consumable_restore_intervals.begin_health(
             amount,
             time_to_keep_ms,
             frequency_ms,
@@ -2430,6 +2411,8 @@ impl CMoveShape {
         ) else {
             return false;
         };
+        let record = state.encoded_for_install();
+        self.state_entries.append(state);
         self.append_serialized_state_record(&record);
         true
     }
@@ -2442,7 +2425,7 @@ impl CMoveShape {
         interval_ms: u32,
         now_ms: impl FnMut() -> u32,
     ) -> bool {
-        let Some(record) = self.consumable_restore_states.begin_mana(
+        let Some(state) = self.consumable_restore_intervals.begin_mana(
             amount,
             time_to_keep_ms,
             frequency_ms,
@@ -2451,20 +2434,28 @@ impl CMoveShape {
         ) else {
             return false;
         };
+        let record = state.encoded_for_install();
+        self.state_entries.append(state);
         self.append_serialized_state_record(&record);
         true
     }
 
-    pub(crate) const fn consumable_restore_state_count(&self) -> usize {
-        self.state_storage.consumable_restore_states.len()
+    pub(crate) fn consumable_restore_state_count(&self) -> usize {
+        self.state_entries.iter::<ConsumableRestoreState>().count()
     }
 
     pub(crate) fn activate_loaded_consumable_restore_states(&mut self, now_ms: u32) -> usize {
-        self.consumable_restore_states.activate_loaded(now_ms)
+        let mut activated = 0;
+        self.state_entries.for_each_mut::<ConsumableRestoreState>(|state| {
+            state.activate_loaded(now_ms);
+            activated += 1;
+        });
+        activated
     }
 
     pub(crate) fn consumable_restore_state_is_health(&self, index: usize) -> Option<bool> {
-        self.consumable_restore_states.is_health(index)
+        self.state_entries.iter::<ConsumableRestoreState>().nth(index)
+            .map(|state| state.is_health())
     }
 
     pub(crate) fn tick_consumable_restore_state(
@@ -2474,8 +2465,9 @@ impl CMoveShape {
         current: u32,
         maximum: u32,
     ) -> Option<ConsumableRestoreMutation> {
-        self.consumable_restore_states
-            .tick(index, checked_at_ms, current, maximum)
+        let key = *self.state_entries.keys::<ConsumableRestoreState>().get(index)?;
+        ConsumableRestoreState::as_data_mut(self.state_entries.get_mut(key)?)?
+            .tick(checked_at_ms, current, maximum)
     }
 
     pub(crate) fn consumable_restore_state_expired(
@@ -2483,21 +2475,29 @@ impl CMoveShape {
         index: usize,
         checked_at_ms: u32,
     ) -> Option<bool> {
-        self.consumable_restore_states.expired(index, checked_at_ms)
+        self.state_entries.iter::<ConsumableRestoreState>().nth(index)
+            .map(|state| state.expired(checked_at_ms))
     }
 
     pub(crate) fn remove_consumable_restore_state(&mut self, index: usize) -> bool {
-        let Some(state_id) = self.consumable_restore_states.state_id(index) else {
+        let keys = self.state_entries.keys::<ConsumableRestoreState>();
+        let Some(&key) = keys.get(index) else {
             return false;
         };
-        let occurrence = (0..index)
-            .filter(|known| self.consumable_restore_states.state_id(*known) == Some(state_id))
+        let Some(state_id) = self.state_entries.get(key)
+            .and_then(ConsumableRestoreState::as_data_ref)
+            .map(|state| state.state_id())
+        else {
+            return false;
+        };
+        let occurrence = self.state_entries.iter::<ConsumableRestoreState>().take(index)
+            .filter(|state| state.state_id() == state_id)
             .count();
         let serialized_offset = known_state_record_offsets(&self.ex_states)
             .into_iter()
             .filter(|offset| read_i32(&self.ex_states, *offset) == Some(state_id))
             .nth(occurrence);
-        if !self.consumable_restore_states.remove(index) {
+        if self.state_entries.take::<ConsumableRestoreState>(key).is_none() {
             return false;
         }
         if let Some(offset) = serialized_offset {
@@ -2633,7 +2633,9 @@ impl CMoveShape {
             .iter()
             .filter(|state| state.state_id() == state_id)
             .count();
-        let consumable_restore = self.consumable_restore_states.count(state_id);
+        let consumable_restore = self.state_entries.iter::<ConsumableRestoreState>()
+            .filter(|state| state.state_id() == state_id)
+            .count();
         let change_body = (state_id == 0x37)
             .then_some(self.change_body_states.len())
             .unwrap_or(0);
@@ -2714,7 +2716,7 @@ impl CMoveShape {
             self.boss_blue_quake_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
-        let cure = self.cure_states.iter()
+        let cure = self.state_entries.iter::<CureState>()
             .filter(|state| state.skill_id() as i32 == state_id).count();
         let daub_poison = usize::from(
             self.daub_poison_state
@@ -2829,8 +2831,8 @@ impl CMoveShape {
                 .is_some_and(|state| state.state_id() as i32 == state_id),
         );
         let shields = self
-            .defense_shields
-            .iter()
+            .state_entries
+            .iter::<DefenseShieldState>()
             .filter(|state| state.skill_id() as i32 == state_id)
             .count();
         scripted
@@ -2938,7 +2940,7 @@ impl CMoveShape {
                 .boss_blue_quake_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
-                .cure_states.iter()
+                .state_entries.iter::<CureState>()
                 .any(|state| state.skill_id() == state_id)
             || self
                 .daub_poison_state
@@ -3016,8 +3018,8 @@ impl CMoveShape {
                 .wangsheng_state
                 .is_some_and(|state| state.state_id() == state_id)
             || self
-                .defense_shields
-                .iter()
+                .state_entries
+                .iter::<DefenseShieldState>()
                 .any(|state| state.skill_id() == state_id)
             || self
                 .script_states
@@ -3029,7 +3031,8 @@ impl CMoveShape {
                 .any(|state| state.state_id() == state_id)
             || (state_id == PARTICULAR_STATE_ID && !self.particular_states.is_empty())
             || (state_id == TEAM_STATE_ID as u32 && !self.team_recruitment_states.is_empty())
-            || self.consumable_restore_states.contains(state_id)
+            || self.state_entries.iter::<ConsumableRestoreState>()
+                .any(|state| state.state_id() as u32 == state_id)
             || (state_id == CHANGE_BODY_STATE_ID && !self.change_body_states.is_empty())
             || self
                 .extended_states
@@ -3420,10 +3423,8 @@ impl CMoveShape {
         state: ManaShieldState,
     ) -> Option<ManaShieldState> {
         let previous = self
-            .defense_shields
-            .iter()
-            .position(|candidate| candidate.skill_id() == state.skill_id())
-            .map(|position| self.defense_shields.remove(position))
+            .defense_shield_key(state.skill_id())
+            .and_then(|key| self.state_entries.take::<DefenseShieldState>(key))
             .and_then(|candidate| match candidate {
                 DefenseShieldState::Life(_) => None,
                 DefenseShieldState::Mana(previous) => Some(previous),
@@ -3432,7 +3433,7 @@ impl CMoveShape {
             });
         self.remove_serialized_state_record(state.skill_id(), MANA_SHIELD_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.defense_shields.push(DefenseShieldState::Mana(state));
+        self.state_entries.append(DefenseShieldState::Mana(state));
         previous
     }
 
@@ -3441,10 +3442,8 @@ impl CMoveShape {
         state: MachineShieldState,
     ) -> Option<MachineShieldState> {
         let previous = self
-            .defense_shields
-            .iter()
-            .position(|candidate| candidate.skill_id() == state.skill_id())
-            .map(|position| self.defense_shields.remove(position))
+            .defense_shield_key(state.skill_id())
+            .and_then(|key| self.state_entries.take::<DefenseShieldState>(key))
             .and_then(|candidate| match candidate {
                 DefenseShieldState::Life(_) => None,
                 DefenseShieldState::Machine(previous) => Some(previous),
@@ -3453,8 +3452,7 @@ impl CMoveShape {
             });
         self.remove_serialized_state_record(state.skill_id(), MACHINE_SHIELD_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.defense_shields
-            .push(DefenseShieldState::Machine(state));
+        self.state_entries.append(DefenseShieldState::Machine(state));
         previous
     }
 
@@ -3463,10 +3461,8 @@ impl CMoveShape {
         state: LifeShieldState,
     ) -> Option<LifeShieldState> {
         let previous = self
-            .defense_shields
-            .iter()
-            .position(|candidate| candidate.skill_id() == state.skill_id())
-            .map(|position| self.defense_shields.remove(position))
+            .defense_shield_key(state.skill_id())
+            .and_then(|key| self.state_entries.take::<DefenseShieldState>(key))
             .and_then(|candidate| match candidate {
                 DefenseShieldState::Life(previous) => Some(previous),
                 DefenseShieldState::Machine(_)
@@ -3475,38 +3471,35 @@ impl CMoveShape {
             });
         self.remove_serialized_state_record(state.skill_id(), LIFE_SHIELD_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.defense_shields.push(DefenseShieldState::Life(state));
+        self.state_entries.append(DefenseShieldState::Life(state));
         previous
     }
 
     /// Повторное наложение вызывает Restart прежнего состояния без замены
     /// его параметров и без нового Begin.
     pub(crate) fn begin_promotion_state(&mut self, state: PromotionState) -> bool {
-        if let Some(position) = self
-            .defense_shields
-            .iter()
-            .position(|candidate| candidate.skill_id() == state.skill_id())
-        {
-            if let DefenseShieldState::Promotion(previous) = &mut self.defense_shields[position] {
+        if let Some(key) = self.defense_shield_key(state.skill_id()) {
+            if let Some(StateData::DefenseShield(DefenseShieldState::Promotion(previous))) =
+                self.state_entries.get_mut(key)
+            {
                 previous.restart(state.started_at_ms());
             }
             return false;
         }
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.defense_shields
-            .push(DefenseShieldState::Promotion(state));
+        self.state_entries.append(DefenseShieldState::Promotion(state));
         true
     }
 
     pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {
-        self.defense_shields.iter().find_map(|state| match state {
+        self.state_entries.iter::<DefenseShieldState>().find_map(|state| match state {
             DefenseShieldState::Promotion(state) => Some(state.magic_attack_factor()),
             _ => None,
         })
     }
 
     pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
-        self.defense_shields.iter().find_map(|state| match state {
+        self.state_entries.iter::<DefenseShieldState>().find_map(|state| match state {
             DefenseShieldState::Promotion(state) => Some(state.heal_recover_factor()),
             _ => None,
         })
@@ -3516,32 +3509,61 @@ impl CMoveShape {
         &mut self,
         now_ms: u32,
     ) -> Option<PromotionState> {
-        let position = self.defense_shields.iter().position(|state| {
-            matches!(state, DefenseShieldState::Promotion(promotion) if promotion.expired(now_ms))
+        let key = self.defense_shield_keys().into_iter().find(|key| {
+            matches!(self.defense_shield(*key), Some(DefenseShieldState::Promotion(promotion)) if promotion.expired(now_ms))
         })?;
-        match self.defense_shields.remove(position) {
-            DefenseShieldState::Promotion(state) => {
-                self.remove_serialized_state_record(state.skill_id(), PROMOTION_STATE_BYTES);
-                Some(state)
-            }
-            _ => unreachable!("позиция состояния Promotion проверена"),
+        match self.remove_defense_shield_key(key)? {
+            DefenseShieldState::Promotion(state) => Some(state),
+            _ => unreachable!("экземпляр состояния Promotion проверен"),
         }
     }
 
-    pub(crate) fn defense_shields(&self) -> &[DefenseShieldState] {
-        &self.defense_shields
+    pub(crate) fn defense_shields(&self) -> impl Iterator<Item = &DefenseShieldState> {
+        self.state_entries.iter::<DefenseShieldState>()
+    }
+
+    pub(crate) fn defense_shield_keys(&self) -> Vec<StateKey> {
+        self.state_entries.keys::<DefenseShieldState>()
+    }
+
+    pub(crate) fn defense_shield_key(&self, skill_id: u32) -> Option<StateKey> {
+        self.defense_shield_keys().into_iter().find(|key| {
+            self.defense_shield(*key).is_some_and(|state| state.skill_id() == skill_id)
+        })
+    }
+
+    pub(crate) fn defense_shield(&self, key: StateKey) -> Option<&DefenseShieldState> {
+        match self.state_entries.get(key)? {
+            StateData::DefenseShield(state) => Some(state),
+            _ => None,
+        }
     }
 
     pub(crate) fn remove_defense_shield(&mut self, skill_id: u32) -> Option<DefenseShieldState> {
-        let position = self.defense_shields.iter().position(|state| state.skill_id() == skill_id)?;
-        let state = self.defense_shields.remove(position);
+        self.remove_defense_shield_key(self.defense_shield_key(skill_id)?)
+    }
+
+    pub(crate) fn remove_defense_shield_key(&mut self, key: StateKey) -> Option<DefenseShieldState> {
+        let state_id = self.defense_shield(key)?.skill_id();
+        let occurrence = self.defense_shield_keys().into_iter()
+            .filter(|candidate| {
+                self.defense_shield(*candidate).is_some_and(|state| state.skill_id() == state_id)
+            })
+            .position(|candidate| candidate == key)?;
+        let offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
+            .nth(occurrence);
+        let state = self.state_entries.take::<DefenseShieldState>(key)?;
         let bytes = match state {
             DefenseShieldState::Mana(_) => MANA_SHIELD_STATE_BYTES,
             DefenseShieldState::Machine(_) => MACHINE_SHIELD_STATE_BYTES,
             DefenseShieldState::Life(_) => LIFE_SHIELD_STATE_BYTES,
             DefenseShieldState::Promotion(_) => PROMOTION_STATE_BYTES,
         };
-        self.remove_serialized_state_record(skill_id, bytes);
+        if let Some(offset) = offset {
+            self.remove_serialized_state_record_at(offset, bytes);
+        }
         Some(state)
     }
 
@@ -3550,7 +3572,7 @@ impl CMoveShape {
         now_ms: u32,
     ) -> Vec<DefenseShieldState> {
         let mut loaded = Vec::new();
-        for state in &mut self.defense_shields {
+        self.state_entries.for_each_mut::<DefenseShieldState>(|state| {
             match state {
                 DefenseShieldState::Mana(state) => {
                     state.activate_loaded(now_ms);
@@ -3569,7 +3591,7 @@ impl CMoveShape {
                     loaded.push(DefenseShieldState::Promotion(*state));
                 }
             }
-        }
+        });
         loaded
     }
 
@@ -3612,25 +3634,30 @@ impl CMoveShape {
         true
     }
 
-    pub(crate) fn take_defense_shields(&mut self) -> Vec<DefenseShieldState> {
-        std::mem::take(&mut self.defense_shields)
+    pub(crate) fn take_defense_shields(&mut self) -> StateBatch<DefenseShieldState> {
+        self.state_entries.take_batch::<DefenseShieldState>()
     }
 
-    pub(crate) fn restore_defense_shields(&mut self, states: Vec<DefenseShieldState>) {
-        self.defense_shields = states;
+    pub(crate) fn restore_defense_shields(&mut self, states: StateBatch<DefenseShieldState>) {
+        self.state_entries.restore_batch(states);
     }
 
     pub(crate) fn push_cure_state(&mut self, state: CureState) {
         self.append_serialized_state_record(&state.encoded());
-        self.cure_states.push(state);
+        self.state_entries.append(state);
     }
 
-    pub(crate) fn cure_state_replacement_offset(&self) -> Option<usize> {
-        known_state_record_offsets(&self.ex_states).into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
+    pub(crate) fn cure_state_replacement_location(&self, key: StateKey) -> Option<(usize, usize)> {
+        let ordinal = self.state_entries.keys::<CureState>().iter().position(|entry| *entry == key)?;
+        let position = self.state_entries.index_of(key)?;
+        let offset = known_state_record_offsets(&self.ex_states).into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
+            .nth(ordinal)?;
+        Some((position, offset))
     }
 
-    pub(crate) fn insert_replacement_cure_state(&mut self, state: CureState, offset: usize) {
+    pub(crate) fn insert_replacement_cure_state(&mut self, state: CureState, location: (usize, usize)) {
+        let (position, offset) = location;
         let amount = CURE_STATE_BYTES;
         self.ex_states.splice(offset..offset, state.encoded());
         let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
@@ -3644,30 +3671,45 @@ impl CMoveShape {
         if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_for_insert(offset, amount); }
         if let Some(known) = &mut self.meteor_arrow_state { known.shift_serialized_offset_for_insert(offset, amount); }
         if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_for_insert(offset, amount); }
-        self.cure_states.insert(0, state);
+        let _ = self.state_entries.replace_at(position, state);
     }
 
     pub(crate) fn activate_loaded_cure_states(&mut self, now_ms: u32) -> Vec<CureState> {
-        for state in &mut self.cure_states {
-            state.activate_loaded(now_ms);
-        }
-        self.cure_states.clone()
+        self.state_entries.for_each_mut::<CureState>(|state| state.activate_loaded(now_ms));
+        self.state_entries.iter::<CureState>().copied().collect()
     }
 
-    pub(crate) fn cure_states(&self) -> &[CureState] {
-        &self.state_storage.cure_states
+    pub(crate) fn state_slot_count(&self) -> usize {
+        self.state_entries.len()
+    }
+
+    pub(crate) fn compact_state_slots(&mut self) -> bool {
+        self.state_entries.compact()
+    }
+
+    pub(crate) fn state_at(&self, position: usize) -> Option<(StateKey, &StateData)> {
+        let StateAddress::Applied(key) = self.state_entries.address(position)? else { return None };
+        Some((key, self.state_entries.get(key)?))
+    }
+
+    pub(crate) fn cure_state_key(&self) -> Option<StateKey> {
+        self.state_entries.first_key::<CureState>()
+    }
+
+    pub(crate) fn cure_state_by_key(&self, key: StateKey) -> Option<CureState> {
+        CureState::as_data_ref(self.state_entries.get(key)?).copied()
     }
 
     pub(crate) fn cure_state(&self) -> Option<CureState> {
-        self.cure_states().first().copied()
+        self.state_entries.first::<CureState>().copied()
     }
 
     pub(crate) fn take_cure_state(&mut self) -> Option<CureState> {
-        self.remove_cure_state(0)
+        self.remove_cure_state_by_key(self.cure_state_key()?)
     }
 
-    pub(crate) fn remove_cure_state(&mut self, position: usize) -> Option<CureState> {
-        let state = *self.cure_states.get(position)?;
+    pub(crate) fn remove_cure_state_by_key(&mut self, key: StateKey) -> Option<CureState> {
+        let position = self.state_entries.keys::<CureState>().iter().position(|entry| *entry == key)?;
         if let Some(offset) = known_state_record_offsets(&self.ex_states)
             .into_iter()
             .filter(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
@@ -3675,8 +3717,7 @@ impl CMoveShape {
         {
             self.remove_serialized_state_record_at(offset, CURE_STATE_BYTES);
         }
-        self.cure_states.remove(position);
-        Some(state)
+        self.state_entries.take::<CureState>(key)
     }
 
     pub(crate) fn replace_daub_poison_state(

@@ -51,7 +51,7 @@ impl CGame {
                 target_war_soul_mana,
                 &self.globe_setup,
                 &mut random,
-                &mut defense_shields,
+                defense_shields.as_mut_slice(),
                 pillar_damage_factor,
             );
             if let Some(target) = self.find_player_mut(target.id) {

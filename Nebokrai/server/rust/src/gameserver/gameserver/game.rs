@@ -29028,6 +29028,9 @@ impl CGame {
         player_id: i32,
         runtime: &mut Runtime,
     ) -> Option<()> {
+        if self.find_player_mut(player_id)?.move_shape_mut().compact_state_slots() {
+            let _ = self.update_player_properties(player_id);
+        }
         let materialized = self
             .find_player(player_id)
             .is_some_and(CPlayer::has_materialized_abnormality);
@@ -45321,7 +45324,7 @@ impl CGame {
                 target_war_soul_mana,
                 &self.globe_setup,
                 &mut random,
-                &mut defense_shields,
+                defense_shields.as_mut_slice(),
                 pillar_damage_factor,
             );
             if let Some(target) = self.find_player_mut(target_id) {
@@ -47398,6 +47401,11 @@ impl CGame {
                     == Some(true)
                 {
                     continue;
+                }
+                if let Some(monster) = self.find_region_mut(region_id)
+                    .and_then(|owner| owner.base_mut().find_monster_by_id_mut(monster_id))
+                {
+                    let _ = monster.move_shape_mut().compact_state_slots();
                 }
                 let _ = finish_monster_weak_outside(self, region_id, monster_id);
                 let _ = finish_monster_god_bless(self, region_id, monster_id, now_ms);

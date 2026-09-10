@@ -348,7 +348,7 @@ pub(crate) fn defend_owned_monster_attack(
             target_war_soul_mana,
             &globe_setup,
             &mut random,
-            &mut defense_shields,
+            defense_shields.as_mut_slice(),
             pillar_damage_factor,
         );
     } else if let Some(properties) = target_monster_properties {

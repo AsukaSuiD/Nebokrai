@@ -369,7 +369,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             target_war_soul_mana,
             &game.globe_setup,
             &mut random,
-            &mut defense_shields,
+            defense_shields.as_mut_slice(),
             pillar_damage_factor,
         );
         if let Some(target) = game.find_player_mut(target_id) {

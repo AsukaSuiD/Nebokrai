@@ -4978,7 +4978,7 @@ impl CPlayer {
         self.move_shape.has_ride_state()
     }
 
-    pub(crate) const fn has_materialized_abnormality(&self) -> bool {
+    pub(crate) fn has_materialized_abnormality(&self) -> bool {
         self.move_shape.has_materialized_abnormality()
     }
 
@@ -5917,8 +5917,28 @@ impl CPlayer {
         self.move_shape.replace_life_shield_state(state)
     }
 
-    pub(crate) fn defense_shields(&self) -> &[super::skills::shieldstate::DefenseShieldState] {
+    pub(crate) fn defense_shields(
+        &self,
+    ) -> impl Iterator<Item = &super::skills::shieldstate::DefenseShieldState> {
         self.move_shape.defense_shields()
+    }
+
+    pub(crate) fn defense_shield_key(&self, skill_id: u32) -> Option<super::moveshape::StateKey> {
+        self.move_shape.defense_shield_key(skill_id)
+    }
+
+    pub(crate) fn defense_shield(
+        &self,
+        key: super::moveshape::StateKey,
+    ) -> Option<&super::skills::shieldstate::DefenseShieldState> {
+        self.move_shape.defense_shield(key)
+    }
+
+    pub(crate) fn remove_defense_shield_key(
+        &mut self,
+        key: super::moveshape::StateKey,
+    ) -> Option<super::skills::shieldstate::DefenseShieldState> {
+        self.move_shape.remove_defense_shield_key(key)
     }
 
     pub(crate) fn remove_defense_shield(
@@ -5938,13 +5958,13 @@ impl CPlayer {
 
     pub(crate) fn take_defense_shields(
         &mut self,
-    ) -> Vec<super::skills::shieldstate::DefenseShieldState> {
+    ) -> super::moveshape::StateBatch<super::skills::shieldstate::DefenseShieldState> {
         self.move_shape.take_defense_shields()
     }
 
     pub(crate) fn restore_defense_shields(
         &mut self,
-        states: Vec<super::skills::shieldstate::DefenseShieldState>,
+        states: super::moveshape::StateBatch<super::skills::shieldstate::DefenseShieldState>,
     ) {
         self.move_shape.restore_defense_shields(states);
     }
@@ -5962,17 +5982,6 @@ impl CPlayer {
         now_ms: u32,
     ) -> Vec<super::skills::curestate::CureState> {
         self.move_shape.activate_loaded_cure_states(now_ms)
-    }
-
-    pub(crate) fn remove_cure_state(
-        &mut self,
-        position: usize,
-    ) -> Option<super::skills::curestate::CureState> {
-        self.move_shape.remove_cure_state(position)
-    }
-
-    pub(crate) fn cure_states(&self) -> &[super::skills::curestate::CureState] {
-        self.move_shape.cure_states()
     }
 
     pub(crate) fn push_cure_state(&mut self, state: super::skills::curestate::CureState) {
@@ -14371,7 +14380,7 @@ impl CPlayer {
         self.move_shape.activate_loaded_automatic_restore_states(now_ms)
     }
 
-    pub(crate) const fn consumable_restore_state_count(&self) -> usize {
+    pub(crate) fn consumable_restore_state_count(&self) -> usize {
         self.move_shape.consumable_restore_state_count()
     }
 

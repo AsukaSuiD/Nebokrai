@@ -9,12 +9,17 @@
 //! End (`0x5E3110`, `0x5FD420`) выполняет эффект до RemoveState
 //! (`0x4CDAB0`), который вызывает UpdateProperty игрока. Поэтому следующий
 //! щит проверяется после полного завершения предыдущего, а LifeShield
-//! создаёт Cure до удаления самого щита. Vec заменяет исходный контейнер.
+//! создаёт Cure до удаления самого щита. Экземплярами владеет общий
+//! `CMoveShape::state_entries`: SlotMap сохраняет identity, а список адресов —
+//! исходный порядок и пропуски. End удаляет тот же ключ после своего эффекта.
+//! Для чистого PreDefense payload временно выделяется в keyed batch и
+//! возвращается в прежние ключи до любых callbacks или применения урона.
 
 use super::lifeshieldstate::{finish_life_shield_state, LifeShieldState};
 use super::machineshieldstate::{send_machine_shield_state_visual, MachineShieldState};
 use super::manashieldstate::{send_mana_shield_state_visual, ManaShieldState};
 use super::promotionstate::PromotionState;
+use crate::gameserver::appserver::moveshape::{StateData, StateKey};
 use crate::gameserver::appserver::states::attackpower::AttackPower;
 use crate::gameserver::gameserver::game::CGame;
 
@@ -97,28 +102,30 @@ pub(crate) fn expire_player_defense_shields(
     player_id: i32,
     now_ms: u32,
 ) -> usize {
-    let skill_ids: Vec<_> = game
-        .find_player(player_id)
-        .map(|player| {
-            player.defense_shields().iter().map(|state| state.skill_id()).collect()
-        })
-        .unwrap_or_default();
     let mut ended = 0;
-    for skill_id in skill_ids {
-        let state = game.find_player(player_id).and_then(|player| {
-            let state = player.defense_shields().iter()
-                .find(|state| state.skill_id() == skill_id)?;
+    let initial_len = game.find_player(player_id)
+        .map_or(0, |player| player.move_shape().state_slot_count());
+    let mut position = 0;
+    while let Some(player) = game.find_player(player_id) {
+        if position >= initial_len || position >= player.move_shape().state_slot_count() {
+            break;
+        }
+        let expired_key = player.move_shape().state_at(position).and_then(|(key, state)| {
+            let StateData::DefenseShield(state) = state else {
+                return None;
+            };
             state.expired(
                 now_ms,
                 player.mana(),
                 player.is_dead(),
                 player.war_soul_mana(game.goods_factory()),
-            ).then_some(*state)
+            ).then_some(key)
         });
-        let Some(_) = state else {
+        position += 1;
+        let Some(key) = expired_key else {
             continue;
         };
-        if end_player_defense_shield(game, player_id, skill_id, now_ms) {
+        if end_player_defense_shield_key(game, player_id, key, now_ms) {
             ended += 1;
         }
     }
@@ -131,9 +138,22 @@ pub(crate) fn end_player_defense_shield(
     skill_id: u32,
     now_ms: u32,
 ) -> bool {
-    let state = game.find_player(player_id).and_then(|player| {
-        player.defense_shields().iter().find(|state| state.skill_id() == skill_id).copied()
-    });
+    let Some(key) = game.find_player(player_id)
+        .and_then(|player| player.defense_shield_key(skill_id))
+    else {
+        return false;
+    };
+    end_player_defense_shield_key(game, player_id, key, now_ms)
+}
+
+pub(crate) fn end_player_defense_shield_key(
+    game: &mut CGame,
+    player_id: i32,
+    key: StateKey,
+    now_ms: u32,
+) -> bool {
+    let state = game.find_player(player_id)
+        .and_then(|player| player.defense_shield(key).copied());
     let Some(state) = state else {
         return false;
     };
@@ -150,7 +170,7 @@ pub(crate) fn end_player_defense_shield(
         DefenseShieldState::Promotion(_) => {}
     }
     let removed = game.find_player_mut(player_id)
-        .and_then(|player| player.remove_defense_shield(skill_id))
+        .and_then(|player| player.remove_defense_shield_key(key))
         .is_some();
     if removed {
         let _ = game.update_player_properties(player_id);

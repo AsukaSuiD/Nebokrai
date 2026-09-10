@@ -450,45 +450,43 @@ fn install_cure_state(game: &mut CGame, region_id: i32, target: &CureTarget, sta
         PLAYER_TYPE => {
             let Some(player) = game.find_player(target.identity.id)
                 .filter(|player| player.server_region_id() == Some(region_id)) else { return false };
-            let old = player.cure_state();
+            let old = player.move_shape().cure_state_key();
             send_cure_state_visual(game, target.identity.id, state, true);
-            if old.is_some() {
-                let Some(offset) = game.find_player_mut(target.identity.id)
-                    .and_then(|player| player.move_shape_mut().cure_state_replacement_offset())
+            if let Some(key) = old {
+                let Some(location) = game.find_player(target.identity.id)
+                    .and_then(|player| player.move_shape().cure_state_replacement_location(key))
                     else { return false };
-                if !super::curestate::end_player_cure_state(game, target.identity.id) {
+                if !super::curestate::end_player_cure_state_key(game, target.identity.id, key) {
                     return false;
                 }
                 let Some(player) = game.find_player_mut(target.identity.id) else { return false };
-                player.move_shape_mut().insert_replacement_cure_state(state, offset);
+                player.move_shape_mut().insert_replacement_cure_state(state, location);
             } else if let Some(player) = game.find_player_mut(target.identity.id) {
                 player.push_cure_state(state);
-            }
+            } else { return false }
             true
         }
         MONSTER_TYPE => {
             let Some(mut owner) = game.take_region_owner(region_id) else { return false };
             let installed = if let Some(monster) = owner.base().find_monster_by_id(target.identity.id) {
-                let old = monster.move_shape().cure_state();
+                let old = monster.move_shape().cure_state_key();
                 let shape = monster.move_shape().shape().clone();
                 super::curestate::send_cure_state_visual_in_region(game, owner.base(), &shape, state, true);
-                if old.is_some() {
-                    let offset = owner.base().find_monster_by_id(target.identity.id)
-                        .and_then(|monster| monster.move_shape().cure_state_replacement_offset());
-                    if let Some(offset) = offset {
-                        if super::curestate::end_monster_cure_state_at(game, owner.base_mut(), target.identity.id, 0) {
-                            owner.base_mut().find_monster_by_id_mut(target.identity.id)
-                                .expect("End Cure сохраняет монстра")
-                                .move_shape_mut().insert_replacement_cure_state(state, offset);
+                if let Some(key) = old {
+                    let location = owner.base().find_monster_by_id(target.identity.id)
+                        .and_then(|monster| monster.move_shape().cure_state_replacement_location(key));
+                    if let Some(location) = location {
+                        if super::curestate::end_monster_cure_state_key(game, owner.base_mut(), target.identity.id, key)
+                            && let Some(monster) = owner.base_mut().find_monster_by_id_mut(target.identity.id)
+                        {
+                            monster.move_shape_mut().insert_replacement_cure_state(state, location);
                             true
                         } else { false }
                     } else { false }
-                } else {
-                    owner.base_mut().find_monster_by_id_mut(target.identity.id)
-                        .expect("публикация не удаляет владельца Cure")
-                        .move_shape_mut().push_cure_state(state);
+                } else if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target.identity.id) {
+                    monster.move_shape_mut().push_cure_state(state);
                     true
-                }
+                } else { false }
             } else { false };
             game.restore_region_owner(owner);
             installed
