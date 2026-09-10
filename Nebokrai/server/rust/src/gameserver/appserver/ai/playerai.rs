@@ -117,6 +117,10 @@
 //! возвращают player-а к вычисленному default attack; death-tail делает это и
 //! без активного skill, а разорванный concrete owner больше не оставляет
 //! current-skill и запрет движения.
+//! `WhenBeenKilled` использует ту же passive FIFO `CBaseAI`: достигнутый
+//! Died сохраняет только первый Move, вызывает OnLoseTarget и ждёт его
+//! завершения перед OnDied. Координатор публикует настоящий CPlayerAI на
+//! время обоих callback; отдельной очереди смерти или копии снимка удара нет.
 //! Отказный `0xBFE01` при `OnLoseTarget` следует только за `End(1)` реально
 //! прерванного навыка; одна ожидающая object-команда удаляется без ответа.
 //! Завершённый либо prepared экземпляр не получает End при потере цели
@@ -186,7 +190,7 @@
 
 use std::collections::VecDeque;
 
-use super::baseai::{AiShapeAction, CBaseAI, PassiveStiffenAction};
+use super::baseai::{AiShapeAction, CBaseAI, PassiveDeathAction, PassiveStiffenAction};
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
@@ -255,6 +259,10 @@ impl CPlayerAI {
         self.base_ai.when_been_stiffened(delay_ms, now_ms);
     }
 
+    pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
+        self.base_ai.when_been_killed(now_ms);
+    }
+
     pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
         self.base_ai.process_reached_defense_actions(|_| {})
     }
@@ -269,6 +277,18 @@ impl CPlayerAI {
         now: impl FnOnce() -> u32,
     ) -> PassiveStiffenAction {
         self.base_ai.finish_reached_stiffen_action(begun, now)
+    }
+
+    pub(crate) fn begin_reached_death_action(&mut self) -> bool {
+        self.base_ai.begin_reached_death_action()
+    }
+
+    pub(crate) fn reached_death_action_state(&self) -> PassiveDeathAction {
+        self.base_ai.reached_death_action_state()
+    }
+
+    pub(crate) fn finish_reached_death_action(&mut self, now_ms: u32) {
+        self.base_ai.finish_reached_death_action(now_ms);
     }
 
     pub(crate) fn stiffen_attack_needs_end(&self) -> bool {

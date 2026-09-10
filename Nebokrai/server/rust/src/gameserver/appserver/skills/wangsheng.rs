@@ -55,7 +55,6 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
     let terminal = |state| QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     };
     let skill_level = match dispatch {
         BattleFairySkillDispatch::SelfTarget {

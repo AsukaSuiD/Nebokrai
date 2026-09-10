@@ -11,10 +11,16 @@
 //! выполняет его после сообщения смерти либо при отмене/Stiffen без взрыва;
 //! скрипт, урон и пометка удаления не являются побочными эффектами End.
 
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -110,15 +116,15 @@ fn calculate_attack(
 )]
 pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((
         source,
         property,
@@ -232,9 +238,10 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
             }
             let cell_x = center_x.wrapping_sub(1).wrapping_add(x);
             let cell_y = center_y.wrapping_sub(1).wrapping_add(y);
-            for identity in
-                monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y)
-            {
+            let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
+            let candidates = monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y);
+            for identity in candidates {
+                let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
                 if identity.object_type != PLAYER_TYPE {
                     continue;
                 }
@@ -269,7 +276,7 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
                 );
                 apply_owned_monster_attack_hit(
                     game,
-                    region,
+                    owner,
                     runtime,
                     now_ms,
                     monster_id,
@@ -283,11 +290,11 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
                     target.tamed,
                     target.carriage,
                     attack,
-                    deaths,
                 );
             }
         }
     }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.stage_for_delete();
     }

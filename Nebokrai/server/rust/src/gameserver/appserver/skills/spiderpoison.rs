@@ -1,4 +1,6 @@
 //! Ядовитая атака паука `CSpiderPoison` (`0x191`) для игрока и монстра.
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -22,13 +24,19 @@
 //! End (0x00546090) возвращает движение перед оружейным AfterUseSkill;
 //! callback игрока +0x158 пуст: общий End не пересчитывает свойства.
 
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillTermination, skill_is_restored};
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -64,7 +72,7 @@ const SKILL_USAGE_BASE_PROBABILITY: u32 = 40_001;
 pub(crate) const SPIDER_POISON_SKILL_ID: u32 = 0x191;
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_player_spider_poison_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -196,7 +204,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_player_spider_poison_dispatch(dispatch) {
@@ -273,8 +281,8 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
     let owner = game.find_player(player_id).map(player_master).unwrap_or_default();
     if let Some((master, attack)) = calculate_player_attack(game, player_id) {
         match target.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
             _ => {}
         }
     }
@@ -377,15 +385,15 @@ pub(crate) fn install_spider_poison_state(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((source_shape, property, attacker_master, attacker_tamed, pet_attack, cast, last_used_ms)) =
         region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
@@ -499,9 +507,10 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
     }
-    apply_owned_monster_attack_hit(game, region, runtime, now_ms, monster_id, attacker_master,
+    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, attacker_master,
         target_identity, &target.shape, target.health, target.mana, target.master,
-        target.monster_property, target.tamed, target.carriage, attack, deaths);
+        target.monster_property, target.tamed, target.carriage, attack);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if !target_has_cure(game, region, target_identity)
         && game.skill_random_below(100) <= properties.query_property(SKILL_USAGE_BASE_PROBABILITY) as i32 {
         install_spider_poison_state(game, region, target_identity, SpiderPoisonState::new(

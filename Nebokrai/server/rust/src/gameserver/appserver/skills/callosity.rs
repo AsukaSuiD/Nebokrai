@@ -112,12 +112,10 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     let rejected = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Rejected,
         first_contact: false,
-        killing_blow: None,
     };
     let pending = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Pending,
         first_contact: false,
-        killing_blow: None,
     };
     let skill_id = match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. }
@@ -257,6 +255,5 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,
         first_contact: false,
-        killing_blow: None,
     }
     }

@@ -53,7 +53,7 @@ const ALLOW_PLAYER: u32 = 70_001;
 const ALLOW_MONSTER: u32 = 70_004;
 const MONSTER_GROUP: u32 = 70_005;
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 const fn has_mana(mana: u32, loss: u32) -> bool { mana.wrapping_sub(loss) as i32 >= 0 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {

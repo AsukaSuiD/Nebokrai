@@ -1,4 +1,6 @@
 //! Рывок сквозь строй `CFlash` (`0x69`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -82,7 +84,7 @@ impl FlashExecutionState {
 
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_flash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == FLASH_SKILL_ID }
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, FLASH_SKILL_ID, runtime); }
 pub(crate) fn cancel_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false }; finish_player_flash(game, player_id, player_ai, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
@@ -266,7 +268,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
     if game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).is_some_and(|state| state.condition_checked && !state.attacked) {
         let path = game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| state.path.clone()).unwrap_or_default();
         let mut attacked = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default();
-        attack_path(game, player_id, region_id, level, hit, factor, &path, &mut attacked, runtime);
+        game.with_published_player_ai(player_id, ai, |game| attack_path(game, player_id, region_id, level, hit, factor, &path, &mut attacked, runtime));
         if let Some(state) = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID) { state.attacked_creatures = attacked; state.attacked = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); }
     }
     let started = game.player_skill_state::<FlashExecutionState>(player_id, FLASH_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default();

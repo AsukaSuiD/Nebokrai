@@ -60,7 +60,7 @@ pub(crate) fn is_rush_dispatch(dispatch: PlayerSkillDispatch) -> bool {
 }
 
 pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(super) fn finish_rush_owner<Runtime: GameMainLoopRuntime>(

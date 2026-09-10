@@ -45,7 +45,7 @@ const REUSE_DELAY_TIME: u32 = 10_005;
 #[derive(Clone, Copy)]
 struct Target { identity: ShapeIdentity, x: i32, y: i32 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 
 fn requested_target(game: &CGame, region_id: i32, player_id: i32, skill_id: u32, dispatch: PlayerSkillDispatch) -> Option<Target> {
     let requested = match dispatch {

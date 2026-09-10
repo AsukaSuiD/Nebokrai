@@ -51,7 +51,7 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn target_position(game: &CGame, region_id: i32, player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32, Option<ShapeIdentity>)> {

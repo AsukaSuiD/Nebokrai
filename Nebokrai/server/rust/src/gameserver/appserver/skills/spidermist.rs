@@ -127,7 +127,7 @@ fn send_phalanx_entry(game: &CGame, region: &CServerRegion, phalanx_id: i32) {
 }
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_player_spider_mist_dispatch(dispatch: PlayerSkillDispatch) -> bool {

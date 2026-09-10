@@ -62,7 +62,7 @@ impl ChaosSphereExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn send_failure(game: &CGame, player_id: i32, code: u8) {

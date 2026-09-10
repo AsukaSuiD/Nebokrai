@@ -1,4 +1,6 @@
 //! Круговая атака `CMonsterRangeAttack` (ID `0x2ef`) для игрока и монстра.
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -40,6 +42,12 @@
 //! читает свежие часы delay. Отсутствие свойств после Begin — End(0)
 //! (0x00512900). Ранние отказы schedule до Begin остаются у caller-а.
 
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
 use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use crate::gameserver::appserver::ai::monsterai::MonsterSkillCallOutcome;
@@ -53,7 +61,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::skills::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit,
+    apply_owned_monster_attack_hit,
     defend_owned_monster_attack, monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -68,7 +76,7 @@ const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
 pub(crate) const MONSTER_RANGE_ATTACK_SKILL_ID: u32 = 0x2ef;
 
 fn player_range_outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn end_player_range_attack<Runtime: GameMainLoopRuntime>(
@@ -121,7 +129,7 @@ fn calculate_player_range_attack(
 
 pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    _ai: &mut CPlayerAI, runtime: &mut Runtime,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
     use super::kernel::skill_is_restored;
@@ -203,9 +211,9 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
                 && let Some((master, attack)) = calculate_player_range_attack(game, player_id, region_id, target, level, &properties)
             {
                 match target.object_type {
-                    PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-                    MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
-                    1100 | 1200 => game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, target, attack, runtime),
+                    PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+                    MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
+                    1100 | 1200 => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, target, attack, runtime)),
                     _ => {}
                 }
             }
@@ -429,12 +437,12 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     dispatch: &MonsterRangeAttackDispatch,
     identity: ShapeIdentity,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return false;
     };
@@ -470,7 +478,7 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     );
     apply_owned_monster_attack_hit(
         game,
-        region,
+        owner,
         runtime,
         dispatch.now_ms,
         dispatch.monster_id,
@@ -484,7 +492,6 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
         target.tamed,
         target.carriage,
         attack,
-        deaths,
     );
     true
 }

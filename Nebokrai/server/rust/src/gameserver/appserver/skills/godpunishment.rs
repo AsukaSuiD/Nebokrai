@@ -37,7 +37,7 @@ const MAX_ATTACK: u32 = 20_002;
 const ELEMENT_MODIFIER: u32 = 20_015;
 const SUMMONED_LIFETIME: u32 = 30_001;
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn position(game: &CGame, region: i32, player: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32, Option<ShapeIdentity>)> {
     match dispatch {
         PlayerSkillDispatch::SelfTarget { .. } => game.find_player(player).and_then(CPlayer::shape_view).map(|s| (s.tile_x, s.tile_y, None)),

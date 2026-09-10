@@ -1,4 +1,6 @@
 //! Молния `CLightning` (`0x133`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
 //! расход ресурсов и эффекты AI выполняются после постановки Attack в том
 //! же Run; исходный отсчёт Begin сохраняется общим kernel.
@@ -103,7 +105,6 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 
@@ -565,20 +566,20 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     match target.object_type {
-        PLAYER_TYPE => game.apply_owned_skill_attack_to_player(
+        PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(
             master,
             target.id,
             region_id,
             attack,
             runtime,
-        ),
-        MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(
+        )),
+        MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(
             master,
             target.id,
             region_id,
             attack,
             runtime,
-        ),
+        )),
         _ => {}
     }
     if let Some(state) = game.player_skill_state_mut::<LightningExecutionState>(player_id, LIGHTNING_SKILL_ID) {

@@ -100,7 +100,6 @@ pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecution
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 

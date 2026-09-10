@@ -1,4 +1,6 @@
 //! Семь падающих звёзд `CSevenShootingStar` (`0x136`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
 //! расход ресурсов и эффекты AI выполняются после постановки Attack в том
 //! же Run; исходный отсчёт Begin сохраняется общим kernel.
@@ -92,7 +94,7 @@ impl SevenShootingStarExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn target_position(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
@@ -277,7 +279,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_seven_shooting_star_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
@@ -399,8 +401,8 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
                 game, player_id, region_id, target, level, minimum, maximum, element_modifier, hit_modifier,
             ) else { continue };
             match target.object_type {
-                PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-                MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+                MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
                 _ => {}
             }
         }

@@ -117,7 +117,7 @@ struct CureTarget {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn caster_identity(player_id: i32) -> ShapeIdentity {

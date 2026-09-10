@@ -1,4 +1,6 @@
 //! Базовая атака монстра и приручённого питомца (`CMonsterBaseAttack`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Достигнутый OnSchedule с целью и пустыми active/passive FIFO вызывается
 //! до background/passive (CBaseAI::Run 0x004C7D10; проверки CMonsterAI
 //! 0x005DCFA2..0x005DCFB0). Первые входы owners сохраняют только Begin;
@@ -165,6 +167,9 @@
 //! изменение HP, death-script и wire стационарного owner-а; NPC не атакуются.
 //! У NPC нулевой combat HP: общая IsDied-проверка даёт failure 2 и End(1)
 //! до начала анимации, а не пустую атаку по истечении delay.
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -202,6 +207,8 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     BASE_ATTACK_SKILL_ID as COMMON_BASE_ATTACK_SKILL_ID,
@@ -213,7 +220,7 @@ use super::monsterfastattack::{
     fast_attack_fire_message,
 };
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -340,7 +347,7 @@ pub(crate) const fn is_player_monster_base_attack(dispatch: PlayerSkillDispatch)
 }
 
 fn player_base_attack_outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
@@ -361,7 +368,7 @@ pub(crate) fn finish_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    _ai: &mut CPlayerAI, runtime: &mut Runtime,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     use super::lordfastattack::{calculate_attack, master_info, send_start};
     let rejected = || player_base_attack_outcome(QueuedSkillExecutionState::Rejected);
@@ -457,9 +464,9 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && let Some((master, attack)) = calculate_attack(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level, hit_modifier)
     {
         match identity.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, identity.id, region_id, attack, runtime),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, identity.id, region_id, attack, runtime),
-            1100 | 1200 => game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, identity, attack, runtime),
+            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, identity.id, region_id, attack, runtime)),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, identity.id, region_id, attack, runtime)),
+            1100 | 1200 => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, identity, attack, runtime)),
             _ => {}
         }
     }
@@ -998,15 +1005,15 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
     wide_arc_dispatch: &mut Option<WideArcAttackDispatch>,
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
     snow_storm_entry: &mut Option<i32>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some(active_ai) = region.find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
         return false;
     };
@@ -1391,11 +1398,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if skill_id == KNOCK_OUT_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_knock_out(game, region, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, deaths);
+        return execute_owned_monster_knock_out(game, owner, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime);
     }
     if skill_id == YAKSHA_SLASH_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_yaksha_slash(game, region, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, deaths);
+        return execute_owned_monster_yaksha_slash(game, owner, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime);
     }
     if skill_id == SNOW_STORM_SKILL_ID {
         let skill_properties = skill_properties.clone();
@@ -1435,14 +1442,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_yunsheng_lightning(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == CORPSE_PTOMAINE_SKILL_ID {
@@ -1462,14 +1468,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_corpse_candle_blasting(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == SPORE_BLASTING_SKILL_ID {
@@ -1489,56 +1494,52 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_energy_bolt(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == ZOMBIE_CLAW_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_zombie_claw(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == LITTLE_STAR_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_little_star(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == SNAKE_BOLT_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_snake_bolt(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == SPRITE_BURN_SKILL_ID {
@@ -1588,36 +1589,35 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == BOSS_BLUE_QUAKE_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_boss_blue_quake(
-            game, region, monster_id, target, skill_level, &skill_properties, now_ms, runtime, deaths,
+            game, owner, monster_id, target, skill_level, &skill_properties, now_ms, runtime,
         );
     }
     if skill_id == BOSS_FIEND_PENETRATE_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_boss_fiend_penetrate(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == MONSTER_THORN_SKILL_ID {
         let skill_properties = skill_properties.clone();
         let outcome = execute_owned_monster_thorn(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
             game, region, monster_id, outcome, runtime,
         );
@@ -1626,14 +1626,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_spider_poison(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
             &skill_properties,
             now_ms,
             runtime,
-            deaths,
         );
     }
     if skill_id == SPIDER_MIST_SKILL_ID {
@@ -1923,6 +1922,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
 
         for hit_index in 0..hit_count {
+            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
             if hit_index != 0 {
                 if target.object_type == PLAYER_TYPE {
                     let Some(player) = game.find_player(target.id) else { break; };
@@ -2023,7 +2023,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             apply_owned_monster_attack_hit(
                 game,
-                region,
+                owner,
                 runtime,
                 now_ms,
                 monster_id,
@@ -2037,9 +2037,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 target_tamed,
                 target_carriage,
                 attack,
-                deaths,
             );
         }
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
         if finish_cast
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {

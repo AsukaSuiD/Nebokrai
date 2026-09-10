@@ -39,7 +39,7 @@ pub(crate) const fn is_roar_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: ROAR_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: ROAR_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: ROAR_SKILL_ID, .. })
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
     player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 1)

@@ -1,4 +1,6 @@
 //! Обратный рубящий удар `CInverseChopped` (`0x8A`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -36,7 +38,7 @@ pub(crate) const fn is_inverse_chopped_dispatch(dispatch: PlayerSkillDispatch) -
     matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: INVERSE_CHOPPED_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: INVERSE_CHOPPED_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: INVERSE_CHOPPED_SKILL_ID, .. })
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 
 fn finish_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) {
@@ -102,8 +104,8 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
         let multiplier = energy.map_or(1.0, |state| 1.0 + f64::from(state.energy_count()) * f64::from(state.parameter_percent()) * 0.01);
         let Some((master, attack)) = calculate_attack_with_multiplier(game, player_id, DEFINITION, target_level, level, hit_modifier, target_damage_factor, multiplier) else { continue };
         match target.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+            PLAYER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
             _ => unreachable!("тип цели проверен выше"),
         }
     }

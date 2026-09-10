@@ -19,12 +19,18 @@
 //! End снимает фазу kernel, а этот owner сбрасывает fired и время полёта.
 //! Технический снимок detached-impact сохраняется: он не является отдельным
 //! native-полётным полем и после ended не применяется повторно.
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -397,12 +403,12 @@ impl MonsterProjectileProgress {
 
 pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     dispatch: &MonsterProjectileDispatch,
     identity: ShapeIdentity,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return false;
     };
@@ -493,7 +499,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
     );
     apply_owned_monster_attack_hit(
         game,
-        region,
+        owner,
         runtime,
         dispatch.now_ms,
         dispatch.monster_id,
@@ -507,7 +513,6 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
         target.tamed,
         target.carriage,
         attack,
-        deaths,
     );
     true
 }

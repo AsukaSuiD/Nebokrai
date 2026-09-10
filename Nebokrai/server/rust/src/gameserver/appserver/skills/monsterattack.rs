@@ -2,9 +2,14 @@
 //!
 //! Конкретный навык сохраняет формулу, RNG и выбор целей у своего владельца.
 //! Здесь остаются общие `CFightDefense::PreDefense`, изменение цели, точные
-//! пакеты ранения и смерти и семантические хвосты. Смерть игрока передаётся
-//! наружу после возврата владельца региона; смерть любого монстра остаётся
-//! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
+//! пакеты ранения и смерти и семантические хвосты. По CMoveShape::OnBeenAttacked
+//! (gameserver.exe + GameServer.pdb, 0x004D38E4) смертельный удар синхронно
+//! публикует настоящий производный регион для StopAllSkills/OnBeenMurdered/
+//! WhenBeenKilled. После BF60B общий CMoveShape хранит убийцу и action 6;
+//! OnDied игрока и монстра допускается только их пассивной AI FIFO. Полный
+//! ClearAllStates(true) и последующий prison_check ещё требуют общего state-owner.
+//! OnBeenHurted (0x004D3BE3) вызывается только после нелетального BF60A:
+//! общий координатор сохраняет Nation → защиту первого атакующего.
 //! Производные hurt-owner-ы вызываются после освобождения mutation-заимствования;
 //! в частности AI19 сохраняет поиск summon-формы и принимает monster-attacker-а.
 //! Выбор реакции проходит через текущий CMonster::GetAI (0x004E6D80), а не
@@ -34,15 +39,15 @@ use crate::gameserver::appserver::ai::lord::{
 };
 use crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKillingAttack};
-use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::monster::MonsterCombatProperties;
+use crate::gameserver::appserver::moveshape::{CMoveShape, KillingAttackIdentity};
 use crate::gameserver::appserver::player::{CPlayer, PlayerCombatProperties};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
     CShape, ShapeIdentity, ShapeResolver, ShapeView,
 };
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, PlayerKillingBlow};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use crate::setup::monsterlist::MonsterProperties;
@@ -132,11 +137,6 @@ pub(crate) fn monster_attack_cell_candidates(
                 && !(identity.object_type == MONSTER_TYPE && identity.id == source_monster_id)
         })
         .collect()
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum MonsterAttackDeath {
-    Player(PlayerKillingBlow),
 }
 
 #[derive(Clone, Debug)]
@@ -368,11 +368,11 @@ pub(crate) fn defend_owned_monster_attack(
 #[allow(clippy::too_many_arguments, reason = "поля сохраняют атомарный снимок цели исходного OnBeenAttacked")]
 pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
     now_ms: u32,
     monster_id: i32,
-    attacker_master: MasterInfo,
+    _attacker_master: MasterInfo,
     target: ShapeIdentity,
     target_shape: &CShape,
     target_health: u32,
@@ -380,10 +380,10 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     _target_master: Option<MasterInfo>,
     target_monster_property: Option<MonsterProperties>,
     target_tamed: bool,
-    target_carriage: bool,
+    _target_carriage: bool,
     attack: AttackInformation,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return };
     let (damage, mana_damage) = CGame::applied_attack_damage(&attack, target_health, target_mana);
     if damage == 0 && mana_damage == 0 {
         if attack.full_miss != 0 {
@@ -396,6 +396,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         return;
     }
     let current_health = target_health - damage;
+    let killing_attacker = KillingAttackIdentity::from(&attack);
     let (target_primary_ai, target_pet_ai) = region.find_monster_by_id(target.id)
         .filter(|_| target.object_type == MONSTER_TYPE)
         .map(|monster| (
@@ -426,17 +427,6 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(target.id) {
             player.set_health(current_health);
             player.set_mana(target_mana - mana_damage);
-            if current_health == 0 || attack.full_miss == 0 {
-                player
-                    .movement_shape_mut()
-                    .set_action(if current_health == 0 { 6 } else { 5 });
-            }
-        }
-        if damage != 0 {
-            game.increase_owned_player_rp(target.id, false, damage as u16);
-        }
-        if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-            let _ = game.queue_player_hurt_ai(target.id, damage, runtime);
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(target.id) {
         if attack.full_miss == 0
@@ -453,23 +443,36 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             );
         }
         monster.set_hit_points(current_health);
-        if current_health == 0 || attack.full_miss == 0 {
+    }
+    if target.object_type == PLAYER_TYPE && damage != 0 {
+        game.increase_owned_player_rp(target.id, false, damage as u16);
+    }
+    if current_health == 0 {
+        let region_id = region.id;
+        let _ = game.with_published_region(owner, |game| {
+            game.begin_move_shape_death(region_id, target, killing_attacker, runtime);
+        });
+    }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return };
+    if target.object_type == PLAYER_TYPE {
+        if let Some(player) = game.find_player_mut(target.id) {
+            if current_health != 0 && attack.full_miss == 0 {
+                player
+                    .movement_shape_mut()
+                    .set_action(5);
+            }
+        }
+        if attack.full_miss == 0 && damage != 0 && current_health != 0 {
+            let _ = game.queue_player_hurt_ai(target.id, damage, runtime);
+        }
+    } else if let Some(monster) = region.find_monster_by_id_mut(target.id) {
+        if current_health != 0 && attack.full_miss == 0 {
             monster
                 .move_shape_mut()
                 .shape_mut()
-                .set_action(if current_health == 0 { 6 } else { 5 });
+                .set_action(5);
         }
-        if current_health == 0 {
-            monster.when_been_killed(now_ms);
-            monster.set_killed_by(MonsterKillingAttack {
-                attacker_type: MONSTER_TYPE,
-                attacker_id: monster_id,
-                skill_id: attack.skill_id,
-                skill_level: attack.skill_level,
-                critical: attack.critical,
-                blast_attack: attack.blast_attack,
-            });
-        } else if attack.full_miss == 0 {
+        if current_health != 0 && attack.full_miss == 0 {
             let attacker = ShapeIdentity {
                 object_type: MONSTER_TYPE,
                 id: monster_id,
@@ -503,19 +506,6 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             } else {
                 monster.when_been_hurted_by(attacker, attacker_is_tamed, now_ms);
             }
-        }
-        if attack.full_miss == 0
-            && !target_tamed
-            && !target_carriage
-            && attacker_master.master_type == PLAYER_TYPE
-            && attacker_master.master_id != 0
-        {
-            let protection_ms = game.globe_setup().attack_monster_protection_ms();
-            let _ = monster.register_attacking_player(
-                attacker_master.master_id,
-                now_ms,
-                protection_ms,
-            );
         }
     }
     if attack.full_miss == 0
@@ -601,15 +591,11 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         died.add_ulong(damage);
         died.base_mut().add_char(1);
         CGame::append_base_attack_tail(&mut died, &attack);
-        let _ = game.send_game_shape_around(region, target_shape, None, &died);
-        if target.object_type == PLAYER_TYPE {
-            deaths.push(MonsterAttackDeath::Player(PlayerKillingBlow {
-                victim_id: target.id,
-                attacker_type: MONSTER_TYPE,
-                attacker_id: monster_id,
-                attacker_faction_id: 0,
-            }));
-        }
+        let region_id = region.id;
+        let _ = game.with_published_region(owner, |game| {
+            let _ = game.send_move_shape_around(region_id, target, &died);
+            game.record_move_shape_death(region_id, target, killing_attacker);
+        });
     } else if attack.full_miss != 0 {
         let mut missed = CMessage::new(0x000b_f612);
         missed.add_byte(attack.full_miss);
@@ -643,6 +629,11 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 }
             }
             game.damage_player_armor(target.id, runtime);
+        } else if target.object_type == MONSTER_TYPE {
+            let region_id = region.id;
+            let _ = game.with_published_region(owner, |game| {
+                game.monster_on_been_hurted(region_id, target.id, MONSTER_TYPE, monster_id, runtime)
+            });
         }
     }
 }

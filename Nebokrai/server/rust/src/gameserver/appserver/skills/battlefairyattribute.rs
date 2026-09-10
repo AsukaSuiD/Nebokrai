@@ -77,7 +77,7 @@ pub(crate) const fn definition(skill_id: u32) -> Option<BattleFairyAttributeSkil
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn dispatch_fields(dispatch: BattleFairySkillDispatch) -> (u32, i32, Option<ShapeIdentity>) {

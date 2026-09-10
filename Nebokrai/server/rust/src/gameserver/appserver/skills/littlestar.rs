@@ -1,4 +1,6 @@
 //! Малая звезда `CLittleStar` (`0x1a4`) для игроков и монстров.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -33,6 +35,9 @@
 //! использует резервные координаты +0x24/+0x28. Объектный Begin обнуляет
 //! их (0x005DBDBA), поэтому до построения пути fallback равен (0, 0),
 //! а не позиции источника. После выпуска сохранённый путь независим от цели.
+//! Monster-hit получает полное временное владение ServerRegionOwner для общего
+//! death/End callback. После такого вызова регион разрешается заново;
+//! исчезнувший owner прекращает проход без подмены базовым регионом.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
@@ -43,7 +48,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER}
 use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -63,7 +68,7 @@ use crate::gameserver::appserver::states::attackpower::{
 };
 use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -104,7 +109,7 @@ impl PlayerLittleStarExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_player_little_star_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -372,8 +377,8 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
                     game, player_id, region_id, target, level, minimum, maximum, element_modifier, hit_modifier,
                 ) else { continue };
                 match target.object_type {
-                    PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-                    MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                    PLAYER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+                    MONSTER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
                     _ => unreachable!(),
                 }
             }
@@ -472,7 +477,7 @@ pub(crate) fn send_end(game: &CGame, region: &CServerRegion, source: &CShape, sk
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет порядок клеток, целей и RNG каждого удара")]
 fn attack_path<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
     now_ms: u32,
     monster_id: i32,
@@ -482,13 +487,14 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
     attacker_master: MasterInfo,
     attacker_tamed: bool,
     path: &[(i32, i32, u8)],
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) {
     for &(cell_x, cell_y, block) in path {
         if block == BLOCK_UNFLY {
             break;
         }
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
         for identity in monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y) {
+            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
             let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
                 continue;
             };
@@ -546,7 +552,7 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
             );
             apply_owned_monster_attack_hit(
                 game,
-                region,
+                owner,
                 runtime,
                 now_ms,
                 monster_id,
@@ -560,8 +566,8 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
                 target.tamed,
                 target.carriage,
                 attack,
-                deaths,
             );
+            if owner.is_none() { return; }
         }
     }
 }
@@ -569,15 +575,15 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт длительного навыка")]
 pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((
         source,
         property,
@@ -715,15 +721,17 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
 
     if progress.attack_due(now_ms, properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY)) {
         attack_path(
-            game, region, runtime, now_ms, monster_id, skill_level, properties, &property,
-            master, tamed, &progress.path, deaths,
+            game, owner, runtime, now_ms, monster_id, skill_level, properties, &property,
+            master, tamed, &progress.path,
         );
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
         progress.record_attack(runtime.now_milliseconds());
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(LITTLE_STAR_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         }
     }
 
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     let expiration_now_ms = runtime.now_milliseconds();
     let expired = cast.started_at_ms()
         .wrapping_add(delay_ms)

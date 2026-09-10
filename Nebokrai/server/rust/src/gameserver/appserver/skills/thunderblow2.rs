@@ -1,4 +1,6 @@
 //! Второй громовой удар `CThunderBlow2` (`0x14D`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
 //! расход ресурсов и эффекты AI выполняются после постановки Attack в том
 //! же Run; исходный отсчёт Begin сохраняется общим kernel.
@@ -49,7 +51,7 @@ const TARGET_FINAL_DAMAGE_MODIFIER: u32 = 20_002;
 const PILLAR_STATE_ID: u32 = 0x74;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn finish_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
@@ -224,7 +226,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
@@ -368,8 +370,8 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     match target.object_type {
-        PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-        MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+        PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+        MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
         _ => unreachable!("тип цели проверен dispatcher-ом"),
     }
     if let Some(execution) = game.player_skill_execution_mut(player_id, THUNDER_BLOW_2_SKILL_ID) {

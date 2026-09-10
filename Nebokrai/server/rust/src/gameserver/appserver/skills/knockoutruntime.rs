@@ -1,4 +1,6 @@
 //! Рабочий владелец исполнения `CKnockOut` (`0x192`) с объектом-целью.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //!
@@ -16,6 +18,12 @@
 //! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
 //! контакта и длительность состояния остаются elapsed.
 
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
@@ -25,7 +33,7 @@ use super::knockoutstate::{
     KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
 };
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -77,7 +85,7 @@ const CAN_BREAK: u32 = 10_006;
 struct Target { identity: ShapeIdentity, x: i32, y: i32, level: u8, dodge: u16, dead: bool, cured: bool }
 
 fn result(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<Target> {
@@ -250,7 +258,7 @@ fn owned_target_has_cure(game: &CGame, region: &CServerRegion, target: ShapeIden
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
@@ -258,8 +266,8 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     property: &MonsterProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -342,7 +350,8 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
-    apply_owned_monster_attack_hit(game, region, runtime, now_ms, monster_id, attacker_master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack, deaths);
+    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, attacker_master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if !owned_target_has_cure(game, region, target_identity) {
         let state_now = runtime.now_milliseconds();
         let state = KnockOutState::new(state_now, properties.query_property(PERSIST));
@@ -451,8 +460,8 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     if chance <= game.skill_random_below(100) { return result(QueuedSkillExecutionState::Completed); }
     if let Some((master, attack)) = attack(game, player_id, target.level) {
         match target.identity.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.identity.id, region_id, attack, runtime),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.identity.id, region_id, attack, runtime), _ => {}
+            PLAYER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_player(master, target.identity.id, region_id, attack, runtime)),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_monster(master, target.identity.id, region_id, attack, runtime)), _ => {}
         }
     }
     if !target.cured {

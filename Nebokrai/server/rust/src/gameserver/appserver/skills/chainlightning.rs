@@ -1,4 +1,6 @@
 //! Цепная молния `CChainLightning` (`0x13E`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
 //! расход ресурсов и эффекты AI выполняются после постановки Attack в том
 //! же Run; исходный отсчёт Begin сохраняется общим kernel.
@@ -71,7 +73,7 @@ impl ChainLightningExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn finish_player_chain_lightning<Runtime: GameMainLoopRuntime>(
@@ -341,8 +343,8 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
                     element_modifier, hit_modifier, damage_modifier,
                 ) else { continue };
                 match target.object_type {
-                    PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-                    MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                    PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+                    MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
                     _ => {}
                 }
                 attacked.push(target);

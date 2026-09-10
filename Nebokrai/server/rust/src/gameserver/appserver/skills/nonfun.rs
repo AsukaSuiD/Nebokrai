@@ -32,7 +32,6 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 

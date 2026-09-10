@@ -34,7 +34,7 @@ const STATE_TIME: u32 = 10_002; const REUSE: u32 = 10_005; const CAN_BREAK: u32 
 const DEF_LOSS: u32 = 209; const DODGE_LOSS: u32 = 210; const ELEMENT_LOSS: u32 = 212;
 const DEF_COEFFICIENT: u32 = 223; const ER_COEFFICIENT: u32 = 224; const LIFETIME: u32 = 30_001;
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn weapon_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 4) }
 fn destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> { match dispatch { PlayerSkillDispatch::Point { skill_id: POISON_FOG_SKILL_ID, x, y } => Some((x, y)), PlayerSkillDispatch::Object { skill_id: POISON_FOG_SKILL_ID, target } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => { let target = game.base_magic_target_view(region_id, target)?; Some((target.tile_x, target.tile_y)) }, _ => None } }
 fn fail(game: &mut CGame, player_id: i32, code: u8, text: &[u8], mp: Option<u32>) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code); if let Some(mp) = mp { game.send_skill_system_info_with_unsigned(player_id, text, mp); } else { game.send_skill_system_info(player_id, text); } }

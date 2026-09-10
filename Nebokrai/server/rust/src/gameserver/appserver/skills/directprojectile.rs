@@ -1,4 +1,6 @@
 //! Общий player-путь прямых снарядов `CChuckStone` и `CSkeletonArchery`.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий жизненный
 //! цикл: проверку лука или арбалета, задержку с запретом движения, повторный
@@ -77,7 +79,7 @@ const fn skill_id(dispatch: PlayerSkillDispatch) -> u32 {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_player_direct_projectile_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -292,7 +294,7 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
 
     let Some(state) = game.player_skill_state::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()).copied() else { return terminal(QueuedSkillExecutionState::Rejected) };
     if !time_reached(now_ms, started_at_ms, delay_ms.wrapping_add(state.missile_flying_time_ms)) { return terminal(QueuedSkillExecutionState::Pending) }
-    attack_impact(game, player_id, region_id, skill_id, level, hit_modifier, state.impact, runtime);
+    game.with_published_player_ai(player_id, ai, |game| attack_impact(game, player_id, region_id, skill_id, level, hit_modifier, state.impact, runtime));
     if let Some(state) = game.player_skill_state_mut::<PlayerDirectProjectileExecutionState>(player_id, dispatch.skill_id()) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
     finish(game, player_id, skill_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)

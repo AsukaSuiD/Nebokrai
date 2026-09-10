@@ -8,18 +8,18 @@
 //! исполняются общим механизмом `energybolt`; эта обёртка задаёт только
 //! различающийся контракт когтя зомби. Унаследованный
 //! `CAttackSkill::AfterUseSkill` изнашивает оружие один раз при `End(true)`.
+//! Monster-обёртка передаёт полное временное владение регионом общему
+//! пошаговому снаряду: death/End не ограничивается заимствованием его базы.
 
 use super::energybolt::{
     PathProjectileSpec, execute_owned_path_projectile, execute_player_path_projectile,
 };
-use super::monsterattack::MonsterAttackDeath;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, QueuedSkillExecutionOutcome,
 };
 
 pub(crate) const ZOMBIE_CLAW_SKILL_ID: u32 = 0x1a2;
@@ -43,18 +43,17 @@ pub(crate) fn execute_player_zombie_claw<Runtime: GameMainLoopRuntime>(
 #[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
 pub(crate) fn execute_owned_zombie_claw<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
     execute_owned_path_projectile(
         game,
-        region,
+        owner,
         monster_id,
         target_identity,
         PathProjectileSpec::new(ZOMBIE_CLAW_SKILL_ID, 3, true, 1),
@@ -62,6 +61,5 @@ pub(crate) fn execute_owned_zombie_claw<Runtime: GameMainLoopRuntime>(
         properties,
         now_ms,
         runtime,
-        deaths,
     )
 }

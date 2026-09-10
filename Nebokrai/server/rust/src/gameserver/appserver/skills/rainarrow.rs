@@ -61,7 +61,7 @@ impl RainArrowExecutionState {
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
 }
-fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn restore_player_movement(game: &mut CGame, id: i32) { if let Some(player) = game.find_player_mut(id) { player.set_skill_moveable(true); } }
 fn finish_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, runtime: &mut R) {
     restore_player_movement(game, id);

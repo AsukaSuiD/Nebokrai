@@ -42,7 +42,7 @@ const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 const fn has_mana(mana: u32, loss: u32) -> bool {

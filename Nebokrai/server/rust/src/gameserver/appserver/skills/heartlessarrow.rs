@@ -1,4 +1,6 @@
 //! Заряжаемый выстрел `CHeartLessArrow` (`0xCA`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/heartlessarrow.cpp`. Модуль-владелец хранит цель, время удержания и
@@ -99,7 +101,7 @@ impl HeartlessArrowExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn restore_player_movement(game: &mut CGame, player_id: i32) {
@@ -333,7 +335,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     let factor = damage_factor(state.hold_time_ms, action_interval_ms, factors);
     if let Some((master, attack)) = calculate_attack(game, player_id, level, hit_modifier, factor) {
-        match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} }
+        match target.object_type { PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)), MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)), _ => {} }
     }
     apply_daub_poison(game, player_id, region_id, target, runtime.now_milliseconds());
     if let Some(state) = game.player_skill_state_mut::<HeartlessArrowExecutionState>(player_id, HEARTLESS_ARROW_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }

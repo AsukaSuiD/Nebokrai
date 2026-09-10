@@ -41,7 +41,7 @@ const WEAPON_DAMAGE_LEVEL_MODIFIER: u32 = 20_018;
 
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_leaf_cut_3_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == LEAF_CUT_3_SKILL_ID }
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn finish_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, LEAF_CUT_3_SKILL_ID, runtime); }
 pub(crate) fn cancel_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, LEAF_CUT_3_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_player_leaf_cut_3(game, player_id, player_ai, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
 fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }

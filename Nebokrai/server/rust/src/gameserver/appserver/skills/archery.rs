@@ -443,12 +443,10 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
     let rejected = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Rejected,
         first_contact: false,
-        killing_blow: None,
     };
     let pending = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Pending,
         first_contact: false,
-        killing_blow: None,
     };
     let Some(player) = game.find_player(player_id) else {
         return rejected();
@@ -728,7 +726,6 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,
         first_contact: false,
-        killing_blow: None,
     }
     }
 

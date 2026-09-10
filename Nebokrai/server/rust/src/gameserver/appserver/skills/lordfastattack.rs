@@ -1,4 +1,6 @@
 //! Быстрая атака владыки `CLordFastAttack` (`0x1f5`) для игрока и монстра.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -106,7 +108,6 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 
@@ -560,7 +561,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         ) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
-        apply_attack(
+        game.with_published_player_ai(player_id, player_ai, |game| apply_attack(
             game,
             player_id,
             skill_id,
@@ -569,7 +570,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             level,
             hit_modifier,
             runtime,
-        );
+        ));
         if let Some(state) = game.player_skill_state_mut::<LordFastAttackExecutionState>(player_id, dispatch.skill_id()) {
             state.first_attack_done = true;
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
@@ -584,7 +585,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     ) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
-    apply_attack(
+    game.with_published_player_ai(player_id, player_ai, |game| apply_attack(
         game,
         player_id,
         skill_id,
@@ -593,7 +594,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         level,
         hit_modifier,
         runtime,
-    );
+    ));
     if let Some(state) = game.player_skill_state_mut::<LordFastAttackExecutionState>(player_id, dispatch.skill_id()) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }

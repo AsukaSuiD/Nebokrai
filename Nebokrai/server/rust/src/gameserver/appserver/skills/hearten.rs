@@ -113,7 +113,6 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
     let terminal = |state| QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     };
     let requested_target_id = match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. }

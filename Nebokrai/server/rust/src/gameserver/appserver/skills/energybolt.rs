@@ -1,4 +1,6 @@
 //! Владелец общего пошагового снаряда и конкретной семантики энергетического снаряда.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Monster-End освобождает также локальный снимок пути до общей очистки;
 //! reuse читает свежие часы после неё (`CSkill::End`, 0x004D84C0), не время шага.
 //!
@@ -36,6 +38,9 @@
 //! Monster End всех трёх вариантов (0x0053BF50) подключён к общей очистке
 //! CMonster: путь, SetMoveable(true), reuse ненулевого End и Stiffen=4.
 //! Отдельный пакет конца полёта остаётся у AI; сам End его не посылает.
+//! Monster-hit получает полное временное владение ServerRegionOwner для общего
+//! death/End callback. После такого вызова регион разрешается заново;
+//! исчезнувший owner прекращает проход без подмены базовым регионом.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
@@ -43,7 +48,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER}
 use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -66,7 +71,7 @@ use crate::gameserver::appserver::states::attackpower::{
 };
 use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -237,7 +242,7 @@ impl PathProjectileProgress {
 }
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_player_path_projectile_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -663,10 +668,10 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
     progress.end_y = cell_y;
     match game.find_region(region_id).map_or(BLOCK_UNFLY, |owner| owner.base().skill_cell_block(cell_x, cell_y)) {
         BLOCK_SHAPE => {
-            if attack_player_projectile_scope(
+            if game.with_published_player_ai(player_id, ai, |game| attack_player_projectile_scope(
                 game, player_id, region_id, spec, level, cell_x, cell_y, minimum, maximum,
                 element_modifier, hit_modifier, &mut progress, runtime,
-            ) {
+            )) {
                 send_player_projectile_end(game, player_id, spec.skill_id, level, &progress);
                 progress.finish_after_collision();
                 if let Some(state) = game.player_skill_state_mut::<PlayerPathProjectileExecutionState>(player_id, dispatch.skill_id()) { state.progress = progress; }
@@ -776,7 +781,7 @@ fn send_end(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет порядок scope, формулу и последствия каждого удара")]
 fn attack_scope<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
     now_ms: u32,
     monster_id: i32,
@@ -789,7 +794,6 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
     center_x: i32,
     center_y: i32,
     progress: &mut PathProjectileProgress,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
     let wide_scope = if spec.wide_scope_from_third {
         !matches!(skill_level, 1 | 2)
@@ -805,9 +809,11 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
         for offset_y in -scope_radius..=scope_radius {
             let cell_x = center_x.wrapping_add(offset_x);
             let cell_y = center_y.wrapping_add(offset_y);
+            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return did_attack; };
             for identity in monster_attack_cell_candidates(
                 game, region, monster_id, cell_x, cell_y,
             ) {
+                let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return did_attack; };
                 if attacked.contains(&identity) {
                     continue;
                 }
@@ -875,7 +881,7 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
                 );
                 apply_owned_monster_attack_hit(
                     game,
-                    region,
+                    owner,
                     runtime,
                     now_ms,
                     monster_id,
@@ -889,10 +895,10 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
                     target.tamed,
                     target.carriage,
                     attack,
-                    deaths,
                 );
                 attacked.push(identity);
                 did_attack = true;
+                if owner.is_none() { return did_attack; }
             }
         }
     }
@@ -902,7 +908,7 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет owner, путь и текущий такт многоцелевого полёта")]
 pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     spec: PathProjectileSpec,
@@ -910,8 +916,8 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((
         source,
         property,
@@ -1091,9 +1097,9 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     progress.end_y = cell_y;
     match region.skill_cell_block(cell_x, cell_y) {
         BLOCK_SHAPE => {
-            if attack_scope(
+            let did_attack = attack_scope(
                 game,
-                region,
+                owner,
                 runtime,
                 now_ms,
                 monster_id,
@@ -1106,8 +1112,9 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 cell_x,
                 cell_y,
                 &mut progress,
-                deaths,
-            ) {
+            );
+            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+            if did_attack {
                 send_end(game, region, &source, spec.skill_id, skill_level, &progress);
                 progress.finish_after_collision();
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -1123,6 +1130,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
         _ => {}
     }
     progress.advance();
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.set_skill_progress(spec.skill_id, progress, game.skill_factory());
     }
@@ -1132,18 +1140,17 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
 #[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
 pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
     execute_owned_path_projectile(
         game,
-        region,
+        owner,
         monster_id,
         target_identity,
         PathProjectileSpec::new(ENERGY_BOLT_SKILL_ID, 1, false, 1),
@@ -1151,6 +1158,5 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
         properties,
         now_ms,
         runtime,
-        deaths,
     )
 }

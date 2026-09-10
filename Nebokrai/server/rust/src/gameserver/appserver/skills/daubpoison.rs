@@ -32,7 +32,7 @@ const REUSE_DELAY_TIME: u32 = 10_005;
 const CAN_BE_BREAKED: u32 = 10_006;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_daub_poison_dispatch(dispatch: PlayerSkillDispatch) -> bool {

@@ -1,4 +1,6 @@
 //! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`) для игрока и монстра.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Monster-End освобождает локальный снимок пути и поражённых целей перед
 //! общим cleanup; reuse читает часы в `CSkill::End` (0x004D84C0), не в начале AI.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -34,6 +36,9 @@
 //! поражённых целей освобождаются до SetMoveable(true), затем завершается
 //! cast. Отдельное снятие запрета перед выпуском остаётся у AI; End не
 //! публикует пакет и не повторяет уже применённые удары.
+//! Monster-hit получает полное временное владение ServerRegionOwner для общего
+//! death/End callback. После такого вызова регион разрешается заново;
+//! исчезнувший owner прекращает проход без подмены базовым регионом.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
@@ -43,7 +48,7 @@ use super::baseattack::{
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
@@ -63,7 +68,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -124,7 +129,6 @@ fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutc
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 
@@ -644,7 +648,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         let mut attacked = game.player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(player_id, BOSS_FIEND_PENETRATE_SKILL_ID)
             .map(|state| std::mem::take(&mut state.attacked))
             .unwrap_or_default();
-        attack_player_cell(
+        game.with_published_player_ai(player_id, player_ai, |game| attack_player_cell(
             game,
             player_id,
             region_id,
@@ -655,7 +659,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             cell_y,
             &mut attacked,
             runtime,
-        );
+        ));
         if let Some(state) = game.player_skill_state_mut::<PlayerBossFiendPenetrateExecutionState>(player_id, BOSS_FIEND_PENETRATE_SKILL_ID) {
             state.attacked = attacked;
             state.current_cell = state.current_cell.wrapping_add(1);
@@ -770,7 +774,7 @@ fn send_empty_path(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет формулу и порядок последствий одного поражения")]
 fn attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
     now_ms: u32,
     monster_id: i32,
@@ -780,8 +784,8 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     attacker_master: MasterInfo,
     attacker_tamed: bool,
     identity: ShapeIdentity,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return;
     };
@@ -863,7 +867,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     );
     apply_owned_monster_attack_hit(
         game,
-        region,
+        owner,
         runtime,
         now_ms,
         monster_id,
@@ -877,22 +881,21 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
         target.tamed,
         target.carriage,
         attack,
-        deaths,
     );
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, путь и текущий такт навыка")]
 pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((source, property, master, tamed, cast, progress, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
@@ -1069,6 +1072,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         return true;
     };
     for identity in monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y) {
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
         if progress.attacked.contains(&identity) {
             continue;
         }
@@ -1093,7 +1097,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         progress.attacked.push(identity);
         attack_target(
             game,
-            region,
+            owner,
             runtime,
             now_ms,
             monster_id,
@@ -1103,10 +1107,11 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             master,
             tamed,
             identity,
-            deaths,
         );
+        if owner.is_none() { return true; }
     }
     progress.current_cell = progress.current_cell.wrapping_add(1);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.set_skill_progress(BOSS_FIEND_PENETRATE_SKILL_ID, progress, game.skill_factory());
     }

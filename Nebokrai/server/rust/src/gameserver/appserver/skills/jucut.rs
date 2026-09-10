@@ -1,4 +1,6 @@
 //! Фронтальный рубящий удар `CJuCut` (`0x6C`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -44,7 +46,6 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 
@@ -207,20 +208,20 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
         )
     {
         match target.identity.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(
+            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(
                 master,
                 target.identity.id,
                 region_id,
                 attack,
                 runtime,
-            ),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(
+            )),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(
                 master,
                 target.identity.id,
                 region_id,
                 attack,
                 runtime,
-            ),
+            )),
             _ => unreachable!("тип цели проверен перед расчётом"),
         }
     }

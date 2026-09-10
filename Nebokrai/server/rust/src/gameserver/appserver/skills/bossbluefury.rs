@@ -101,7 +101,6 @@ fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutc
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 

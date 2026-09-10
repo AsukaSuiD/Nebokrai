@@ -49,7 +49,7 @@ fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch {
     | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
 } }
 pub(crate) fn is_thunder_slash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == THUNDER_SLASH_SKILL_ID }
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn finish_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,

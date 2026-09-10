@@ -1,4 +1,6 @@
 //! Семейство бегущего удара `CGhostCut` (`0x66/0x79/0x7A`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Reuse проверяется exact `CSkill::IsRestored`; шаги полёта остаются elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
@@ -76,7 +78,7 @@ impl GhostCutExecutionState {
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 fn family_index(skill_id: u32) -> Option<usize> { match skill_id { GHOST_CUT_SKILL_ID => Some(0), GHOST_CUT_2_SKILL_ID => Some(1), GHOST_CUT_3_SKILL_ID => Some(2), _ => None } }
 pub(crate) fn is_ghost_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool { family_index(skill_id(dispatch)).is_some() }
@@ -208,7 +210,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms.wrapping_add(missile_step_ms.wrapping_mul(current_position as u32))) { return terminal(QueuedSkillExecutionState::Pending) }
     let Some((x, y, _)) = cell else { send_visual(game, player_id, requested_skill, level, 3, None); if let Some(state) = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_ghost_cut(game, player_id, player_ai, requested_skill, runtime); return terminal(QueuedSkillExecutionState::Completed) };
     let live_block = game.find_region(region_id).map_or(2, |owner| owner.base().skill_cell_block(x, y));
-    if live_block == 3 { let mut attacked = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()).map(|state| std::mem::take(&mut state.attacked)).unwrap_or_default(); attack_cell(game, player_id, region_id, requested_skill, level, hit_modifier, target_damage_factor, x, y, &mut attacked, runtime); if let Some(state) = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()) { state.attacked = attacked; state.current_position = state.current_position.wrapping_add(1); } }
+    if live_block == 3 { let mut attacked = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()).map(|state| std::mem::take(&mut state.attacked)).unwrap_or_default(); game.with_published_player_ai(player_id, player_ai, |game| attack_cell(game, player_id, region_id, requested_skill, level, hit_modifier, target_damage_factor, x, y, &mut attacked, runtime)); if let Some(state) = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()) { state.attacked = attacked; state.current_position = state.current_position.wrapping_add(1); } }
     else if live_block == 2 { send_visual(game, player_id, requested_skill, level, 3, None); if let Some(state) = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()) { state.current_position = state.path.len().wrapping_add(1); } }
     else if let Some(state) = game.player_skill_state_mut::<GhostCutExecutionState>(player_id, dispatch.skill_id()) { state.current_position = state.current_position.wrapping_add(1); }
     terminal(QueuedSkillExecutionState::Pending)

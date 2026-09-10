@@ -27,13 +27,23 @@
 //! При исчезнувшем object-target исходные нулевые point-поля участвуют в
 //! дальности/повороте; отсутствующая форма не подменяется самим источником.
 //! Отказный End(0) очищает active ID без износа оружия и нового cooldown.
+//! Хвост урона подтверждён парой gameserver.exe + GameServer.pdb,
+//! исходный owner appserver/moveshape.cpp: HP и RP игрока меняются до
+//! StopAllSkills, OnBeenMurdered и WhenBeenKilled (0x004D38E4..0x004D3915).
+//! BF60B предшествует записи снимка убийцы и action 6; широкий OnDied
+//! запускается отдельно из passive FIFO, результат навыка его не переносит.
+//! CMonster::OnBeenHurted (+0x180, 0x004D3BE3) следует только за nonlethal
+//! BF60A: общий owner выполняет Nation notice, затем регистрацию атакующего.
+//! Lethal-ветвь его минует; обычная реакция AI сохраняет damage != 0 и
+//! full_miss == 0. На время межвладельческих callback настоящий AI источника
+//! возвращается в CPlayer через существующую границу публикации CGame.
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
     BUILD_OBJECT_TYPE, CITY_GATE_OBJECT_TYPE,
     BaseAttackExecutionState, CGame, CGuid, CMessage, CMonster, CPlayer, CPlayerAI,
     GameMainLoopRuntime, MONSTER_TYPE,
-    MonsterKillingAttack, PLAYER_TYPE, PlayerKillingBlow, PlayerSkillDispatch,
+    KillingAttackIdentity, PLAYER_TYPE, PlayerSkillDispatch,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     SKILL_USAGE_USER_HIT_MODIFIER, ShapeIdentity, SkillStage,
@@ -69,7 +79,6 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     let rejected = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Rejected,
         first_contact: false,
-        killing_blow: None,
     };
     let Some(player) = game.find_player(player_id) else {
         return rejected();
@@ -94,7 +103,6 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         return QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Begun,
             first_contact: false,
-            killing_blow: None,
         };
     }
     let requested_target = match dispatch {
@@ -190,7 +198,6 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         return QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Pending,
             first_contact: false,
-            killing_blow: None,
         };
     }
     if let Some((target_identity, _)) = target
@@ -229,7 +236,6 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     fire.add_long(target_y);
     let _ = game.send_player_shape_around(player_id, None, &fire);
 
-    let mut killing_blow = None;
     let mut first_contact = false;
     if target_type == PLAYER_TYPE && game.player_base_attackable(player_id, target_id) {
         let (
@@ -378,10 +384,10 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             if let Some(target) = game.find_player_mut(target_id) {
                 target.set_health(current_health);
                 target.set_mana(target_mana - mana_damage);
-                if current_health == 0 || attack.full_miss == 0 {
+                if current_health != 0 && attack.full_miss == 0 {
                     target
                         .movement_shape_mut()
-                        .set_action(if current_health == 0 { 6 } else { 5 });
+                        .set_action(5);
                 }
             }
             if damage != 0 {
@@ -409,20 +415,25 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                 let _ = finish_player_blind_states_on_defense(game, target_id, now_ms);
             }
             if current_health == 0 {
-                let mut died = CMessage::new(0x000b_f60b);
-                died.add_long(PLAYER_TYPE);
-                died.add_long(player_id);
-                died.add_long(PLAYER_TYPE);
-                died.add_long(target_id);
-                died.add_ulong(damage);
-                died.base_mut().add_char(1);
-                CGame::append_base_attack_tail(&mut died, &attack);
-                let _ = game.send_player_shape_around(target_id, None, &died);
-                killing_blow = Some(PlayerKillingBlow {
-                    victim_id: target_id,
-                    attacker_type: PLAYER_TYPE,
-                    attacker_id: player_id,
-                    attacker_faction_id: attacker_faction,
+                let victim = ShapeIdentity { object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
+                let attacker = KillingAttackIdentity::from(&attack);
+                let region_id = game.find_player(target_id).map(|player| player.shape().get_region_id());
+                game.with_published_player_ai(player_id, player_ai, |game| {
+                    if let Some(region_id) = region_id {
+                        game.begin_move_shape_death(region_id, victim, attacker, runtime);
+                    }
+                    let mut died = CMessage::new(0x000b_f60b);
+                    died.add_long(PLAYER_TYPE);
+                    died.add_long(player_id);
+                    died.add_long(PLAYER_TYPE);
+                    died.add_long(target_id);
+                    died.add_ulong(damage);
+                    died.base_mut().add_char(1);
+                    CGame::append_base_attack_tail(&mut died, &attack);
+                    let _ = game.send_player_shape_around(target_id, None, &died);
+                    if let Some(region_id) = region_id {
+                        game.record_move_shape_death(region_id, victim, attacker);
+                    }
                 });
             } else if attack.full_miss != 0 {
                 let mut missed = CMessage::new(0x000b_f612);
@@ -686,14 +697,12 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                 );
             }
             monster.set_hit_points(current_health);
-            if damage != 0 && (attack.full_miss == 0 || current_health == 0) {
+            if damage != 0 && attack.full_miss == 0 && current_health != 0 {
                 monster
                     .move_shape_mut()
                     .shape_mut()
-                    .set_action(if current_health == 0 { 6 } else { 5 });
-                if current_health == 0 {
-                    monster.when_been_killed(now_ms);
-                } else if monster_property.ai == 1 {
+                    .set_action(5);
+                if monster_property.ai == 1 {
                     monster.when_passive_gladiator_hurted_by(
                         ShapeIdentity {
                             object_type: PLAYER_TYPE,
@@ -731,16 +740,6 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                         now_ms,
                     );
                 }
-            }
-            if current_health == 0 {
-                monster.set_killed_by(MonsterKillingAttack {
-                    attacker_type: PLAYER_TYPE,
-                    attacker_id: player_id,
-                    skill_id: attack.skill_id,
-                    skill_level: attack.skill_level,
-                    critical: attack.critical,
-                    blast_attack: attack.blast_attack,
-                });
             }
         }
         if attack.full_miss == 0
@@ -853,15 +852,21 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             let _ = game.send_shape_position_around(region_id, target_x, target_y, &missed);
         } else if damage != 0 {
             if current_health == 0 {
-                let mut died = CMessage::new(0x000b_f60b);
-                died.add_long(PLAYER_TYPE);
-                died.add_long(player_id);
-                died.add_long(MONSTER_TYPE);
-                died.add_long(target_id);
-                died.add_ulong(damage);
-                died.base_mut().add_char(1);
-                CGame::append_base_attack_tail(&mut died, &attack);
-                let _ = game.send_shape_position_around(region_id, target_x, target_y, &died);
+                let victim = ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
+                let attacker = KillingAttackIdentity::from(&attack);
+                game.with_published_player_ai(player_id, player_ai, |game| {
+                    game.begin_move_shape_death(region_id, victim, attacker, runtime);
+                    let mut died = CMessage::new(0x000b_f60b);
+                    died.add_long(PLAYER_TYPE);
+                    died.add_long(player_id);
+                    died.add_long(MONSTER_TYPE);
+                    died.add_long(target_id);
+                    died.add_ulong(damage);
+                    died.base_mut().add_char(1);
+                    CGame::append_base_attack_tail(&mut died, &attack);
+                    let _ = game.send_move_shape_around(region_id, victim, &died);
+                    game.record_move_shape_death(region_id, victim, attacker);
+                });
             } else {
                 let mut hurt = CMessage::new(0x000b_f60a);
                 hurt.add_long(PLAYER_TYPE);
@@ -874,18 +879,9 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                 hurt.add_ulong(current_health);
                 CGame::append_base_attack_tail(&mut hurt, &attack);
                 let _ = game.send_shape_position_around(region_id, target_x, target_y, &hurt);
-                let _ =
-                    game.monster_on_been_hurted(region_id, target_id, PLAYER_TYPE, player_id);
-                if let Some(mut owner) = game.take_region_owner(region_id) {
-                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
-                        monster.register_attacking_player(
-                            player_id,
-                            now_ms,
-                            game.globe_setup.attack_monster_protection_ms(),
-                        );
-                    }
-                    game.restore_region_owner(owner);
-                }
+                let _ = game.with_published_player_ai(player_id, player_ai, |game| {
+                    game.monster_on_been_hurted(region_id, target_id, PLAYER_TYPE, player_id, runtime)
+                });
             }
         }
         game.increase_owned_player_rp(player_id, true, 0);
@@ -936,7 +932,6 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,
         first_contact,
-        killing_blow,
     }
 }
 

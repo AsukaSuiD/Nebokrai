@@ -1,4 +1,8 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! Сведения об убийце принадлежат единственной базе CMoveShape: монстр
+//! лишь делегирует чтение потребляемой OnDied-проекции type/ID/guild.
+//! Native SetKilledMeAttackInfo (0x004CCE50) вызывается после пакета смерти 0xBF60B;
+//! поля навыка и результата удара не выдаются за его сохранённый layout.
 //! CPet vtable 0x00652D0C: OnFighting (+0x1C) указывает на CBaseAI
 //! 0x004C9320. Завершение его атаки ставит ChangeSkill независимо от
 //! сохранённого первичного AI. У стационарных лучников SearchEnemy следует
@@ -35,7 +39,14 @@
 //! навыка сохраняют исполнения остальных. Begin не получает дополнительного
 //! сброса ресурсов; жизнь призванного существа остаётся у CMonster.
 //! StopAllSkills перед приручением обходит все зарегистрированные экземпляры,
-//! не только текущий cast. Общая граница смерти ещё требует публикации owner-а.
+//! не только текущий cast. Общая синхронная граница смерти публикует настоящий
+//! регион, а последующий OnDied допускается пассивной очередью выбранного AI.
+//! OnBeenHurted (0x004E6EF0, appserver/monster.cpp:920) вызывается только
+//! после нелетального BF60A. CGame сначала выполняет Nation-уведомление для
+//! прямого игрока, затем разрешает player ID/хозяина приручённого монстра/0.
+//! Защита первого удара читает часы для проверки только при ненулевом первом
+//! ID, а для принятой записи читает их заново; чужой защищённый удар не
+//! обновляет таймер. Цели-pet/carriage не исключаются этим callback.
 //! Успех приручения назначает tamed/master после StopAll и снимает цель только
 //! auxiliary CPet: прежний primary AI, его команды и hate не очищаются.
 //! Повторного IsTamable после увеличения счётчика попыток нет; AddPet и
@@ -276,7 +287,7 @@ use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
 use super::legacycodec::LegacyWriter;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
-use super::moveshape::{CMoveShape, MoveShapePositionFacts};
+use super::moveshape::{CMoveShape, KillingAttackIdentity, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::energybolt::PathProjectileProgress;
@@ -408,7 +419,6 @@ pub(crate) struct CMonster {
     primary_carriage_lifecycle: CarriageLifecycleState,
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
-    killed_by: Option<MonsterKillingAttack>,
     summoned_creature: Option<SummonedCreatureLifecycle>,
     ai_schedule: MonsterAiScheduleState,
     base_attack_owned_tick: bool,
@@ -531,16 +541,6 @@ pub(crate) struct PetAttackProperties {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterKillingAttack {
-    pub(crate) attacker_type: i32,
-    pub(crate) attacker_id: i32,
-    pub(crate) skill_id: u32,
-    pub(crate) skill_level: u8,
-    pub(crate) critical: bool,
-    pub(crate) blast_attack: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PetExperienceUpdate {
     pub(crate) level: u32,
     pub(crate) experience: u32,
@@ -589,7 +589,6 @@ impl CMonster {
             primary_carriage_lifecycle: CarriageLifecycleState::default(),
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
-            killed_by: None,
             summoned_creature: None,
             ai_schedule: MonsterAiScheduleState::default(),
             base_attack_owned_tick: false,
@@ -1550,20 +1549,20 @@ impl CMonster {
     pub(crate) fn register_attacking_player(
         &mut self,
         attacker_player_id: i32,
-        now_ms: u32,
         protection_ms: u32,
+        mut clock: impl FnMut() -> u32,
     ) -> bool {
         if self.first_attack_player_id != 0
-            && now_ms.wrapping_sub(self.last_attack_timer_ms) <= protection_ms
+            && clock().wrapping_sub(self.last_attack_timer_ms) <= protection_ms
         {
             if self.first_attack_player_id != attacker_player_id {
                 return false;
             }
-            self.last_attack_timer_ms = now_ms;
+            self.last_attack_timer_ms = clock();
             return true;
         }
         self.first_attack_player_id = attacker_player_id;
-        self.last_attack_timer_ms = now_ms;
+        self.last_attack_timer_ms = clock();
         true
     }
 
@@ -1575,12 +1574,8 @@ impl CMonster {
         self.refresh_index
     }
 
-    pub(crate) fn set_killed_by(&mut self, attack: MonsterKillingAttack) {
-        self.killed_by = Some(attack);
-    }
-
-    pub(crate) const fn killed_by(&self) -> Option<MonsterKillingAttack> {
-        self.killed_by
+    pub(crate) const fn killed_by(&self) -> Option<KillingAttackIdentity> {
+        self.move_shape.killed_by()
     }
 
     pub(crate) fn when_been_hurted_by(
@@ -2720,20 +2715,6 @@ impl CMonster {
 // RVA: 0x000E6DD0
 // ADDRESS: 004e6dd0
 // PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::OnBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:920
-// RVA: 0x000E6EF0
-// ADDRESS: 004e6ef0
-// PROTOTYPE: void __thiscall OnBeenHurted(long param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

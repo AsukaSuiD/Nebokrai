@@ -1,4 +1,6 @@
 //! Владелец одноцелевой молнии `CYunShengLightning` (`0x19E`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Monster-End читает reuse после очистки полёта (`CSkill::End`, 0x004D84C0);
 //! время нанесения удара не подменяет эти часы завершения.
 //!
@@ -27,13 +29,19 @@
 //! не наносит удар и не публикует эффект. Отсутствие monster-блокировки
 //! движения в Begin не отменяет подтверждённый декремент в End.
 
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
 use super::fightdefense::truncate_original;
 use super::flash::master_info;
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -162,15 +170,15 @@ fn send_fire(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт полёта")]
 pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((
         source,
         property,
@@ -361,11 +369,12 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
             target.player_properties, target.monster_properties, attack,
         );
         apply_owned_monster_attack_hit(
-            game, region, runtime, now_ms, monster_id, master, target_identity,
+            game, owner, runtime, now_ms, monster_id, master, target_identity,
             &target.shape, target.health, target.mana, target.master,
-            target.monster_property, target.tamed, target.carriage, attack, deaths,
+            target.monster_property, target.tamed, target.carriage, attack,
         );
     }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(YUNSHENG_LIGHTNING_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(YUNSHENG_LIGHTNING_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
@@ -374,7 +383,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
     true
 }
 
-fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 pub(crate) const fn is_player_yunsheng_lightning_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Point { skill_id: YUNSHENG_LIGHTNING_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: YUNSHENG_LIGHTNING_SKILL_ID, .. }) }
 fn player_destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch, fallback: Option<(i32, i32)>) -> Option<(i32, i32)> { match dispatch { PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)), PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)).or(fallback), PlayerSkillDispatch::SelfTarget { .. } => None } }
 fn player_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
@@ -387,7 +396,7 @@ pub(crate) fn cancel_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(gam
 
 fn calculate_player_attack(game: &mut CGame, player_id: i32, level: i32, properties: &CSkillBaseProperties) -> Option<(MasterInfo, AttackInformation)> { let (combat, master) = game.find_player(player_id).map(|player| (player.combat_properties(), master_info(player)))?; let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32; let span = (properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32).wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32; let random = game.skill_random_below(span); let modifier = truncate_original(f64::from(properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER)) * f64::from(0.01_f32) * f64::from(combat.element_modify)); let element = (combat.add_element_attack as i32).wrapping_add(minimum).wrapping_add(random).wrapping_add(modifier).max(0); Some((master, AttackInformation { skill_id: YUNSHENG_LIGHTNING_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32, damage_factor: 1.0, damage_modifier: properties.query_property(SKILL_USAGE_TARGET_FINAL_DAMAGE_MODIFIER) as i32, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: element, mp_damage: 0 }] })) }
 
-pub(crate) fn execute_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_player_yunsheng_lightning_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(YUNSHENG_LIGHTNING_SKILL_ID, game.skill_factory()), player.mana()))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(YUNSHENG_LIGHTNING_SKILL_ID, level).cloned() else { if game.player_skill_state::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID).is_some() { restore_player(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
@@ -397,6 +406,6 @@ pub(crate) fn execute_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(ga
     if game.player_skill_state::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID).is_some_and(|state| !state.condition_checked) { let current = game.find_player(player_id).map_or(0, CPlayer::mana); if (current.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_start(game, player_id, level); if let Some(state) = game.player_skill_state_mut::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); } }
     let started = game.player_skill_state::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID).map(|state| state.kernel().started_at_ms()).unwrap_or_default(); if game.player_skill_state::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID).is_some_and(|state| !state.kernel().is_prepared()) { if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } let visual_target = player_target(dispatch).filter(|target| game.base_magic_target_view(region_id, *target).is_some()); send_player_fire(game, player_id, level, visual_target, destination); if let Some(state) = game.player_skill_state_mut::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID) { state.destination = destination; state.kernel_mut().mark_prepared(); let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); } }
     if !time_reached(now, started, delay.wrapping_add(flight)) { return player_terminal(QueuedSkillExecutionState::Pending) }
-    if let Some(target) = player_target(dispatch) && game.base_magic_target_view(region_id, target).is_some() && game.find_player(player_id).map(master_info).is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)) { if let Some((master, attack)) = calculate_player_attack(game, player_id, level, &properties) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } } }
+    if let Some(target) = player_target(dispatch) && game.base_magic_target_view(region_id, target).is_some() && game.find_player(player_id).map(master_info).is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)) { if let Some((master, attack)) = calculate_player_attack(game, player_id, level, &properties) { match target.object_type { PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)), MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)), _ => {} } } }
     if let Some(state) = game.player_skill_state_mut::<PlayerYunShengLightningExecutionState>(player_id, YUNSHENG_LIGHTNING_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }

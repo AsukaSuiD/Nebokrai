@@ -33,7 +33,7 @@ pub(crate) const fn is_energy_holding_dispatch(dispatch: PlayerSkillDispatch) ->
     matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: ENERGY_HOLDING_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: ENERGY_HOLDING_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: ENERGY_HOLDING_SKILL_ID, .. })
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
     player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2)

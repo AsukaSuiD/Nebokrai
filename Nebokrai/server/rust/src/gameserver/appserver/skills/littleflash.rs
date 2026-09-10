@@ -1,4 +1,6 @@
 //! Семейство малых рывков `CLittleFlash` (`0x71`) и `CLittleFlash2` (`0x7f`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -132,7 +134,7 @@ impl LittleFlashExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_little_flash_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -446,7 +448,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     if game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).is_some_and(|state| !state.attacked) {
         let path = game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).map(|state| state.path.clone()).unwrap_or_default();
         let mut attacked = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default();
-        attack_path(
+        game.with_published_player_ai(player_id, ai, |game| attack_path(
             game,
             player_id,
             region_id,
@@ -458,7 +460,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
             &path,
             &mut attacked,
             runtime,
-        );
+        ));
         if let Some(state) = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()) {
             state.attacked_creatures = attacked;
             state.attacked = true;

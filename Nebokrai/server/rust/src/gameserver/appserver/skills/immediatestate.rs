@@ -209,7 +209,6 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     let terminal = |state| QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     };
     let skill_id = match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. }

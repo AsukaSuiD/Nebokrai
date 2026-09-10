@@ -129,12 +129,10 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
     let rejected = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Rejected,
         first_contact: false,
-        killing_blow: None,
     };
     let pending = || QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Pending,
         first_contact: false,
-        killing_blow: None,
     };
     let Some(player) = game.find_player(player_id) else {
         return rejected();
@@ -406,6 +404,5 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             QueuedSkillExecutionState::RejectedAfterUse
         },
         first_contact: false,
-        killing_blow: None,
     }
 }

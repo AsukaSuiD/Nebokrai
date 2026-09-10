@@ -1,4 +1,6 @@
 //! Печать `CSeal` (`0x138`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/seal.cpp`. Достигнутый объектный путь сохраняет две
@@ -80,7 +82,7 @@ impl SealExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn reject_begin(game: &CGame, player_id: i32) -> QueuedSkillExecutionOutcome {
@@ -263,7 +265,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
@@ -423,7 +425,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
     let has_cure = game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(target.id)).is_some_and(|monster| monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID));
     if !has_cure {
         if let Some((master, attack)) = calculate_attack(game, player_id, level, minimum, maximum, element_modifier, hit_modifier, damage_modifier) {
-            game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime);
+            game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime));
             let current_source_level = game.find_player(player_id).map_or(0, |player| i32::from(player.level()));
             let multiplier = current_source_level
                 .wrapping_sub(target_level)

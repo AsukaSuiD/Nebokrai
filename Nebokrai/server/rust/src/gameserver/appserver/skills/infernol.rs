@@ -1,4 +1,6 @@
 //! Огненный круг `CInfernol` (`0x135`).
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -58,7 +60,7 @@ const SCOPE: [bool; 49] = [
 ];
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn send_failure(game: &CGame, player_id: i32, code: u8) {
@@ -373,12 +375,12 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
             continue;
         };
         match target.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(
+            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(
                 master, target.id, region_id, attack, runtime,
-            ),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(
+            )),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(
                 master, target.id, region_id, attack, runtime,
-            ),
+            )),
             _ => {}
         }
         attacked.push(target);

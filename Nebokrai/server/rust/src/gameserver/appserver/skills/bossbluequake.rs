@@ -1,4 +1,6 @@
 //! Землетрясение синего босса `CBossBlueQuake` (`0x1f8`) для игрока и монстра.
+//! На время применения удара настоящий AI источника опубликован в CPlayer;
+//! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -29,6 +31,9 @@
 //! End (0x00546090) возвращает движение до AfterUseSkill (0x0053CF30),
 //! затем освобождает текущий навык. Callback CPlayer +0x158 пуст:
 //! дополнительного пересчёта свойств при завершении нет.
+//! Monster-hit получает полное временное владение ServerRegionOwner для общего
+//! death/End callback. После такого вызова регион разрешается заново;
+//! исчезнувший owner прекращает проход без подмены базовым регионом.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
@@ -39,7 +44,7 @@ use super::bossbluequakestate::BossBlueQuakeState;
 use super::fightdefense::truncate_original;
 use super::flash::cell_views;
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -59,7 +64,7 @@ use crate::gameserver::appserver::skills::kernel::{
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -121,7 +126,6 @@ fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutc
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     }
 }
 
@@ -545,12 +549,12 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             continue;
         };
         match target.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(
+            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(
                 master, target.id, region_id, attack, runtime,
-            ),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(
+            )),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(
                 master, target.id, region_id, attack, runtime,
-            ),
+            )),
             _ => continue,
         }
         if game.periodic_state_target_dead(region_id, target)
@@ -689,7 +693,7 @@ pub(crate) fn replace_quake_state(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет формулу, состояние и ForceMove одной цели")]
 fn attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
     now_ms: u32,
     monster_id: i32,
@@ -701,8 +705,8 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     identity: ShapeIdentity,
     source_x: i32,
     source_y: i32,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else { return };
     if target.dead || target.god || target.city_dead || !owned_monster_attackable(
         game, region.id, attacker_property, tamed, master, identity, &target,
@@ -749,10 +753,11 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     };
     let attack = defend_owned_monster_attack(game, identity, target.mana, target.war_soul_mana,
         target.player_properties, target.monster_properties, attack);
-    apply_owned_monster_attack_hit(game, region, runtime, now_ms, monster_id, master, identity,
+    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, master, identity,
         &target.shape, target.health, target.mana, target.master, target.monster_property,
-        target.tamed, target.carriage, attack, deaths);
+        target.tamed, target.carriage, attack);
 
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
     let Some(live_target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return;
     };
@@ -807,15 +812,15 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и последствия всех целей клетки")]
 pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((mut source, property, master, tamed, cast, last_used_ms)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((
         monster.move_shape().shape().clone(),
         game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
@@ -868,9 +873,11 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     let source_x = source.get_tile_x().unwrap_or_default();
     let source_y = source.get_tile_y().unwrap_or_default();
     for identity in monster_attack_cell_candidates(game, region, monster_id, face.x, face.y) {
-        attack_target(game, region, runtime, now_ms, monster_id, level, properties, &property,
-            master, tamed, identity, source_x, source_y, deaths);
+        attack_target(game, owner, runtime, now_ms, monster_id, level, properties, &property,
+            master, tamed, identity, source_x, source_y);
+        if owner.is_none() { return true; }
     }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(BOSS_BLUE_QUAKE_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(BOSS_BLUE_QUAKE_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());

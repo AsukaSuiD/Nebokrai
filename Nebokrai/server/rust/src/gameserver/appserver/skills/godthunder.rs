@@ -45,7 +45,7 @@ const ELEMENT_MODIFIER: u32 = 20_015;
 const LIFETIME: u32 = 30_001;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn position(game: &CGame, region: i32, player: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32, Option<ShapeIdentity>)> {

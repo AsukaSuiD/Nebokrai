@@ -77,7 +77,7 @@ impl SpriteBurnExecutionState {
 }
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_sprite_burn_dispatch(dispatch: PlayerSkillDispatch) -> bool {

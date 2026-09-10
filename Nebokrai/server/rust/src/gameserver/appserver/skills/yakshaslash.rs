@@ -1,4 +1,6 @@
 //! Летающий рубящий удар якши `CYakshaSlash` (`0x196`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/yakshaslash.cpp`. Сохранены начальная проверка реального
@@ -23,13 +25,16 @@
 //! движения перед CAttackSkill::End. Monster-путь использует общую очистку
 //! CMonster при успехе, отмене и Stiffen; отдельное снятие запрета перед
 //! выпуском сохраняется, а End не откатывает удар и не отправляет эффект.
+//! Monster-hit получает полное временное владение ServerRegionOwner для общего
+//! death/End callback. После такого вызова регион разрешается заново;
+//! исчезнувший owner прекращает проход без подмены базовым регионом.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::monsterattack::{MonsterAttackDeath, finish_owned_monster_attack_impact, owned_monster_attackable, resolve_owned_monster_attack_target};
+use super::monsterattack::{finish_owned_monster_attack_impact, owned_monster_attackable, resolve_owned_monster_attack_target};
 use super::monsterprojectile::{MonsterProjectileDispatch, MonsterProjectileProgress, execute_owned_monster_projectile_target};
 use super::poisonmoth::{master_info, MONSTER_TYPE, PLAYER_TYPE};
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
@@ -41,7 +46,7 @@ use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
@@ -69,7 +74,7 @@ impl YakshaSlashExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_yaksha_slash_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -144,7 +149,8 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 /// проверки непроходимого полёта, блокировка движения до delay, время полёта
 /// по числу клеток и общий monster defence/death tail.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, deaths: &mut Vec<MonsterAttackDeath>) -> bool {
+pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_progress::<MonsterProjectileProgress>(YAKSHA_SLASH_SKILL_ID, game.skill_factory()).copied()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -211,7 +217,8 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
     }
     if !time_reached(now_ms, cast.started_at_ms(), delay.wrapping_add(progress.missile_flying_time_ms())) { return true; }
     let dispatch = MonsterProjectileDispatch::object_target(monster_id, YAKSHA_SLASH_SKILL_ID, target_x, target_y, skill_level, properties.clone(), property.clone(), master, tamed, now_ms);
-    let _ = execute_owned_monster_projectile_target(game, region, &dispatch, target_identity, runtime, deaths);
+    let _ = execute_owned_monster_projectile_target(game, owner, &dispatch, target_identity, runtime);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     finish_owned_monster_attack_impact(region, dispatch.monster_id, dispatch.skill_id, game.skill_factory(), runtime);
     true
 }
@@ -228,7 +235,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, h
     Some((master, attack))
 }
 
-pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_yaksha_slash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
     let Some((region_id, source_view, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape_view()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID, game.skill_factory())))) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -267,7 +274,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
     }
     let flying_time = game.player_skill_state::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID).copied().map_or(0, |state| state.missile_flying_time_ms);
     if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(flying_time)) { return terminal(QueuedSkillExecutionState::Pending) }
-    if let Some((master, attack)) = calculate_attack(game, player_id, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } }
+    if let Some((master, attack)) = calculate_attack(game, player_id, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)), MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)), _ => {} } }
     if let Some(state) = game.player_skill_state_mut::<YakshaSlashExecutionState>(player_id, YAKSHA_SLASH_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_yaksha_slash(game, player_id, runtime); terminal(QueuedSkillExecutionState::Completed)
 }

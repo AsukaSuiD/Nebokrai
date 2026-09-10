@@ -1,4 +1,6 @@
 //! Фронтальный удар Мо-шоу `CMosou` (`0x65`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
 //! перемещение и атака остаются у AI после постановки Attack в том же Run;
 //! раннее время Begin сохраняется общим kernel.
@@ -47,7 +49,7 @@ const TARGET_BACK_STEP: u32 = 1_001;
 const TARGET_MOVE_SPEED: u32 = 2_001;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn finish_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
@@ -210,7 +212,7 @@ pub(crate) const fn is_mosou_dispatch(dispatch: PlayerSkillDispatch) -> bool {
 
 pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI, runtime: &mut Runtime,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_mosou_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_level, source_x, source_y, initial_mana)) = game.find_player(player_id).and_then(|player| Some((
@@ -290,8 +292,8 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         if !game.owned_player_skill_target_attackable(master, target, region_id) { continue }
         let Some((master, attack)) = calculate_attack(game, player_id, level, hit_modifier) else { continue };
         match target.object_type {
-            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
             _ => continue,
         }
         let Some((target_level, attack_avoid)) = target_level_avoid(game, region_id, target) else { continue };

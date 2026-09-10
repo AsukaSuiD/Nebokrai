@@ -30,6 +30,12 @@
 //! смены пространственной принадлежности, двоичные форматы `0xBF603/604/605`,
 //! счётчики запрета движения и боя, а также подтверждённая странность
 //! `ForceMove`, где верхняя граница Y записывает `width - 1`.
+//! `SetKilledMeAttackInfo` (0x004CCE50) сохраняет данные убийцы в общей
+//! базе после пакета смерти 0xBF60B. Единственный KillingAttackIdentity содержит
+//! только потребляемую OnDied-проекцию: тип, ID и guild ID атакующего.
+//! Это не восстановление полного native-layout: остальные скопированные
+//! модификаторы и флаги, пока не имеющие перенесённых потребителей, остаются
+//! в RAW ниже. Ни конкретная форма, ни отложенный удар не дублируют эту запись.
 //!
 //! Известные состояния смены тела, расширенные состояния, бессмертие,
 //! сценарные состояния и езда принадлежат одному `CanonicalStateStorage`.
@@ -878,6 +884,23 @@ pub(crate) struct MoveShapePet {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KillingAttackIdentity {
+    pub(crate) attacker_type: i32,
+    pub(crate) attacker_id: i32,
+    pub(crate) attacker_faction_id: i32,
+}
+
+impl From<&super::states::attackpower::AttackInformation> for KillingAttackIdentity {
+    fn from(attack: &super::states::attackpower::AttackInformation) -> Self {
+        Self {
+            attacker_type: attack.attacker_type,
+            attacker_id: attack.attacker_id,
+            attacker_faction_id: attack.attacker_faction_id,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MoveShapeCommandBlock {
     Coordinate(ShapeCoordinateBlock),
     RegionCell(RegionCellAccessBlock),
@@ -907,6 +930,7 @@ pub(crate) struct CMoveShape {
     current_pets_mode: i32,
     stiffen_started_ms: u32,
     stiffen_count: i32,
+    killed_by: Option<KillingAttackIdentity>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1107,11 +1131,20 @@ impl Default for CMoveShape {
             current_pets_mode: 1,
             stiffen_started_ms: 0,
             stiffen_count: 0,
+            killed_by: None,
         }
     }
 }
 
 impl CMoveShape {
+    pub(crate) fn set_killed_by(&mut self, attack: KillingAttackIdentity) {
+        self.killed_by = Some(attack);
+    }
+
+    pub(crate) const fn killed_by(&self) -> Option<KillingAttackIdentity> {
+        self.killed_by
+    }
+
     /// Exact `CMoveShape::Stiffen` (`RVA 0x000CD2F0`): окно и limit проверяются
     /// до RNG, просроченное окно делает второй замер часов, а вероятность
     /// уменьшается на `GetReAnk` перед signed-сравнением с `random(100)`.

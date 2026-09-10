@@ -1,4 +1,6 @@
 //! Механический топот `CMachineryStomp` (`0x1a7`) для объектного пути игрока и монстра.
+//! На время участка нанесения урона настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
 //! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
 //! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
@@ -47,6 +49,12 @@
 //! (0x00532425/0x00532836 и 0x0052FF55/0x00530366), не отменяя AI-цель
 //! и Move. До Begin ранние отказы общего schedule ещё требуют согласования.
 
+//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
+//! Заимствование базы не переживает эту границу; продолжение заново получает
+//! оставшегося владельца, не создавая замену исчезнувшему региону.
+
+use crate::gameserver::gameserver::game::ServerRegionOwner;
+
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -56,7 +64,7 @@ use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
 use super::fightdefense::truncate_original;
 use super::monsterattack::{
-    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -93,7 +101,7 @@ const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 pub(crate) const MACHINERY_STOMP_SKILL_ID: u32 = 0x1a7;
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_machinery_stomp_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -263,7 +271,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     player_id: i32,
     dispatch: PlayerSkillDispatch,
     skill_id: u32,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     match dispatch {
@@ -418,21 +426,21 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     }
     for offset_x in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
         for offset_y in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
-            attack_player_cell(
+            game.with_published_player_ai(player_id, player_ai, |game| attack_player_cell(
                 game, player_id, region_id, skill_id,
                 source_view.tile_x.wrapping_add(offset_x),
                 source_view.tile_y.wrapping_add(offset_y),
                 level, hit_modifier, damage_factor, runtime,
-            );
+            ));
         }
     }
     for (tile_x, tile_y) in outside_cells(
         source_view.tile_x, source_view.tile_y, target_view.tile_x, target_view.tile_y,
     ) {
-        attack_player_cell(
+        game.with_published_player_ai(player_id, player_ai, |game| attack_player_cell(
             game, player_id, region_id, skill_id, tile_x, tile_y,
             level, hit_modifier, damage_factor, runtime,
-        );
+        ));
     }
     if let Some(kernel) = game.player_skill_execution_mut(player_id, skill_id) {
         let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
@@ -832,12 +840,12 @@ pub(crate) fn wide_arc_attack_cell_candidates(
 
 pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     dispatch: &WideArcAttackDispatch,
     identity: ShapeIdentity,
     runtime: &mut Runtime,
-    deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return false;
     };
@@ -868,7 +876,7 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
     );
     apply_owned_monster_attack_hit(
         game,
-        region,
+        owner,
         runtime,
         dispatch.now_ms,
         dispatch.monster_id,
@@ -882,7 +890,6 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
         target.tamed,
         target.carriage,
         attack,
-        deaths,
     );
     true
 }

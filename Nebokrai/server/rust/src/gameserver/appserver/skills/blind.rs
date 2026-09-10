@@ -40,7 +40,7 @@ const STATE_PERSIST_TIME: u32 = 10_002;
 const BLOCK_UNFLY: u8 = 2;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_blind_dispatch(dispatch: PlayerSkillDispatch) -> bool {

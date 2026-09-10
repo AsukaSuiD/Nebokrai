@@ -132,7 +132,6 @@ pub(crate) fn execute_player_self_shield_dispatch<Runtime: GameMainLoopRuntime>(
         _ => QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Rejected,
             first_contact: false,
-            killing_blow: None,
         },
     }
 }
@@ -176,7 +175,6 @@ where
     let terminal = |state| QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
-        killing_blow: None,
     };
     let skill_id = match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. }

@@ -1,4 +1,6 @@
 //! Зеркало душ `CSoulMirror` (`0x13C`).
+//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
+//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
 //! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
 //! расход ресурсов и эффекты AI выполняются после постановки Attack в том
 //! же Run; исходный отсчёт Begin сохраняется общим kernel.
@@ -48,7 +50,7 @@ const SUMMONED_LIFETIME: u32 = 30_001;
 const SUMMONED_CREATURE_ID: u32 = 30_003;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 const fn has_mana(mana: u32, loss: u32) -> bool {
@@ -264,7 +266,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_soul_mirror_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
@@ -371,8 +373,8 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
             }
             let Some((master, attack)) = calculate_attack(game, player_id, region_id, target, level, minimum, maximum, element_modifier, hit_modifier) else { continue };
             match target.object_type {
-                PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
-                MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
+                MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
                 _ => {}
             }
             attacked.push(target);

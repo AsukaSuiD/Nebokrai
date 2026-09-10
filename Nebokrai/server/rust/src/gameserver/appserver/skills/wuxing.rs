@@ -71,7 +71,7 @@ pub(crate) const fn is_wuxing_skill(skill_id: u32) -> bool {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn state_from_properties(

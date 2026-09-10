@@ -88,7 +88,7 @@ impl KnightCutExecutionState {
 struct Target { identity: ShapeIdentity, x: i32, y: i32, level: u8, dead: bool, cured: bool }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 pub(crate) const fn is_knight_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool {

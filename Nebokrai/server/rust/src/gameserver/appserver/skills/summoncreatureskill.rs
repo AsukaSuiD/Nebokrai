@@ -87,7 +87,7 @@ pub(crate) fn is_player_summon_creature_dispatch(dispatch: PlayerSkillDispatch) 
 }
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn player_destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch, source: (i32, i32)) -> Option<(i32, i32)> {

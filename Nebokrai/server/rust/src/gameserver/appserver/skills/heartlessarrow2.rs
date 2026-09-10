@@ -72,7 +72,7 @@ impl HeartlessArrowAreaExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn skill_id(dispatch: PlayerSkillDispatch) -> Option<u32> {

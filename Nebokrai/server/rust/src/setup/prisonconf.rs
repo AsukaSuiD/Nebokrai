@@ -12,6 +12,14 @@
 //! Game decoder сначала очищает map, затем публикует threshold и только полные
 //! records. Safe short-buffer сохраняет этот подтверждённый partial state;
 //! безразмерному C++ pointer с неизвестным UB Rust побочных эффектов не задаёт.
+//! `GetParam` использует изменяющий map::operator[]: в GameServer
+//! `prison_check` вызывает его по 0x004D243A, тело находится по 0x004D0B60.
+//! Отсутствующий signed-byte ключ создаёт PrisonParam с нулевыми region/x/y/d:
+//! 0x004D0BA1..0x004D0BC8 обнуляют три DWORD значения перед вставкой,
+//! а 0x00431C42..0x00431C5D копируют пару в узел без изменения этих полей.
+//! BTreeMap::entry().or_default() сохраняет вставку и последующее wire-наличие
+//! записи; существующая страна не перезаписывается. Неизвестный до загрузки
+//! PK-порог остаётся Option и не заменяется предполагаемым нулём.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -21,7 +29,7 @@ use std::path::Path;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::readwrite::read_to;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PrisonParam {
     pub(crate) region: i32,
     pub(crate) x: i16,
@@ -85,8 +93,12 @@ impl PrisonConf {
         Ok(applied)
     }
 
-    pub(crate) fn get_param(&self, country: i8) -> Option<&PrisonParam> {
-        self.prison_params.get(&country)
+    pub(crate) const fn pk_value_enter(&self) -> Option<i32> {
+        self.pk_value_enter
+    }
+
+    pub(crate) fn get_param(&mut self, country: i8) -> &PrisonParam {
+        self.prison_params.entry(country).or_default()
     }
 
     pub(crate) fn prison_params(&self) -> &BTreeMap<i8, PrisonParam> {

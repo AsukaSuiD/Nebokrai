@@ -63,6 +63,15 @@
 //! текущие исполнения и не терял изменения очередей. Это адаптация Rust
 //! заимствований, не новая игровая очередь. Вложенные callbacks внутри
 //! конкретных skill-owner-ов требуют отдельного проведения через эту границу.
+//! Смертельный OnBeenAttacked (0x004D38E4..0x004D3A21) синхронно выполняет
+//! StopAllSkills → OnBeenMurdered → WhenBeenKilled до BF60B. Затем общий
+//! CMoveShape хранит identity убийцы и action 6. Настоящий производный регион
+//! опубликован на callbacks; после них caller заново разрешает owner, без
+//! временного базового региона и отложенного списка смертей. OnDied игрока
+//! и монстра вызывается только достигнутым passive Died, после OnLoseTarget
+//! и единственного сохранённого Move. Полный ClearAllStates(true) и затем
+//! prison_check ещё требуют связывания общего state-owner; частичная Cure
+//! и поздний OnDied не заменяют их исходную синхронную границу.
 //! Player Run следует CBaseAI::Run (0x004C7D10): OnSchedule/Begin до фона,
 //! затем passive и active. Первый AI не вызывается из Begin; фон может
 //! завершить навык, а passive — прервать Attack до его первого исполнения.
@@ -804,11 +813,11 @@ use crate::gameserver::appserver::ai::pet::{
     execute_owned_pet_follow, pet_master_ref,
 };
 use crate::gameserver::appserver::monster::{
-    CMonster, MonsterExperienceFormula, MonsterKillingAttack,
+    CMonster, MonsterExperienceFormula,
 };
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE,
+    CMoveShape, KillingAttackIdentity, MoveShapeCommandBlock, MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE,
 };
 use crate::gameserver::appserver::build::{
     BUILD_OBJECT_TYPE, BuildClientPublication, CBuild,
@@ -1336,7 +1345,7 @@ use crate::gameserver::appserver::skills::knightcutstate::{
     send_knight_cut_state_visual,
 };
 use crate::gameserver::appserver::ai::baseai::{
-    PassiveDeathAction, PassiveStiffenAction,
+    AiShapeAction, PassiveDeathAction, PassiveStiffenAction,
 };
 use crate::gameserver::appserver::ai::monsterai::{
     process_owned_monster_stiffen, release_owned_monster_target,
@@ -1356,7 +1365,7 @@ use crate::gameserver::appserver::skills::machinerystomp::{
     wide_arc_attack_cell_candidates,
 };
 use crate::gameserver::appserver::skills::monsterattack::{
-    MonsterAttackDeath, finish_owned_monster_attack_impact, monster_attack_cell_candidates,
+    finish_owned_monster_attack_impact, monster_attack_cell_candidates,
 };
 use crate::gameserver::appserver::skills::monsterrangeattack::{
     execute_owned_monster_range_target,
@@ -2318,9 +2327,6 @@ pub(crate) struct QueuedSkillExecutionOutcome {
     pub(crate) state: QueuedSkillExecutionState,
     /// Runtime выставляет event только в tick фактического первого контакта.
     pub(crate) first_contact: bool,
-    /// Concrete damage owner сообщает killing blow только после фактического
-    /// перехода target-player HP в dead state.
-    pub(crate) killing_blow: Option<PlayerKillingBlow>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12947,6 +12953,24 @@ impl CGame {
         );
     }
 
+    /// Синхронная граница callback для извлечённого региона. Перемещается
+    /// настоящий derived owner, а не копия его base: GetUser/GetSufferer и
+    /// региональные callbacks видят те же city/nation/build-объекты.
+    /// None после вызова означает реальное исчезновение owner-а; caller
+    /// обязан заново получить и регион, и нужный экземпляр внутри него.
+    pub(crate) fn with_published_region<Output>(
+        &mut self,
+        owner: &mut Option<ServerRegionOwner>,
+        callback: impl FnOnce(&mut Self) -> Output,
+    ) -> Option<Output> {
+        let region = owner.take()?;
+        let region_id = region.region_id();
+        self.restore_region_owner(region);
+        let output = callback(self);
+        *owner = self.take_region_owner(region_id);
+        Some(output)
+    }
+
     /// Сценарная функция `9304 / kScriptFunctionNationWarSendPlayerId`:
     /// родительский регион берётся у текущего игрока сценария, а отсчёт
     /// запускается для переданного ID игрока только в локальном владельце
@@ -14376,17 +14400,38 @@ impl CGame {
             .send_to_player(self.net_server(), player_id)
     }
 
-    /// Reached `CMonster::OnBeenHurted` branch: только player damage (`400`)
-    /// вызывает Nation first-hit owner.
-    pub(crate) fn monster_on_been_hurted(
+    /// CMonster::OnBeenHurted (0x004E6EF0): после нелетального BF60A прямой
+    /// player-attacker сначала уведомляет Nation. Затем защита первого удара
+    /// получает player ID, хозяина приручённого монстра либо 0; её два чтения
+    /// часов не заменяются временем расчёта удара. Смертельная ветка этого
+    /// callback не вызывает (CMoveShape::OnBeenAttacked, 0x004D3BE3).
+    pub(crate) fn monster_on_been_hurted<Runtime: GameClockContext>(
         &mut self,
         region_id: i32,
         monster_id: i32,
         attacker_type: i32,
         attacker_id: i32,
+        runtime: &mut Runtime,
     ) -> Option<()> {
-        (attacker_type == 400)
-            .then(|| self.nation_monster_damaged(region_id, monster_id, attacker_id))?
+        if attacker_type == PLAYER_TYPE {
+            let _ = self.nation_monster_damaged(region_id, monster_id, attacker_id);
+        }
+        let attacker_player_id = match attacker_type {
+            PLAYER_TYPE => attacker_id,
+            MONSTER_TYPE => self.find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(attacker_id))
+                .filter(|attacker| attacker.is_tamed())
+                .map(CMonster::master_info)
+                .filter(|master| master.master_type == PLAYER_TYPE)
+                .map_or(0, |master| master.master_id),
+            _ => 0,
+        };
+        let protection_ms = self.globe_setup.attack_monster_protection_ms();
+        let monster = self.find_region_mut(region_id)?.base_mut().find_monster_by_id_mut(monster_id)?;
+        let _ = monster.register_attacking_player(
+            attacker_player_id, protection_ms, || runtime.now_milliseconds(),
+        );
+        Some(())
     }
 
     /// Typed dispatch достигнутого `CCityGate::OnBeenHurted`: `CGame`
@@ -34702,30 +34747,14 @@ impl CGame {
                     |maximum| game_legacy_random(&mut self.random_state, maximum),
                 );
             }
-            let _ = monster.register_attacking_player(
-                player_id,
-                now_ms,
-                self.globe_setup.attack_monster_protection_ms(),
-            );
             monster.set_hit_points(current_health);
-            monster
-                .move_shape_mut()
-                .shape_mut()
-                .set_action(if current_health == 0 { 6 } else { 5 });
-            if current_health == 0 {
-                monster.when_been_killed(now_ms);
-                monster.set_killed_by(MonsterKillingAttack {
-                    attacker_type: PLAYER_TYPE,
-                    attacker_id: player_id,
-                    skill_id: 0,
-                    skill_level: 0,
-                    critical: false,
-                    blast_attack: false,
-                });
-            } else if primary_ai == Some(19) {
+            if current_health != 0 {
+                monster.move_shape_mut().shape_mut().set_action(5);
+            }
+            if current_health != 0 && primary_ai == Some(19) {
                 // AI19 применяет Defense, spatial-step и выбор цели после
                 // освобождения изменяемого заимствования монстра.
-            } else {
+            } else if current_health != 0 {
                 monster.when_been_hurted_by(
                     ShapeIdentity {
                         object_type: PLAYER_TYPE,
@@ -34772,10 +34801,16 @@ impl CGame {
             hurt.add_long(0);
             hurt.add_byte(0);
             let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &hurt);
-            let _ = self.monster_on_been_hurted(region_id, monster_id, PLAYER_TYPE, player_id);
+            let _ = self.monster_on_been_hurted(region_id, monster_id, PLAYER_TYPE, player_id, runtime);
             return false;
         }
 
+        let victim = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
+        let attacker = KillingAttackIdentity {
+            attacker_type: PLAYER_TYPE, attacker_id: player_id,
+            attacker_faction_id: self.find_player(player_id).map_or(0, CPlayer::faction_id),
+        };
+        self.begin_move_shape_death(region_id, victim, attacker, runtime);
         let mut died = CMessage::new(0x000b_f60b);
         died.add_long(PLAYER_TYPE);
         died.add_long(player_id);
@@ -34787,7 +34822,8 @@ impl CGame {
         died.base_mut().add_char(0);
         died.add_long(0);
         died.add_byte(0);
-        let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &died);
+        let _ = self.send_move_shape_around(region_id, victim, &died);
+        self.record_move_shape_death(region_id, victim, attacker);
         true
     }
 
@@ -39390,15 +39426,43 @@ impl CGame {
         Some(vanish)
     }
 
-    fn apply_monster_attack_deaths<Runtime: GameMainLoopRuntime>(
+    /// OnBeenAttacked (0x004D38E4..0x004D391B): синхронный death-пролог
+    /// перед BF60B. OnBeenMurdered (+0x17C) у монстра пустой, у игрока
+    /// выполняет PK-эффекты; OnDied вызывается позднее пассивной AI FIFO.
+    pub(crate) fn begin_move_shape_death<Runtime: GameClockContext>(
         &mut self,
-        _region_id: i32,
-        deaths: Vec<MonsterAttackDeath>,
+        region_id: i32,
+        victim: ShapeIdentity,
+        attacker: KillingAttackIdentity,
         runtime: &mut Runtime,
     ) {
-        for death in deaths {
-            let MonsterAttackDeath::Player(killing_blow) = death;
-            let _ = self.player_on_death(killing_blow, runtime);
+        self.stop_all_move_shape_skills(region_id, victim);
+        if victim.object_type == PLAYER_TYPE {
+            let _ = self.player_on_been_murdered(PlayerKillingBlow {
+                victim_id: victim.id,
+                attacker_type: attacker.attacker_type,
+                attacker_id: attacker.attacker_id,
+                attacker_faction_id: attacker.attacker_faction_id,
+            }, runtime);
+            if let Some(player) = self.find_player_mut(victim.id) {
+                player.player_ai_mut().when_been_killed(runtime.now_milliseconds());
+            }
+        } else if victim.object_type == MONSTER_TYPE
+            && let Some(monster) = self.find_region_mut(region_id)
+                .and_then(|region| region.base_mut().find_monster_by_id_mut(victim.id))
+        {
+            monster.when_been_killed(runtime.now_milliseconds());
+        }
+    }
+
+    /// После BF60B сохраняется identity убийцы и только затем ставится action 6.
+    /// Снимок находится в базовом CMoveShape и читается поздним OnDied.
+    pub(crate) fn record_move_shape_death(
+        &mut self, region_id: i32, victim: ShapeIdentity, attacker: KillingAttackIdentity,
+    ) {
+        if let Some(shape) = crate::gameserver::appserver::states::state::resolve_state_move_shape_mut(self, region_id, victim) {
+            shape.set_killed_by(attacker);
+            shape.shape_mut().set_action(6);
         }
     }
 
@@ -39549,31 +39613,30 @@ impl CGame {
         monster_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
-        let Some(mut owner) = self.take_region_owner(region_id) else {
+        let Some(owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let mut deaths = Vec::new();
         let mut range_dispatch = None;
         let mut wide_arc_dispatch = None;
         let mut projectile_dispatch = None;
         let mut snow_storm_entry = None;
+        let mut owner = Some(owner);
         let handled = execute_owned_monster_base_attack(
             self,
-            owner.base_mut(),
+            &mut owner,
             monster_id,
             runtime,
-            &mut deaths,
             &mut range_dispatch,
             &mut wide_arc_dispatch,
             &mut projectile_dispatch,
             &mut snow_storm_entry,
         );
+        let Some(mut owner) = owner else { return handled };
         let _ = synchronize_jiumai_target_loss(owner.base_mut(), monster_id);
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.set_base_attack_owned_tick(handled);
         }
         self.restore_region_owner(owner);
-        self.apply_monster_attack_deaths(region_id, deaths, runtime);
         if let Some(phalanx_id) = snow_storm_entry {
             let _ = self.send_snow_storm_phalanx_entry(region_id, phalanx_id, runtime);
         }
@@ -39591,22 +39654,19 @@ impl CGame {
                 );
                 self.restore_region_owner(owner);
                 for identity in candidates {
-                    let Some(mut owner) = self.take_region_owner(region_id) else {
+                    let Some(owner) = self.take_region_owner(region_id) else {
                         break 'cells;
                     };
-                    let mut deaths = Vec::new();
-                    let applied = execute_owned_wide_arc_attack_target(
+                    let mut owner = Some(owner);
+                    let _ = execute_owned_wide_arc_attack_target(
                         self,
-                        owner.base_mut(),
+                        &mut owner,
                         &dispatch,
                         identity,
                         runtime,
-                        &mut deaths,
                     );
+                    let Some(owner) = owner else { break 'cells };
                     self.restore_region_owner(owner);
-                    if applied {
-                        self.apply_monster_attack_deaths(region_id, deaths, runtime);
-                    }
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
@@ -39635,22 +39695,21 @@ impl CGame {
                     if attacked.contains(&identity) {
                         continue;
                     }
-                    let Some(mut owner) = self.take_region_owner(region_id) else {
+                    let Some(owner) = self.take_region_owner(region_id) else {
                         break 'cells;
                     };
-                    let mut deaths = Vec::new();
+                    let mut owner = Some(owner);
                     let applied = execute_owned_monster_range_target(
                         self,
-                        owner.base_mut(),
+                        &mut owner,
                         &dispatch,
                         identity,
                         runtime,
-                        &mut deaths,
                     );
+                    let Some(owner) = owner else { break 'cells };
                     self.restore_region_owner(owner);
                     if applied {
                         attacked.push(identity);
-                        self.apply_monster_attack_deaths(region_id, deaths, runtime);
                     }
                 }
             }
@@ -39677,22 +39736,19 @@ impl CGame {
                 Vec::new()
             };
             for identity in candidates {
-                let Some(mut owner) = self.take_region_owner(region_id) else {
+                let Some(owner) = self.take_region_owner(region_id) else {
                     break;
                 };
-                let mut deaths = Vec::new();
-                let applied = execute_owned_monster_projectile_target(
+                let mut owner = Some(owner);
+                let _ = execute_owned_monster_projectile_target(
                     self,
-                    owner.base_mut(),
+                    &mut owner,
                     &dispatch,
                     identity,
                     runtime,
-                    &mut deaths,
                 );
+                let Some(owner) = owner else { break };
                 self.restore_region_owner(owner);
-                if applied {
-                    self.apply_monster_attack_deaths(region_id, deaths, runtime);
-                }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
                 finish_owned_monster_attack_impact(
@@ -41311,7 +41367,6 @@ impl CGame {
                 return QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
                     first_contact: false,
-                    killing_blow: None,
                 };
             }
         };
@@ -41319,7 +41374,7 @@ impl CGame {
     }
 
     /// Общий результат concrete AI, независимо от активного или фонового
-    /// вызова. Первый контакт и смерть не должны пропадать при переносе в фон.
+    /// вызова. Первый контакт сохраняется при переносе навыка в фон.
     fn apply_player_skill_contacts<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -41340,7 +41395,6 @@ impl CGame {
                     _ => None,
                 };
             }
-            let _death = outcome.killing_blow.and_then(|blow| game.player_on_death(blow, runtime));
         });
     }
 
@@ -41413,7 +41467,6 @@ impl CGame {
                 QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
                     first_contact: false,
-                    killing_blow: None,
                 }
             } else {
                 self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
@@ -41517,9 +41570,6 @@ impl CGame {
                     _ => None,
                 };
             }
-            let _death = outcome
-                .killing_blow
-                .and_then(|blow| game.player_on_death(blow, runtime));
         });
     }
 
@@ -41541,7 +41591,6 @@ impl CGame {
             return QueuedSkillExecutionOutcome {
                 state: QueuedSkillExecutionState::Pending,
                 first_contact: false,
-                killing_blow: None,
             };
         }
         let execute: fn(
@@ -41573,7 +41622,6 @@ impl CGame {
                 return QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
                     first_contact: false,
-                    killing_blow: None,
                 };
             }
         };
@@ -41622,7 +41670,6 @@ impl CGame {
                 QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
                     first_contact: false,
-                    killing_blow: None,
                 }
             } else {
                 self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
@@ -42046,7 +42093,7 @@ impl CGame {
         deliveries
     }
 
-    fn player_on_been_murdered<Runtime: GameMainLoopRuntime>(
+    fn player_on_been_murdered<Runtime: GameClockContext>(
         &mut self,
         blow: PlayerKillingBlow,
         runtime: &mut Runtime,
@@ -42498,12 +42545,16 @@ impl CGame {
 
     fn player_on_death<Runtime: GameMainLoopRuntime>(
         &mut self,
-        blow: PlayerKillingBlow,
+        player_id: i32,
         runtime: &mut Runtime,
     ) -> Option<()> {
-        let interrupted_skill =
-            self.lose_player_skill_target(blow.victim_id, runtime);
-        self.player_on_been_murdered(blow, runtime)?;
+        let killed_by = self.find_player(player_id)?.move_shape().killed_by()?;
+        let blow = PlayerKillingBlow {
+            victim_id: player_id,
+            attacker_type: killed_by.attacker_type,
+            attacker_id: killed_by.attacker_id,
+            attacker_faction_id: killed_by.attacker_faction_id,
+        };
         let mut world_deliveries = 0usize;
         let mut drops = 0usize;
         macro_rules! record_death_world_delivery {
@@ -42937,7 +42988,6 @@ impl CGame {
             world_deliveries,
             ?property_delivery,
             ?around_delivery,
-            interrupted_skill,
             "обработана смерть игрока"
         );
         Some(())
@@ -43033,6 +43083,24 @@ impl CGame {
         });
         self.restore_region_owner(owner);
         delivery
+    }
+
+    /// После owning callbacks положение формы разрешается заново: StopAll/End
+    /// не дают пакету смерти права использовать снимок клетки до вызова.
+    pub(crate) fn send_move_shape_around(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        message: &CMessage,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        if identity.object_type == PLAYER_TYPE {
+            return self.send_player_shape_around(identity.id, None, message);
+        }
+        let shape = crate::gameserver::appserver::states::state::resolve_state_move_shape(
+            self, region_id, identity,
+        )?;
+        let owner = self.find_region(shape.shape().get_region_id())?;
+        Some(self.send_game_shape_around(owner.base(), shape.shape(), None, message))
     }
 
     pub(crate) fn send_shape_position_around(
@@ -45281,10 +45349,10 @@ impl CGame {
         if let Some(target) = self.find_player_mut(target_id) {
             target.set_health(current_health);
             target.set_mana(target_mana - mana_damage);
-            if current_health == 0 || attack.full_miss == 0 {
+            if current_health != 0 && attack.full_miss == 0 {
                 target
                     .movement_shape_mut()
-                    .set_action(if current_health == 0 { 6 } else { 5 });
+                    .set_action(5);
             }
         }
         if damage != 0 {
@@ -45312,6 +45380,9 @@ impl CGame {
             let _ = finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {
+            let victim = ShapeIdentity { object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
+            let attacker = KillingAttackIdentity::from(&attack);
+            self.begin_move_shape_death(region_id, victim, attacker, runtime);
             let mut died = CMessage::new(0x000b_f60b);
             died.add_long(master.master_type);
             died.add_long(master.master_id);
@@ -45321,15 +45392,7 @@ impl CGame {
             died.base_mut().add_char(1);
             Self::append_base_attack_tail(&mut died, &attack);
             let _ = self.send_player_shape_around(target_id, None, &died);
-            let _ = self.player_on_death(
-                PlayerKillingBlow {
-                    victim_id: target_id,
-                    attacker_type: master.master_type,
-                    attacker_id: master.master_id,
-                    attacker_faction_id: master.master_guild_id,
-                },
-                runtime,
-            );
+            self.record_move_shape_death(region_id, victim, attacker);
         } else if attack.full_miss != 0 {
             let mut missed = CMessage::new(0x000b_f612);
             missed.add_byte(attack.full_miss);
@@ -45482,14 +45545,9 @@ impl CGame {
                     );
                 }
                 monster.set_hit_points(current_health);
-                if damage != 0 && (attack.full_miss == 0 || current_health == 0) {
-                    monster
-                        .move_shape_mut()
-                        .shape_mut()
-                        .set_action(if current_health == 0 { 6 } else { 5 });
-                    if current_health == 0 {
-                        monster.when_been_killed(now_ms);
-                    } else if pet_ai {
+                if damage != 0 && attack.full_miss == 0 && current_health != 0 {
+                    monster.move_shape_mut().shape_mut().set_action(5);
+                    if pet_ai {
                         monster.when_pet_been_hurted_by(attacker, now_ms);
                     } else if primary_ai == Some(1) {
                         monster.when_passive_gladiator_hurted_by(
@@ -45521,21 +45579,6 @@ impl CGame {
                             now_ms,
                         );
                     }
-                    monster.register_attacking_player(
-                        master.master_id,
-                        now_ms,
-                        self.globe_setup.attack_monster_protection_ms(),
-                    );
-                }
-                if current_health == 0 {
-                    monster.set_killed_by(MonsterKillingAttack {
-                        attacker_type: master.master_type,
-                        attacker_id: master.master_id,
-                        skill_id: attack.skill_id,
-                        skill_level: attack.skill_level,
-                        critical: attack.critical,
-                        blast_attack: attack.blast_attack,
-                    });
                 }
             }
             if attack.full_miss == 0
@@ -45662,11 +45705,15 @@ impl CGame {
                 target_id,
                 master.master_type,
                 master.master_id,
+                runtime,
             );
             self.increase_owned_player_rp(master.master_id, true, 0);
             return true;
         }
 
+        let victim = ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
+        let killing_attacker = KillingAttackIdentity::from(&attack);
+        self.begin_move_shape_death(region_id, victim, killing_attacker, runtime);
         let mut died = CMessage::new(0x000b_f60b);
         died.add_long(master.master_type);
         died.add_long(master.master_id);
@@ -45675,7 +45722,8 @@ impl CGame {
         died.add_ulong(damage);
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
-        let _ = self.send_shape_position_around(region_id, x, y, &died);
+        let _ = self.send_move_shape_around(region_id, victim, &died);
+        self.record_move_shape_death(region_id, victim, killing_attacker);
         self.increase_owned_player_rp(master.master_id, true, 0);
         true
     }
@@ -46277,11 +46325,11 @@ impl CGame {
         {
             for target in snow_storm_targets(self, region_id, snow_storm) {
                 if snow_storm.master().master_type == MONSTER_TYPE {
-                    let Some(mut owner) = self.take_region_owner(region_id) else { break };
-                    let mut deaths = Vec::new();
-                    let _ = execute_owned_monster_snow_storm_target(self, owner.base_mut(), snow_storm, target, sampled_at_ms, runtime, &mut deaths);
+                    let Some(owner) = self.take_region_owner(region_id) else { break };
+                    let mut owner = Some(owner);
+                    let _ = execute_owned_monster_snow_storm_target(self, &mut owner, snow_storm, target, sampled_at_ms, runtime);
+                    let Some(owner) = owner else { break };
                     self.restore_region_owner(owner);
-                    self.apply_monster_attack_deaths(region_id, deaths, runtime);
                     continue;
                 }
                 match target.object_type {
@@ -47120,10 +47168,35 @@ impl CGame {
                                     passive_stiffen, || runtime.now_milliseconds(),
                                 )
                             };
+                            let passive_death_reached = !ai_hibernated
+                                && handled_passive_action.is_none()
+                                && !defense_processed
+                                && passive_stiffen == PassiveStiffenAction::None
+                                && player_ai.begin_reached_death_action();
+                            let passive_death = if passive_death_reached {
+                                self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                                    game.lose_player_skill_target(player_id, runtime)
+                                });
+                                player_ai.reached_death_action_state()
+                            } else {
+                                PassiveDeathAction::None
+                            };
+                            if passive_death == PassiveDeathAction::Ready {
+                                let _ = self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                                    game.player_on_death(player_id, runtime)
+                                });
+                                if self.find_player(player_id).is_some() {
+                                    player_ai.finish_reached_death_action(runtime.now_milliseconds());
+                                }
+                            }
                             let passive_action_hung_up = handled_passive_action.unwrap_or(false)
-                                || passive_stiffen.blocks_active();
+                                || passive_stiffen.blocks_active()
+                                || (passive_death_reached
+                                    && passive_death != PassiveDeathAction::WaitingForMove);
                             let handled_active_action = !ai_hibernated
                                 && !passive_action_hung_up
+                                && (!passive_death_reached
+                                    || player_ai.current_active_action() == Some(AiShapeAction::Move))
                                 && player_ai.advance_handled_active_action(|| runtime.now_milliseconds());
                             let moving_started =
                                 !ai_hibernated
@@ -47142,6 +47215,7 @@ impl CGame {
                             let active_move_handled = moving_started || active_move_advanced;
                             let active_stand_handled = if !ai_hibernated
                                 && !passive_action_hung_up
+                                && !passive_death_reached
                                 && !handled_active_action
                                 && !active_move_handled
                                 && player_ai.active_stand_pending()
@@ -47160,6 +47234,7 @@ impl CGame {
                             };
                             let change_skill_handled = !ai_hibernated
                                 && !passive_action_hung_up
+                                && !passive_death_reached
                                 && !handled_active_action
                                 && !active_move_handled
                                 && !active_stand_handled
@@ -47172,6 +47247,7 @@ impl CGame {
                             }
                             let ended_attack_handled = !ai_hibernated
                                 && !passive_action_hung_up
+                                && !passive_death_reached
                                 && !handled_active_action
                                 && !active_move_handled
                                 && !active_stand_handled
@@ -47182,7 +47258,8 @@ impl CGame {
                                         .and_then(|id| self.player_skill_execution(player_id, id)),
                                     || runtime.now_milliseconds(),
                                 );
-                            let active_action_handled = handled_active_action
+                            let active_action_handled = passive_death_reached
+                                || handled_active_action
                                 || active_move_handled
                                 || active_stand_handled
                                 || change_skill_handled

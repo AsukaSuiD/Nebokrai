@@ -41,7 +41,7 @@ const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn finish_player_thunder_blow<Runtime: GameMainLoopRuntime>(
