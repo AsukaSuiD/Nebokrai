@@ -12,6 +12,8 @@
 //! ресурса вызывается OnChangeStates (+0x164), не UpdateProperty.
 //! Отказ Begin завершает visual перед внешним 4,2 планировщика; AI-отказ
 //! заканчивается End(0) без повторного общего ответа.
+//! В Rust внешний 4,2 принадлежит только координатору после общего End(0),
+//! а этот владелец сохраняет собственные ошибки ресурса и visual action 3.
 
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -180,10 +182,8 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         } if skill_id == kind.skill_id() => skill_level,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let starting = game.battle_fairy_execution(player_id, kind.skill_id()).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
-        if starting { send_failure(game, player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(kind.skill_id(), skill_level) else {

@@ -17,6 +17,14 @@
 //! unsigned now с wrapping(start + delay), cmp/jb 0x00520885.
 //! Отказ объектного Begin завершает эффект через End(0), затем расписание
 //! отправляет `4,2`; отказ уже начатого AI не повторяет этот общий ответ.
+//! В Rust внешний 4,2 отправляет только координатор после общего End(0),
+//! а concrete Begin и общий null-target helper сохраняют visual action 3.
+//! AI после virtual Summon(+0x8C) в 0x005208AB сразу вызывает End(1).
+//! Поэтому неудачная регистрация области после попытки Summon возвращает
+//! RejectedAfterUse, сохраняя общий AfterUse и reuse без продления навыка.
+//! Visual Update(mode=1, wire action 2) в AI (0x00520899) предшествует Summon. Отсутствие
+//! GetWarSoulGoods внутри Summon (0x00520a02..0x00520a09 → 0x00520c99)
+//! возвращает 0 без 4,2; вызывающий AI всё равно выполняет End(1).
 
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
@@ -90,12 +98,10 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
         return reject_thunder_null_target(game, player_id, LEIMING2_SKILL_ID, skill_level);
     }
-    let starting = game.battle_fairy_execution(player_id, LEIMING2_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
         send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
-        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(LEIMING2_SKILL_ID, skill_level) else {
@@ -238,13 +244,15 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         Some((target_x, target_y)),
     );
     let Some(player) = game.find_player(player_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
+        send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let Some(sprite) = player
         .war_soul_goods(game.goods_factory())
         .map(|goods| goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1))
     else {
-        return reject(game, player_id, skill_level, 2, b"");
+        send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let scaled_sprite = scaled_battle_fairy_sprite(sprite);
     let element_modifier = player.combat_properties().element_modify.wrapping_add(
@@ -290,6 +298,6 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {
-        QueuedSkillExecutionState::Rejected
+        QueuedSkillExecutionState::RejectedAfterUse
     })
 }

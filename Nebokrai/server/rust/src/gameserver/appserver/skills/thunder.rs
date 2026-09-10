@@ -20,6 +20,14 @@
 //! отправляет общий отказ. Область по переданным координатам не создаётся.
 //! При остальных отказах Begin общий ответ `4,2` также следует после End(0);
 //! ошибки уже начатого AI не повторяют ответ расписания.
+//! В Rust внешний 4,2 отправляет только координатор после общего End(0),
+//! включая общий null-target отказ Thunder и Leiming2; здесь остаётся action 3.
+//! После попытки Summon (0x00521D30) AI всегда вызывает End(1), как сохранено
+//! в battlefairyskill.rs: неудачная регистрация области — RejectedAfterUse,
+//! а не ранний отказ End(0); lifetime созданной области независим.
+//! Visual Update(mode=1, wire action 2) в AI (0x00521c39) предшествует Summon. Отсутствие
+//! GetWarSoulGoods внутри Summon (0x00521da2..0x00521da9 → 0x00522050)
+//! возвращает 0 без 4,2; вызывающий AI всё равно выполняет End(1).
 
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -111,7 +119,6 @@ pub(super) fn reject_thunder_null_target(
     skill_level: i32,
 ) -> QueuedSkillExecutionOutcome {
     send_thunder_family_cast(game, player_id, skill_id, skill_level, 3, None);
-    game.send_battle_fairy_skill_failure(player_id, 2);
     terminal(QueuedSkillExecutionState::Rejected)
 }
 
@@ -198,12 +205,10 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
         return reject_thunder_null_target(game, player_id, THUNDER_SKILL_ID, skill_level);
     }
-    let starting = game.battle_fairy_execution(player_id, THUNDER_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
         send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
-        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(THUNDER_SKILL_ID, skill_level) else {
@@ -331,7 +336,8 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     }
     send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 2, Some((target_x, target_y)));
     let Some(player) = game.find_player(player_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
+        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let Some(sprite) = player.war_soul_goods(game.goods_factory()).map(|goods| {
         goods.addon_property_value(
@@ -340,7 +346,8 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             1,
         )
     }) else {
-        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
+        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let scaled_sprite = scaled_battle_fairy_sprite(sprite);
     let element_modifier = thunder_element_modifier(em_modifier, scaled_sprite);
@@ -384,6 +391,6 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {
-        QueuedSkillExecutionState::Rejected
+        QueuedSkillExecutionState::RejectedAfterUse
     })
 }

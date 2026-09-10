@@ -10,6 +10,8 @@
 //! `bloodlossstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
 //! object-target он проходит отказ `10 → ZHGS0045 → 2 → End → 2`:
 //! первый 4,2 принадлежит Begin, последний — OnScheduleAboutWarSoul.
+//! В Rust внутренний 4,2 перед visual-End остаётся здесь; внешний 4,2
+//! отправляет только координатор после общего End(0), не concrete Begin.
 //! Коэффициент периодического урона вычисляется в x87 из полного unsigned
 //! `u32` и `0.01_f32`, после чего единожды сохраняется как `f32`.
 //! Модификатор урона сохраняет исходное усечение x87 через 64-битное целое,
@@ -143,7 +145,6 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     let reject_before_ai = |game: &mut CGame| {
         if starting { send_failure(game, player_id, 2); }
         send_cast(game, player_id, skill_level, 3, None);
-        if starting { send_failure(game, player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(BLOOD_LOSS_SKILL_ID, skill_level) else {

@@ -10,6 +10,8 @@
 //! Cast duration — unsigned now >= wrapping(start + delay), cmp/jb 0x00518c59.
 //! При отказе Begin внешний 4,2 планировщика следует после action 3 от End(0),
 //! а при отказе уже начатого AI повторного общего ответа нет.
+//! В Rust внешний 4,2 отправляет только координатор после общего End(0),
+//! без дублирования в concrete Begin.
 //! Повторное наложение сначала полностью завершает прежний щит
 //! (`0x00518D6E`), включая Cure и пересчёт свойств, и лишь затем начинает новый.
 
@@ -99,10 +101,8 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     if game.find_player(player_id).is_none() {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let starting = game.battle_fairy_execution(player_id, LIFE_SHIELD_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_cast(game, player_id, skill_level, 3);
-        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {

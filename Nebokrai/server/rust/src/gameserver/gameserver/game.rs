@@ -1549,7 +1549,7 @@ use crate::gameserver::appserver::skills::blind::{
     BLIND_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::fatalblow::{
-    execute_battle_fairy_fatal_blow, is_fatal_blow_dispatch,
+    execute_battle_fairy_fatal_blow, FATAL_BLOW_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::fatalblowphalanx::{
     calculate_owned_fatal_blow_attack, CFatalBlowPhalanx, FatalBlowPhalanxTick,
@@ -33487,25 +33487,6 @@ impl CGame {
         self.find_player(player_id).map_or(0, |player| player.move_shape().skill_last_used_ms(skill_id, &self.skill_factory))
     }
 
-    pub(crate) fn mark_player_skill_used(&mut self, player_id: i32, skill_id: u32, now_ms: u32) {
-        if let Some(player) = self.players.get_mut(&player_id) {
-            player.move_shape_mut().mark_skill_used(skill_id, now_ms, &self.skill_factory);
-        }
-    }
-
-    /// Общий хвост после concrete cleanup и AfterUse, в том числе без payload.
-    /// CPlayer::OnEndSkill — пустой virtual; здесь нет IsEnded-gate и reuse.
-    pub(crate) fn finish_player_skill_base(
-        &mut self,
-        player_id: i32,
-        skill_id: u32,
-        termination: SkillTermination,
-    ) -> bool {
-        self.players.get_mut(&player_id).is_some_and(|player| {
-            player.move_shape_mut().finish_skill_base(skill_id, &self.skill_factory, termination)
-        })
-    }
-
     pub(crate) fn replace_player_skill_visual_effect(
         &mut self,
         player_id: i32,
@@ -33515,14 +33496,6 @@ impl CGame {
         self.players.get_mut(&player_id).is_some_and(|player| {
             player.move_shape_mut().replace_skill_visual_effect(skill_id, &self.skill_factory, effect)
         })
-    }
-
-    pub(crate) fn player_skill_visual_effect_mut(
-        &mut self,
-        player_id: i32,
-        skill_id: u32,
-    ) -> Option<&mut crate::gameserver::appserver::states::visualeffect::SkillVisualEffect> {
-        self.players.get_mut(&player_id)?.move_shape_mut().skill_visual_effect_mut(skill_id, &self.skill_factory)
     }
 
     /// Хвост команды после подтверждённого concrete owner-ом End. Caller уже
@@ -33593,46 +33566,10 @@ impl CGame {
         self.player_skill_last_used_ms(player_id, skill_id)
     }
 
-    pub(crate) fn mark_battle_fairy_skill_used(&mut self, player_id: i32, skill_id: u32, now_ms: u32) -> bool {
-        if !CSkillFactory::is_war_soul_skill(skill_id) {
-            return false;
-        }
-        let Some(player) = self.players.get_mut(&player_id) else { return false };
-        if player.move_shape().skill(skill_id, &self.skill_factory).is_none() {
-            return false;
-        }
-        player.move_shape_mut().mark_skill_used(skill_id, now_ms, &self.skill_factory);
-        true
-    }
-
     pub(crate) fn selected_battle_fairy_skill_last_used_ms(&self, player_id: i32, ai: &CPlayerAI) -> Option<u32> {
         let skill_id = ai.selected_battle_fairy_skill_id();
         CSkillFactory::is_war_soul_skill(skill_id)
             .then(|| self.battle_fairy_skill_last_used_ms(player_id, skill_id))
-    }
-
-    pub(crate) fn finish_battle_fairy_execution(&mut self, player_id: i32, expected: BattleFairySkillDispatch, termination: SkillTermination) -> bool {
-        let skill_id = expected.skill_id();
-        if !self.battle_fairy_execution(player_id, skill_id).is_some_and(|state| state.dispatch() == expected) {
-            return false;
-        }
-        let stage = self.battle_fairy_execution(player_id, skill_id).map(|kernel| kernel.stage());
-        if !self.finish_player_skill_base(player_id, skill_id, termination) {
-            return false;
-        }
-        let Some(player) = self.players.get_mut(&player_id) else { return false };
-        player.move_shape_mut().clear_battle_fairy_execution(skill_id, &self.skill_factory);
-        tracing::trace!(?expected, ?termination, ?stage, "выполнение навыка боевой феи завершено");
-        true
-    }
-
-    pub(crate) fn finish_battle_fairy_skill(&mut self, player_id: i32, ai: &mut CPlayerAI, expected: BattleFairySkillDispatch, termination: SkillTermination) -> bool {
-        if ai.current_battle_fairy_skill() != Some(expected) {
-            return false;
-        }
-        ai.release_current_battle_fairy_command();
-        self.finish_battle_fairy_execution(player_id, expected, termination);
-        true
     }
 
     pub(crate) fn battle_fairy_skill_execution_is_materialized(&self, player_id: i32, ai: &CPlayerAI) -> bool {
@@ -41085,11 +41022,14 @@ impl CGame {
                     }
                 } else if let Some(execution) = fairy_execution {
                     let dispatch = execution.dispatch();
-                    if self.finish_battle_fairy_execution(player_id, dispatch, termination) {
-                        self.finish_battle_fairy_skill_end_tail(
-                            player_id, dispatch,
-                            outcome.state == QueuedSkillExecutionState::Rejected, runtime,
-                        );
+                    if let Some(instance) = instance {
+                        self.with_published_player_ai(player_id, &mut player_ai, |game| {
+                            game.finish_registered_battle_fairy_skill(
+                                instance, dispatch,
+                                i32::from(outcome.state != QueuedSkillExecutionState::Rejected),
+                                termination, false, runtime,
+                            )
+                        });
                     }
                 }
             }
@@ -41590,6 +41530,8 @@ impl CGame {
     }
 
     /// Единственный выбор concrete WarSoul owner для Begin и последующего AI.
+    /// Перегрузку и тип цели проверяет сам owner: прежний внешний gate
+    /// обходил его отказ Begin и отправлял лишний ответ расписания.
     fn execute_battle_fairy_skill_owner<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -41606,33 +41548,22 @@ impl CGame {
         ) -> QueuedSkillExecutionOutcome = match dispatch.skill_id() {
             id if battle_fairy_attribute_definition(id).is_some() => execute_battle_fairy_attribute,
             LIFE_SHIELD_SKILL_ID => execute_battle_fairy_life_shield,
-            _ if is_fatal_blow_dispatch(dispatch) => execute_battle_fairy_fatal_blow,
+            FATAL_BLOW_SKILL_ID => execute_battle_fairy_fatal_blow,
             TIANHUO_SKILL_ID => execute_battle_fairy_tianhuo,
             LEIMING2_SKILL_ID => execute_battle_fairy_leiming2,
             THUNDER_SKILL_ID => execute_battle_fairy_thunder,
-            POISON_ARROW_SKILL_ID
-                if dispatch.object_target().is_none_or(|target| {
-                    matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                }) => execute_battle_fairy_poison_arrow,
-            BLOOD_LOSS_SKILL_ID
-                if dispatch.object_target().is_none_or(|target| {
-                    matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                }) => execute_battle_fairy_blood_loss,
+            POISON_ARROW_SKILL_ID => execute_battle_fairy_poison_arrow,
+            BLOOD_LOSS_SKILL_ID => execute_battle_fairy_blood_loss,
             WANGSHENG_SKILL_ID => execute_battle_fairy_wangsheng,
             HUOXIESHU_SKILL_ID => execute_battle_fairy_huoxieshu,
             LINGZHISHU_SKILL_ID => execute_battle_fairy_lingzhishu,
-            BATTLE_FAIRY_BASE_MAGIC_SKILL_ID
-                if matches!(dispatch, BattleFairySkillDispatch::Object { target, .. }
-                    if is_base_magic_object_target_type(target.object_type)) =>
-            {
-                execute_battle_fairy_base_magic
-            }
+            BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => execute_battle_fairy_base_magic,
             _ => {
                 self.send_battle_fairy_skill_failure(player_id, 2);
                 tracing::debug!(
                     player_id,
                     ?dispatch,
-                    "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка боевой феи"
+                    "Отклонён неизвестный ID навыка боевой феи"
                 );
                 return QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
@@ -41675,6 +41606,7 @@ impl CGame {
             }) {
                 return 0;
             }
+            let instance = self.registered_player_skill(player_id, dispatch.skill_id());
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
                 && !self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
@@ -41697,38 +41629,34 @@ impl CGame {
             } else {
                 outcome
             };
-            let materialized_end = outcome.state != QueuedSkillExecutionState::Pending
-                && self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
-            if !schedule_rejected
+            let materialized_end = instance.and_then(|instance| self.registered_skill(instance))
+                .is_some_and(|skill| skill.battle_fairy_dispatch() == Some(dispatch));
+            let begin_rejected = !schedule_rejected
                 && !begin_completed
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected
-                && !materialized_end
-            {
+                && !materialized_end;
+            self.apply_battle_fairy_skill_contacts(player_id, dispatch, player_ai, &outcome, runtime);
+            let termination = match outcome.state {
+                QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => None,
+                QueuedSkillExecutionState::Completed => Some(SkillTermination::Completed),
+                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => Some(SkillTermination::Rejected),
+            };
+            if let Some(termination) = termination && let Some(instance) = instance {
+                self.with_published_player_ai(player_id, player_ai, |game| {
+                    game.finish_registered_battle_fairy_skill(
+                        instance, dispatch,
+                        i32::from(outcome.state != QueuedSkillExecutionState::Rejected),
+                        termination, !schedule_rejected && begin_was_pending, runtime,
+                    )
+                });
+            }
+            if begin_rejected {
                 self.send_battle_fairy_skill_failure(player_id, 2);
             }
-            self.apply_battle_fairy_skill_contacts(player_id, dispatch, player_ai, &outcome, runtime);
-            let removed_from_queue = match outcome.state {
-                QueuedSkillExecutionState::Pending | QueuedSkillExecutionState::Begun => false,
-                QueuedSkillExecutionState::Completed => self.finish_battle_fairy_skill(
-                    player_id, player_ai,
-                    dispatch,
-                    SkillTermination::Completed,
-                ),
-                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => self.finish_battle_fairy_skill(
-                    player_id, player_ai,
-                    dispatch,
-                    SkillTermination::Rejected,
-                ),
-            };
-            if removed_from_queue && materialized_end {
-                self.finish_battle_fairy_skill_end_tail(
-                    player_id,
-                    dispatch,
-                    outcome.state == QueuedSkillExecutionState::Rejected,
-                    runtime,
-                );
-            }
+            let removed_from_queue = termination.is_some()
+                && player_ai.current_battle_fairy_skill() == Some(dispatch);
+            if removed_from_queue { player_ai.release_current_battle_fairy_command(); }
             if removed_from_queue && !materialized_end && !begin_completed {
                 player_ai.restore_battle_fairy_base_attack_after_end();
             }

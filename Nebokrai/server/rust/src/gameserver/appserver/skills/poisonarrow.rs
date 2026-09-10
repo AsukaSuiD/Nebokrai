@@ -10,6 +10,8 @@
 //! `poisonarrowstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
 //! object-target он проходит отказ `10 → ZHGS0045 → 2 → End → 2`:
 //! первый 4,2 принадлежит Begin, последний — OnScheduleAboutWarSoul.
+//! В Rust внутренний 4,2 перед visual-End остаётся здесь; внешний 4,2
+//! отправляет только координатор после общего End(0), не concrete Begin.
 //! Reuse использует exact `CSkill::IsRestored`; ожидание навыка сравнивает
 //! unsigned now с wrapping(start + delay), cmp/jb 0x00519fa6.
 //! Периодические часы принадлежат владельцу состояния.
@@ -137,7 +139,6 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
     let reject_before_ai = |game: &mut CGame| {
         if starting { send_failure(game, player_id, 2); }
         send_cast(game, player_id, skill_level, 3, None);
-        if starting { send_failure(game, player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level) else {

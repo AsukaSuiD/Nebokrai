@@ -11,8 +11,15 @@
 //! `10 + ZHGS0045` и завершающий visual action `3`; затем планировщик выдаёт
 //! общий 4,2. Сам Begin (0x0051e3c0) не выдаёт ранний 4,2, в отличие от
 //! BloodLoss/PoisonArrow. Отказ уже запущенного AI не получает ответ расписания.
+//! В Rust единственный внешний 4,2 отправляет координатор после общего End(0);
+//! concrete Begin сохраняет собственную диагностику и visual action 3.
 //! Восстановление использует абсолютный срок `CSkill::IsRestored`; подготовка
 //! сравнивает unsigned now с wrapping(start + delay), cmp/jb 0x0051f330.
+//! После virtual Summon(+0x90) в 0x0051f53d AI без проверки результата
+//! вызывает End(1) в 0x0051f549; отказ создания не отменяет AfterUse/reuse.
+//! Visual Update(mode=1, wire action 2) в AI (0x0051f530) предшествует Summon. Отсутствие
+//! GetWarSoulGoods внутри Summon (0x0051f701..0x0051f708 → 0x0051f8f6)
+//! возвращает 0 без 4,2; вызывающий AI всё равно выполняет End(1).
 //! Lifetime снаряда принадлежит отдельному владельцу.
 
 use super::basemagic::{
@@ -118,26 +125,6 @@ fn master_info(player: &CPlayer) -> MasterInfo {
     }
 }
 
-pub(crate) const fn is_fatal_blow_dispatch(dispatch: BattleFairySkillDispatch) -> bool {
-    matches!(
-        dispatch,
-        BattleFairySkillDispatch::SelfTarget {
-            skill_id: FATAL_BLOW_SKILL_ID,
-            ..
-        } | BattleFairySkillDispatch::Point {
-            skill_id: FATAL_BLOW_SKILL_ID,
-            ..
-        } | BattleFairySkillDispatch::Object {
-            skill_id: FATAL_BLOW_SKILL_ID,
-            target: ShapeIdentity {
-                object_type: PLAYER_TYPE | MONSTER_TYPE,
-                ..
-            },
-            ..
-        }
-    )
-}
-
 pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -145,12 +132,10 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     _player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let starting = game.battle_fairy_execution(player_id, FATAL_BLOW_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, level: i32, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
         send_end(game, player_id, level);
-        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let (skill_level, target) = match dispatch {
@@ -333,10 +318,12 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         missile_flying_time,
     );
     let Some(player) = game.find_player(player_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
+        send_end(game, player_id, skill_level);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     if player.war_soul_goods(game.goods_factory()).is_none() {
-        return reject(game, player_id, skill_level, 2, b"");
+        send_end(game, player_id, skill_level);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     }
     let master = master_info(player);
     let summon_id = game.allocate_summon_shape_id();
@@ -374,6 +361,6 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {
-        QueuedSkillExecutionState::Rejected
+        QueuedSkillExecutionState::RejectedAfterUse
     })
 }

@@ -26,6 +26,8 @@
 //! контекста феи, а не локальное время после OnBeginSkill и проверок.
 //! Отказ до успешного Begin заканчивается action 3, затем внешним 4,2
 //! планировщика; повторный AI-отказ такого внешнего ответа не добавляет.
+//! В Rust этот внешний 4,2 отправляет только координатор после общего
+//! End(0), без дополнительной публикации в concrete Begin.
 
 use super::baseattack::real_distance;
 use super::basemagic::{
@@ -137,12 +139,8 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         | BattleFairySkillDispatch::Point { skill_level, .. }
         | BattleFairySkillDispatch::Object { skill_level, .. } => skill_level,
     };
-    let starting = game.battle_fairy_base_magic(player_id).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_end(game, player_id, skill_level);
-        if starting {
-            game.send_battle_fairy_skill_failure(player_id, 2);
-        }
         rejected()
     };
     let Some(properties) = game.skill_base_properties(

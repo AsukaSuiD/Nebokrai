@@ -20,6 +20,11 @@
 //! wrapping(start + delay), cmp/jb 0x005231e1.
 //! Отказ объектного Begin (0x005222f0) завершает эффект через End(0), затем
 //! расписание отправляет `4,2`; ошибки начатого AI сохраняют отдельный путь.
+//! В Rust этот внешний 4,2 отправляет только координатор после общего End(0),
+//! в том числе при null-цели; concrete Begin публикует только свои ошибки и End.
+//! После попытки Summon (0x00523280) AI всегда вызывает End(1), как сохранено
+//! в battlefairyskill.rs: неудачная регистрация области — RejectedAfterUse,
+//! а не ранний отказ End(0); lifetime созданной области независим.
 
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
@@ -133,15 +138,12 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     };
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
         send_visual(game, player_id, skill_level, 3, None);
-        game.send_battle_fairy_skill_failure(player_id, 2);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let starting = game.battle_fairy_execution(player_id, TIANHUO_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
         if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
         if !text.is_empty() { game.send_skill_system_info(player_id, text); }
         send_visual(game, player_id, skill_level, 3, None);
-        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(TIANHUO_SKILL_ID, skill_level) else {
@@ -311,7 +313,8 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         )),
     );
     let Some(player) = game.find_player(player_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
+        send_visual(game, player_id, skill_level, 3, None);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     };
     let master = master_info(player);
     let summon_id = game.allocate_summon_shape_id();
@@ -349,6 +352,6 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {
-        QueuedSkillExecutionState::Rejected
+        QueuedSkillExecutionState::RejectedAfterUse
     })
 }

@@ -31,10 +31,23 @@
 //! цели; владелец передаёт его как RejectedAfterUse, не как обычный Rejected.
 //! Базовая атака 0x224 также различает End(0) при потере цели и End(1)
 //! после попытки Summon (AI 0x005178fb/0x005179df).
+//! Очередь и background сохраняют поколенческий ключ до Begin/AI/contacts.
+//! Общий End читает GetUser из той же базы, выполняет AfterUse/reuse и лишь
+//! затем очищает source/target/visual и освобождает BF-payload. Удаление навыка
+//! из callback износа не переносит продолжение на новую регистрацию. AI на
+//! время этого callback опубликован у игрока; его новая команда не снимается.
+//! End(0) смены региона/отзыва использует ту же границу без runtime и часов.
+//! Отказ Begin сбрасывает созданную базу даже без payload, после чего расписание
+//! отправляет единственный внешний 4,2. Внутренние отказы владельцев сохранены.
+//! BF owned visual ещё не материализован: concrete owners пока публикуют свои
+//! wire-End сами. Пакет не подменяет ресурс, его Begin/Update/Drop и source-gates;
+//! перенос этих публикаций в общий visual-dispatch остаётся отдельной зависимостью.
 
 use super::basemagic::BASE_MAGIC_EFFECT_MESSAGE;
 use super::kernel::SkillTermination;
+use crate::gameserver::appserver::moveshape::RegisteredSkillDispatch;
 use crate::gameserver::appserver::player::BattleFairySkillDispatch;
+use crate::gameserver::appserver::states::skill::RegisteredPlayerSkill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -55,36 +68,44 @@ impl CGame {
             (materialized, dispatch)
         };
         let dispatch = dispatch?;
+        let instance = self.registered_player_skill(player_id, dispatch.skill_id());
         self.find_player_mut(player_id)?.player_ai_mut().release_current_battle_fairy_command();
-        let _ = self.finish_battle_fairy_execution(player_id, dispatch, SkillTermination::Cancelled);
-        if materialized {
+        if materialized && let Some(instance) = instance {
             self.send_battle_fairy_skill_end(player_id, dispatch);
+            let _ = self.end_registered_player_instance_without_after_use(instance, SkillTermination::Cancelled);
+            if let Some(skill) = self.registered_skill_mut(instance) {
+                skill.clear_execution(RegisteredSkillDispatch::BattleFairy(dispatch));
+            }
         }
         Some(dispatch)
     }
 
-    /// Хвост уже материализованного навыка боевого духа. Его владелец уже
-    /// отправил action `3` и очистил собственные поля. Подтверждённый `End(0)`
-    /// не получает побочные эффекты успешного завершения и повторный отказ.
-    pub(crate) fn finish_battle_fairy_skill_end_tail<Runtime: GameMainLoopRuntime>(
+    /// Терминальная граница после concrete owner и contacts. Wire-End пока
+    /// публикует concrete owner; общий End сохраняет источник до AfterUse и
+    /// только затем сбрасывает базу. Callback не может перенести reuse/cleanup
+    /// на новую регистрацию того же ID. Неуспешный Begin не требует payload.
+    pub(crate) fn finish_registered_battle_fairy_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
+        instance: RegisteredPlayerSkill,
         dispatch: BattleFairySkillDispatch,
-        reject_request: bool,
+        argument: i32,
+        termination: SkillTermination,
+        begin_attempted: bool,
         runtime: &mut Runtime,
-    ) {
-        if reject_request && (0x212..=0x224).contains(&dispatch.skill_id()) {
-            return;
+    ) -> bool {
+        let Some(skill) = self.registered_skill(instance) else { return false };
+        let materialized = skill.battle_fairy_dispatch() == Some(dispatch);
+        let failed_begin = begin_attempted && !skill.lifecycle().is_ended()
+            && skill.is_execution_inactive();
+        if !materialized && !failed_begin {
+            return false;
         }
-        self.damage_player_weapon(player_id, runtime);
-        let _ = self.mark_battle_fairy_skill_used(
-            player_id,
-            dispatch.skill_id(),
-            runtime.now_milliseconds(),
-        );
-        if reject_request {
-            self.send_battle_fairy_skill_failure(player_id, 2);
+        let argument = if materialized { argument } else { 0 };
+        let _ = self.end_registered_player_instance(instance, argument, termination, runtime);
+        if let Some(skill) = self.registered_skill_mut(instance) {
+            skill.clear_execution(RegisteredSkillDispatch::BattleFairy(dispatch));
         }
+        true
     }
 
     pub(crate) fn send_battle_fairy_skill_failure(&self, player_id: i32, action: u8) {

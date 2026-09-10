@@ -24,6 +24,8 @@
 //! Отказ Begin после собственного End(0) получает внешний 4,2 от
 //! CPlayerAI::OnScheduleAboutWarSoul (0x00509861); отказ уже запущенного AI
 //! этого ответа не получает, поскольку OnLoseTargetWarSoul видит IsEnded.
+//! В Rust внешний 4,2 отправляет только координатор после общего End(0);
+//! собственный 4,2 при смерти цели в AI остаётся перед текстом и visual-End.
 
 use super::battlefairyattributestate::{
     send_battle_fairy_attribute_state_visual, BattleFairyAttributeKind,
@@ -157,12 +159,8 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     }) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let starting = game.battle_fairy_execution(player_id, skill_id).is_none();
     let reject_before_ai = |game: &mut CGame, target: ShapeIdentity| {
         send_cast(game, player_id, target, skill_id, skill_level, 3);
-        if starting {
-            game.send_battle_fairy_skill_failure(player_id, 2);
-        }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let target = if definition.kind.targets_self() {

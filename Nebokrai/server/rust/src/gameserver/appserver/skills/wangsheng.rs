@@ -12,6 +12,8 @@
 //! После SetHP AI вызывает OnChangeStates (+0x164, 0x0051e043), без
 //! UpdateProperty. Отказ Begin выдаёт action 3 перед внешним 4,2
 //! планировщика; отказ уже начатого AI не получает повторного ответа.
+//! В Rust внешний 4,2 отправляет только координатор после общего End(0),
+//! без дублирования в concrete Begin.
 
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -66,10 +68,8 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
         } if skill_id == WANGSHENG_SKILL_ID => skill_level,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let starting = game.battle_fairy_execution(player_id, WANGSHENG_SKILL_ID).is_none();
     let reject_before_ai = |game: &mut CGame| {
         send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
-        if starting { send_failure(game, player_id, 2); }
         terminal(QueuedSkillExecutionState::Rejected)
     };
     let Some(properties) = game.skill_base_properties(WANGSHENG_SKILL_ID, skill_level) else {

@@ -21,14 +21,17 @@
 //! по заранее захваченному ключу. Concrete command-tail не разрешает ID заново;
 //! уже снятая им команда не подавляет финализацию того же экземпляра.
 //!
-//! Полный общий End пока вызывают Rage и Knight. Адресация охватывает экземпляры
-//! реестра игрока независимо от payload, но BattleFairy сохраняет прежний End-tail.
+//! Rage и Knight используют общий End вместе с owned visual. BattleFairy
+//! подключён к derived/AfterUse/base-границе и общей очистке typed payload;
+//! его concrete wire-End пока публикуется до этой границы без owned visual.
 //! Перенос общей границы в остальные concrete owners, callbacks временно
 //! извлечённого региона/монстра и синхронные DelSkill/ClearSkills ещё требуется.
 //! Наличие модели не заменяет эти callers.
 //! Производные visual, кроме подключённых видов, не имитируются пустым пакетом.
+//! Нулевой End имеет вход без runtime: он использует тот же derived/base код,
+//! но не требует фиктивных часов или реализации износа для region-entry/recall.
 
-use crate::gameserver::appserver::moveshape::{MoveShapeSkill, SkillSlot};
+use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -59,11 +62,11 @@ impl CGame {
         Some(RegisteredPlayerSkill { player_id, slot })
     }
 
-    fn registered_skill(&self, address: RegisteredPlayerSkill) -> Option<&MoveShapeSkill> {
+    pub(crate) fn registered_skill(&self, address: RegisteredPlayerSkill) -> Option<&MoveShapeSkill> {
         self.find_player(address.player_id)?.move_shape().skill_at(address.slot)
     }
 
-    fn registered_skill_mut(&mut self, address: RegisteredPlayerSkill) -> Option<&mut MoveShapeSkill> {
+    pub(crate) fn registered_skill_mut(&mut self, address: RegisteredPlayerSkill) -> Option<&mut MoveShapeSkill> {
         self.find_player_mut(address.player_id)?.move_shape_mut().skill_at_mut(address.slot)
     }
 
@@ -76,7 +79,7 @@ impl CGame {
         let Some(skill) = self.registered_skill_mut(address) else { return false };
         if skill.player_dispatch() != Some(dispatch) { return false; }
         skill.finish_base(termination);
-        skill.clear_player_execution()
+        skill.clear_execution(RegisteredSkillDispatch::Player(dispatch))
     }
 
     /// Завершение команды отделено от End самого экземпляра. Потерявшийся
@@ -187,12 +190,47 @@ impl CGame {
         self.end_registered_player_instance(address, argument, termination, runtime)
     }
 
-    fn end_registered_player_instance<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn end_registered_player_instance<Runtime: GameMainLoopRuntime>(
         &mut self,
         address: RegisteredPlayerSkill,
         argument: i32,
         termination: SkillTermination,
         runtime: &mut Runtime,
+    ) -> Option<RegisteredSkillEnd> {
+        if self.prepare_registered_player_end(address, argument)? == RegisteredSkillEnd::Released {
+            return Some(RegisteredSkillEnd::Released);
+        }
+        if argument != 0 { self.after_use_registered_skill(address, runtime)?; }
+        self.finish_registered_player_base_end(address, termination)
+    }
+
+    /// End(0) не требует часов, RNG или контекста износа. Region-entry и отзыв
+    /// феи используют ту же derived/base границу, не создавая фиктивный runtime.
+    pub(crate) fn end_registered_player_instance_without_after_use(
+        &mut self,
+        address: RegisteredPlayerSkill,
+        termination: SkillTermination,
+    ) -> Option<RegisteredSkillEnd> {
+        if self.prepare_registered_player_end(address, 0)? == RegisteredSkillEnd::Released {
+            return Some(RegisteredSkillEnd::Released);
+        }
+        self.finish_registered_player_base_end(address, termination)
+    }
+
+    fn finish_registered_player_base_end(
+        &mut self,
+        address: RegisteredPlayerSkill,
+        termination: SkillTermination,
+    ) -> Option<RegisteredSkillEnd> {
+        // CPlayer/CMonster::OnEndSkill — пустой virtual 0x00485540.
+        self.registered_skill_mut(address)?.finish_base(termination);
+        Some(RegisteredSkillEnd::Ended)
+    }
+
+    fn prepare_registered_player_end(
+        &mut self,
+        address: RegisteredPlayerSkill,
+        argument: i32,
     ) -> Option<RegisteredSkillEnd> {
         let policy = self.registered_skill(address)?.owner().end_policy();
         if !self.registered_skill_mut(address)?.prepare_derived_end(argument) {
@@ -242,9 +280,6 @@ impl CGame {
                 self.update_registered_skill_visual(address, 3);
             }
         }
-        if argument != 0 { self.after_use_registered_skill(address, runtime)?; }
-        // CPlayer/CMonster::OnEndSkill — пустой virtual 0x00485540.
-        self.registered_skill_mut(address)?.finish_base(termination);
         Some(RegisteredSkillEnd::Ended)
     }
 }

@@ -107,6 +107,8 @@
 //! Неуспешный Begin сам по себе не удаляет прежние concrete-данные.
 //! Удаление только исполнения возвращает ту же базу в Inactive без Begin,
 //! End и callback; завершение базы вызывается владельцем отдельно до удаления.
+//! Общая очистка Player/BattleFairy требует точного typed dispatch того же
+//! экземпляра. Проверочный enum не хранит исполнение и не объединяет их AI.
 //! Изменяемый доступ не создаёт фиктивного monster-kernel и не подменяет
 //! чужой вариант. Общий IsEnded не выводится из наличия concrete-исполнения;
 //! отдельный immediate-флаг +0x4c не подменяет базовый lifecycle.
@@ -124,8 +126,9 @@
 //! Доступ к этим полям использует тот же первый GetSkill по текущей metadata,
 //! без дополнительного реестра и без поиска по intrinsic-категории. Отсутствие
 //! kernel не означает отсутствия самого registered owner-а. Общий End
-//! в states/skill.rs уже обслуживает Rage/KnightCut, в том числе без payload;
-//! остальные concrete callers ещё не все используют эту границу.
+//! в states/skill.rs уже обслуживает Rage/KnightCut, в том числе без payload,
+//! и терминальный BattleFairy; его visual пока не материализован. Остальные
+//! concrete callers ещё не все используют эту границу.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
 //! Runtime StopAllSkills ещё не подключён; завершение одного текущего cast
@@ -353,6 +356,12 @@ enum RegisteredSkillExecution {
     Player(PlayerSkillExecution),
     BattleFairy(BattleFairyExecution),
     Monster(super::monster::MonsterSkillExecution),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegisteredSkillDispatch {
+    Player(super::player::PlayerSkillDispatch),
+    BattleFairy(super::player::BattleFairySkillDispatch),
 }
 
 impl RegisteredSkillExecution {
@@ -712,22 +721,43 @@ impl MoveShapeSkill {
         }
     }
 
-    pub(crate) fn player_dispatch(&self) -> Option<super::player::PlayerSkillDispatch> {
+    pub(crate) fn execution_dispatch(&self) -> Option<RegisteredSkillDispatch> {
         match &self.execution {
-            RegisteredSkillExecution::Player(execution) => Some(execution.kernel().dispatch()),
+            RegisteredSkillExecution::Player(execution) =>
+                Some(RegisteredSkillDispatch::Player(execution.kernel().dispatch())),
+            RegisteredSkillExecution::BattleFairy(execution) =>
+                Some(RegisteredSkillDispatch::BattleFairy(execution.kernel().dispatch())),
+            RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Monster(_) => None,
+        }
+    }
+
+    pub(crate) fn player_dispatch(&self) -> Option<super::player::PlayerSkillDispatch> {
+        match self.execution_dispatch() {
+            Some(RegisteredSkillDispatch::Player(dispatch)) => Some(dispatch),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn battle_fairy_dispatch(&self) -> Option<super::player::BattleFairySkillDispatch> {
+        match self.execution_dispatch() {
+            Some(RegisteredSkillDispatch::BattleFairy(dispatch)) => Some(dispatch),
             _ => None,
         }
     }
 
     /// Убирает только payload этого экземпляра, без повторного поиска по ID.
     /// Общая база, visual и reuse не получают дополнительных End-переходов.
-    pub(crate) fn clear_player_execution(&mut self) -> bool {
-        if !matches!(self.execution, RegisteredSkillExecution::Player(_)) {
+    pub(crate) fn clear_execution(&mut self, expected: RegisteredSkillDispatch) -> bool {
+        if self.execution_dispatch() != Some(expected) {
             return false;
         }
         let lifecycle = std::mem::take(self.execution.lifecycle_mut());
         self.execution = RegisteredSkillExecution::Inactive(lifecycle);
         true
+    }
+
+    pub(crate) fn is_execution_inactive(&self) -> bool {
+        matches!(self.execution, RegisteredSkillExecution::Inactive(_))
     }
 
     pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
@@ -5663,14 +5693,6 @@ impl CMoveShape {
         true
     }
 
-    pub(crate) fn clear_player_execution(
-        &mut self,
-        skill_id: u32,
-        factory: &CSkillFactory,
-    ) -> bool {
-        self.skill_mut(skill_id, factory).is_some_and(MoveShapeSkill::clear_player_execution)
-    }
-
     pub(crate) fn battle_fairy_execution(
         &self,
         skill_id: u32,
@@ -5706,20 +5728,6 @@ impl CMoveShape {
         let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
         execution.kernel_mut().replace_lifecycle(lifecycle);
         skill.execution = RegisteredSkillExecution::BattleFairy(execution);
-        true
-    }
-
-    pub(crate) fn clear_battle_fairy_execution(
-        &mut self,
-        skill_id: u32,
-        factory: &CSkillFactory,
-    ) -> bool {
-        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, RegisteredSkillExecution::BattleFairy(_)) {
-            return false;
-        }
-        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
-        skill.execution = RegisteredSkillExecution::Inactive(lifecycle);
         true
     }
 
