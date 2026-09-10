@@ -34,8 +34,21 @@
 //! повторяемые ID не объединяются общей картой. Смена AI и завершение одного
 //! навыка сохраняют исполнения остальных. Begin не получает дополнительного
 //! сброса ресурсов; жизнь призванного существа остаётся у CMonster.
-//! Этот перенос хранения не заменяет ещё не подключённый полный обход
-//! registered owners для StopAllSkills и source/common End.
+//! StopAllSkills перед приручением обходит все зарегистрированные экземпляры,
+//! не только текущий cast. Общая граница смерти ещё требует публикации owner-а.
+//! Успех приручения назначает tamed/master после StopAll и снимает цель только
+//! auxiliary CPet: прежний primary AI, его команды и hate не очищаются.
+//! Повторного IsTamable после увеличения счётчика попыток нет; AddPet и
+//! UpgradePetLevel следуют за назначением master в owner-е MonsterTaming.
+//! Общий registered End теперь обращается к тому же MonsterSkillExecution:
+//! фаза и подтверждённые флаги полёта снимаются без удаления payload,
+//! затем owned пути очищаются в порядке SkillOwner::end_policy. Каталог
+//! вариантов прогресса задаёт и доступ, и эти hooks; отдельного списка ID нет.
+//! Source/target и lifecycle сохраняются до общего base End, выбранный ID
+//! и AI-очереди сами эти hooks не меняют. Destination у SpiderMist и
+//! YunShengLightning не обнуляется вместе с derived-полётными флагами:
+//! End 0x0057B810 пишет только +0x4C/+0x50/+0x54/+0x58 перед GetUser,
+//! а координаты базового CState очищаются уже общим хвостом.
 //! Native constructor создаёт уже IsEnded-навык без Begin: Inactive хранит
 //! единственный SkillLifecycle, а настоящий Begin переносит эту же базу в
 //! обязательный kernel Monster-варианта. Source и разрешённый target получают
@@ -281,7 +294,7 @@ use crate::setup::monsterlist::MonsterProperties;
 const MONSTER_TYPE: i32 = 600;
 
 macro_rules! monster_skill_progress {
-    ($($variant:ident($state:ty)),+ $(,)?) => {
+    ($($variant:ident($state:ty) $(prepare($prepare:expr))? $(paths($paths:ident))?),+ $(,)?) => {
         #[derive(Clone, Debug, Eq, PartialEq)]
         pub(crate) enum MonsterSkillProgress {
             $($variant($state)),+
@@ -290,6 +303,27 @@ macro_rules! monster_skill_progress {
         pub(crate) trait MonsterSkillProgressState: Sized {
             fn from_progress(progress: &MonsterSkillProgress) -> Option<&Self>;
             fn from_progress_mut(progress: &mut MonsterSkillProgress) -> Option<&mut Self>;
+        }
+
+        impl MonsterSkillExecution {
+            pub(crate) fn prepare_derived_end(&mut self) {
+                self.kernel.clear_phase_for_end();
+                if let Some(progress) = self.progress.as_mut() {
+                    match progress {
+                        $(MonsterSkillProgress::$variant(_state) =>
+                            monster_skill_progress!(@prepare _state $(, $prepare)?),)+
+                    }
+                }
+            }
+
+            pub(crate) fn clear_end_paths(&mut self) {
+                if let Some(progress) = self.progress.as_mut() {
+                    match progress {
+                        $(MonsterSkillProgress::$variant(_state) =>
+                            monster_skill_progress!(@paths _state $(, $paths)?),)+
+                    }
+                }
+            }
         }
 
         $(
@@ -318,17 +352,28 @@ macro_rules! monster_skill_progress {
             }
         )+
     };
+    (@prepare $state:ident) => { {} };
+    (@prepare $state:ident, $prepare:expr) => { ($prepare)($state) };
+    (@paths $state:ident) => { {} };
+    (@paths $state:ident, $method:ident) => { $state.$method() };
 }
 
 monster_skill_progress! {
-    FastAttack(MonsterFastAttackProgress),
-    Projectile(MonsterProjectileProgress),
-    PathProjectile(PathProjectileProgress),
-    BossFiendPenetrate(BossFiendPenetrateProgress),
-    LittleStar(LittleStarProgress),
-    SpiderWeb(SpiderWebProgress),
+    FastAttack(MonsterFastAttackProgress)
+        prepare(|state: &mut MonsterFastAttackProgress| *state = MonsterFastAttackProgress::default()),
+    Projectile(MonsterProjectileProgress)
+        prepare(MonsterProjectileProgress::prepare_derived_end),
+    PathProjectile(PathProjectileProgress) paths(clear_end_paths),
+    BossFiendPenetrate(BossFiendPenetrateProgress) paths(clear_end_paths),
+    LittleStar(LittleStarProgress) paths(clear_end_paths),
+    SpiderWeb(SpiderWebProgress)
+        prepare(|state: &mut SpiderWebProgress| *state = SpiderWebProgress::new(0)),
     SpiderMist(SpiderMistProgress),
-    YunShengLightning(YunShengLightningProgress),
+    YunShengLightning(YunShengLightningProgress)
+        prepare(|state: &mut YunShengLightningProgress| {
+            let (x, y) = state.destination();
+            *state = YunShengLightningProgress::new(x, y);
+        }),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -721,24 +766,17 @@ impl CMonster {
 
     pub(crate) fn try_become_tamed(
         &mut self,
-        property: &MonsterProperties,
         master: MasterInfo,
         pet_mode: i32,
-        factors: Option<[f32; 10]>,
-        factory: &CSkillFactory,
     ) -> bool {
-        if property.tamable != 1
-            || self.tame_attempt_count >= property.maximum_tame_attempt_count
-            || self.is_tamed()
-        {
+        if self.is_tamed() {
             return false;
         }
-        self.clear_ai_target(factory);
         self.tamed = true;
         self.master_info = master;
-        self.pet_behavior.set_mode(pet_mode);
-        if let Some(factors) = factors {
-            self.adjust_pet_factors(factors);
+        if self.has_pet_ai() {
+            self.set_pet_mode(pet_mode);
+            self.release_pet_ai_target();
         }
         true
     }

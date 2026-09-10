@@ -14,6 +14,11 @@
 //! Общий хвост `End` сохраняет отдельные часы: `dispatch.now_ms` относится к
 //! попаданию, а reuse читает runtime после очистки ресурсов и освобождения
 //! движения, как `CSkill::End` (0x4d84c0). Часы попадания не подменяют часы End.
+//! End `0x0056A330` и `0x0057B810` обнуляет четыре derived DWORD
+//! `+0x4C/+0x50/+0x54/+0x58` до возврата движения. Общий зарегистрированный
+//! End снимает фазу kernel, а этот owner сбрасывает fired и время полёта.
+//! Технический снимок detached-impact сохраняется: он не является отдельным
+//! native-полётным полем и после ended не применяется повторно.
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
@@ -362,6 +367,11 @@ pub(crate) struct MonsterProjectileProgress {
 }
 
 impl MonsterProjectileProgress {
+    pub(crate) fn prepare_derived_end(&mut self) {
+        self.missile_flying_time_ms = 0;
+        self.fired = false;
+    }
+
     pub(crate) const fn fired(self) -> bool {
         self.fired
     }

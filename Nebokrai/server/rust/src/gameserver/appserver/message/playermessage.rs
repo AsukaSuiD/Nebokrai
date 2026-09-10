@@ -16,6 +16,10 @@
 //! `CGame::run_script_file` получает фактический контекст игрока, NPC и региона.
 //! `0x8FA04` сохраняет порядок проверок, проход свойств предмета, мутации
 //! навыков и состояний, а затем расход и публикации `0xBF709/0xC0101/0xC0102`.
+//! ReUseSkillItem после reuse gate вызывает общий DelSkill (0x004CF320),
+//! включая current End(0), затем AddSkill (0x004D1C70); только успешная
+//! регистрация получает SetItemPos и packet. Равный уровень не отменяет
+//! обязательное пересоздание экземпляра в этой предметной ветви.
 //! Процентный HP recovery сохраняет промежуточный `float`, процентный MP —
 //! x87-произведение без такого сохранения; оба результата усекаются к нулю.
 //! `0x8FA06/07/0B/0C` сохраняют границы частичных изменений сессии обмена.
@@ -1009,12 +1013,17 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                     facts.tick_ms.wrapping_sub(last_used) > reuse_time
                                 });
                             if reusable {
-                                let skill_factory = game.skill_factory().clone();
-                                let replaced = game
-                                    .find_player_mut(player_id)
+                                let holder = game
+                                    .find_player(player_id)
                                     .expect("reuse-item player сохранён для skill replacement")
-                                    .replace_item_skill(skill_id, skill_level, &skill_factory);
+                                    .shape()
+                                    .identity();
+                                let _ = game.delete_move_shape_skill(region_id, holder, skill_id);
+                                let replaced = game.add_move_shape_skill(
+                                    region_id, holder, skill_id, skill_level,
+                                );
                                 if replaced {
+                                    let skill_factory = game.skill_factory().clone();
                                     let _ = game
                                         .find_player_mut(player_id)
                                         .expect("reuse-item player сохранён для позиции")

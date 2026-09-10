@@ -1581,7 +1581,7 @@ use crate::gameserver::appserver::skills::selfshield::{
     cancel_player_self_shield_dispatch, execute_player_self_shield_dispatch,
     is_self_shield_skill,
 };
-use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::gameserver::appserver::skills::shieldstate::{
     expire_player_defense_shields, DefenseShieldState,
 };
@@ -12776,10 +12776,19 @@ impl CGame {
         name: &[u8],
         level: u16,
     ) -> Option<crate::gameserver::appserver::player::PlayerRemoteSkillMutation> {
-        let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-        players
-            .get_mut(&player_id)?
-            .add_remote_skill(name, level, skill_factory)
+        self.add_named_player_skill(player_id, name, i32::from(level))
+    }
+
+    fn add_named_player_skill(
+        &mut self, player_id: i32, name: &[u8], level: i32,
+    ) -> Option<crate::gameserver::appserver::player::PlayerRemoteSkillMutation> {
+        let skill_id = self.skill_factory.query_skill_id(Some(name));
+        if skill_id == UNKNOWN_SKILL_ID { return None; }
+        let player = self.find_player(player_id)?;
+        let (region_id, holder) = (player.shape().get_region_id(), player.shape().identity());
+        let legacy_result = self.add_move_shape_skill(region_id, holder, skill_id, level);
+        let skill_level = self.find_player(player_id)?.move_shape().skill(skill_id, &self.skill_factory)?.level();
+        Some(crate::gameserver::appserver::player::PlayerRemoteSkillMutation { skill_id, skill_level, legacy_result })
     }
 
     pub(crate) fn delete_remote_player_skill(
@@ -12787,12 +12796,11 @@ impl CGame {
         player_id: i32,
         name: &[u8],
     ) -> Option<crate::gameserver::appserver::player::PlayerRemoteSkillMutation> {
-        let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-        Some(
-            players
-                .get_mut(&player_id)?
-                .delete_remote_skill(name, skill_factory),
-        )
+        let skill_id = self.skill_factory.query_skill_id(Some(name));
+        let player = self.find_player(player_id)?;
+        let (region_id, holder) = (player.shape().get_region_id(), player.shape().identity());
+        let legacy_result = self.delete_move_shape_skill(region_id, holder, skill_id);
+        Some(crate::gameserver::appserver::player::PlayerRemoteSkillMutation { skill_id, skill_level: 0, legacy_result })
     }
 
     pub(crate) fn decode_monster_list(
@@ -17652,12 +17660,7 @@ impl CGame {
             let _ = request.send(self, false);
             return -1;
         };
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            players
-                .get_mut(&target_id)
-                .and_then(|player| player.set_script_skill_level(skill_name, level, skill_factory))
-        };
+        let mutation = self.add_named_player_skill(target_id, skill_name, level);
         if let Some(mutation) = mutation {
             if let Some(response) = player_skill_learned_message(
                 0x000b_f71d,
@@ -17714,12 +17717,7 @@ impl CGame {
         let Some(target_id) = target_id else {
             return -1;
         };
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            players
-                .get_mut(&target_id)
-                .and_then(|player| player.set_script_skill_level(skill_name, level, skill_factory))
-        };
+        let mutation = self.add_named_player_skill(target_id, skill_name, level);
         let Some(mutation) = mutation else {
             return 0;
         };
@@ -29319,15 +29317,9 @@ impl CGame {
         appellation_id: u32,
         _context: &mut Context,
     ) -> Option<i32> {
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            let player = players.get_mut(&player_id)?;
-            crate::gameserver::appserver::skills::realmappellation::set_bonus(
-                player,
-                appellation_id,
-                skill_factory,
-            )
-        };
+        let mutation = crate::gameserver::appserver::skills::realmappellation::set_bonus(
+            self, player_id, appellation_id,
+        )?;
         let current_properties = self
             .recompute_player_properties_for_update(player_id)
             .expect("realm mutation сохраняет canonical player");
@@ -41477,7 +41469,7 @@ impl CGame {
     fn finish_player_skill_outcome<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
-        instance: Option<crate::gameserver::appserver::states::skill::RegisteredPlayerSkill>,
+        instance: Option<crate::gameserver::appserver::states::skill::RegisteredSkill>,
         dispatch: PlayerSkillDispatch,
         player_ai: &mut CPlayerAI,
         outcome: &QueuedSkillExecutionOutcome,

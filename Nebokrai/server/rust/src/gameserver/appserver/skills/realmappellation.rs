@@ -9,9 +9,14 @@
 //! false. Полный virtual `CPlayer::UpdateProperty` остаётся runtime-входом:
 //! owner меняет skills/identity до recompute, но не подменяет equipment,
 //! progression, state и GlobeSetup части приблизительной delta-формулой.
+//! Каждый DelSkill (0x004CF320) проходит общую границу CGame: разрешённый
+//! current при !IsEnded получает End(0) до удаления экземпляра. Заимствование
+//! игрока не удерживается через этот вызов; identity очищается только после
+//! всех шести удалений, а проверка entitlement остаётся после этой очистки.
 
-use crate::gameserver::appserver::player::{CPlayer, PlayerCombatProperties};
-use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::skills::skillfactory::UNKNOWN_SKILL_ID;
+use crate::gameserver::gameserver::game::CGame;
 
 const BONUS_SKILLS: [u32; 6] = [1010, 1020, 1030, 1040, 1050, 1060];
 
@@ -55,26 +60,32 @@ fn resolve_bonus(appellation_id: u32) -> Option<RealmBonusIdentity> {
 }
 
 pub(crate) fn set_bonus(
-    player: &mut CPlayer,
+    game: &mut CGame,
+    player_id: i32,
     appellation_id: u32,
-    factory: &CSkillFactory,
-) -> RealmBonusMutation {
+) -> Option<RealmBonusMutation> {
+    let player = game.find_player(player_id)?;
     let previous_identity = player.realm_appellation_bonus_identity();
     let previous_properties = player.combat_properties();
+    let region_id = player.shape().get_region_id();
+    let holder = player.shape().identity();
 
     for skill_id in BONUS_SKILLS {
-        let _ = player.delete_realm_appellation_skill(skill_id, factory);
+        let _ = game.delete_move_shape_skill(region_id, holder, skill_id);
     }
-    player.set_realm_appellation_bonus_identity(UNKNOWN_SKILL_ID, 0);
+    game.find_player_mut(player_id)?
+        .set_realm_appellation_bonus_identity(UNKNOWN_SKILL_ID, 0);
 
     let mut current_identity = None;
     let succeeded = if appellation_id == 0 {
         true
     } else if let Some(identity) = resolve_bonus(appellation_id) {
-        if player.realm_appellation_entitled(appellation_id, factory)
-            && player.add_realm_appellation_skill(identity.skill_id, identity.level, factory)
+        if game.find_player(player_id)?
+            .realm_appellation_entitled(appellation_id, game.skill_factory())
+            && game.add_move_shape_skill(region_id, holder, identity.skill_id, identity.level)
         {
-            player.set_realm_appellation_bonus_identity(identity.skill_id, identity.level);
+            game.find_player_mut(player_id)?
+                .set_realm_appellation_bonus_identity(identity.skill_id, identity.level);
             current_identity = Some(identity);
             true
         } else {
@@ -84,11 +95,11 @@ pub(crate) fn set_bonus(
         false
     };
 
-    RealmBonusMutation {
+    Some(RealmBonusMutation {
         appellation_id,
         previous_identity,
         current_identity,
         previous_properties,
         succeeded,
-    }
+    })
 }

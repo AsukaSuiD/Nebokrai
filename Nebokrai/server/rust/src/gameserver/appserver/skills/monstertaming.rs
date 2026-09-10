@@ -10,6 +10,13 @@
 //! `0xC0201`; `CGame` используется только для доступа к владельцам и доставки.
 //! Восстановление использует абсолютный срок `CSkill::IsRestored`; cast-delay
 //! и дальнейший lifecycle питомца остаются elapsed.
+//! Успешная ветвь AI (0x0057C802..0x0057C98E) вызывает StopAllSkills до
+//! DoesCreatureBeenTamed и назначения master. После увеличения счётчика попыток
+//! IsTamable не проверяется повторно. Только auxiliary CPet получает смену
+//! режима и OnLoseTarget; primary AI, его команды и hate не очищаются.
+//! AddPet предшествует UpgradePetLevel с текущими level/experience; лишь затем
+//! идут C0201 и уменьшение refresh-count. Регион и монстр остаются опубликованы
+//! через синхронные End, пакет читает живую shape без копирования владельца.
 
 use super::baseattack::time_reached;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
@@ -125,13 +132,11 @@ fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, val
 }
 
 fn increase_attempt(game: &mut CGame, region_id: i32, monster_id: i32) -> bool {
-    let Some(mut owner) = game.take_region_owner(region_id) else { return false; };
-    let increased = owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
+    let Some(owner) = game.find_region_mut(region_id) else { return false; };
+    owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
         monster.increase_tame_attempt_count();
         true
-    });
-    game.restore_region_owner(owner);
-    increased
+    })
 }
 
 fn apply_success(
@@ -141,42 +146,44 @@ fn apply_success(
     monster_id: i32,
     property: &MonsterProperties,
 ) -> bool {
+    let Some(holder) = game.find_region(region_id)
+        .and_then(|region| region.base().find_monster_by_id(monster_id))
+        .map(|monster| monster.move_shape().shape().identity()) else { return false; };
+    game.stop_all_move_shape_skills(region_id, holder);
     let Some((player_name, pet_mode)) = game.find_player(player_id).map(|player| {
         (player.player_name().to_vec(), player.current_pets_mode())
     }) else {
         return false;
     };
-    let factors = game.globe_setup().pet_progression(0).map(|(_, factors)| factors);
-    let Some(mut owner) = game.take_region_owner(region_id) else { return false; };
-    let result = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
+    let Some(owner) = game.find_region_mut(region_id) else { return false; };
+    let succeeded = owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
         monster.try_become_tamed(
-            property,
             MasterInfo {
                 master_type: PLAYER_TYPE,
                 master_id: player_id,
                 ..MasterInfo::default()
             },
             pet_mode,
-            factors,
-            game.skill_factory(),
-        ).then(|| {
-            let (level, experience) = monster.pet_progress();
-            (
-                monster.move_shape().shape().clone(),
-                level,
-                experience,
-                monster.hit_points(),
-                monster.maximum_hp(property),
-            )
-        })
+        )
     });
-    game.restore_region_owner(owner);
-    let Some((shape, level, experience, hit_points, maximum_hp)) = result else {
-        return false;
-    };
+    if !succeeded { return false; }
     if let Some(player) = game.find_player_mut(player_id) {
         player.add_active_pet(MONSTER_TYPE, monster_id, property.figure as u8 as i32);
     }
+    let Some(level) = game.find_region(region_id)
+        .and_then(|region| region.base().find_monster_by_id(monster_id))
+        .map(|monster| monster.pet_progress().0) else { return false; };
+    let progression = game.globe_setup().pet_progression(level);
+    let experience_factor = progression.map_or(0.0, |(factor, _)| factor);
+    let current_factors = progression.map(|(_, factors)| factors);
+    let next_factors = game.globe_setup().pet_progression(level.wrapping_add(1))
+        .map(|(_, factors)| factors);
+    let Some(monster) = game.find_region_mut(region_id)
+        .and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id)) else { return false; };
+    let _ = monster.increase_pet_experience(0, property, experience_factor, current_factors, next_factors);
+    let (level, experience) = monster.pet_progress();
+    let hit_points = monster.hit_points();
+    let maximum_hp = monster.maximum_hp(property);
     let mut message = CMessage::new(0x000c_0201);
     message.add_long(MONSTER_TYPE);
     message.add_long(monster_id);
@@ -187,12 +194,13 @@ fn apply_success(
     message.add_ulong(experience);
     message.add_ulong(hit_points);
     message.add_ulong(maximum_hp);
-    if let Some(region) = game.find_region(region_id) {
-        let _ = game.send_game_shape_around(region.base(), &shape, None, &message);
+    if let Some(region) = game.find_region(region_id)
+        && let Some(monster) = region.base().find_monster_by_id(monster_id)
+    {
+        let _ = game.send_game_shape_around(region.base(), monster.move_shape().shape(), None, &message);
     }
-    if let Some(mut owner) = game.take_region_owner(region_id) {
+    if let Some(owner) = game.find_region_mut(region_id) {
         owner.base_mut().finish_owned_monster_taming(monster_id);
-        game.restore_region_owner(owner);
     }
     true
 }

@@ -68,7 +68,7 @@ use super::kernel::{BattleFairyExecution, SkillTermination};
 use super::skillfactory::{SkillEndEffect, SkillOwner};
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch};
 use crate::gameserver::appserver::player::BattleFairySkillDispatch;
-use crate::gameserver::appserver::states::skill::RegisteredPlayerSkill;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -207,7 +207,7 @@ impl CGame {
         let Some(skill) = self.registered_skill(instance) else { return false };
         if skill.lifecycle().is_ended() { return false; }
         let dispatch = skill.battle_fairy_dispatch();
-        let _ = self.end_registered_player_instance_without_after_use(instance, SkillTermination::Cancelled);
+        let _ = self.end_registered_instance_without_after_use(instance, SkillTermination::Cancelled);
         if let Some(dispatch) = dispatch && let Some(skill) = self.registered_skill_mut(instance) {
             skill.clear_execution(RegisteredSkillDispatch::BattleFairy(dispatch));
         }
@@ -220,7 +220,7 @@ impl CGame {
     /// на новую регистрацию того же ID. Неуспешный Begin не требует payload.
     pub(crate) fn finish_registered_battle_fairy_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
-        instance: RegisteredPlayerSkill,
+        instance: RegisteredSkill,
         dispatch: BattleFairySkillDispatch,
         argument: i32,
         termination: SkillTermination,
@@ -236,14 +236,14 @@ impl CGame {
         }
         let argument = if materialized { argument } else { 0 };
         self.prepare_battle_fairy_boolean_end(instance);
-        let _ = self.end_registered_player_instance(instance, argument, termination, runtime);
+        let _ = self.end_registered_instance(instance, argument, termination, runtime);
         if let Some(skill) = self.registered_skill_mut(instance) {
             skill.clear_execution(RegisteredSkillDispatch::BattleFairy(dispatch));
         }
         true
     }
 
-    fn prepare_battle_fairy_boolean_end(&mut self, instance: RegisteredPlayerSkill) {
+    fn prepare_battle_fairy_boolean_end(&mut self, instance: RegisteredSkill) {
         if let Some(effect) = self.registered_skill(instance)
             .and_then(|skill| BattleFairyVisualContract::for_owner(skill.owner()))
             .and_then(|contract| contract.boolean_end_effect)

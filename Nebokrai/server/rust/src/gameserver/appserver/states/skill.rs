@@ -2,7 +2,7 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
 //! `appserver/states/skill.cpp`, `attackskill.cpp`, `stateskill.cpp`,
-//! `summonskill.cpp`. CSkill::End(int) (0x004D84C0) не проверяет IsEnded:
+//! `summonskill.cpp`, `appserver/moveshape.cpp`. CSkill::End(int) (0x004D84C0) не проверяет IsEnded:
 //! GetUser/OnEndSkill предшествуют обнулению базы, удалению visual и ended=true.
 //! Native End-политика берётся из единственного каталога concrete владельцев.
 //! End(0) не вызывает AfterUse и не читает reuse-часы. Ненулевой End у
@@ -14,7 +14,7 @@
 //! пересчитать TaoZhuang и удалить/заменить навыки. После такого удаления
 //! продолжение не касается нового экземпляра с тем же ID или индексом.
 //! Владельцы остаются опубликованными; источники и цели разрешаются отдельно
-//! по сохранённой базе. FIFO, current selection и background здесь не меняются.
+//! по сохранённой базе. Сам End не меняет FIFO, current selection и background.
 //! Concrete payload не удаляется общим End: освобождаются только доказанные
 //! ресурсы/поля, HeartLessArrow может вместо End выпустить удерживаемую стрелу.
 //! Терминальные границы расписания и explicit End отдельно завершают payload
@@ -28,12 +28,21 @@
 //! lifecycle.ended/source. FatalBlow здесь также обнуляет время полёта;
 //! BFBaseAttack сохраняет его. Общая int-политика Po/Yu/transfer не получает
 //! этого собственного bool-пролога и его сброса полей.
-//! Перенос общей границы в остальные concrete owners, callbacks временно
-//! извлечённого региона/монстра и синхронные DelSkill/ClearSkills ещё требуется.
-//! Наличие модели не заменяет эти callers.
+//! StopAllSkills (0x004CDF50) обходит живой реестр держателя независимо от
+//! GetUser/IsEnded. Приручение вызывает его до назначения master. DelSkill
+//! (0x004CF320) завершает только разрешённый current и затем удаляет первое
+//! совпадение через Drop, без End остальных. Общий Add сохраняет implicit Del
+//! при повышении уровня. Remote/script, realm и item-reuse проходят эти границы.
+//! Вложенные equipment/war-soul мутации, callbacks извлечённого региона и
+//! смерть ещё требуют подключения в точном порядке частичных изменений.
+//! ClearSkills не заменяется StopAll: его native current-End и virtual
+//! SetCurrentSkill перед деструкторами пока остаются в доказательствах owner-а.
 //! Производные visual, кроме подключённых видов, не имитируются пустым пакетом.
 //! Нулевой End имеет вход без runtime: он использует тот же derived/base код,
 //! но не требует фиктивных часов или реализации износа для region-entry/recall.
+//! SpiderMist снимает у держателя техническую curable-регистрацию после
+//! возврата движения, до AfterUse/base End. SkillOwner задаёт это действие
+//! вместе с остальной политикой; самостоятельная phalanx не принадлежит cast.
 
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -41,16 +50,16 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::skills::kernel::SkillTermination;
 use crate::gameserver::appserver::skills::skillfactory::{
-    SkillAfterUse, SkillCategory, SkillEndEffect, SkillEndMovement, SkillEndPathOrder,
+    SkillAfterUse, SkillCategory, SkillEndEffect, SkillEndMovement, SkillEndPathOrder, UNKNOWN_SKILL_ID,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-use super::state::{resolve_skill_sufferer, resolve_state_move_shape_mut, resolve_state_user};
+use super::state::{resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut, resolve_state_user};
 use super::visualeffect::SkillVisualEffectKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RegisteredPlayerSkill {
-    player_id: i32,
+pub(crate) struct RegisteredSkill {
+    holder: (i32, ShapeIdentity),
     slot: SkillSlot,
 }
 
@@ -61,22 +70,88 @@ pub(crate) enum RegisteredSkillEnd {
 }
 
 impl CGame {
-    pub(crate) fn registered_player_skill(&self, player_id: i32, skill_id: u32) -> Option<RegisteredPlayerSkill> {
-        let slot = self.find_player(player_id)?.move_shape().skill_slot(skill_id, self.skill_factory())?;
-        Some(RegisteredPlayerSkill { player_id, slot })
+    pub(crate) fn registered_player_skill(&self, player_id: i32, skill_id: u32) -> Option<RegisteredSkill> {
+        let player = self.find_player(player_id)?;
+        self.registered_move_shape_skill(player.shape().get_region_id(), player.shape().identity(), skill_id)
     }
 
-    pub(crate) fn registered_skill(&self, address: RegisteredPlayerSkill) -> Option<&MoveShapeSkill> {
-        self.find_player(address.player_id)?.move_shape().skill_at(address.slot)
+    pub(crate) fn registered_move_shape_skill(
+        &self, region_id: i32, holder: ShapeIdentity, skill_id: u32,
+    ) -> Option<RegisteredSkill> {
+        let slot = resolve_state_move_shape(self, region_id, holder)?.skill_slot(skill_id, self.skill_factory())?;
+        Some(RegisteredSkill { holder: (region_id, holder), slot })
     }
 
-    pub(crate) fn registered_skill_mut(&mut self, address: RegisteredPlayerSkill) -> Option<&mut MoveShapeSkill> {
-        self.find_player_mut(address.player_id)?.move_shape_mut().skill_at_mut(address.slot)
+    pub(crate) fn registered_skill(&self, address: RegisteredSkill) -> Option<&MoveShapeSkill> {
+        resolve_state_move_shape(self, address.holder.0, address.holder.1)?.skill_at(address.slot)
+    }
+
+    pub(crate) fn registered_skill_mut(&mut self, address: RegisteredSkill) -> Option<&mut MoveShapeSkill> {
+        resolve_state_move_shape_mut(self, address.holder.0, address.holder.1)?.skill_at_mut(address.slot)
+    }
+
+    /// CMoveShape::StopAllSkills (0x004CDF50): без IsEnded-gate и без
+    /// удаления экземпляров или AI-команд. Первые три категории читают длину
+    /// заново; State фиксирует её перед циклом, но перечитывает каждый индекс.
+    pub(crate) fn stop_all_move_shape_skills(&mut self, region_id: i32, holder: ShapeIdentity) {
+        for category in [SkillCategory::Attack, SkillCategory::Defense, SkillCategory::Summon, SkillCategory::State] {
+            let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return };
+            let state_length = (category == SkillCategory::State).then(|| shape.skill_count_in_category(category));
+            let mut index = 0;
+            loop {
+                let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return };
+                let length = state_length.unwrap_or_else(|| shape.skill_count_in_category(category));
+                if index >= length { break; }
+                let instance = shape.skill_slot_at(category, index)
+                    .map(|slot| RegisteredSkill { holder: (region_id, holder), slot });
+                if let Some(instance) = instance {
+                    let _ = self.end_registered_instance_without_after_use(instance, SkillTermination::Cancelled);
+                }
+                index += 1;
+            }
+        }
+    }
+
+    fn current_registered_skill(&self, region_id: i32, holder: ShapeIdentity) -> Option<RegisteredSkill> {
+        let id = resolve_state_move_shape(self, region_id, holder)?.current_skill_id()?;
+        self.registered_move_shape_skill(region_id, holder, id)
+    }
+
+    /// DelSkill (0x004CF320) завершает только разрешённый current, даже если
+    /// удаляется другой ID. Удаляемый экземпляр получает destructor, не End.
+    pub(crate) fn delete_move_shape_skill(&mut self, region_id: i32, holder: ShapeIdentity, skill_id: u32) -> bool {
+        if skill_id == UNKNOWN_SKILL_ID { return false; }
+        if let Some(instance) = self.current_registered_skill(region_id, holder) {
+            if self.registered_skill(instance).is_some_and(|skill| !skill.lifecycle().is_ended()) {
+                let _ = self.end_registered_instance_without_after_use(instance, SkillTermination::Cancelled);
+            }
+            if let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) {
+                shape.set_current_skill_id(None);
+            }
+        }
+        let Some(category) = SkillCategory::from_raw(self.skill_factory().query_skill_type(skill_id, 1)) else { return false };
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return false };
+        shape.delete_skill_in_category(skill_id, category);
+        true
+    }
+
+    /// AddSkill (0x004D1C70): implicit Del выполняется только при повышении
+    /// ненулевого уровня, до новой фабричной регистрации в хвост категории.
+    pub(crate) fn add_move_shape_skill(&mut self, region_id: i32, holder: ShapeIdentity, skill_id: u32, level: i32) -> bool {
+        if let Some(instance) = self.registered_move_shape_skill(region_id, holder, skill_id)
+            && let Some(existing) = self.registered_skill(instance)
+            && existing.level() != 0
+        {
+            if level <= existing.level() { return true; }
+            let _ = self.delete_move_shape_skill(region_id, holder, skill_id);
+        }
+        resolve_state_move_shape_mut(self, region_id, holder)
+            .is_some_and(|shape| shape.insert_new_skill(skill_id, level))
     }
 
     pub(crate) fn finish_registered_player_execution(
         &mut self,
-        address: RegisteredPlayerSkill,
+        address: RegisteredSkill,
         dispatch: PlayerSkillDispatch,
         termination: SkillTermination,
     ) -> bool {
@@ -92,7 +167,7 @@ impl CGame {
     /// уже снять свою команду, либо callback мог выбрать другую.
     pub(crate) fn finish_registered_player_command(
         &mut self,
-        address: Option<RegisteredPlayerSkill>,
+        address: Option<RegisteredSkill>,
         ai: &mut CPlayerAI,
         dispatch: PlayerSkillDispatch,
         termination: SkillTermination,
@@ -105,12 +180,12 @@ impl CGame {
         finished
     }
 
-    fn registered_skill_user(&self, address: RegisteredPlayerSkill) -> Option<(i32, ShapeIdentity)> {
+    fn registered_skill_user(&self, address: RegisteredSkill) -> Option<(i32, ShapeIdentity)> {
         let (region, identity) = self.registered_skill(address)?.lifecycle().user();
         Some((region, resolve_state_user(self, region, identity)?))
     }
 
-    fn registered_skill_sufferer(&self, address: RegisteredPlayerSkill) -> Option<(i32, ShapeIdentity)> {
+    fn registered_skill_sufferer(&self, address: RegisteredSkill) -> Option<(i32, ShapeIdentity)> {
         resolve_skill_sufferer(self, self.registered_skill(address)?.lifecycle())
     }
 
@@ -120,7 +195,7 @@ impl CGame {
         }
     }
 
-    fn update_registered_skill_visual(&mut self, address: RegisteredPlayerSkill, mode: u32) {
+    fn update_registered_skill_visual(&mut self, address: RegisteredSkill, mode: u32) {
         let Some(skill) = self.registered_skill(address) else { return };
         let Some(effect) = skill.visual_effect() else { return };
         match effect.kind() {
@@ -138,7 +213,7 @@ impl CGame {
 
     fn after_use_registered_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
-        address: RegisteredPlayerSkill,
+        address: RegisteredSkill,
         runtime: &mut Runtime,
     ) -> Option<()> {
         let skill = self.registered_skill(address)?;
@@ -193,39 +268,39 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<RegisteredSkillEnd> {
         let address = self.registered_player_skill(player_id, skill_id)?;
-        self.end_registered_player_instance(address, argument, termination, runtime)
+        self.end_registered_instance(address, argument, termination, runtime)
     }
 
-    pub(crate) fn end_registered_player_instance<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn end_registered_instance<Runtime: GameMainLoopRuntime>(
         &mut self,
-        address: RegisteredPlayerSkill,
+        address: RegisteredSkill,
         argument: i32,
         termination: SkillTermination,
         runtime: &mut Runtime,
     ) -> Option<RegisteredSkillEnd> {
-        if self.prepare_registered_player_end(address, argument)? == RegisteredSkillEnd::Released {
+        if self.prepare_registered_end(address, argument)? == RegisteredSkillEnd::Released {
             return Some(RegisteredSkillEnd::Released);
         }
         if argument != 0 { self.after_use_registered_skill(address, runtime)?; }
-        self.finish_registered_player_base_end(address, termination)
+        self.finish_registered_base_end(address, termination)
     }
 
     /// End(0) не требует часов, RNG или контекста износа. Region-entry и отзыв
     /// феи используют ту же derived/base границу, не создавая фиктивный runtime.
-    pub(crate) fn end_registered_player_instance_without_after_use(
+    pub(crate) fn end_registered_instance_without_after_use(
         &mut self,
-        address: RegisteredPlayerSkill,
+        address: RegisteredSkill,
         termination: SkillTermination,
     ) -> Option<RegisteredSkillEnd> {
-        if self.prepare_registered_player_end(address, 0)? == RegisteredSkillEnd::Released {
+        if self.prepare_registered_end(address, 0)? == RegisteredSkillEnd::Released {
             return Some(RegisteredSkillEnd::Released);
         }
-        self.finish_registered_player_base_end(address, termination)
+        self.finish_registered_base_end(address, termination)
     }
 
-    fn finish_registered_player_base_end(
+    fn finish_registered_base_end(
         &mut self,
-        address: RegisteredPlayerSkill,
+        address: RegisteredSkill,
         termination: SkillTermination,
     ) -> Option<RegisteredSkillEnd> {
         // CPlayer/CMonster::OnEndSkill — пустой virtual 0x00485540.
@@ -233,9 +308,9 @@ impl CGame {
         Some(RegisteredSkillEnd::Ended)
     }
 
-    fn prepare_registered_player_end(
+    fn prepare_registered_end(
         &mut self,
-        address: RegisteredPlayerSkill,
+        address: RegisteredSkill,
         argument: i32,
     ) -> Option<RegisteredSkillEnd> {
         let policy = self.registered_skill(address)?.owner().end_policy();
@@ -256,6 +331,11 @@ impl CGame {
         {
             target.set_moveable(true);
         }
+        if policy.release_curable_registration {
+            let skill_id = self.registered_skill(address)?.id();
+            resolve_state_move_shape_mut(self, address.holder.0, address.holder.1)?
+                .finish_curable_skill_state(skill_id);
+        }
         if policy.path_order == SkillEndPathOrder::AfterMovement {
             self.registered_skill_mut(address)?.clear_end_paths();
         }
@@ -267,7 +347,7 @@ impl CGame {
     }
 
     pub(crate) fn prepare_registered_skill_end_effect(
-        &mut self, address: RegisteredPlayerSkill, effect: SkillEndEffect, argument: i32,
+        &mut self, address: RegisteredSkill, effect: SkillEndEffect, argument: i32,
     ) -> Option<()> {
         if matches!(effect, SkillEndEffect::BattleFairyBaseMagic | SkillEndEffect::BattleFairyState
             | SkillEndEffect::BattleFairyFatal | SkillEndEffect::BattleFairySummon)

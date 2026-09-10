@@ -7383,23 +7383,6 @@ impl CPlayer {
         self.set_script_value(canonical, current.wrapping_add(delta))
     }
 
-    pub(crate) fn delete_realm_appellation_skill(
-        &mut self,
-        skill_id: u32,
-        factory: &CSkillFactory,
-    ) -> bool {
-        self.move_shape.delete_skill(skill_id, factory)
-    }
-
-    pub(crate) fn add_realm_appellation_skill(
-        &mut self,
-        skill_id: u32,
-        level: i32,
-        factory: &CSkillFactory,
-    ) -> bool {
-        self.move_shape.add_skill(skill_id, level, factory)
-    }
-
     pub(crate) const fn gods_battle_faction(&self) -> i32 {
         self.base_properties.gods_battle_faction
     }
@@ -7475,60 +7458,6 @@ impl CPlayer {
         self.base_properties.level = level;
         self.base_properties.experience = 0;
         mutation
-    }
-
-    pub(crate) fn add_remote_skill(
-        &mut self,
-        name: &[u8],
-        level: u16,
-        factory: &CSkillFactory,
-    ) -> Option<PlayerRemoteSkillMutation> {
-        let skill_id = factory.query_skill_id(Some(name));
-        if skill_id == UNKNOWN_SKILL_ID {
-            return None;
-        }
-        let legacy_result = self
-            .move_shape
-            .add_skill(skill_id, i32::from(level), factory);
-        let skill = self.move_shape.skill(skill_id, factory)?;
-        Some(PlayerRemoteSkillMutation {
-            skill_id,
-            skill_level: skill.level(),
-            legacy_result,
-        })
-    }
-
-    pub(crate) fn set_script_skill_level(
-        &mut self,
-        name: &[u8],
-        level: i32,
-        factory: &CSkillFactory,
-    ) -> Option<PlayerRemoteSkillMutation> {
-        let skill_id = factory.query_skill_id(Some(name));
-        if skill_id == UNKNOWN_SKILL_ID {
-            return None;
-        }
-        let legacy_result = self.move_shape.add_skill(skill_id, level, factory);
-        let skill = self.move_shape.skill(skill_id, factory)?;
-        Some(PlayerRemoteSkillMutation {
-            skill_id,
-            skill_level: skill.level(),
-            legacy_result,
-        })
-    }
-
-    pub(crate) fn delete_remote_skill(
-        &mut self,
-        name: &[u8],
-        factory: &CSkillFactory,
-    ) -> PlayerRemoteSkillMutation {
-        let skill_id = factory.query_skill_id(Some(name));
-        let legacy_result = self.move_shape.delete_skill(skill_id, factory);
-        PlayerRemoteSkillMutation {
-            skill_id,
-            skill_level: 0,
-            legacy_result,
-        }
     }
 
     pub(crate) const fn szl(&self) -> u32 {
@@ -7858,18 +7787,6 @@ impl CPlayer {
         level: i32,
         factory: &CSkillFactory,
     ) -> bool {
-        self.move_shape.add_skill(skill_id, level, factory)
-    }
-
-    /// `ReUseSkillItem` success tail всегда пересоздаёт concrete skill перед
-    /// `CItemSkill_2::SetItemPos`, даже когда уровень совпадает с текущим.
-    pub(crate) fn replace_item_skill(
-        &mut self,
-        skill_id: u32,
-        level: i32,
-        factory: &CSkillFactory,
-    ) -> bool {
-        let _deleted = self.move_shape.delete_skill(skill_id, factory);
         self.move_shape.add_skill(skill_id, level, factory)
     }
 

@@ -109,6 +109,10 @@
 //! End и callback; завершение базы вызывается владельцем отдельно до удаления.
 //! Общая очистка Player/BattleFairy требует точного typed dispatch того же
 //! экземпляра. Проверочный enum не хранит исполнение и не объединяет их AI.
+//! Monster-подготовка End и освобождение путей используют hooks того же
+//! registered payload; порядок возврата движения остаётся у общей политики.
+//! Это не удаление исполнения: фаза и ресурсы очищаются, но kernel с исходной
+//! базой остаётся доступен до общего End и следующего active-прохода AI.
 //! Изменяемый доступ не создаёт фиктивного monster-kernel и не подменяет
 //! чужой вариант. Общий IsEnded не выводится из наличия concrete-исполнения;
 //! отдельный immediate-флаг +0x4c не подменяет базовый lifecycle.
@@ -131,8 +135,13 @@
 //! concrete callers ещё не все используют эту границу.
 //! StopAllSkills (0x004CDF50) вызывает End(0) каждого экземпляра в порядке
 //! attack → defense → summon → state, не очищая AI target/FIFO/background.
-//! Runtime StopAllSkills ещё не подключён; завершение одного текущего cast
-//! не заменяет этот контракт, в том числе перед приручением монстра.
+//! Общий обход в states/skill.rs подключён перед приручением монстра:
+//! Attack/Defense/Summon перечитывают длину, State фиксирует исходную длину,
+//! каждый индекс снова берётся из реестра. Ключ захватывается только на End.
+//! DelSkill для remote/script, realm и item-reuse синхронно завершает current,
+//! затем storage удаляет первый экземпляр без дополнительного End. Вложенные
+//! equipment/war-soul callers ещё используют локальную границу без общего End;
+//! полный StopAll перед смертью требует опубликованного регионального owner-а.
 //! В Luvinia Application/MoveShape.cpp AddSkill/DelSkill остались пустыми,
 //! а StopAllSkills работает с другой active-module map и удаляет её записи.
 //! Старый GetSkill сохранился в отключённом OtherMessage; world factory
@@ -775,10 +784,14 @@ impl MoveShapeSkill {
     }
 
     pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
-        if let RegisteredSkillExecution::Player(execution) = &mut self.execution
-            && !execution.prepare_derived_end(argument)
-        {
-            return false;
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(execution) => {
+                if !execution.prepare_derived_end(argument) {
+                    return false;
+                }
+            }
+            RegisteredSkillExecution::Monster(execution) => execution.prepare_derived_end(),
+            RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_) => {}
         }
         if is_auto_start_state_skill(self.id) {
             self.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
@@ -787,8 +800,10 @@ impl MoveShapeSkill {
     }
 
     pub(crate) fn clear_end_paths(&mut self) {
-        if let RegisteredSkillExecution::Player(execution) = &mut self.execution {
-            execution.clear_end_paths();
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(execution) => execution.clear_end_paths(),
+            RegisteredSkillExecution::Monster(execution) => execution.clear_end_paths(),
+            RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_) => {}
         }
     }
 
@@ -5853,6 +5868,10 @@ impl CMoveShape {
                 self.delete_skill(skill_id, factory);
             }
         }
+        self.insert_new_skill(skill_id, level)
+    }
+
+    pub(crate) fn insert_new_skill(&mut self, skill_id: u32, level: i32) -> bool {
         let Some(owner) = CSkillFactory::factory_owner(skill_id) else {
             return false;
         };
@@ -5882,12 +5901,16 @@ impl CMoveShape {
         let Some(category) = SkillCategory::from_raw(factory.query_skill_type(skill_id, 1)) else {
             return false;
         };
+        self.delete_skill_in_category(skill_id, category);
+        true
+    }
+
+    pub(crate) fn delete_skill_in_category(&mut self, skill_id: u32, category: SkillCategory) {
         let skills = &mut self.skills[category as usize];
         let index = skills.iter().position(|skill| skill.id == skill_id);
         if let Some(index) = index {
             skills.remove(index);
         }
-        true
     }
 
     pub(crate) fn set_pos_xy(
@@ -6676,19 +6699,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::StopAllSkills
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2096
-// RVA: 0x000CDF50
-// ADDRESS: 004cdf50
-// PROTOTYPE: void __thiscall StopAllSkills(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::StartAllStates
