@@ -11,8 +11,10 @@
 //! (0x00536B97, slot +0x20) и завершается без создания Fury/Cure, пакета
 //! состояния и пересчёта свойств. Это общая ветвь игрока и монстра;
 //! обычная ветвь сохраняет накопление состояний.
-//! Монстровая ветвь снимает доступные typed-состояния exact conflict-набора
-//! через текущий region owner и публикует их завершение до `CCureState`.
+//! Снятие конфликтов внутри AI0x00536970 обходит живую длину общей арены:
+//! каждый подходящий ID получает virtual End, затем destructor свежего остатка
+//! той же позиции. Игрок и монстр используют один проход; монстровый callback
+//! публикует настоящий регион. Дополнительного BFE04 поверх owner End нет.
 //! Игровая ветвь игрока завершается общим `CSummonSkill::End(1)`; монстровый
 //! lifecycle остаётся отдельным и не использует этот хвост. Обе ветви
 //! используют абсолютные сроки `CSkill::IsRestored` и задержки каста
@@ -24,9 +26,10 @@
 //! region owner на время этого пересчёта и затем разрешает его заново.
 //! CFuryState::Begin(0x005EA500) только создаёт loop=1 visual; начальный
 //! BFE03 отправляет OnUpdateProperties, а не отдельный вызов после Begin.
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
+};
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_in_region};
 use super::furystate::FuryState;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
@@ -108,68 +111,15 @@ fn send_cast_fire(
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
-fn remove_reached_conflict_states(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-) {
-    let order = region
-        .find_monster_by_id(monster_id)
-        .map(|monster| monster.move_shape().curable_state_ids())
-        .unwrap_or_default();
-    for state_id in order {
-        if !CONFLICTING_STATES.contains(&state_id) {
-            continue;
+fn remove_reached_conflict_states(game: &mut CGame, region_id: i32, holder: ShapeIdentity) {
+    let mut position = 0;
+    loop {
+        let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return; };
+        if position >= shape.state_slot_count() { break; }
+        if shape.state_at(position).is_some_and(|(_, state)| CONFLICTING_STATES.contains(&state.state_id())) {
+            let _ = end_and_destroy_state_at(game, region_id, holder, position);
         }
-        let removed_shape = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-            match state_id {
-                super::sealstate::SEAL_STATE_ID => {
-                    monster.move_shape_mut().take_seal_state()?;
-                    monster.move_shape_mut().set_moveable(true);
-                    monster.move_shape_mut().set_fightable(true);
-                }
-                super::boalockstate::BOA_LOCK_STATE_ID => {
-                    monster.move_shape_mut().take_boa_lock_state()?;
-                    monster.move_shape_mut().set_moveable(true);
-                }
-                super::poisonfogstate::POISON_FOG_STATE_ID => {
-                    monster.move_shape_mut().take_poison_fog_state()?;
-                }
-                super::knightcutstate::KNIGHT_CUT_STATE_ID => {
-                    monster.move_shape_mut().take_knight_cut_state()?;
-                    monster.move_shape_mut().set_moveable(true);
-                    monster.move_shape_mut().set_fightable(true);
-                }
-                super::bossbluequakestate::BOSS_BLUE_QUAKE_STATE_ID => {
-                    monster.move_shape_mut().take_boss_blue_quake_state()?;
-                    monster.move_shape_mut().set_moveable(true);
-                    monster.move_shape_mut().set_fightable(true);
-                }
-                super::spiderweb::SPIDER_WEB_SKILL_ID => {
-                    monster.move_shape_mut().take_spider_web_state()?;
-                    monster.move_shape_mut().set_moveable(true);
-                    monster.move_shape_mut().set_fightable(true);
-                }
-                super::spiderpoison::SPIDER_POISON_SKILL_ID => {
-                    monster.move_shape_mut().take_spider_poison_state()?;
-                }
-                super::spriteburn::SPRITE_BURN_SKILL_ID => {
-                    monster.move_shape_mut().take_sprite_burn_state()?;
-                }
-                // `0x198` — активный `CSpiderMist`, но текущий Fury уже
-                // занимает единственный monster execution slot.
-                _ => return None,
-            }
-            Some(monster.move_shape().shape().clone())
-        });
-        if let Some(shape) = removed_shape {
-            let identity = shape.identity();
-            let mut message = CMessage::new(0x000b_fe04);
-            message.add_long(identity.object_type);
-            message.add_long(identity.id);
-            message.add_long(state_id as i32);
-            let _ = game.send_game_shape_around(region, &shape, None, &message);
-        }
+        position += 1;
     }
 }
 
@@ -291,7 +241,10 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
         monster.move_shape_mut().push_fury_state(fury);
     }
 
-    remove_reached_conflict_states(game, region, monster_id);
+    let _ = game.with_published_region(owner, |game| {
+        remove_reached_conflict_states(game, region_id, identity);
+    });
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
 
     let cure = CureState::new(identity, identity).begin_now();
     send_cure_state_visual_in_region(game, region, &source, cure, true);
@@ -481,15 +434,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         player.push_fury_state(fury);
     }
 
-    let state_order = game
-        .find_player(player_id)
-        .map(CPlayer::curable_state_ids)
-        .unwrap_or_default();
-    for state_id in state_order {
-        if CONFLICTING_STATES.contains(&state_id) {
-            let _ = finish_curable_state(game, region_id, identity, state_id, now_ms);
-        }
-    }
+    remove_reached_conflict_states(game, region_id, identity);
 
     let cure = CureState::new(identity, identity).begin_now();
     super::curestate::send_cure_state_visual(game, player_id, cure, true);

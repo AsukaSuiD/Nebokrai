@@ -44543,7 +44543,7 @@ impl CGame {
                 self,
                 region_id,
                 ShapeIdentity { object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID },
-                runtime.now_milliseconds(),
+                &mut || runtime.now_milliseconds(),
             );
         }
         let Some((mut attack, mut attacker_properties, attacker_occupation, _)) =
@@ -44759,7 +44759,7 @@ impl CGame {
                 self,
                 region_id,
                 ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID },
-                runtime.now_milliseconds(),
+                &mut || runtime.now_milliseconds(),
             );
         }
         let Some((mut attack, attacker_properties, attacker_occupation, attacker_level)) =
@@ -45459,17 +45459,10 @@ impl CGame {
         ) = (tick, &phalanx)
         {
             let candidates = crate::gameserver::appserver::skills::spidermistphalanx::spider_mist_targets(self, region_id, spider_mist);
-            if let Some(mut owner) = self.take_region_owner(region_id) {
-                let applied = crate::gameserver::appserver::skills::spidermistphalanx::apply_spider_mist_targets(
-                    self,
-                    owner.base_mut(),
-                    spider_mist,
-                    candidates,
-                    || runtime.now_milliseconds(),
-                );
-                self.restore_region_owner(owner);
-                tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
-            }
+            let applied = crate::gameserver::appserver::skills::spidermistphalanx::apply_spider_mist_targets(
+                self, region_id, spider_mist, candidates, || runtime.now_milliseconds(),
+            );
+            tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
             return true;
         }
         if let SummonedSkillShape::Weak(weak) = &phalanx {

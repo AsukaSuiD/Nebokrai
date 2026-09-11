@@ -788,15 +788,12 @@ state_callbacks! {
     ),
     StateData::SpiderPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::spiderpoisonstate::update_player_spider_poison_state(game, target.id, key, runtime); }
-                600 => { skills::spiderpoisonstate::update_monster_spider_poison_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            skills::spiderpoisonstate::update_spider_poison_state(game, region, target, key, runtime);
         },
         skills::spiderpoisonstate::end_spider_poison_state,
         skills::spiderpoisonstate::restart_spider_poison_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::SpriteBurn(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {

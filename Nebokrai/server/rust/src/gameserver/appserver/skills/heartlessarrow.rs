@@ -24,6 +24,11 @@
 //! При переносе яда DWORD-произведение уровня оружия и модификатора остаётся
 //! точным unsigned-значением в x87 вплоть до умножения на `-0.01f` и прямого
 //! `FISTP dword`; промежуточного сохранения в `f32` нет.
+//! AddPoisonState (0x00592920; формы 0x005FAB00/0x005EDB90) проверяет Cure,
+//! покрытие и наличие навыка, затем снимает MasterInfo живого игрока с country=0.
+//! Первый старый яд получает End и уничтожение остатка до чтения modifier/оружия,
+//! CONST/frequency/keep. Новый Begin с живыми часами предшествует append;
+//! наличие покрытия не расходует и не завершает DaubPoison.
 //! После эффекта выпуска (0x005931BE) устанавливается общий prepared-флаг.
 //! Следующий OnFighting переносит исполнение в фон без End; полёт продолжает
 //! тот же owner с исходной целью и временем. Это не attacking_started,
@@ -39,8 +44,8 @@ use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::spiderpoison::{install_spider_poison_state, target_has_cure};
-use super::spiderpoisonstate::SpiderPoisonState;
+use super::spiderpoison::SPIDER_POISON_SKILL_ID;
+use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -49,6 +54,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::skill::RegisteredSkillEnd;
+use crate::gameserver::appserver::states::state::{end_and_destroy_state_at, resolve_state_move_shape};
 use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -223,32 +229,38 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, hit_modifier: 
     Some((master, attack))
 }
 
-pub(crate) fn apply_daub_poison(game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity, now_ms: u32) {
-    let Some(master) = game.find_player(player_id).map(master_info) else { return };
-    apply_daub_poison_with_master(game, player_id, master, region_id, target, now_ms);
-}
-
-pub(crate) fn apply_daub_poison_with_master(game: &mut CGame, player_id: i32, master: MasterInfo, region_id: i32, target: ShapeIdentity, now_ms: u32) {
-    let Some((level, weapon_level)) = game.find_player(player_id).and_then(|player| {
-        if !player.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return None; }
-        let level = player.learned_skill_level(DAUB_POISON_SKILL_ID, game.skill_factory());
-        (level != 0).then(|| (level, player.weapon_damage_level(game.goods_factory())))
-    }) else { return };
+pub(crate) fn apply_daub_poison(
+    game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity,
+    now: &mut dyn FnMut() -> u32,
+) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let Some(target_shape) = resolve_state_move_shape(game, region_id, target) else { return };
+    if target_shape.has_state_by_skill_id(0x131) { return; }
+    if !player.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return; }
+    let Some(level) = player.learned_skill_level_if_present(DAUB_POISON_SKILL_ID, game.skill_factory()) else { return };
+    if game.skill_base_properties(DAUB_POISON_SKILL_ID, level).is_none() { return; }
+    let master = master_info(player);
+    let user = (player.shape().get_region_id(), player.shape().identity());
+    let sufferer = (target_shape.shape().get_region_id(), target_shape.shape().identity());
+    let previous = target_shape.find_state_position(|state| state.state_id() == SPIDER_POISON_SKILL_ID);
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, sufferer.0, sufferer.1, position);
+    }
     let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else { return };
-    let keep_time_ms = properties.query_property(STATE_PERSIST_TIME_MODIFIER);
-    let frequency_ms = properties.query_property(TARGET_AFFECT_FREQUENCY);
-    let constant = properties.query_property(POISON_CONSTANT);
     let modifier = properties.query_property(WEAPON_DAMAGE_LEVEL_MODIFIER);
+    let Some(weapon_level) = game.find_player(player_id).map(|player| player.weapon_damage_level(game.goods_factory())) else { return };
     let scaled = (weapon_level as u32).wrapping_mul(modifier);
+    let constant = properties.query_property(POISON_CONSTANT);
     let negative_bonus = truncate_original(
         f64::from(scaled) * f64::from(-0.01_f32),
     );
     let hp_loss = constant.wrapping_sub(negative_bonus as u32);
-    let Some(mut owner) = game.take_region_owner(region_id) else { return };
-    if !target_has_cure(game, owner.base(), target) {
-        install_spider_poison_state(game, owner.base_mut(), target, SpiderPoisonState::new(master, now_ms, keep_time_ms, frequency_ms, hp_loss), now_ms);
-    }
-    game.restore_region_owner(owner);
+    let frequency_ms = properties.query_property(TARGET_AFFECT_FREQUENCY);
+    let keep_time_ms = properties.query_property(STATE_PERSIST_TIME_MODIFIER);
+    let state = SpiderPoisonState::new(master, keep_time_ms, frequency_ms, hp_loss);
+    let _ = begin_primary_spider_poison_state(
+        game, sufferer.0, sufferer.1, Some(user), Some(sufferer), state, None, now,
+    );
 }
 
 pub(crate) const fn is_heartless_arrow_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -337,7 +349,9 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
     if let Some((master, attack)) = calculate_attack(game, player_id, level, hit_modifier, factor) {
         match target.object_type { PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)), MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)), _ => {} }
     }
-    apply_daub_poison(game, player_id, region_id, target, runtime.now_milliseconds());
+    game.with_published_player_ai(player_id, player_ai, |game| {
+        apply_daub_poison(game, player_id, region_id, target, &mut || runtime.now_milliseconds());
+    });
     if let Some(state) = game.player_skill_state_mut::<HeartlessArrowExecutionState>(player_id, HEARTLESS_ARROW_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_heartless_arrow(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)

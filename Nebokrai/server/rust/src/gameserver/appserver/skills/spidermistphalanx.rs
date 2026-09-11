@@ -8,13 +8,17 @@
 //! состояния выполняет владелец исполнения, которому принадлежит раздельный
 //! доступ к игрокам, монстрам и региону. Исходное вычитание перекрытия направлено
 //! в отдельный `SKILL_POISON_FOG` (`0xC9`) и не подменяется самоперекрытием.
+//! AI0x005EB110 не заменяет уже существующий SpiderPoison: Cure/яд запрещают
+//! наложение. Источник заново разрешается перед ctor; Begin(source,target)
+//! и visual исполняются до общего append в опубликованном регионе.
+//! До IsAttackAble проверяются смерть цели, Cure и SpiderPoison. Права берутся
+//! у живого player/monster-источника, а будущий яд сохраняет MasterInfo области.
 
 use super::spidermist::SPIDER_MIST_SKILL_ID;
-use super::spiderpoison::install_spider_poison_state;
-use super::spiderpoisonstate::SpiderPoisonState;
+use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
 use super::monsterattack::{owned_monster_attackable, resolve_owned_monster_attack_target};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::CGame;
@@ -100,7 +104,7 @@ impl CSpiderMistPhalanx {
     pub(crate) const fn hp_loss(&self) -> u32 { self.hp_loss }
 
     pub(crate) fn tick(&mut self, now_ms: u32) -> SpiderMistPhalanxTick {
-        if now_ms.wrapping_sub(self.started_at_ms) > self.lifetime_ms {
+        if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
             self.shape.set_change_state(SHAPE_CHANGE_DELETE);
             SpiderMistPhalanxTick::Expired
         } else {
@@ -180,80 +184,103 @@ impl CSpiderMistPhalanx {
 
 pub(crate) fn apply_spider_mist_targets(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_id: i32,
     phalanx: &CSpiderMistPhalanx,
     candidates: Vec<ShapeIdentity>,
     mut now_milliseconds: impl FnMut() -> u32,
 ) -> usize {
     let master = phalanx.master();
-    let Some((attacker_property, attacker_tamed, attacker_master)) = region
-        .find_monster_by_id(master.master_id)
-        .and_then(|monster| {
-            Some((
-                game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-                monster.is_tamed(),
-                monster.master_info(),
-            ))
-        })
-    else {
-        return 0;
+    let source = ShapeIdentity {
+        object_type: master.master_type, id: master.master_id, ex_id: CGuid::GUID_INVALID,
     };
+    if game.find_shape_in_region(region_id, source).is_none()
+        || resolve_state_move_shape(game, region_id, source).is_none()
+    {
+        return 0;
+    }
     let mut applied = 0usize;
     for candidate in candidates {
         if candidate.object_type == master.master_type && candidate.id == master.master_id {
             continue;
         }
-        let Some(target) = resolve_owned_monster_attack_target(game, region, candidate) else {
+        if game.move_shape_health(region_id, candidate).is_none_or(|health| health == 0) {
             continue;
-        };
-        if target.dead
-            || target.god
-            || target.city_dead
-            || !owned_monster_attackable(
-                game,
-                region.id,
-                &attacker_property,
-                attacker_tamed,
-                attacker_master,
-                candidate,
-                &target,
-            )
+        }
+        let Some(target) = resolve_state_move_shape(game, region_id, candidate) else { continue; };
+        if target.has_state_by_skill_id(0x131)
+            || target.has_state_by_skill_id(super::spiderpoison::SPIDER_POISON_SKILL_ID)
         {
             continue;
         }
-        let blocked = match candidate.object_type {
-            400 => game.find_player(candidate.id).is_none_or(|player| {
-                player.has_state_by_skill_id(0x131)
-                    || player.has_state_by_skill_id(super::spiderpoison::SPIDER_POISON_SKILL_ID)
-            }),
-            600 => region.find_monster_by_id(candidate.id).is_none_or(|monster| {
-                monster.move_shape().has_state_by_skill_id(0x131)
-                    || monster
-                        .move_shape()
-                        .has_state_by_skill_id(super::spiderpoison::SPIDER_POISON_SKILL_ID)
-            }),
-            _ => true,
-        };
-        if blocked {
-            continue;
-        }
-        let now_ms = now_milliseconds();
-        install_spider_poison_state(
-            game,
-            region,
-            candidate,
-            SpiderPoisonState::new(
-                master,
-                now_ms,
-                phalanx.state_lifetime_ms(),
-                phalanx.frequency_ms(),
-                phalanx.hp_loss(),
-            ),
-            now_ms,
+        if !spider_mist_target_attackable(game, region_id, source, candidate) { continue; }
+        if game.find_shape_in_region(region_id, source).is_none() { continue; }
+        let Some(source_region) = resolve_state_move_shape(game, region_id, source)
+            .map(|shape| shape.shape().get_region_id()) else { continue; };
+        let state = SpiderPoisonState::new(
+            master, phalanx.state_lifetime_ms(), phalanx.frequency_ms(), phalanx.hp_loss(),
         );
-        applied = applied.wrapping_add(1);
+        if begin_primary_spider_poison_state(
+            game, region_id, candidate, Some((source_region, source)),
+            Some((region_id, candidate)), state, None, &mut now_milliseconds,
+        ).is_some() {
+            applied = applied.wrapping_add(1);
+        }
     }
     applied
+}
+
+fn player_target_attackable(game: &CGame, source_id: i32, target_id: i32) -> bool {
+    if game.find_player(target_id).is_none_or(|player| player.city_war_died_state()) {
+        return false;
+    }
+    if let Some((text, limit)) = game.player_base_attack_level_block(source_id, target_id) {
+        game.send_base_attack_level_block(source_id, text, limit);
+        return false;
+    }
+    game.player_base_attackable(source_id, target_id)
+}
+
+fn spider_mist_target_attackable(
+    game: &CGame,
+    region_id: i32,
+    source: ShapeIdentity,
+    target: ShapeIdentity,
+) -> bool {
+    if !matches!(target.object_type, 400 | 600) { return false; }
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return false; };
+    match source.object_type {
+        400 => {
+            if target.object_type == 400 {
+                return player_target_attackable(game, source.id, target.id);
+            }
+            let Some(monster) = region.find_monster_by_id(target.id) else { return false; };
+            let Some(property) = monster.base_property_key()
+                .and_then(|name| game.find_monster_property_by_origin_name(name))
+            else { return false; };
+            let target_master = monster.master_info();
+            if (monster.is_tamed() || monster.is_carriage(property))
+                && target_master.master_type == 400 && target_master.master_id != 0
+            {
+                let Some(owner) = game.find_player(target_master.master_id) else { return true; };
+                if target_master.master_id == source.id { return owner.pk_permissions().criminal; }
+                return player_target_attackable(game, source.id, target_master.master_id);
+            }
+            game.monster_attackable_by_player(source.id, region_id, property)
+        }
+        600 => {
+            let Some(monster) = region.find_monster_by_id(source.id) else { return false; };
+            let Some(property) = monster.base_property_key()
+                .and_then(|name| game.find_monster_property_by_origin_name(name))
+            else { return false; };
+            let Some(target_snapshot) = resolve_owned_monster_attack_target(game, region, target)
+            else { return false; };
+            owned_monster_attackable(
+                game, region_id, property, monster.is_tamed(), monster.master_info(),
+                target, &target_snapshot,
+            )
+        }
+        _ => false,
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

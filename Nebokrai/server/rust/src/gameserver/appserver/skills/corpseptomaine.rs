@@ -12,8 +12,15 @@
 //! в skill-owner-е. Нулевой MP-loss сохраняет исходный отказ player-cast.
 //! Обе ветви проверяют восстановление абсолютным сроком `CSkill::IsRestored`,
 //! а общую задержку — отдельной elapsed-проверкой.
+//! AddState0x00539FF0 создаёт payload до замены: CONST → frequency → keep,
+//! первый ID191 получает End и destructor остатка, затем Begin(source,target)
+//! и запись в прежний слот либо append при отсутствии совпадения. MasterInfo
+//! берётся у живого source на каждом наложении; country остаётся нулём.
+//! Callback публикует настоящий derived region, без копии base/состояния.
 
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
+};
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED};
 use super::flash::{cell_views, master_info};
@@ -22,21 +29,22 @@ use super::monsterattack::{
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoison::{install_spider_poison_state, target_has_cure};
-use super::spiderpoisonstate::SpiderPoisonState;
+use super::spiderpoison::{SPIDER_POISON_SKILL_ID, target_has_cure};
+use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::states::summonskill::{
     finish_summon_skill,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner};
+use crate::public::guid::CGuid;
 use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;
@@ -48,6 +56,38 @@ const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_USAGE_CONST: u32 = 20_010;
 pub(crate) const CORPSE_PTOMAINE_SKILL_ID: u32 = 0x19f;
+
+fn add_corpse_poison_state(
+    game: &mut CGame, region_id: i32, source: ShapeIdentity, target: ShapeIdentity,
+    properties: &CSkillBaseProperties, now: &mut dyn FnMut() -> u32,
+) {
+    let Some(source_region) = resolve_state_move_shape(game, region_id, source)
+        .map(|shape| shape.shape().get_region_id()) else { return; };
+    let Some(target_region) = resolve_state_move_shape(game, region_id, target)
+        .map(|shape| shape.shape().get_region_id()) else { return; };
+    let mut master = if source.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(source.id) else { return; };
+        master_info(player)
+    } else {
+        MasterInfo { master_type: source.object_type, master_id: source.id, ..MasterInfo::default() }
+    };
+    master.master_country_id = 0;
+    let hp_loss = properties.query_property(SKILL_USAGE_CONST);
+    let frequency = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
+    let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let state = SpiderPoisonState::new(master, keep, frequency, hp_loss);
+    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return; };
+    let selected = shape.find_state_position(|state| state.state_id() == SPIDER_POISON_SKILL_ID);
+    let placement = if let Some((position, key)) = selected {
+        let Some(location) = shape.applied_state_replacement_location(key) else { return; };
+        let _ = end_and_destroy_state_at(game, region_id, target, position);
+        Some(location)
+    } else { None };
+    let _ = begin_primary_spider_poison_state(
+        game, region_id, target, Some((source_region, source)), Some((target_region, target)),
+        state, placement, now,
+    );
+}
 
 fn send_start(
     game: &CGame,
@@ -88,7 +128,7 @@ fn send_fire(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт")]
 pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: crate::gameserver::appserver::shape::ShapeIdentity,
     skill_level: u16,
@@ -96,6 +136,8 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
+    let region_id = region.id;
     let Some((source, property, master, tamed, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
@@ -187,13 +229,9 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
         return true;
     };
     send_fire(game, region, &source, skill_level, center_x, center_y);
-    let state_master = MasterInfo {
-        master_type: MONSTER_TYPE,
-        master_id: monster_id,
-        ..MasterInfo::default()
-    };
     for offset_x in -1..=1 {
         for offset_y in -1..=1 {
+            let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
             let candidates = monster_attack_cell_candidates(
                 game,
                 region,
@@ -202,6 +240,7 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
                 center_y.wrapping_add(offset_y),
             );
             for identity in candidates {
+                let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
                 let Some(target) = resolve_owned_monster_attack_target(game, region, identity)
                 else {
                     continue;
@@ -222,23 +261,16 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
                 {
                     continue;
                 }
-                let state_now_ms = runtime.now_milliseconds();
-                install_spider_poison_state(
-                    game,
-                    region,
-                    identity,
-                    SpiderPoisonState::new(
-                        state_master,
-                        state_now_ms,
-                        properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
-                        properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY),
-                        properties.query_property(SKILL_USAGE_CONST),
-                    ),
-                    state_now_ms,
-                );
+                let _ = game.with_published_region(owner, |game| {
+                    add_corpse_poison_state(
+                        game, region_id, source.identity(), identity, properties,
+                        &mut || runtime.now_milliseconds(),
+                    );
+                });
             }
         }
     }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(CORPSE_PTOMAINE_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(CORPSE_PTOMAINE_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
@@ -269,6 +301,11 @@ pub(crate) fn execute_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game:
     send_player_fire(game, player_id, level, (center_x, center_y));
     let Some(master) = game.find_player(player_id).map(master_info) else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
     let mut targets = Vec::new(); for offset_x in -1..=1 { for offset_y in -1..=1 { for view in cell_views(game, region_id, center_x.wrapping_add(offset_x), center_y.wrapping_add(offset_y)) { let identity = view.identity; if matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) && game.owned_player_skill_target_attackable(master, identity, region_id) && !game.periodic_state_target_dead(region_id, identity) { targets.push(identity); } } } }
-    if let Some(mut region) = game.take_region_owner(region_id) { for identity in targets { if target_has_cure(game, region.base(), identity) { continue } let state_now = runtime.now_milliseconds(); install_spider_poison_state(game, region.base_mut(), identity, SpiderPoisonState::new(master, state_now, properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME), properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY), properties.query_property(SKILL_USAGE_CONST)), state_now); } game.restore_region_owner(region); }
+    let source = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
+    for identity in targets {
+        let Some(region) = game.find_region(region_id) else { break; };
+        if target_has_cure(game, region.base(), identity) { continue; }
+        add_corpse_poison_state(game, region_id, source, identity, &properties, &mut || runtime.now_milliseconds());
+    }
     if let Some(state) = game.player_skill_execution_mut(player_id, CORPSE_PTOMAINE_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, ai, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }

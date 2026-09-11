@@ -121,14 +121,14 @@ impl CHeartlessArrowPhalanx {
         game: &mut CGame,
         region_id: i32,
         target: ShapeIdentity,
-        now_ms: u32,
+        now: &mut dyn FnMut() -> u32,
     ) {
         super::heartlessarrow::apply_daub_poison(
             game,
             self.master.master_id,
             region_id,
             target,
-            now_ms,
+            now,
         );
     }
 }

@@ -247,12 +247,13 @@ fn install_cure_state(game: &mut CGame, region_id: i32, target: &CureTarget, sta
     send_cure_state_visual_for_holder(game, region_id, target.identity, state, true);
     if let Some(key) = old {
         let Some(location) = resolve_state_move_shape(game, region_id, target.identity)
-            .and_then(|shape| shape.cure_state_replacement_location(key)) else { return false };
+            .and_then(|shape| shape.applied_state_replacement_location(key)) else { return false };
         if !end_cure_state_key(game, region_id, target.identity, key) {
             return false;
         }
         let Some(shape) = resolve_state_move_shape_mut(game, region_id, target.identity) else { return false };
-        shape.insert_replacement_cure_state(state, location);
+        let record = state.encoded_for_install();
+        if shape.insert_replacement_state_record(state, &record, location).is_none() { return false; }
     } else if let Some(shape) = resolve_state_move_shape_mut(game, region_id, target.identity) {
         shape.push_cure_state(state);
     } else { return false }

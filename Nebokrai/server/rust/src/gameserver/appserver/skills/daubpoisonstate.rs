@@ -1,71 +1,98 @@
-//! Каноническое состояние смазки оружия ядом `CDaubPoisonState` (`0xDF`).
-//! Истечение получает ключ конкретного экземпляра общей арены; проверка
-//! срока и End не подменяют его первым состоянием с тем же ID.
-//! Vtable 0x0066047c, слот +0x0c: CBlindState::AI (0x005d5ba0).
-//! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/daubpoisonstate.cpp`. Достигнутый cast создаёт состояние
-//! игроку; само состояние хранит строгий wrapping-срок и публикует пакеты начала и
-//! завершения. Проверки стрел читают этот единственный типизированный
-//! экземпляр через `GetStateBySkillID`. Persisted-запись `ID + remaining time`
-//! занимает 8 байт и активируется StartAllStates после 8F801. Vtable exact EXE
-//! подтверждает общий с `CBlindState` `GetRemainedTime` по адресу
-//! `0x005F2CD0`, включая отдельное чтение часов для положительного остатка.
-//! End vtable+0x1C→0x005FD420 не имеет Player-gate: сначала visual, затем
-//! GetSufferer и RemoveState. Общий AI поэтому завершает и регионального
-//! держателя; фактическое удаление вызывает общий virtual UpdateProperty.
-//! Object Begin +0x08→0x005F1A50: guard null sufferer, base Begin,
-//! новый visual(0xC), BeginVisualEffect(1), Update(state,0), затем return 1.
-//! При Begin(NULL,holder) clock не читается и срок не перезапускается:
-//! timestamp уже записан унаследованной Unserialize0x005EAAC0. Визуальный
-//! GetRemainedTime читает собственные часы после создания ресурса.
+//! CDaubPoisonState (0xDF), gameserver.exe + GameServer.pdb,
+//! исходный owner appserver/skills/daubpoisonstate.cpp. Общая арена хранит
+//! один экземпляр, стороны Begin, serialized span и visual; заимствования
+//! заменяют CState* без копирования payload между End и callback.
+//! Ctor0x005F17B0 сохраняет keep без часов. Object Begin0x005F1A50 требует S:
+//! base clock при non-NULL U до getters → visual loop1/Update0 → append
+//! у caller. NULL-user restart сохраняет timestamp и User. Visual0x005F1B00
+//! читает actual S; BFE03 содержит type/id/DF/remaining/0, BFE04 — type/id/DF.
+//! End0x005FD420: optional visual1 → свежий S → общий RemoveState(pointer),
+//! без записи state.ended. Missing/ended visual подавляет только пакет;
+//! существующий ресурс получает base tail и при отсутствующем S.
+//! AI0x005D5BA0 читает один clock и сравнивает unsigned start+keep<now,
+//! включая keep0, без death/holder-gates. Remaining0x005F2CD0 читает clock
+//! повторно только при положительном остатке. Save: ID/remaining, 8 байт;
+//! Unserialize0x005EAAC0 читает clock до keep. Список/свойства после удаления
+//! обслуживает общий lifecycle; первичный append сам UpdateProperty не вызывает.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    begin_applied_state_visual, begin_base_applied_state, resolve_state_move_shape,
-    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_visual_base,
+    StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
+    remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
+    timed_client_state_time, update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 pub(crate) const DAUB_POISON_STATE_ID: u32 = 0xdf;
 pub(crate) const DAUB_POISON_STATE_BYTES: usize = 8;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DaubPoisonState {
     started_at_ms: u32,
     keep_time_ms: u32,
 }
 
 impl DaubPoisonState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
-        Self { started_at_ms, keep_time_ms }
+    const fn new(keep_time_ms: u32) -> Self {
+        Self { started_at_ms: 0, keep_time_ms }
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != DAUB_POISON_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
-        Ok(Self::new(now_ms, reader.read_u32()?))
+        let mut state = Self::new(reader.read_u32()?);
+        state.started_at_ms = now_ms;
+        Ok(state)
     }
-    pub(crate) fn encoded_for_install(self) -> [u8; DAUB_POISON_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
-    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; DAUB_POISON_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
-    fn encoded_with_remaining(self, remaining: u32) -> [u8; DAUB_POISON_STATE_BYTES] { let mut bytes = [0; DAUB_POISON_STATE_BYTES]; bytes[..4].copy_from_slice(&DAUB_POISON_STATE_ID.to_le_bytes()); bytes[4..].copy_from_slice(&remaining.to_le_bytes()); bytes }
+    pub(crate) fn encoded_for_install(&self) -> [u8; DAUB_POISON_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(&self, now_milliseconds: impl FnMut() -> u32) -> [u8; DAUB_POISON_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(&self, remaining: u32) -> [u8; DAUB_POISON_STATE_BYTES] { let mut bytes = [0; DAUB_POISON_STATE_BYTES]; bytes[..4].copy_from_slice(&DAUB_POISON_STATE_ID.to_le_bytes()); bytes[4..].copy_from_slice(&remaining.to_le_bytes()); bytes }
 
-    pub(crate) const fn skill_id(self) -> u32 { DAUB_POISON_STATE_ID }
+    pub(crate) const fn skill_id(&self) -> u32 { DAUB_POISON_STATE_ID }
 
     /// Исходный `GameAiTick::Passed`: равенство с границей ещё активно.
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+    pub(crate) const fn expired(&self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+    pub(crate) fn client_time(&self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
+}
+
+pub(crate) fn begin_primary_daub_poison_state(
+    game: &mut CGame,
+    player_id: i32,
+    keep_time_ms: u32,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<StateKey> {
+    let mut state = DaubPoisonState::new(keep_time_ms);
+    game.find_player(player_id)?;
+    state.started_at_ms = now();
+    let player = game.find_player(player_id)?;
+    let participant = (
+        player.shape().get_region_id(),
+        ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() },
+    );
+    let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+    message.add_long(participant.1.object_type);
+    message.add_long(participant.1.id);
+    message.add_ulong(state.skill_id());
+    message.add_long(state.client_time(now));
+    message.add_ulong(0);
+    let _ = game.send_move_shape_around(participant.0, participant.1, &message);
+    let record = state.encoded_for_install();
+    let shape = game.find_player_mut(player_id)?.move_shape_mut();
+    let key = shape.append_applied_state_record(state, &record);
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, Some(participant));
+    shape.set_applied_state_sufferer(key, Some(participant));
+    Some(key)
 }
 
 pub(crate) fn restart_daub_poison_state(
@@ -81,60 +108,13 @@ pub(crate) fn restart_daub_poison_state(
     {
         return false;
     }
-    if !begin_base_applied_state(game, region_id, holder, key)
-        || !begin_applied_state_visual(game, region_id, holder, key, 1)
-    {
-        return false;
+    if !begin_base_applied_state(game, region_id, holder, key) { return false; }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        update_property_state_visual::<DaubPoisonState>(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer,
+            now, |state, now| state.client_time(now) as u32,
+        );
     }
-    let Some(remaining) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<DaubPoisonState>(key))
-        .map(|state| state.client_time(now))
-    else { return false };
-    let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(DAUB_POISON_STATE_ID as i32);
-    message.add_long(remaining);
-    message.add_long(0);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let _ = update_applied_state_visual_base(game, region_id, holder, key);
-    true
-}
-
-pub(crate) fn send_daub_poison_state_visual(
-    game: &mut CGame,
-    player_id: i32,
-    state: DaubPoisonState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.client_time(now_milliseconds));
-        message.add_long(0);
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-pub(crate) fn replace_player_daub_poison_state(
-    game: &mut CGame,
-    player_id: i32,
-    state: DaubPoisonState,
-    mut now_milliseconds: impl FnMut() -> u32,
-) -> bool {
-    let previous = game
-        .find_player_mut(player_id)
-        .map(|player| player.replace_daub_poison_state(state));
-    let Some(previous) = previous else { return false };
-    if let Some(previous) = previous {
-        send_daub_poison_state_visual(game, player_id, previous, false, || now_milliseconds());
-    }
-    send_daub_poison_state_visual(game, player_id, state, true, now_milliseconds);
     true
 }
 
@@ -165,16 +145,8 @@ pub(crate) fn end_daub_poison_state(
     {
         return false;
     }
-    let mut message = CMessage::new(STATE_END_MESSAGE);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(DAUB_POISON_STATE_ID as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES))
-        .is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, target, DAUB_POISON_STATE_BYTES)
 }

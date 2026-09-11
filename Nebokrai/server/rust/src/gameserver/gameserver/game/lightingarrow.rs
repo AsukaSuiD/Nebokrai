@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::skills::heartlessarrow::apply_daub_poison_with_master;
+use crate::gameserver::appserver::skills::heartlessarrow::apply_daub_poison;
 use crate::gameserver::appserver::skills::lightingarrowphalanx::{lighting_arrow_targets, CLightingArrowPhalanx};
 
 impl CGame {
@@ -78,7 +78,8 @@ impl CGame {
                 self.restore_region_owner(owner); marked
             } else { false };
             if !marked { continue }
-            apply_daub_poison_with_master(self, snapshot.master().master_id, snapshot.master(), region_id, target, sampled_at_ms);
+            apply_daub_poison(self, snapshot.master().master_id, region_id, target,
+                &mut || runtime.now_milliseconds());
             match target.object_type {
                 PLAYER_TYPE => { self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime); }
                 MONSTER_TYPE => { self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime); }

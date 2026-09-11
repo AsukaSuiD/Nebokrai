@@ -5741,13 +5741,6 @@ impl CPlayer {
         self.move_shape.push_cure_state(state);
     }
 
-    pub(crate) fn replace_daub_poison_state(
-        &mut self,
-        state: super::skills::daubpoisonstate::DaubPoisonState,
-    ) -> Option<super::skills::daubpoisonstate::DaubPoisonState> {
-        self.move_shape.replace_daub_poison_state(state)
-    }
-
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
         self.move_shape.curable_state_ids()
@@ -5771,22 +5764,9 @@ impl CPlayer {
 
 
 
-    pub(crate) fn replace_spider_poison_state(
-        &mut self,
-        state: super::skills::spiderpoisonstate::SpiderPoisonState,
-    ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
-        self.move_shape.replace_spider_poison_state(state)
-    }
 
 
 
-
-
-    pub(crate) fn take_spider_poison_state(
-        &mut self,
-    ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
-        self.move_shape.take_spider_poison_state()
-    }
 
     pub(crate) fn replace_sprite_burn_state(
         &mut self,

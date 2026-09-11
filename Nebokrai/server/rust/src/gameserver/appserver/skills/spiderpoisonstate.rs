@@ -1,34 +1,20 @@
-//! Каноническое периодическое состояние `CSpiderPoisonState` (`0x191`).
-//! Object Begin (0x005E9430) не требует user/sufferer: base Begin,
-//! visual SetRun(1) → Update(0) → base visual tail, затем обнуление attack-count.
-//! restart_spider_poison_state переносит Begin(NULL, holder) по точному ключу:
-//! timestamp из Unserialize и MasterInfo сохраняются; часы читает только visual.
-//! Периодический AI изменяет payload по поколенческому ключу общей арены.
-//! Чистый tick завершается до межвладельческого удара; состояние не вынимается
-//! и остаётся доступным вложенному End/Clear. Удар использует независимый снимок.
-//! Прямой End: vtable 0x0065F9F4, слот +0x1C → 0x005FD420: visual
-//! с фазой 1 → GetSufferer (+0x18, 0x005DBFD0) → RemoveState (0x004CDAB0).
-//! Это не CState::End: записи IsEnded и проверок времени/HP в нём нет.
-//! Runtime Begin и StartAllStates связывают sufferer с holder; MasterInfo
-//! остаётся источником атаки, а не владельцем удаляемого ключа. End работает
-//! с опубликованной формой и точным ключом; ошибка доставки не отменяет удаление.
-//! После фактического RemoveState общий virtual UpdateProperty вызывается
-//! для живого держателя: player пересчитывает tagProperty, остальные формы
-//! пересчитывают упорядоченные состояния и накопленные модификаторы.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/spiderpoisonstate.cpp`. Состояние хранит снимок
-//! `tagMasterInfo`, использует два чтения часов и строгую границу `>` для
-//! срока и периодического удара. Формула яда, lifecycle и wire-сообщения
-//! принадлежат этому модулю; `CGame` координирует независимых владельцев цели
-//! и смерти.
-//! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
-//! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
-//! Координатные перегрузки `Begin` остаются RAW ниже.
-//! Клиентский срок использует общий exact-owner `0x00606320`: проверка
-//! deadline и положительный остаток читают wrapping clock независимо.
-//! Persisted-запись длиной 56 байт сохраняет `MasterInfo`, remaining time,
-//! частоту и урон, но не внутренний номер следующего тика.
+//! `CSpiderPoisonState` (0x191), `gameserver.exe` + `GameServer.pdb`,
+//! исходный owner `appserver/skills/spiderpoisonstate.cpp`.
+//! Параметрический ctor 0x005E90C0 не читает часы. Object Begin 0x005E9430:
+//! base clock только при User → свежие U/S → loop1 visual Update(0) →
+//! сброс счётчика → регистрация caller-ом. NULL restart сохраняет start/Master.
+//! AI 0x005E96B0: clock → абсолютный wrapping deadline → actual Sufferer →
+//! IsDied → счётчик → второй clock → абсолютная частота → count++ → удар.
+//! End 0x005FD420: optional visual(1) → свежий Sufferer → общий RemoveState,
+//! без state.ended; ключ другой арены не удаляется. Vtable 0x0065F9F4:
+//! property +24 возвращает true, SetRegion 0x005E3B30 меняет только S.region.
+//! Save 0x005E93C0 чистый: ID/Master40/remaining/frequency/hp-loss, 56 байт.
+//! Load 0x005E3500 читает Master40 до clock, затем оставшиеся поля.
+//! GetRemainedTime 0x00606320 читает clock повторно для положительного остатка.
+//! Общая арена владеет payload; снимок атаки независим от lifecycle состояния.
+//! Его skill-id 0x7fffffff/level1 сохраняют defaults tagAttackInformation.
+//! Достигнутые skill/arrow callers накладывают яд на player/monster; их удары
+//! обслуживают существующие CGame adapters. Прочие Begin overload остаются RAW.
 
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -39,25 +25,21 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::states::state::{
-    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+    StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
+    remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
+    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_end_visual,
+    update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 const MONSTER_TYPE: i32 = 600;
 pub(crate) const SPIDER_POISON_STATE_BYTES: usize = 56;
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SpiderPoisonStateTick {
-    Pending,
-    Attack(AttackInformation),
-    Ended,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiderPoisonState {
     master: MasterInfo,
     started_at_ms: u32,
@@ -70,57 +52,54 @@ pub(crate) struct SpiderPoisonState {
 impl SpiderPoisonState {
     pub(crate) const fn new(
         master: MasterInfo,
-        started_at_ms: u32,
         keep_time_ms: u32,
         frequency_ms: u32,
         hp_loss: u32,
     ) -> Self {
-        Self { master, started_at_ms, keep_time_ms, frequency_ms, hp_loss, attack_count: 0 }
+        Self { master, started_at_ms: 0, keep_time_ms, frequency_ms, hp_loss, attack_count: 0 }
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != SPIDER_POISON_SKILL_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
         let master = MasterInfo { master_type: reader.read_i32()?, master_id: reader.read_i32()?, master_guild_id: reader.read_i32()?, master_team_id: reader.read_i32()?, master_union_id: reader.read_i32()?, master_country_id: reader.read_i32()?, permitted_to_kill_player: reader.read_i32()?, permitted_to_kill_teammate: reader.read_i32()?, permitted_to_kill_guild_member: reader.read_i32()?, permitted_to_kill_criminal: reader.read_i32()? };
-        Ok(Self::new(master, now_ms, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
+        let started_at_ms = now();
+        let mut state = Self::new(master, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?);
+        state.started_at_ms = started_at_ms;
+        Ok(state)
     }
-    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; SPIDER_POISON_STATE_BYTES] { self.encoded_with_remaining(self.client_state_time(now_milliseconds)) }
-    pub(crate) fn encoded_for_install(self) -> [u8; SPIDER_POISON_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
-    fn encoded_with_remaining(self, remaining: u32) -> [u8; SPIDER_POISON_STATE_BYTES] {
+    pub(crate) fn encoded(&self, now_milliseconds: impl FnMut() -> u32) -> [u8; SPIDER_POISON_STATE_BYTES] { self.encoded_with_remaining(self.client_state_time(now_milliseconds)) }
+    pub(crate) fn encoded_for_install(&self) -> [u8; SPIDER_POISON_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    fn encoded_with_remaining(&self, remaining: u32) -> [u8; SPIDER_POISON_STATE_BYTES] {
         let mut record = Vec::with_capacity(SPIDER_POISON_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(SPIDER_POISON_SKILL_ID);
         for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id, self.master.master_team_id, self.master.master_union_id, self.master.master_country_id, self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate, self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] { writer.write_i32(value); }
         writer.write_u32(remaining); writer.write_u32(self.frequency_ms); writer.write_u32(self.hp_loss); record.try_into().expect("размер состояния паучьего яда фиксирован")
     }
 
-    pub(crate) const fn skill_id(self) -> u32 { SPIDER_POISON_SKILL_ID }
-    pub(crate) const fn master(self) -> MasterInfo { self.master }
+    pub(crate) const fn skill_id(&self) -> u32 { SPIDER_POISON_SKILL_ID }
+    pub(crate) const fn master(&self) -> MasterInfo { self.master }
 
-    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+    pub(crate) fn client_state_time(&self, now_milliseconds: impl FnMut() -> u32) -> u32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
     }
 
-    pub(crate) fn tick(
-        &mut self,
-        lifetime_now_ms: u32,
-        frequency_now_ms: u32,
-        target_dead: bool,
-    ) -> SpiderPoisonStateTick {
-        if lifetime_now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms || target_dead {
-            return SpiderPoisonStateTick::Ended;
-        }
-        let delay = self.frequency_ms.wrapping_mul(self.attack_count);
-        if frequency_now_ms.wrapping_sub(self.started_at_ms) <= delay {
-            return SpiderPoisonStateTick::Pending;
-        }
-        self.attack_count = self.attack_count.wrapping_add(1);
-        SpiderPoisonStateTick::Attack(AttackInformation {
+    fn expired(&self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
+    }
+
+    fn take_due_attack(&mut self, now_ms: u32, count: u32) -> Option<(MasterInfo, AttackInformation)> {
+        let deadline = self.started_at_ms.wrapping_add(self.frequency_ms.wrapping_mul(count));
+        if deadline >= now_ms { return None; }
+        self.attack_count = count.wrapping_add(1);
+        let player_master = self.master.master_type == 400;
+        Some((self.master, AttackInformation {
             skill_id: DEFAULT_PERIODIC_SKILL_ID,
             skill_level: 1,
             attacker_type: self.master.master_type,
             attacker_id: self.master.master_id,
-            attacker_team_id: self.master.master_team_id,
-            attacker_faction_id: self.master.master_guild_id,
-            attacker_union_id: self.master.master_union_id,
+            attacker_team_id: if player_master { self.master.master_team_id } else { 0 },
+            attacker_faction_id: if player_master { self.master.master_guild_id } else { 0 },
+            attacker_union_id: if player_master { self.master.master_union_id } else { 0 },
             hit_modifier: 0,
             damage_factor: 1.0,
             damage_modifier: 0,
@@ -132,51 +111,55 @@ impl SpiderPoisonState {
                 hp_damage: self.hp_loss as i32,
                 mp_damage: 0,
             }],
-        })
+        }))
     }
 }
 
-#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
-pub(crate) fn send_spider_poison_state_visual(
+#[allow(clippy::too_many_arguments, reason = "раздельные User/Sufferer и место регистрации сохраняют native Begin")]
+pub(crate) fn begin_primary_spider_poison_state(
     game: &mut CGame,
-    region_id: i32,
-    identity: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: SpiderPoisonState,
-    begin: bool,
-    now_ms: u32,
-) {
-    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_ulong(state.client_state_time(|| now_ms));
-        message.add_long(0);
+    holder_region: i32,
+    holder: ShapeIdentity,
+    user: Option<(i32, ShapeIdentity)>,
+    sufferer: Option<(i32, ShapeIdentity)>,
+    mut state: SpiderPoisonState,
+    placement: Option<(usize, usize)>,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<StateKey> {
+    resolve_state_move_shape(game, holder_region, holder)?;
+    if user.is_some() { state.started_at_ms = now(); }
+    let participant = |(region, identity)| {
+        let shape = resolve_state_move_shape(game, region, identity)?.shape();
+        Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
+    };
+    let user = match user { Some(user) => Some(participant(user)?), None => None };
+    let sufferer = match sufferer { Some(sufferer) => Some(participant(sufferer)?), None => None };
+    if let Some((region, identity)) = sufferer {
+        if let Some(shape) = resolve_state_move_shape(game, region, identity) {
+            let target_region = shape.shape().get_region_id();
+            let target = shape.shape().identity();
+            let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+            message.add_long(target.object_type);
+            message.add_long(target.id);
+            message.add_ulong(SPIDER_POISON_SKILL_ID);
+            message.add_ulong(state.client_state_time(&mut *now));
+            message.add_ulong(0);
+            let _ = game.send_move_shape_around(target_region, target, &message);
+        }
     }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
-}
-
-pub(crate) fn send_spider_poison_state_visual_in_region(
-    game: &CGame,
-    region: &crate::gameserver::appserver::serverregion::CServerRegion,
-    identity: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: SpiderPoisonState,
-    begin: bool,
-    now_ms: u32,
-) {
-    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_ulong(state.client_state_time(|| now_ms));
-        message.add_long(0);
-    }
-    let _ = game.send_game_position_around(region, tile_x, tile_y, &message);
+    // После Update(0) у loop1 остаётся незавершённый visual; arena создаёт
+    // именно этот остаток. Счётчик сбрасывается до передачи state владельцу.
+    state.attack_count = 0;
+    let record = state.encoded_for_install();
+    let shape = resolve_state_move_shape_mut(game, holder_region, holder)?;
+    let key = match placement {
+        Some(location) => shape.insert_replacement_state_record(state, &record, location)?,
+        None => shape.append_applied_state_record(state, &record),
+    };
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, user);
+    shape.set_applied_state_sufferer(key, sufferer);
+    Some(key)
 }
 
 pub(crate) fn restart_spider_poison_state(
@@ -187,24 +170,16 @@ pub(crate) fn restart_spider_poison_state(
     _changing_region: bool,
     now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key)).copied()
-    else { return false };
-    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
-        game, region_id, holder, key,
-    ) { return false }
-    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
-        game, region_id, holder, key, 1,
-    ) {
-        let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        message.add_ulong(state.client_state_time(&mut *now));
-        message.add_long(0);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
-        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
-            game, region_id, holder, key,
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key)).is_none()
+        || !begin_base_applied_state(game, region_id, holder, key)
+    {
+        return false;
+    }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        update_property_state_visual::<SpiderPoisonState>(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+            |state, now| state.client_state_time(now),
         );
     }
     if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
@@ -221,124 +196,61 @@ pub(crate) fn end_spider_poison_state(
     holder: ShapeIdentity,
     key: StateKey,
 ) -> bool {
-    let Some(state_id) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key))
-        .map(|state| state.skill_id())
-    else {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key)).is_none()
+    {
         return false;
-    };
-    let mut message = CMessage::new(STATE_END_MESSAGE);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(state_id as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<SpiderPoisonState>(key, SPIDER_POISON_STATE_BYTES))
-        .is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
     }
-    removed
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, target, SPIDER_POISON_STATE_BYTES)
 }
 
-pub(crate) fn update_player_spider_poison_state<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    key: StateKey,
-    runtime: &mut Runtime,
-) -> bool {
-    let target = game.find_player(player_id).and_then(|player| {
-        player.move_shape().applied_state::<SpiderPoisonState>(key)?;
-        let shape = player.move_shape().shape();
-        Some((
-            shape.identity(),
-            player.server_region_id()?,
-            player.is_dead(),
-        ))
-    });
-    let Some((identity, region_id, dead)) = target else { return false };
-    let lifetime_now_ms = runtime.now_milliseconds();
-    let frequency_now_ms = runtime.now_milliseconds();
-    let prepared = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.move_shape_mut().applied_state_mut::<SpiderPoisonState>(key)?;
-        let tick = state.tick(lifetime_now_ms, frequency_now_ms, dead);
-        Some((tick, *state))
-    });
-    let Some((tick, state)) = prepared else { return false };
-    match tick {
-        SpiderPoisonStateTick::Pending => {}
-        SpiderPoisonStateTick::Attack(attack) => {
-            let master = state.master();
-            if master.master_type == MONSTER_TYPE {
-                game.apply_monster_periodic_state_attack(master, identity, region_id, attack, runtime);
-            } else {
-                game.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime);
-            }
-        }
-        SpiderPoisonStateTick::Ended => {
-            let _ = end_spider_poison_state(game, region_id, identity, key);
-            let _ = game.publish_player_states(player_id);
-        }
-    }
-    true
-}
-
-pub(crate) fn update_monster_spider_poison_state<Runtime: GameMainLoopRuntime>(
+pub(crate) fn update_spider_poison_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region_id: i32,
-    monster_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(owner) = game.take_region_owner(region_id) else { return false };
-    let target = owner.base().find_monster_by_id(monster_id).and_then(|monster| {
-        monster.move_shape().applied_state::<SpiderPoisonState>(key)?;
-        let shape = monster.move_shape().shape();
-        Some((shape.identity(), monster.hit_points() == 0))
-    });
-    game.restore_region_owner(owner);
-    let Some((identity, dead)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
+    let Some(expired) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key))
+        .map(|state| state.expired(lifetime_now_ms))
+    else { return false; };
+    if expired {
+        end_spider_poison_state(game, region_id, holder, key);
+        return true;
+    }
+    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else {
+        end_spider_poison_state(game, region_id, holder, key);
+        return true;
+    };
+    if game.move_shape_health(target_region, target).is_none_or(|health| health == 0) {
+        end_spider_poison_state(game, region_id, holder, key);
+        return true;
+    }
+    let Some(count) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key))
+        .map(|state| state.attack_count)
+    else { return false; };
     let frequency_now_ms = runtime.now_milliseconds();
-    let Some(mut owner) = game.take_region_owner(region_id) else { return false };
-    let prepared = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().applied_state_mut::<SpiderPoisonState>(key)?;
-        let tick = state.tick(lifetime_now_ms, frequency_now_ms, dead);
-        Some((tick, *state))
-    });
-    game.restore_region_owner(owner);
-    let Some((tick, state)) = prepared else { return false };
-    match tick {
-        SpiderPoisonStateTick::Pending => {}
-        SpiderPoisonStateTick::Attack(attack) => {
-            let master = state.master();
-            if master.master_type == MONSTER_TYPE {
-                game.apply_monster_periodic_state_attack(master, identity, region_id, attack, runtime);
-            } else {
-                game.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime);
-            }
-        }
-        SpiderPoisonStateTick::Ended => {
-            let _ = end_spider_poison_state(game, region_id, identity, key);
+    let Some((master, attack)) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<SpiderPoisonState>(key))
+        .and_then(|state| state.take_due_attack(frequency_now_ms, count))
+    else { return true; };
+    if master.master_type == MONSTER_TYPE {
+        game.apply_monster_periodic_state_attack(master, target, target_region, attack, runtime);
+    } else {
+        match target.object_type {
+            400 => game.apply_owned_skill_attack_to_player(master, target.id, target_region, attack, runtime),
+            600 => game.apply_owned_skill_attack_to_monster(master, target.id, target_region, attack, runtime),
+            _ => {}
         }
     }
     true
-}
-
-pub(crate) fn finish_player_spider_poison_state_on_cure(
-    game: &mut CGame,
-    player_id: i32,
-    _now_ms: u32,
-) -> bool {
-    let target = game.find_player(player_id).and_then(|player| {
-        Some((
-            player.server_region_id()?,
-            player.shape().identity(),
-            player.move_shape().applied_state_key::<SpiderPoisonState>()?,
-        ))
-    });
-    let Some((region_id, holder, key)) = target else { return false };
-    end_spider_poison_state(game, region_id, holder, key)
 }
 
 
@@ -347,48 +259,6 @@ pub(crate) fn finish_player_spider_poison_state_on_cure(
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp
-
-// ============================================================================
-// FUNCTION: CSpiderPoisonState::CSpiderPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:17
-// RVA: 0x001E90C0
-// ADDRESS: 005e90c0
-// PROTOTYPE: undefined __thiscall CSpiderPoisonState(tagMasterInfo * param_1, ulong param_2, ulong param_3, ulong param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSpiderPoisonState::CSpiderPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:30
-// RVA: 0x001E9170
-// ADDRESS: 005e9170
-// PROTOTYPE: undefined __thiscall CSpiderPoisonState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSpiderPoisonState::~CSpiderPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:43
-// RVA: 0x001E9200
-// ADDRESS: 005e9200
-// PROTOTYPE: void __thiscall ~CSpiderPoisonState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CSpiderPoisonState::Begin
@@ -417,53 +287,6 @@ pub(crate) fn finish_player_spider_poison_state_on_cure(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-// ============================================================================
-// FUNCTION: CSpiderPoisonStateVisualEffect::UpdateVisualEffect
-// STATUS: IMPLEMENTED
-// IMPLEMENTED: `send_spider_poison_state_visual`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:228
-// RVA: 0x001E94D0
-// ADDRESS: 005e94d0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSpiderPoisonState::CalculateAttackPower
-// STATUS: IMPLEMENTED
-// IMPLEMENTED: `SpiderPoisonState::tick`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:163
-// RVA: 0x001E9610
-// ADDRESS: 005e9610
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, tagAttackInformation * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSpiderPoisonState::AI
-// STATUS: IMPLEMENTED
-// IMPLEMENTED: `SpiderPoisonState::tick` и периодический runtime-владелец.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:113
-// RVA: 0x001E96B0
-// ADDRESS: 005e96b0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 
 

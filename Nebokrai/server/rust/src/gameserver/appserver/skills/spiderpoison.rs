@@ -17,6 +17,13 @@
 //! monster-вызов сохраняет RNG, но его виртуальный critical chance равен нулю.
 //! Состояние заменяется после удара и только при отсутствии `Cure`;
 //! `CGame` координирует владельцев и применение рассчитанных последствий.
+//! Хвост AI (0x00586020): probability читается до RNG; signed JG 0x0058621E
+//! отвергает только roll > probability. MasterInfo оставляет country=0,
+//! затем CONST/frequency/keep и ctor предшествуют старому
+//! End. Первый слот 0x191 перечитывается и очищается после callback; новый
+//! Begin с живыми часами возвращается в ту же позицию. Без старого — append.
+//! Стрелковый перенос использует иной порядок cleanup и принадлежит своему
+//! caller-у; общий concrete owner отвечает только за Begin/visual/регистрацию.
 //! Координатный `Begin` по точному EXE использует общий
 //! `CState::GetSufferer`: выбирает первый `CMoveShape` клетки и продолжает
 //! через тот же объектный pipeline.
@@ -30,7 +37,9 @@
 
 use crate::gameserver::gameserver::game::ServerRegionOwner;
 
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
+};
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
@@ -41,7 +50,7 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoisonstate::{
-    SpiderPoisonState, send_spider_poison_state_visual_in_region,
+    SpiderPoisonState, begin_primary_spider_poison_state,
 };
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
@@ -277,7 +286,6 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
-    let owner = game.find_player(player_id).map(player_master).unwrap_or_default();
     if let Some((master, attack)) = calculate_player_attack(game, player_id) {
         match target.object_type {
             PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
@@ -285,25 +293,11 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
             _ => {}
         }
     }
-    let has_cure = game.find_region(region_id).is_some_and(|region| target_has_cure(game, region.base(), target));
-    if !has_cure && game.skill_random_below(100) <= properties.query_property(SKILL_USAGE_BASE_PROBABILITY) as i32 {
-        let state_now_ms = runtime.now_milliseconds();
-        if let Some(mut region) = game.take_region_owner(region_id) {
-            install_spider_poison_state(
-                game,
-                region.base_mut(),
-                target,
-                SpiderPoisonState::new(
-                    owner,
-                    state_now_ms,
-                    properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
-                    properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY),
-                    properties.query_property(SKILL_USAGE_CONST),
-                ),
-                state_now_ms,
-            );
-            game.restore_region_owner(region);
-        }
+    if let Some(user) = game.find_player(player_id).map(|player| player.shape().identity()) {
+        game.with_published_player_ai(player_id, player_ai, |game| {
+            apply_spider_poison(game, region_id, user, target, &properties,
+                &mut || runtime.now_milliseconds());
+        });
     }
     if let Some(execution) = game.player_skill_execution_mut(player_id, SPIDER_POISON_SKILL_ID) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
@@ -352,33 +346,42 @@ pub(crate) fn target_has_cure(
     }
 }
 
-pub(crate) fn install_spider_poison_state(
+fn apply_spider_poison(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_id: i32,
+    user: ShapeIdentity,
     target: ShapeIdentity,
-    state: SpiderPoisonState,
-    now_ms: u32,
+    properties: &CSkillBaseProperties,
+    now: &mut dyn FnMut() -> u32,
 ) {
-    let replaced = match target.object_type {
-        PLAYER_TYPE => game.find_player_mut(target.id).and_then(|player| {
-            let identity = player.shape().identity();
-            let x = player.shape().get_tile_x().ok()?;
-            let y = player.shape().get_tile_y().ok()?;
-            Some((player.replace_spider_poison_state(state), identity, x, y))
-        }),
-        MONSTER_TYPE => region.find_monster_by_id_mut(target.id).and_then(|monster| {
-            let identity = monster.move_shape().shape().identity();
-            let x = monster.move_shape().shape().get_tile_x().ok()?;
-            let y = monster.move_shape().shape().get_tile_y().ok()?;
-            Some((monster.move_shape_mut().replace_spider_poison_state(state), identity, x, y))
-        }),
-        _ => None,
+    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return };
+    if shape.has_state_by_skill_id(CURE_SKILL_ID) { return; }
+    let sufferer = (shape.shape().get_region_id(), shape.shape().identity());
+    let probability = properties.query_property(SKILL_USAGE_BASE_PROBABILITY);
+    if game.skill_random_below(100) > probability as i32 { return; }
+    let Some(shape) = resolve_state_move_shape(game, region_id, user) else { return };
+    let user = (shape.shape().get_region_id(), shape.shape().identity());
+    let master = if user.1.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(user.1.id) else { return };
+        MasterInfo { master_country_id: 0, ..player_master(player) }
+    } else {
+        MasterInfo { master_type: user.1.object_type, master_id: user.1.id, ..MasterInfo::default() }
     };
-    let Some((previous, identity, x, y)) = replaced else { return };
-    if let Some(previous) = previous {
-        send_spider_poison_state_visual_in_region(game, region, identity, x, y, previous, false, now_ms);
-    }
-    send_spider_poison_state_visual_in_region(game, region, identity, x, y, state, true, now_ms);
+    let hp_loss = properties.query_property(SKILL_USAGE_CONST);
+    let frequency = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
+    let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let state = SpiderPoisonState::new(master, keep, frequency, hp_loss);
+    let Some(shape) = resolve_state_move_shape(game, sufferer.0, sufferer.1) else { return };
+    let location = if let Some((position, key)) = shape.find_state_position(|state| state.state_id() == SPIDER_POISON_SKILL_ID) {
+        let Some(location) = shape.applied_state_replacement_location(key) else { return };
+        let _ = end_and_destroy_state_at(game, sufferer.0, sufferer.1, position);
+        Some(location)
+    } else {
+        None
+    };
+    let _ = begin_primary_spider_poison_state(
+        game, sufferer.0, sufferer.1, Some(user), Some(sufferer), state, location, now,
+    );
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
@@ -507,15 +510,15 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, attacker_master,
         target_identity, &target.shape, target.health, target.mana, target.master,
         target.monster_property, target.tamed, target.carriage, attack);
+    let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
+    let region_id = region.id;
+    let Some(user) = region.find_monster_by_id(monster_id)
+        .map(|monster| monster.move_shape().shape().identity()) else { return true };
+    let _ = game.with_published_region(owner, |game| {
+        apply_spider_poison(game, region_id, user, target_identity, properties,
+            &mut || runtime.now_milliseconds());
+    });
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-    if !target_has_cure(game, region, target_identity)
-        && game.skill_random_below(100) <= properties.query_property(SKILL_USAGE_BASE_PROBABILITY) as i32 {
-        install_spider_poison_state(game, region, target_identity, SpiderPoisonState::new(
-            MasterInfo { master_type: MONSTER_TYPE, master_id: monster_id, ..MasterInfo::default() },
-            now_ms, properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
-            properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY),
-            properties.query_property(SKILL_USAGE_CONST)), now_ms);
-    }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
         let _ = monster.finish_base_attack_cast_with_clock(SPIDER_POISON_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());

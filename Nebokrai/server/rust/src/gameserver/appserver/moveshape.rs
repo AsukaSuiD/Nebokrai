@@ -286,8 +286,8 @@ use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY
 use crate::gameserver::appserver::skills::callositystate::{
     CALLOSITY_STATE_BYTES, CallosityFamilyState,
 };
-use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
-use crate::gameserver::appserver::skills::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DaubPoisonState};
+use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES};
+use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
 use crate::gameserver::appserver::skills::enlargemaxhpstate::{ENLARGE_MAX_HP_STATE_BYTES, EnlargeMaxHpState};
 use crate::gameserver::appserver::skills::enlargemaxmpstate::{ENLARGE_MAX_MP_STATE_BYTES, EnlargeMaxMpState};
@@ -349,7 +349,7 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
 };
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_STATE_BYTES};
-use crate::gameserver::appserver::skills::spiderpoisonstate::{SPIDER_POISON_STATE_BYTES, SpiderPoisonState};
+use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spriteburnstate::{
     SPRITE_BURN_STATE_BYTES, SpriteBurnState,
 };
@@ -2344,23 +2344,34 @@ impl CMoveShape {
         self.state_entries.set_serialized_span(key, (offset, CURE_STATE_BYTES));
     }
 
-    pub(crate) fn cure_state_replacement_location(&self, key: StateKey) -> Option<(usize, usize)> {
-        self.applied_state::<CureState>(key)?;
+    /// Позиция замены и техническое место DB-записи. Caller сохраняет их
+    /// до End: Begin новой записи не обязан добавлять её в конец m_vStates.
+    pub(crate) fn applied_state_replacement_location(&self, key: StateKey) -> Option<(usize, usize)> {
+        let state_id = self.applied_state_data(key)?.state_id();
         let position = self.state_entries.index_of(key)?;
         if let Some((offset, _)) = self.state_entries.serialized_span(key) {
             return Some((position, offset));
         }
-        let ordinal = self.state_entries.keys::<CureState>().iter().position(|entry| *entry == key)?;
+        let ordinal = self.state_entries.entries().filter(|(_, state)| state.state_id() == state_id)
+            .position(|(entry, _)| entry == key)?;
         let offset = known_state_record_offsets(&self.ex_states).into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
             .nth(ordinal)?;
         Some((position, offset))
     }
 
-    pub(crate) fn insert_replacement_cure_state(&mut self, state: CureState, location: (usize, usize)) {
+    /// Регистрация уже начатого состояния в освобождённой caller-ом позиции.
+    /// Сериализованный cache и все spans сдвигаются один раз для любого owner-а;
+    /// здесь нет End, игровых часов, Serialize или UpdateProperty.
+    pub(crate) fn insert_replacement_state_record<T: AppliedState>(
+        &mut self, state: T, record: &[u8], location: (usize, usize),
+    ) -> Option<StateKey> {
         let (position, offset) = location;
-        let amount = CURE_STATE_BYTES;
-        self.ex_states.splice(offset..offset, state.encoded_for_install());
+        if position >= self.state_entries.len() || offset < 4 || offset > self.ex_states.len() {
+            return None;
+        }
+        let amount = record.len();
+        self.ex_states.splice(offset..offset, record.iter().copied());
         self.state_entries.shift_serialized_spans_for_insert(offset, amount);
         let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
         write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
@@ -2374,9 +2385,9 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<MeteorArrowState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         let _ = self.state_entries.replace_at(position, state);
-        if let Some(key) = self.state_entries.address(position) {
-            self.state_entries.set_serialized_span(key, (offset, amount));
-        }
+        let key = self.state_entries.address(position)?;
+        self.state_entries.set_serialized_span(key, (offset, amount));
+        Some(key)
     }
 
 
@@ -2572,17 +2583,6 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn replace_daub_poison_state(
-        &mut self,
-        state: DaubPoisonState,
-    ) -> Option<DaubPoisonState> {
-        let previous = self.state_entries.first_key::<DaubPoisonState>()
-            .and_then(|key| self.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
 
 
     pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
@@ -2619,27 +2619,10 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn replace_spider_poison_state(
-        &mut self,
-        state: SpiderPoisonState,
-    ) -> Option<SpiderPoisonState> {
-        let previous = self.state_entries.first_key::<SpiderPoisonState>()
-            .and_then(|key| self.remove_applied_state_record::<SpiderPoisonState>(key, SPIDER_POISON_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
 
 
 
 
-
-
-    pub(crate) fn take_spider_poison_state(&mut self) -> Option<SpiderPoisonState> {
-        let key = self.state_entries.first_key::<SpiderPoisonState>()?;
-        let state = self.remove_applied_state_record::<SpiderPoisonState>(key, SPIDER_POISON_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn replace_sprite_burn_state(
         &mut self,

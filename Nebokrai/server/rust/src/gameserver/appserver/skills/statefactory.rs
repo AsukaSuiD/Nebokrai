@@ -242,7 +242,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         SPIDER_POISON_SKILL_ID => StateRecordLayout::typed(
             SPIDER_POISON_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::spiderpoisonstate::SpiderPoisonState::decode(payload, offset, _now()).ok().map(StateData::SpiderPoison)
+                super::spiderpoisonstate::SpiderPoisonState::decode(payload, offset, _now).ok().map(StateData::SpiderPoison)
             },
         ),
         DAUB_POISON_STATE_ID => StateRecordLayout::typed(

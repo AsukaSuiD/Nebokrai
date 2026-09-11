@@ -5,20 +5,28 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/daubpoison.cpp`. Все перегрузки `Begin` подтверждённо
 //! игнорируют запрошенную цель и выбирают игрока. Сохранены две проверки MP,
-//! условная блокировка движения только при ненулевом расходе, задержка,
-//! cooldown, пакеты `0xBFE01` и порядок замены состояния `end → begin`.
+//! условная блокировка движения только при ненулевом расходе, unsigned
+//! delay-gate now >= started.wrapping_add(delay),
+//! cooldown и пакеты `0xBFE01`. Apply из AI0x00566690 после delay/effect1
+//! завершает первый живой слот ID0xDF и уничтожает свежий остаток той же
+//! позиции. Только затем читает keep, создаёт состояние и вызывает self/self
+//! Begin с собственными часами; успешный Begin предшествует append.
+//! Отдельного post-append UpdateProperty здесь нет.
+//! Первый AI после UpdateCurState пишет CAN_BE_BREAKED в базовую available
+//! (+0x3C), до effect0. Её native consumer CSkill::OnAction (0x004D8390)
+//! разрешает effect2 и End(0); отдельный флаг или новый consumer не вводится.
 //! `CGame` предоставляет player owner, свойства, обновление состояния и
 //! фактическую доставку; lifecycle навыка остаётся здесь.
 //! Достигнутый apply-path фиксирует cooldown даже при смерти владельца или
 //! неудачной установке состояния; раннее прерывание этого не делает.
 //! Входной cooldown сохраняет absolute DWORD deadline `CSkill::IsRestored`.
 
-use super::baseattack::time_reached;
-use super::daubpoisonstate::{DaubPoisonState, DAUB_POISON_STATE_ID, replace_player_daub_poison_state};
+use super::daubpoisonstate::{DAUB_POISON_STATE_ID, begin_primary_daub_poison_state};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::state::end_and_destroy_state_at;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
@@ -118,9 +126,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay = properties.query_property(DELAY_TIME);
-    let keep_time = properties.query_property(STATE_PERSIST_TIME);
     let reuse = properties.query_property(REUSE_DELAY_TIME);
-    let _breakable = properties.query_property(CAN_BE_BREAKED);
 
     if game.player_skill_execution(player_id, DAUB_POISON_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
@@ -160,6 +166,12 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
             player.set_mana(mana.wrapping_sub(mp_loss));
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        let can_be_breaked = game.skill_base_properties(DAUB_POISON_SKILL_ID, level)
+            .expect("каталог проверенного уровня сохраняется через UpdateCurState")
+            .query_property(CAN_BE_BREAKED);
+        if let Some(execution) = game.player_skill_execution_mut(player_id, DAUB_POISON_SKILL_ID) {
+            execution.lifecycle_mut().set_available(can_be_breaked != 0);
+        }
         send_cast(game, player_id, level, false);
         if let Some(execution) = game.player_skill_execution_mut(player_id, DAUB_POISON_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
@@ -168,16 +180,25 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
     let started = game.player_skill_execution(player_id, DAUB_POISON_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение смазки оружия создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started, delay) {
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     send_cast(game, player_id, level, true);
-    let now_ms = runtime.now_milliseconds();
-    let installed = replace_player_daub_poison_state(
+    let previous = game.find_player(player_id).and_then(|player| {
+        player.move_shape().find_state_position(|state| state.state_id() == DAUB_POISON_STATE_ID)
+            .map(|(index, _)| (player.shape().get_region_id(), player.shape().identity(), index))
+    });
+    if let Some((region_id, holder, index)) = previous {
+        let _ = end_and_destroy_state_at(game, region_id, holder, index);
+    }
+    let keep_time = game.skill_base_properties(DAUB_POISON_SKILL_ID, level)
+        .expect("каталог проверенного уровня сохраняется через End предыдущего состояния")
+        .query_property(STATE_PERSIST_TIME);
+    let _ = begin_primary_daub_poison_state(
         game,
         player_id,
-        DaubPoisonState::new(now_ms, keep_time),
-        || runtime.now_milliseconds(),
+        keep_time,
+        &mut || runtime.now_milliseconds(),
     );
     if let Some(execution) = game.player_skill_execution_mut(player_id, DAUB_POISON_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
@@ -185,5 +206,5 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_daub_poison(game, player_id, player_ai, runtime);
-    terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
+    terminal(QueuedSkillExecutionState::Completed)
 }
