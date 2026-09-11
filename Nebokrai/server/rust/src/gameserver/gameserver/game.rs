@@ -44,7 +44,14 @@
 //! (0x005D44E0) не ставит ended и ничего не меняет при отказе Player/GM gate.
 //! Restore End (0x005EEBA0) только RemoveState. Его virtual UpdateProperty
 //! выполняется после фактического удаления; явные Del* сохраняют ещё один
-//! собственный UpdateProperty. Это не универсальная замена CState::End:
+//! собственный UpdateProperty. RestoreHp/Mp (0x00444C80/0x00444D50) сохраняют
+//! clock1 cooldown gate → clock2 last stamp → ctor → Begin с clock3 → append.
+//! AI (0x004F8650/0x004F8AA0) разрешает actual sufferer, но счётчик меняет
+//! в том же живом payload держателя: strict due → count++ → getters/setter
+//! цели → OnChangeStates → отдельный expiry clock. Смерть не читает часы;
+//! missing sufferer и MP non-player вызывают End. Локальный ключ не переносится
+//! в арену цели; End удаляет только найденный там исходный экземпляр.
+//! Это не универсальная замена CState::End:
 //! базовый End лишь ставит флаг, а Clear отдельно владеет удалением остатка.
 //! Повторный Attack проверяет requested CSkill: IsEnded и prepared (+0x44),
 //! не равенство выбранному ID. Object (0x00509FF0) и point (0x0050A230)
@@ -29485,11 +29492,6 @@ impl CGame {
         removed
     }
 
-    /// Один общий ключ ConsumableRestore: HP использует virtual health
-    /// живого CMoveShape, MP требует игрока. Native NPC health равен нулю;
-    /// Build/CityGate и Monster публикуют базовый OnChangeStates (0x4CD3E0).
-    /// После публикации перечитывается тот же ключ, затем второй clock
-    /// проверяет истечение. End не отправляет visual.
     pub(crate) fn update_move_shape_consumable_restore_state<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -29497,79 +29499,88 @@ impl CGame {
         key: crate::gameserver::appserver::moveshape::StateKey,
         runtime: &mut Runtime,
     ) -> bool {
-        use crate::gameserver::appserver::restorestate::ConsumableRestoreMutation;
+        use crate::gameserver::appserver::restorestate::ConsumableRestoreState;
         use crate::gameserver::appserver::states::state::{
-            resolve_state_move_shape, resolve_state_move_shape_mut,
+            resolve_applied_state_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
         };
         let Some(health_state) = resolve_state_move_shape(self, region_id, holder)
-            .and_then(|shape| shape.consumable_restore_state_is_health(key)) else { return false };
-        if !health_state && holder.object_type != PLAYER_TYPE {
+            .and_then(|shape| shape.applied_state::<ConsumableRestoreState>(key))
+            .map(ConsumableRestoreState::is_health) else { return false };
+        let Some((target_region, target)) = resolve_applied_state_sufferer(self, region_id, holder, key)
+        else { return self.end_move_shape_consumable_restore_state(region_id, holder, key) };
+        if !health_state && target.object_type != PLAYER_TYPE {
             return self.end_move_shape_consumable_restore_state(region_id, holder, key);
         }
-        let Some(health) = self.move_shape_health(region_id, holder) else { return false };
+        let Some(health) = self.move_shape_health(target_region, target) else { return false };
         if health == 0 {
             return false;
         }
         let checked_at_ms = runtime.now_milliseconds();
-        let mutation = if holder.object_type == PLAYER_TYPE {
-            self.find_player_mut(holder.id)
-                .and_then(|player| player.tick_consumable_restore_state(key, checked_at_ms))
-        } else {
-            let Some(maximum) = self.move_shape_maximum_health(region_id, holder) else { return false };
-            let mutation = resolve_state_move_shape_mut(self, region_id, holder)
-                .and_then(|shape| shape.tick_consumable_restore_state(
-                    key, checked_at_ms, health, maximum,
-                ));
-            if let Some(ConsumableRestoreMutation::Health(value)) = mutation {
-                match holder.object_type {
+        let gain = resolve_state_move_shape_mut(self, region_id, holder)
+            .and_then(|shape| shape.applied_state_mut::<ConsumableRestoreState>(key))
+            .and_then(|state| state.take_due_gain(checked_at_ms));
+        if let Some(gain) = gain {
+            // Native count++ предшествует getters, setter и owning публикации.
+            if target.object_type == PLAYER_TYPE {
+                let Some(player) = self.find_player_mut(target.id) else { return false };
+                if health_state {
+                    let value = player.health().wrapping_add(gain).min(player.maximum_health());
+                    player.set_health(value);
+                } else {
+                    let value = player.mana().wrapping_add(gain).min(player.maximum_mana());
+                    player.set_mana(value);
+                }
+            } else {
+                let Some(current) = self.move_shape_health(target_region, target) else { return false };
+                let Some(maximum) = self.move_shape_maximum_health(target_region, target) else { return false };
+                let value = current.wrapping_add(gain).min(maximum);
+                match target.object_type {
                     MONSTER_TYPE => {
-                        let Some(monster) = self.find_region_mut(region_id)
-                            .and_then(|owner| owner.base_mut().find_monster_by_id_mut(holder.id))
+                        let Some(monster) = self.find_region_mut(target_region)
+                            .and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.id))
                             else { return false };
                         monster.set_hit_points(value);
                     }
                     1_100 | 1_200 => {
-                        let Some(build) = self.find_region_mut(region_id)
-                            .and_then(|owner| owner.stationary_build_mut(holder))
+                        let Some(build) = self.find_region_mut(target_region)
+                            .and_then(|owner| owner.stationary_build_mut(target))
                             else { return false };
                         build.set_hp(value);
                     }
                     _ => return false,
                 }
             }
-            mutation
-        };
-        if mutation.is_some() {
-            match holder.object_type {
-                PLAYER_TYPE => { let _ = self.publish_player_states(holder.id); }
+            match target.object_type {
+                PLAYER_TYPE => { let _ = self.publish_player_states(target.id); }
                 MONSTER_TYPE => {
-                    if let Some(owner) = self.find_region(region_id) {
-                        let _ = self.publish_owned_monster_states(owner.base(), holder.id);
+                    if let Some(owner) = self.find_region(target_region) {
+                        let _ = self.publish_owned_monster_states(owner.base(), target.id);
                     }
                 }
                 1_100 | 1_200 => {
-                    if let Some(health) = self.move_shape_health(region_id, holder) {
+                    if let Some(health) = self.move_shape_health(target_region, target) {
                         let mut message = CMessage::new(0x000b_fe02);
-                        message.add_long(holder.object_type);
-                        message.add_long(holder.id);
+                        message.add_long(target.object_type);
+                        message.add_long(target.id);
                         message.add_ulong(health);
                         message.add_ulong(0);
                         message.add_short(0);
                         message.add_short(0);
-                        let _ = self.send_move_shape_around(region_id, holder, &message);
+                        let _ = self.send_move_shape_around(target_region, target, &message);
                     }
                 }
                 _ => {}
             }
         }
-        let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return false };
-        if shape.consumable_restore_state_is_health(key).is_none() {
+        if resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<ConsumableRestoreState>(key)).is_none()
+        {
             return false;
         }
         let expiry_checked_at_ms = runtime.now_milliseconds();
         let expired = resolve_state_move_shape(self, region_id, holder)
-            .and_then(|shape| shape.consumable_restore_state_expired(key, expiry_checked_at_ms))
-            .unwrap_or(false);
+            .and_then(|shape| shape.applied_state::<ConsumableRestoreState>(key))
+            .is_some_and(|state| state.expired(expiry_checked_at_ms));
         if !expired {
             return false;
         }
@@ -29579,15 +29590,23 @@ impl CGame {
     pub(crate) fn end_move_shape_consumable_restore_state(
         &mut self,
         region_id: i32,
-        identity: ShapeIdentity,
+        holder: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
     ) -> bool {
-        let removed = resolve_state_move_shape_mut(self, region_id, identity)
-            .is_some_and(|shape| shape.remove_consumable_restore_state(key));
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
+        use crate::gameserver::appserver::restorestate::{
+            ConsumableRestoreState, CONSUMABLE_RESTORE_STATE_BYTES,
+        };
+        use crate::gameserver::appserver::states::state::{
+            remove_applied_state_from, resolve_applied_state_sufferer,
+        };
+        if resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<ConsumableRestoreState>(key)).is_none()
+        {
+            return false;
         }
-        removed
+        let Some(target) = resolve_applied_state_sufferer(self, region_id, holder, key)
+        else { return false };
+        remove_applied_state_from(self, region_id, holder, key, target, CONSUMABLE_RESTORE_STATE_BYTES)
     }
 
     pub(crate) fn move_shape_health(&self, region_id: i32, holder: ShapeIdentity) -> Option<u32> {
@@ -35127,15 +35146,9 @@ impl CGame {
         now_ms: impl FnMut() -> u32,
     ) -> bool {
         let (interval_ms, _) = self.globe_setup.item_restore_intervals_ms();
-        self.find_player_mut(player_id).is_some_and(|player| {
-            player.begin_consumable_health_restore(
-                amount,
-                time_to_keep_ms,
-                frequency_ms,
-                interval_ms,
-                now_ms,
-            )
-        })
+        self.begin_player_consumable_restore(
+            player_id, true, amount, time_to_keep_ms, frequency_ms, interval_ms, now_ms,
+        )
     }
 
     pub(crate) fn begin_player_consumable_mana_restore(
@@ -35147,15 +35160,37 @@ impl CGame {
         now_ms: impl FnMut() -> u32,
     ) -> bool {
         let (_, interval_ms) = self.globe_setup.item_restore_intervals_ms();
-        self.find_player_mut(player_id).is_some_and(|player| {
-            player.begin_consumable_mana_restore(
-                amount,
-                time_to_keep_ms,
-                frequency_ms,
-                interval_ms,
-                now_ms,
-            )
-        })
+        self.begin_player_consumable_restore(
+            player_id, false, amount, time_to_keep_ms, frequency_ms, interval_ms, now_ms,
+        )
+    }
+
+    fn begin_player_consumable_restore(
+        &mut self,
+        player_id: i32,
+        health: bool,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        interval_ms: u32,
+        mut now: impl FnMut() -> u32,
+    ) -> bool {
+        let Some(player) = self.find_player_mut(player_id) else { return false };
+        let region_id = player.shape().get_region_id();
+        let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let Some(mut state) = player.move_shape_mut().prepare_consumable_restore(
+            health, amount, time_to_keep_ms, frequency_ms, interval_ms, &mut now,
+        ) else { return false };
+        let Some((begin_region, participant)) = crate::gameserver::appserver::restorestate::begin_primary_consumable_restore_state(
+            self, region_id, holder, &mut state, &mut now,
+        ) else { return false };
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return false };
+        let record = state.encoded_for_install();
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some((begin_region, participant)));
+        shape.set_applied_state_sufferer(key, Some((begin_region, participant)));
+        true
     }
 
     fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {

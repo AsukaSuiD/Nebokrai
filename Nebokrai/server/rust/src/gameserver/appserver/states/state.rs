@@ -94,7 +94,8 @@ fn set_state_user_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity
     }
 }
 
-// CBlindState с четырьмя наследниками и CPoisonFogState (vtable0x006622D4)
+// CBlindState с четырьмя наследниками, CPoisonFogState (vtable0x006622D4)
+// и RestoreHp/RestoreMp (0x0065355C/0x006535BC)
 // используют +0x2C=0x005E3B30: меняется только sufferer-region до Begin.
 // Регион caster у первичного Fog при переходе держателя не перезаписывается.
 fn set_state_sufferer_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
@@ -1005,7 +1006,8 @@ state_callbacks! {
         },
         CGame::end_move_shape_consumable_restore_state,
         crate::gameserver::appserver::restorestate::restart_consumable_restore_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::Particular(_); client = |state, _team, _now| { StateClientRecord { time: state.client_state_time(), additional: state.additional_data(), team_name: None } } => (
         |game, region, target, key, runtime| {

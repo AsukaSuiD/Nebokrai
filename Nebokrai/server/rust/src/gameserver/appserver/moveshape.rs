@@ -148,6 +148,12 @@
 //! обрывая следующий record. RestoreHpMp (0x004455D0) завершает четыре
 //! автоматических типа и Particular одним обходом исходных позиций, затем
 //! добавляет четыре 12-байтные записи из актуальных свойств игрока.
+//! RestoreHp/RestoreMp (0x00444C80/0x00444D50) сначала проверяют отдельный
+//! cooldown по clock1 и записывают clock2 до создания состояния. Подготовка
+//! здесь не выполняет Begin и append: owner читает clock3 в Begin, после чего
+//! CGame регистрирует единственный экземпляр и DB-span в общей арене.
+//! Эти cooldown-поля обнуляются конструктором игрока (0x00458F3D/0x00458F43),
+//! но не очисткой состояний и не DecordFromByteArray (0x0044BA80).
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; доказанные границы записей теперь
 //! предоставляет достигнутый `CStateFactory`, а применение состояний остаётся
@@ -243,9 +249,9 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
-use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreMutation, ConsumableRestoreState};
-use super::restorehpstate::RESTORE_HP_STATE_BYTES;
-use super::restorempstate::RESTORE_MP_STATE_BYTES;
+use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreState};
+use super::restorehpstate::RestoreHpState;
+use super::restorempstate::RestoreMpState;
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
@@ -1668,7 +1674,6 @@ impl CMoveShape {
             decoded_count += 1;
         }
         write_u32(&mut payload, 0, decoded_count);
-        self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
         self.ex_states = LegacyStateCodec {
             payload,
             opaque_tail: states[cursor..].to_vec(),
@@ -1683,7 +1688,6 @@ impl CMoveShape {
         self.item_skill_ids.clear();
         self.ex_states.clear();
         self.state_entries.clear();
-        self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
         self.can_fight_count = 0;
         self.can_fight = true;
     }
@@ -1730,85 +1734,29 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn begin_consumable_health_restore(
+    /// Cooldown и constructor до отдельного Begin: отказ читает только clock1,
+    /// допуск записывает clock2; timestamp нового payload пока остаётся нулём.
+    pub(crate) fn prepare_consumable_restore(
         &mut self,
+        health: bool,
         amount: u32,
         time_to_keep_ms: u32,
         frequency_ms: u32,
         interval_ms: u32,
-        now_ms: impl FnMut() -> u32,
-    ) -> bool {
-        let Some(state) = self.consumable_restore_intervals.begin_health(
-            amount,
-            time_to_keep_ms,
-            frequency_ms,
-            interval_ms,
-            now_ms,
-        ) else {
-            return false;
-        };
-        let record = state.encoded_for_install();
-        self.state_entries.append(state);
-        self.append_serialized_state_record(&record);
-        true
-    }
-
-    pub(crate) fn begin_consumable_mana_restore(
-        &mut self,
-        amount: u32,
-        time_to_keep_ms: u32,
-        frequency_ms: u32,
-        interval_ms: u32,
-        now_ms: impl FnMut() -> u32,
-    ) -> bool {
-        let Some(state) = self.consumable_restore_intervals.begin_mana(
-            amount,
-            time_to_keep_ms,
-            frequency_ms,
-            interval_ms,
-            now_ms,
-        ) else {
-            return false;
-        };
-        let record = state.encoded_for_install();
-        self.state_entries.append(state);
-        self.append_serialized_state_record(&record);
-        true
-    }
-
-
-
-    pub(crate) fn consumable_restore_state_is_health(&self, key: StateKey) -> Option<bool> {
-        self.applied_state::<ConsumableRestoreState>(key)
-            .map(|state| state.is_health())
-    }
-
-    pub(crate) fn tick_consumable_restore_state(
-        &mut self,
-        key: StateKey,
-        checked_at_ms: u32,
-        current: u32,
-        maximum: u32,
-    ) -> Option<ConsumableRestoreMutation> {
-        ConsumableRestoreState::as_data_mut(self.state_entries.get_mut(key)?)?
-            .tick(checked_at_ms, current, maximum)
-    }
-
-    pub(crate) fn consumable_restore_state_expired(
-        &self,
-        key: StateKey,
-        checked_at_ms: u32,
-    ) -> Option<bool> {
-        self.applied_state::<ConsumableRestoreState>(key)
-            .map(|state| state.expired(checked_at_ms))
-    }
-
-    pub(crate) fn remove_consumable_restore_state(&mut self, key: StateKey) -> bool {
-        let Some(state) = self.applied_state::<ConsumableRestoreState>(key) else {
-            return false;
-        };
-        let amount = if state.is_health() { RESTORE_HP_STATE_BYTES } else { RESTORE_MP_STATE_BYTES };
-        self.remove_applied_state_record::<ConsumableRestoreState>(key, amount).is_some()
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<ConsumableRestoreState> {
+        if !self.consumable_restore_intervals.try_begin(health, interval_ms, &mut *now) {
+            return None;
+        }
+        Some(if health {
+            ConsumableRestoreState::Health(RestoreHpState::new(
+                time_to_keep_ms, frequency_ms, amount,
+            ))
+        } else {
+            ConsumableRestoreState::Mana(RestoreMpState::new(
+                time_to_keep_ms, frequency_ms, amount,
+            ))
+        })
     }
 
     pub(crate) fn particular_states(&self) -> impl Iterator<Item = &ParticularState> {

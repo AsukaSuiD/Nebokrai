@@ -12,6 +12,11 @@
 //! принадлежат этому Begin, а внешний Update остаётся в ветке UseItem.
 //! Undead/Appellation также устанавливается и завершается через общий
 //! lifecycle CMoveShape; Player не хранит промежуточную пачку копий состояний.
+//! RestoreHp/RestoreMp (0x00444C80/0x00444D50) координирует CGame:
+//! после двух cooldown-часов выполняются constructor, Begin(self, self)
+//! с отдельным clock и общая регистрация. Нулевой срок не означает мгновенное
+//! лечение; повторные состояния сохраняются, внешнего UpdateProperty нет.
+//! HP/MP-mutation wrappers устранены: AI обращается к тому же живому payload.
 //! Ride AI (0x004F9110, other states/ridestate.cpp) проверяет packet actual
 //! Sufferer через существующий property-listener: сначала GAP_MOUNT_TYPE != 0,
 //! затем GUID lookup и сравнение type/level. Проверка read-only, без cached GUID,
@@ -496,7 +501,6 @@ use super::skills::baseattack::BASE_ATTACK_SKILL_ID;
 use super::skills::basemagic::BASE_MAGIC_SKILL_ID;
 use super::skills::skillfactory::{CSkillFactory, SkillCategory, UNKNOWN_SKILL_ID};
 use super::states::automaticrestore::AutomaticRestoreMutation;
-use super::restorestate::ConsumableRestoreMutation;
 use super::teamstate::CTeamState;
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
@@ -13726,68 +13730,6 @@ impl CPlayer {
         self.move_shape
             .append_automatic_hp_mp_states(self.combat_properties);
     }
-
-    pub(crate) fn begin_consumable_health_restore(
-        &mut self,
-        amount: u32,
-        time_to_keep_ms: u32,
-        frequency_ms: u32,
-        interval_ms: u32,
-        now_ms: impl FnMut() -> u32,
-    ) -> bool {
-        self.move_shape.begin_consumable_health_restore(
-            amount,
-            time_to_keep_ms,
-            frequency_ms,
-            interval_ms,
-            now_ms,
-        )
-    }
-
-    pub(crate) fn begin_consumable_mana_restore(
-        &mut self,
-        amount: u32,
-        time_to_keep_ms: u32,
-        frequency_ms: u32,
-        interval_ms: u32,
-        now_ms: impl FnMut() -> u32,
-    ) -> bool {
-        self.move_shape.begin_consumable_mana_restore(
-            amount,
-            time_to_keep_ms,
-            frequency_ms,
-            interval_ms,
-            now_ms,
-        )
-    }
-
-
-
-    pub(crate) fn tick_consumable_restore_state(
-        &mut self,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        checked_at_ms: u32,
-    ) -> Option<ConsumableRestoreMutation> {
-        let health = self.move_shape.consumable_restore_state_is_health(key)?;
-        let (current, maximum) = if health {
-            (self.health(), self.maximum_health())
-        } else {
-            (self.mana(), self.maximum_mana())
-        };
-        let mutation = self.move_shape.tick_consumable_restore_state(
-            key,
-            checked_at_ms,
-            current,
-            maximum,
-        )?;
-        match mutation {
-            ConsumableRestoreMutation::Health(value) => self.set_health(value),
-            ConsumableRestoreMutation::Mana(value) => self.set_mana(value),
-        }
-        Some(mutation)
-    }
-
-
 
     pub(crate) fn particular_state_goods_present(
         &self,
