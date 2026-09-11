@@ -2,38 +2,26 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/other states/usegoodsenlargemaxhpstate.cpp`. Достигнутый путь
-//! создаётся фабрикой `CMoveShape::AddState`, хранит исходные `DWORD` времени
-//! и коэффициента и при пересчёте увеличивает максимум HP с FISTP-усечением,
+//! создаётся фабрикой `CMoveShape::AddState`; общий ScriptMoveState хранит время
+//! и коэффициент, а эта формула увеличивает максимум HP с FISTP-усечением,
 //! wrapping-сложением и верхней границей `i32::MAX`. Недостигнутые перегрузки
 //! сохранены ниже.
+//! Default ctor 0x005D59A0 задаёт keep=0/coefficient=1; промежуточный объект
+//! заменён прямой загрузкой полей общего payload, без наблюдаемых callbacks.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 
 pub(crate) const USE_GOODS_ENLARGE_MAX_HP_STATE_ID: i32 = 100_007;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct UseGoodsEnlargeMaxHpState {
-    _time_to_keep: u32,
-    coefficient: u32,
-}
-
-impl UseGoodsEnlargeMaxHpState {
-    pub(crate) const fn new(time_to_keep: u32, coefficient: u32) -> Self {
-        Self { _time_to_keep: time_to_keep, coefficient }
-    }
-
-    pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_MAX_HP_STATE_ID }
-
-    pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
-        let delta = truncate_original(f64::from(self.coefficient)
-            * f64::from(0.01_f32)
-            * f64::from(properties.maximum_hp)) as u32;
-        properties.maximum_hp = properties
-            .maximum_hp
-            .wrapping_add(delta)
-            .min(i32::MAX as u32);
-    }
+pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
+    let delta = truncate_original(f64::from(coefficient)
+        * f64::from(0.01_f32)
+        * f64::from(properties.maximum_hp)) as u32;
+    properties.maximum_hp = properties
+        .maximum_hp
+        .wrapping_add(delta)
+        .min(i32::MAX as u32);
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
@@ -44,21 +32,6 @@ impl UseGoodsEnlargeMaxHpState {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp
 
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::CUseGoodsEnlargeMaxHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:25
-// RVA: 0x001D59A0
-// ADDRESS: 005d59a0
-// PROTOTYPE: undefined __thiscall CUseGoodsEnlargeMaxHpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // ============================================================================
 // FUNCTION: CUseGoodsEnlargeMaxHpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

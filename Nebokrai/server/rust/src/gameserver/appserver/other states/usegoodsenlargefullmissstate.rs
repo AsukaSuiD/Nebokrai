@@ -2,29 +2,17 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/other states/usegoodsenlargefullmissstate.cpp`. Достигнутый путь
-//! хранит исходные `DWORD`, а при пересчёте прибавляет коэффициент к 16-битному
-//! `full_miss` с тем же wrapping-сужением.
+//! хранит время и коэффициент в ScriptMoveState; эта формула прибавляет коэффициент
+//! к 16-битному `full_miss` с тем же wrapping-сужением.
+//! Default ctor 0x005D46F0 задаёт keep=0/coefficient=0; промежуточный объект
+//! заменён прямой загрузкой полей общего payload, без наблюдаемых callbacks.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
 pub(crate) const USE_GOODS_ENLARGE_FULL_MISS_STATE_ID: i32 = 100_012;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct UseGoodsEnlargeFullMissState {
-    _time_to_keep: u32,
-    coefficient: u32,
-}
-
-impl UseGoodsEnlargeFullMissState {
-    pub(crate) const fn new(time_to_keep: u32, coefficient: u32) -> Self {
-        Self { _time_to_keep: time_to_keep, coefficient }
-    }
-
-    pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_FULL_MISS_STATE_ID }
-
-    pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
-        properties.full_miss = properties.full_miss.wrapping_add(self.coefficient as u16);
-    }
+pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
+    properties.full_miss = properties.full_miss.wrapping_add(coefficient as u16);
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
@@ -35,21 +23,6 @@ impl UseGoodsEnlargeFullMissState {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargefullmissstate.cpp
 
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeFullMissState::CUseGoodsEnlargeFullMissState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargefullmissstate.cpp:25
-// RVA: 0x001D46F0
-// ADDRESS: 005d46f0
-// PROTOTYPE: undefined __thiscall CUseGoodsEnlargeFullMissState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // ============================================================================
 // FUNCTION: CUseGoodsEnlargeFullMissState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

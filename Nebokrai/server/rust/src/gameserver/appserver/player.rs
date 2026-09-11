@@ -6063,36 +6063,6 @@ impl CPlayer {
 
 
 
-    pub(crate) fn add_script_move_state(
-        &mut self,
-        state_id: i32,
-        value1: i32,
-        value2: i32,
-        sufferer_is_gm: bool,
-        started_at_ms: u32,
-    ) -> Option<super::scriptstate::ScriptMoveState> {
-        let state = self.move_shape.add_script_state(
-            state_id,
-            value1,
-            value2,
-            sufferer_is_gm,
-            started_at_ms,
-        )?;
-        Some(state)
-    }
-
-
-
-    pub(crate) fn remove_script_move_state_key(
-        &mut self,
-        key: super::moveshape::StateKey,
-    ) -> Option<super::scriptstate::ScriptMoveState> {
-        if self.move_shape.applied_state::<super::scriptstate::ScriptMoveState>(key)?.is_auto_protect() {
-            self.auto_protected = false;
-        }
-        self.move_shape.remove_script_state_key(key)
-    }
-
     pub(crate) fn script_move_state_count(&self, state_id: i32) -> u32 {
         self.move_shape.state_count_by_state_id(state_id)
     }

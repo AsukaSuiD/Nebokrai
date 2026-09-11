@@ -5,27 +5,17 @@
 //! `CMoveShape::AddState`; каждый живой экземпляр независимо добавляет
 //! `coefficient * float(0.01)` к неокруглённому x87-подобному множителю опыта
 //! в порядке канонического списка.
+//! Время и коэффициент принадлежат единственному payload ScriptMoveState;
+//! здесь остаётся только формула, без повторного config-объекта.
+//! Default ctor 0x005D5E90 задаёт keep=0/coefficient=0; промежуточный объект
+//! заменён прямой загрузкой полей общего payload, без наблюдаемых callbacks.
 //! Exact vtable направляет клиентский срок на
 //! `CAgilityState2::GetRemainedTime` по `0x005D5F30`.
 
 pub(crate) const IMPROVE_EXP_STATE_ID: i32 = 100_009;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ImproveExpState {
-    _time_to_keep: u32,
-    coefficient: u32,
-}
-
-impl ImproveExpState {
-    pub(crate) const fn new(time_to_keep: u32, coefficient: u32) -> Self {
-        Self { _time_to_keep: time_to_keep, coefficient }
-    }
-
-    pub(crate) const fn state_id(self) -> i32 { IMPROVE_EXP_STATE_ID }
-
-    pub(crate) fn multiplier_delta(self) -> f64 {
-        f64::from(self.coefficient) * f64::from(0.01_f32)
-    }
+pub(crate) fn multiplier_delta(coefficient: u32) -> f64 {
+    f64::from(coefficient) * f64::from(0.01_f32)
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
@@ -36,21 +26,6 @@ impl ImproveExpState {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp
 
-// ============================================================================
-// FUNCTION: CImproveExpState::CImproveExpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp:25
-// RVA: 0x001D5E90
-// ADDRESS: 005d5e90
-// PROTOTYPE: undefined __thiscall CImproveExpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // ============================================================================
 // FUNCTION: CImproveExpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

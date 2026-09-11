@@ -47,6 +47,11 @@
 //! хвост EXE безопасно прерывается, а не считается определённым native no-op.
 //! Script6 (0x005D5B80) ставит base ended до Remove без visual; AutoProtect
 //! (0x005D44E0) не ставит ended и ничего не меняет при отказе Player/GM gate.
+//! AddState (0x004D1560) вызывает concrete Begin до общей регистрации, затем
+//! virtual UpdateProperty. Шесть усилений создают loop0 без Begin-пакета;
+//! первое обновление visual завершает этот ресурс. AutoProtect имеет loop1;
+//! его End удерживает первого sufferer через visual, снимает ему флаг защиты
+//! и удаляет тот же экземпляр. Собственного списка сценарных состояний нет.
 //! Restore End (0x005EEBA0) только RemoveState. Его virtual UpdateProperty
 //! выполняется после фактического удаления; явные Del* сохраняют ещё один
 //! собственный UpdateProperty. RestoreHp/Mp (0x00444C80/0x00444D50) сохраняют
@@ -905,7 +910,7 @@ use crate::gameserver::appserver::build::{
 use crate::gameserver::appserver::citygate::{CITY_GATE_OBJECT_TYPE, CCityGate};
 use crate::gameserver::appserver::autoprotectstate::AUTO_PROTECT_STATE_ID;
 use crate::gameserver::appserver::scriptstate::{
-    ScriptMoveState, script_state_visual_message,
+    ScriptMoveState, begin_primary_script_state,
 };
 use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
@@ -6307,19 +6312,11 @@ impl CGame {
         value1: i32,
         value2: i32,
     ) -> i32 {
-        let sufferer_is_gm = self.script_player_gm_level(player_id).unwrap_or(0) != 0;
-        let started_at_ms = game_tick_milliseconds();
-        let Some(_state) = self.find_player_mut(player_id).and_then(|player| {
-            player.add_script_move_state(
-                state_id,
-                value1,
-                value2,
-                sufferer_is_gm,
-                started_at_ms,
-            )
-        }) else {
+        if begin_primary_script_state(
+            self, player_id, state_id, value1, value2, &mut game_tick_milliseconds,
+        ).is_none() {
             return 0;
-        };
+        }
         // AddState0x004D1560: successful Begin → push_back → virtual +0x9C.
         let _ = self.update_player_properties(player_id);
         1
@@ -6338,8 +6335,10 @@ impl CGame {
             .find(|key| shape.applied_state::<ScriptMoveState>(*key)
                 .is_some_and(|state| state.is_auto_protect()))
         else { return false };
-        self.end_move_shape_script_move_state(
-            player.shape().get_region_id(), player.shape().identity(), key,
+        let region_id = player.shape().get_region_id();
+        let holder = player.shape().identity();
+        crate::gameserver::appserver::states::state::end_move_shape_state(
+            self, region_id, holder, key,
         )
     }
 
@@ -29170,64 +29169,6 @@ impl CGame {
             self, region_id, identity, key, (target_region, target),
             crate::gameserver::appserver::chbystate::CHANGE_BODY_STATE_BYTES,
         )
-    }
-
-    /// Исполняет virtual `AI` одного достигнутого состояния `CMoveShape::AddState`.
-    /// Общий обход владеет позицией, а End удаляет только переданный ключ.
-    pub(crate) fn update_move_shape_script_move_state<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        region_id: i32,
-        identity: ShapeIdentity,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        runtime: &mut Runtime,
-    ) -> usize {
-        let now_ms = runtime.now_milliseconds();
-        let Some(shape) = resolve_state_move_shape(self, region_id, identity) else {
-            return 0;
-        };
-        let Some(state) = shape.applied_state::<ScriptMoveState>(key).copied() else {
-            return 0;
-        };
-        if !state.expired(now_ms) {
-            return 0;
-        }
-        usize::from(self.end_move_shape_script_move_state(region_id, identity, key))
-    }
-
-    pub(crate) fn end_move_shape_script_move_state(
-        &mut self,
-        region_id: i32,
-        identity: ShapeIdentity,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-    ) -> bool {
-        let Some(shape) = resolve_state_move_shape(self, region_id, identity) else {
-            return false;
-        };
-        let Some(state) = shape.applied_state::<ScriptMoveState>(key).copied() else {
-            return false;
-        };
-        if state.is_auto_protect() {
-            if identity.object_type != PLAYER_TYPE
-                || self.script_player_gm_level(identity.id).unwrap_or(0) != 0
-            {
-                return false;
-            }
-            let message = script_state_visual_message(shape.shape(), state, false, game_tick_milliseconds);
-            let _ = self.send_move_shape_around(region_id, identity, &message);
-        } else if let Some(shape) = resolve_state_move_shape_mut(self, region_id, identity) {
-            shape.mark_applied_state_ended(key);
-        }
-        let removed = if identity.object_type == PLAYER_TYPE {
-            self.find_player_mut(identity.id)
-                .and_then(|player| player.remove_script_move_state_key(key)).is_some()
-        } else {
-            resolve_state_move_shape_mut(self, region_id, identity)
-                .and_then(|shape| shape.remove_script_state_key(key)).is_some()
-        };
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
-        }
-        removed
     }
 
     /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:

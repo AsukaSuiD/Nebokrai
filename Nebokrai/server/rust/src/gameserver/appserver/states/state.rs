@@ -111,6 +111,16 @@ fn set_god_bless_regions(game: &mut CGame, region_id: i32, holder: ShapeIdentity
     set_state_sufferer_region(game, region_id, holder, key);
 }
 
+// ImproveExp наследует S-only SetRegion, остальные шесть Script — U-only.
+fn set_script_state_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
+    let Some(improve_exp) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<crate::gameserver::appserver::scriptstate::ScriptMoveState>(key))
+        .map(|state| state.is_improve_exp())
+    else { return; };
+    if improve_exp { set_state_sufferer_region(game, region_id, holder, key); }
+    else { set_state_user_region(game, region_id, holder, key); }
+}
+
 /// CMoveShape::UpdateProperty (0x004CFB60): обнуление 25 LONG, затем
 /// virtual +0x24 в исходном порядке. Граница фиксируется один раз, слот
 /// читается заново перед callback. IsEnded и return callback не фильтруют
@@ -1029,12 +1039,16 @@ state_callbacks! {
     ); visual = |_state| Some((1, true)),
     StateData::Script(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            game.update_move_shape_script_move_state(region, target, key, runtime);
+            crate::gameserver::appserver::scriptstate::update_script_move_state(game, region, target, key, runtime);
         },
-        CGame::end_move_shape_script_move_state,
+        crate::gameserver::appserver::scriptstate::end_script_move_state,
         crate::gameserver::appserver::scriptstate::restart_script_move_state,
-        crate::gameserver::appserver::scriptstate::update_script_move_state_properties
-    ),
+        crate::gameserver::appserver::scriptstate::update_script_move_state_properties,
+        set_script_state_region
+    ); visual = |state| match state {
+        StateData::Script(state) => Some((if state.is_auto_protect() { 1 } else { 0 }, false)),
+        _ => None,
+    },
     StateData::ChangeBody(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
             game.update_move_shape_change_body_state(region, target, key, runtime);

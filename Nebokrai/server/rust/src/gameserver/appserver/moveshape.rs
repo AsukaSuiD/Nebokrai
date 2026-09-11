@@ -29,6 +29,9 @@
 //! остаётся лишь fallback-кодеком, а не условием удаления живого экземпляра.
 //! Particular также использует общий Begin/append/End; дополнительный код
 //! предмета проверяет native caller, storage не подавляет повторные записи.
+//! AddState (0x004D1560) делегирует семь вариантов owner-у scriptstate:
+//! успешный Begin → общая регистрация/span → virtual UpdateProperty.
+//! Список и копия результата для сценарных состояний отдельно не создаются.
 //! Клиентский AddToByteArray_ForClient (0x004CDD30, moveshape.cpp:1779)
 //! считает непустые позиции общей арены, затем пишет ID/+30/+38 и Team-name
 //! в том же порядке. DB Serialize и его offsets здесь не используются;
@@ -1781,29 +1784,6 @@ impl CMoveShape {
         self.applied_state_mut::<AutomaticRestoreState>(key)
     }
 
-    /// Точный фабричный диапазон `CMoveShape::AddState`: остальные ID не
-    /// создают состояние. Значения принимают исходное знаковое представление
-    /// сценария и сохраняются как поля `DWORD` конкретных классов.
-    pub(crate) fn add_script_state(
-        &mut self,
-        state_id: i32,
-        value1: i32,
-        value2: i32,
-        sufferer_is_gm: bool,
-        started_at_ms: u32,
-    ) -> Option<ScriptMoveState> {
-        let state = ScriptMoveState::from_factory(
-            state_id,
-            value1,
-            value2,
-            sufferer_is_gm,
-            started_at_ms,
-        )?;
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        Some(state)
-    }
-
     /// Точный `GetStateNumByStateID`: считает все живые экземпляры с данным
     /// базовым `CState::m_lID`, независимо от concrete owner-а состояния.
     pub(crate) fn state_count_by_state_id(&self, state_id: i32) -> u32 {
@@ -3198,12 +3178,6 @@ impl CMoveShape {
         self.state_entries.iter::<ScriptMoveState>()
     }
 
-
-    pub(crate) fn remove_script_state_key(&mut self, key: StateKey) -> Option<ScriptMoveState> {
-        let state = self.applied_state::<ScriptMoveState>(key)?;
-        let amount = ScriptMoveState::serialized_size(state.state_id())?;
-        self.remove_applied_state_record::<ScriptMoveState>(key, amount)
-    }
 
 
 
@@ -4735,19 +4709,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::AddState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:674
-// RVA: 0x000D1560
-// ADDRESS: 004d1560
-// PROTOTYPE: int __thiscall AddState(tagStateID param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 
 // ============================================================================
