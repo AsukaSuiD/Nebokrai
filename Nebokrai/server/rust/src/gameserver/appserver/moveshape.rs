@@ -344,9 +344,7 @@ use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, Orig
 use crate::gameserver::appserver::skills::pillarstate::{
     PILLAR_STATE_BYTES, PillarState,
 };
-use crate::gameserver::appserver::skills::poisonarrowstate::{
-    PoisonArrowState, POISON_ARROW_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
@@ -1618,7 +1616,7 @@ impl CMoveShape {
                 StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
                 StateData::Callosity(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::BossBlueFury(state) => Some(state.encoded(now_ms).to_vec()),
-                StateData::PoisonArrow(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::PoisonArrow(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::BattleFairyAttribute(state) => Some(state.encoded(now_ms).to_vec()),
                 // Эти неизменяемые записи уже синхронизированы при установке.
                 // В частности, не обнуляем сохранённый padding tagWuXingState.
@@ -2600,17 +2598,6 @@ impl CMoveShape {
         let key = self.state_entries.first_key::<SealState>()?;
         let state = self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES)?;
         Some(state)
-    }
-
-    pub(crate) fn replace_poison_arrow_state(
-        &mut self,
-        state: PoisonArrowState,
-    ) -> Option<PoisonArrowState> {
-        let previous = self.state_entries.first_key::<PoisonArrowState>()
-            .and_then(|key| self.remove_applied_state_record::<PoisonArrowState>(key, POISON_ARROW_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
     }
 
 

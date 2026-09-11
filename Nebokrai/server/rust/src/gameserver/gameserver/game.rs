@@ -1528,7 +1528,6 @@ use crate::gameserver::appserver::skills::monstertaming::{
 use crate::gameserver::appserver::skills::poisonarrow::{
     POISON_ARROW_SKILL_ID, execute_battle_fairy_poison_arrow,
 };
-use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::promotion::{
     cancel_player_promotion, complete_player_promotion, execute_player_promotion,
     PROMOTION_SKILL_ID,
@@ -40130,42 +40129,6 @@ impl CGame {
                 .map(CMonster::display_name)
                 .unwrap_or_default(),
             _ => &[],
-        }
-    }
-
-    pub(crate) fn replace_poison_arrow_state(
-        &mut self,
-        region_id: i32,
-        target: ShapeIdentity,
-        state: PoisonArrowState,
-    ) -> Option<(Option<PoisonArrowState>, ShapeIdentity, i32, i32)> {
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self.find_player_mut(target.id)?;
-                let identity = player.shape().identity();
-                let x = player.shape().get_tile_x().ok()?;
-                let y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_poison_arrow_state(state);
-                Some((previous, identity, x, y))
-            }
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner
-                    .base_mut()
-                    .find_monster_by_id_mut(target.id)
-                    .and_then(|monster| {
-                        let identity = monster.move_shape().shape().identity();
-                        let x = monster.move_shape().shape().get_tile_x().ok()?;
-                        let y = monster.move_shape().shape().get_tile_y().ok()?;
-                        let previous = monster
-                            .move_shape_mut()
-                            .replace_poison_arrow_state(state);
-                        Some((previous, identity, x, y))
-                    });
-                self.restore_region_owner(owner);
-                result
-            }
-            _ => None,
         }
     }
 

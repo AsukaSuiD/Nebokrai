@@ -5746,13 +5746,6 @@ impl CPlayer {
         self.move_shape.curable_state_ids()
     }
 
-    pub(crate) fn replace_poison_arrow_state(
-        &mut self,
-        state: super::skills::poisonarrowstate::PoisonArrowState,
-    ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
-        self.move_shape.replace_poison_arrow_state(state)
-    }
-
     pub(crate) fn take_expired_poison_fog_state(&mut self, key: super::moveshape::StateKey, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_expired_poison_fog_state(key, now_ms) }
     pub(crate) fn take_poison_fog_state(&mut self) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_poison_fog_state() }
     pub(crate) fn meteor_arrow_state(&self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.meteor_arrow_state() }
@@ -10055,6 +10048,20 @@ impl CPlayer {
         factory: &CGoodsFactory,
         da_kong_key: bool,
     ) -> Option<super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
+        self.spend_war_soul_mana_record(amount, factory, da_kong_key)
+            .and_then(|(update, encoded)| encoded.then_some(update))
+    }
+
+    /// Запись MP предшествует SerializeForOldClient. Результат сериализации
+    /// отделён от уже изменённого предмета и сформированного BF918: PoisonArrow
+    /// (0x00519EA5) игнорирует false и отправляет даже пустой payload. Остальные
+    /// callers через spend_war_soul_mana сохраняют свой прежний success-gate.
+    pub(crate) fn spend_war_soul_mana_record(
+        &mut self,
+        amount: u32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> Option<(super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate, bool)> {
         let current = self.war_soul_mana(factory)?;
         let next = current.wrapping_sub(amount as i32);
         let player_id = self.player_id();
@@ -10062,17 +10069,16 @@ impl CPlayer {
         let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, next);
         let identity = goods.identity();
         let mut old_client_payload = Vec::new();
-        if !goods.serialize_for_old_client(&mut old_client_payload, factory, da_kong_key) {
-            return None;
-        }
-        Some(
+        let encoded = goods.serialize_for_old_client(&mut old_client_payload, factory, da_kong_key);
+        Some((
             super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
                 message_type: 0x0b_f918,
                 player_id,
                 goods: identity,
                 old_client_payload,
             },
-        )
+            encoded,
+        ))
     }
 
     /// Изменяет `GAP_BF_HP` owned боевого духа и формирует тот же полный

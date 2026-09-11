@@ -383,7 +383,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         POISON_ARROW_SKILL_ID => StateRecordLayout::typed(
             POISON_ARROW_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::poisonarrowstate::PoisonArrowState::decode(payload, offset, _now()).ok().map(StateData::PoisonArrow)
+                super::poisonarrowstate::PoisonArrowState::decode(payload, offset, _now).ok().map(StateData::PoisonArrow)
             },
         ),
         state_id if state_id == RESTORE_HP_STATE_ID as u32 => StateRecordLayout::typed(

@@ -776,22 +776,19 @@ state_callbacks! {
     ),
     StateData::PoisonArrow(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::poisonarrowstate::update_player_poison_arrow_state(game, target.id, key, runtime); }
-                600 => { skills::poisonarrowstate::update_monster_poison_arrow_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            super::poison::update_poison_state::<0x21e, _>(game, region, target, key, runtime);
         },
-        skills::poisonarrowstate::end_poison_arrow_state,
-        skills::poisonarrowstate::restart_poison_arrow_state,
-        |_, _, _, _, _| true
+        super::poison::end_poison_state::<0x21e>,
+        super::poison::restart_poison_state::<0x21e>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::SpiderPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            skills::spiderpoisonstate::update_spider_poison_state(game, region, target, key, runtime);
+            super::poison::update_poison_state::<0x191, _>(game, region, target, key, runtime);
         },
-        skills::spiderpoisonstate::end_spider_poison_state,
-        skills::spiderpoisonstate::restart_spider_poison_state,
+        super::poison::end_poison_state::<0x191>,
+        super::poison::restart_poison_state::<0x191>,
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),

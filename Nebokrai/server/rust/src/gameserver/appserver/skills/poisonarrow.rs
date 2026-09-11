@@ -5,10 +5,9 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/poisonarrow.cpp`. Модуль сохраняет проверки цели и пути,
 //! расход MP боевого духа, задержку, пакеты и замену периодического состояния.
-//! `CGame` предоставляет владельцев, регион и атомарную установку состояния
-//! игрока или монстра; последующие периодические удары принадлежат
-//! `poisonarrowstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
-//! object-target он проходит отказ `10 → ZHGS0045 → 2 → End → 2`:
+//! `CGame` предоставляет опубликованных владельцев; установка и периодические
+//! удары принадлежат `poisonarrowstate.rs`. Координатный `Begin` не создаёт
+//! клеточную атаку: без object-target он проходит отказ `10 → ZHGS0045 → 2 → End → 2`:
 //! первый 4,2 принадлежит Begin, последний — OnScheduleAboutWarSoul.
 //! В Rust внутренний 4,2 перед visual-End остаётся здесь; внешний 4,2
 //! отправляет только координатор после общего End(0), не concrete Begin.
@@ -24,6 +23,16 @@
 //! Reuse использует exact `CSkill::IsRestored`; ожидание навыка сравнивает
 //! unsigned now с wrapping(start + delay), cmp/jb 0x00519fa6.
 //! Периодические часы принадлежат владельцу состояния.
+//! AI 0x00519D70 не делает RNG. После mode1 снимается MasterInfo с country=0,
+//! затем PK OnFirstSkill читает security по координатам source в регионе цели
+//! (0x0051A2AB..0x0051A2D3). CONST/frequency/keep и ctor 0x0051A32D идут
+//! до первого старого ID21E: End → destructor свежего остатка той же позиции →
+//! Begin(source,target) → прежний слот либо append. Отказ Begin не меняет
+//! успешный End(1) навыка; внешняя публикация списка состояний здесь отсутствует.
+//! Первый AI требует goods духа и при NULL остаётся Pending; MP0 также проходит
+//! signed wrapping MP-gate, запись и BF918 даже при отказе SerializeForOldClient.
+//! После пакета CAN_BE_BREAKED записывается в базовую available перед mode0,
+//! отдельно от derived допуска AI.
 
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -33,10 +42,11 @@ use super::battlefairytransfer::send_goods_update;
 use super::kernel::{
     SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
 };
-use super::poisonarrowstate::{PoisonArrowState, send_poison_arrow_state_visual};
+use super::poisonarrowstate::{PoisonArrowState, begin_primary_poison_arrow_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
+use crate::gameserver::appserver::states::state::{end_and_destroy_state_at, resolve_state_move_shape};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -67,7 +77,7 @@ fn master_info(player: &CPlayer) -> MasterInfo {
         master_guild_id: player.faction_id(),
         master_team_id: player.team_id(),
         master_union_id: player.union_id(),
-        master_country_id: i32::from(player.country()),
+        master_country_id: 0,
         permitted_to_kill_player: i32::from(permissions.player),
         permitted_to_kill_teammate: i32::from(permissions.teammate),
         permitted_to_kill_guild_member: i32::from(permissions.guild_member),
@@ -79,7 +89,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let (skill_level, target) = match dispatch {
@@ -121,14 +131,8 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         game.send_skill_system_info(player_id, b"ZHGS0045");
         return reject_before_ai(game);
     };
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let frequency_ms = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
-    let hp_loss = properties.query_property(SKILL_USAGE_CONST);
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if game.battle_fairy_execution(player_id, POISON_ARROW_SKILL_ID).is_none() {
         if target.id == player_id && target.object_type == PLAYER_TYPE {
@@ -187,6 +191,9 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             );
             return reject_before_ai(game);
         }
+        let mp_loss = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level)
+            .expect("свойства допуска навыка сохраняются")
+            .query_property(SKILL_USAGE_USER_MP_LOSE);
         if mp_loss != 0 {
             let Some(current) = game
                 .find_player(player_id)
@@ -194,7 +201,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             else {
                 return reject_before_ai(game);
             };
-            if i64::from(current) - i64::from(mp_loss) < 0 {
+            if current.wrapping_sub(mp_loss as i32) < 0 {
                 game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(
                     player_id,
@@ -213,33 +220,43 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
+    if resolve_state_move_shape(game, region_id, target).is_none() {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if game.periodic_state_target_dead(region_id, target) {
+        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
     if game
         .battle_fairy_execution(player_id, POISON_ARROW_SKILL_ID)
         .is_some_and(|state| state.stage() == SkillStage::Begin)
     {
-        let target_alive = game
-            .base_magic_target_view(region_id, target)
-            .is_some_and(|_| !game.periodic_state_target_dead(region_id, target));
-        if !target_alive {
-            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
+        let Some(current) = game.find_player(player_id)
+            .and_then(|player| player.war_soul_mana(game.goods_factory()))
+        else { return terminal(QueuedSkillExecutionState::Pending) };
+        let mp_loss = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level)
+            .expect("свойства исполняемого навыка сохраняются")
+            .query_property(SKILL_USAGE_USER_MP_LOSE);
+        if current.wrapping_sub(mp_loss as i32) < 0 {
+            game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 7);
+            game.send_skill_system_info_with_unsigned(
+                player_id, b"ZHGS0052", battle_fairy_mana_text_cost(mp_loss),
+            );
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        if mp_loss != 0 {
-            let goods_factory = game.goods_factory().clone();
-            let da_kong_key = game.globe_setup().da_kong_key();
-            let update = game.find_player_mut(player_id).and_then(|player| {
-                player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
-            });
-            let Some(update) = update else {
-                game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 7);
-                game.send_skill_system_info_with_unsigned(
-                    player_id,
-                    b"ZHGS0052",
-                    battle_fairy_mana_text_cost(mp_loss),
-                );
-                return terminal(QueuedSkillExecutionState::Rejected);
-            };
-            send_goods_update(game, &update);
+        let goods_factory = game.goods_factory().clone();
+        let da_kong_key = game.globe_setup().da_kong_key();
+        let update = game.find_player_mut(player_id).and_then(|player| {
+            player.spend_war_soul_mana_record(mp_loss, &goods_factory, da_kong_key)
+                .map(|(update, _encoded)| update)
+        });
+        let Some(update) = update else { return terminal(QueuedSkillExecutionState::Rejected) };
+        send_goods_update(game, &update);
+        let can_be_breaked = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level)
+            .expect("свойства исполняемого навыка сохраняются")
+            .query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        if let Some(execution) = game.battle_fairy_execution_mut(player_id, POISON_ARROW_SKILL_ID) {
+            execution.lifecycle_mut().set_available(can_be_breaked != 0);
         }
         game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 0);
         if let Some(state) = game.battle_fairy_execution_mut(player_id, POISON_ARROW_SKILL_ID) {
@@ -251,6 +268,9 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         .battle_fairy_execution(player_id, POISON_ARROW_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение ядовитой стрелы создано или восстановлено");
+    let delay_ms = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level)
+        .expect("свойства исполняемого навыка сохраняются")
+        .query_property(SKILL_USAGE_DELAY_TIME);
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
@@ -258,10 +278,6 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if game.periodic_state_target_dead(region_id, target) {
-        game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 10);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
     let source_view = game
         .find_player(player_id)
         .and_then(CPlayer::shape_view)
@@ -295,24 +311,35 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     game.update_player_skill_visual(player_id, POISON_ARROW_SKILL_ID, 1);
-    if target.object_type == PLAYER_TYPE {
-        let _ = game.player_on_first_skill(player_id, target.id, Some(region_id), runtime);
-    }
-    let master = game
-        .find_player(player_id)
-        .map(master_info)
-        .expect("владелец ядовитой стрелы сохранён");
-    let state_now_ms = runtime.now_milliseconds();
-    let state = PoisonArrowState::new(master, state_now_ms, keep_time_ms, frequency_ms, hp_loss);
-    if let Some((previous, identity, x, y)) = game.replace_poison_arrow_state(region_id, target, state) {
-        if let Some(previous) = previous {
-            send_poison_arrow_state_visual(game, region_id, identity, x, y, previous, false, state_now_ms);
-        }
-        send_poison_arrow_state_visual(game, region_id, identity, x, y, state, true, state_now_ms);
+    let _ = game.with_published_player_ai(player_id, player_ai, |game| {
+        let player = game.find_player(player_id)?;
+        let master = master_info(player);
+        let user = (player.shape().get_region_id(), player.shape().identity());
+        let shape = resolve_state_move_shape(game, region_id, target)?;
+        let sufferer = (shape.shape().get_region_id(), shape.shape().identity());
         if target.object_type == PLAYER_TYPE {
-            let _ = game.publish_player_states(target.id);
+            let source_y = player.shape().get_tile_y().ok()?;
+            let source_x = player.shape().get_tile_x().ok()?;
+            let _ = game.player_on_first_skill_at_position(
+                player_id, target.id, sufferer.0, source_x, source_y, runtime,
+            );
         }
-    }
+        let properties = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level)?;
+        let hp_loss = properties.query_property(SKILL_USAGE_CONST);
+        let frequency_ms = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
+        let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+        let state = PoisonArrowState::new(master, keep_time_ms, frequency_ms, hp_loss);
+        let shape = resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
+        let placement = if let Some((position, key)) = shape.find_state_position(|state| state.state_id() == POISON_ARROW_SKILL_ID) {
+            let location = shape.applied_state_replacement_location(key)?;
+            let _ = end_and_destroy_state_at(game, sufferer.0, sufferer.1, position);
+            Some(location)
+        } else { None };
+        begin_primary_poison_arrow_state(
+            game, sufferer.0, sufferer.1, Some(user), Some(sufferer), state, placement,
+            &mut || runtime.now_milliseconds(),
+        )
+    });
     if let Some(execution) = game.battle_fairy_execution_mut(player_id, POISON_ARROW_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
