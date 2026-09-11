@@ -24,8 +24,8 @@
 //! Загрузка активирует каждую запись; удаление синхронизирует DB-кодек и свойства.
 //! Опубликованный generic End используется также AddCure щита жизни:
 //! visual предшествует точному удалению, payload не извлекается до доставки.
-//! Player сохраняет собственный UpdateProperty; monster читает изменения
-//! состояний через живые getters, неперенесённые overrides не выдумываются.
+//! После фактического удаления общий virtual UpdateProperty пересчитывает
+//! живой tagProperty игрока либо состояние модификаторов региональной формы.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 pub(crate) const CURE_STATE_BYTES: usize = 8;
@@ -175,8 +175,8 @@ pub(crate) fn end_cure_state_key(
     send_cure_state_visual_for_holder(game, region_id, holder, state, false);
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_cure_state_by_key(key)).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

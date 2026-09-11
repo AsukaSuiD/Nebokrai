@@ -7,7 +7,7 @@
 //! срока и End не подменяют его первым состоянием с тем же ID.
 //! Direct End (vtable 0x00661254 +0x1C, тело 0x005EA9A0) сначала
 //! отправляет visual, затем снимает fight-lock и move-lock и удаляет точный ключ.
-//! RemoveState вызывает UpdateProperty игрока; timer и Cure используют
+//! RemoveState вызывает общий virtual UpdateProperty; timer и Cure используют
 //! этот же хвост без подмены direct End принудительным истечением.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
@@ -187,8 +187,8 @@ pub(crate) fn end_knight_cut_state(
     shape.set_fightable(true);
     shape.set_moveable(true);
     let removed = shape.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

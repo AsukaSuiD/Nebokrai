@@ -4,8 +4,8 @@
 //! `appserver/skills/bossbluefurystate.cpp`. Достигнутые пути игрока и монстра
 //! заменяют первый найденный экземпляр до установки нового, сохраняя остальные
 //! загруженные записи. Движение и бой запрещены на слабой фазе, после неё
-//! состояние сохраняется до общего срока. Только для монстра минимальная
-//! и максимальная атака заменяются указанной долей коэффициента: полный unsigned
+//! состояние сохраняется до общего срока. Только для монстра модификаторы
+//! атаки увеличиваются указанной долей текущих getter-ов: полный unsigned
 //! attack и signed-коэффициент перемножаются в x87 с `0.01_f32`, затем результат
 //! усекается в `i32`. Визуальные начало и завершение сохраняют `0xBFE03/04`.
 //! DB-запись содержит остаток срока и коэффициент атаки;
@@ -25,8 +25,16 @@
 //! Unserialize 0x005D6190 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
 
+//! OnUpdateProperties 0x005E8DC0: GetSufferer → существующий visual Update(0)
+//! → type600/RTTI CMonster → maximum, затем minimum. Каждый процент вычисляется
+//! от соответствующего живого getter; +0x1AC/+0x1A8 прибавляют signed delta
+//! к накопленным модификаторам. Ограничения и pet-множитель остаются у getter.
+
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual,
+};
+use crate::gameserver::appserver::states::state::{
+    resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::appserver::moveshape::StateKey;
 
@@ -142,21 +150,9 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 //
 //
 
-// ============================================================================
-// FUNCTION: CBossBlueFuryState::OnUpdateProperties
-// STATUS: PARTIALLY_IMPLEMENTED
-// Формула монстра выполняется `BossBlueFuryState::apply_to_monster_attack`;
-// исходная проверка типа `600` не применяет коэффициент к игроку.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:48
-// RVA: 0x001E8DC0
-// ADDRESS: 005e8dc0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// CBossBlueFuryState::OnUpdateProperties (0x005E8DC0) реализован
+// в update_boss_blue_fury_state_properties; порядок visual и live-modifier формул
+// зафиксирован в заголовке владельца.
 
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::Begin
@@ -177,7 +173,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 // ============================================================================
 // FUNCTION: CBossBlueFuryStateVisualEffect::UpdateVisualEffect
 // STATUS: IMPLEMENTED
-// Достигнутый путь выполняет `send_boss_blue_fury_state_visual`.
+// Достигнутый Update(0) выполняет общий property visual; End публикует Update(1).
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:204
@@ -285,35 +281,54 @@ impl BossBlueFuryState {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) fn apply_to_monster_attack(self, attack: u32) -> u32 {
+    fn attack_modifier(self, attack: u32) -> i32 {
         truncate_original(
             f64::from(self.attack_factor_percent)
                 * f64::from(0.01_f32)
                 * f64::from(attack),
-        ) as u32
+        )
     }
 }
 
-#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
-pub(crate) fn send_boss_blue_fury_state_visual(
+
+pub(crate) fn update_boss_blue_fury_state_properties(
     game: &mut CGame,
     region_id: i32,
-    identity: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: BossBlueFuryState,
-    begin: bool,
-    now_ms: u32,
-) {
-    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.client_time(|| now_ms));
-        message.add_long(0);
+    holder: ShapeIdentity,
+    key: StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    let _ = update_property_state_visual::<BossBlueFuryState>(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+        |state, now| state.client_time(now) as u32,
+    );
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueFuryState>(key)).copied()
+    else { return false; };
+    if target.object_type != 600 {
+        return true;
     }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    let base = game.find_region(target_region)
+        .and_then(|region| region.base().find_monster_by_id(target.id))
+        .and_then(|monster| {
+            let property = game.find_monster_property_by_origin_name(monster.original_name())?;
+            Some((property.minimum_attack, property.maximum_attack))
+        });
+    let Some((minimum_base, maximum_base)) = base else { return true; };
+    let Some(monster) = game.find_region_mut(target_region)
+        .and_then(|region| region.base_mut().find_monster_by_id_mut(target.id))
+    else { return true; };
+    let maximum = monster.state_attack_bounds(minimum_base, maximum_base).1;
+    let maximum_gain = state.attack_modifier(maximum);
+    let modifiers = monster.move_shape_mut().property_modifiers_mut();
+    modifiers.maximum_attack = modifiers.maximum_attack.wrapping_add(maximum_gain);
+    let minimum = monster.state_attack_bounds(minimum_base, maximum_base).0;
+    let minimum_gain = state.attack_modifier(minimum);
+    let modifiers = monster.move_shape_mut().property_modifiers_mut();
+    modifiers.minimum_attack = modifiers.minimum_attack.wrapping_add(minimum_gain);
+    true
 }
 
 pub(crate) fn restart_boss_blue_fury_state(
@@ -379,8 +394,8 @@ pub(crate) fn end_boss_blue_fury_state(
         .and_then(|shape| shape.remove_applied_state_record::<BossBlueFuryState>(
             key, BOSS_BLUE_FURY_STATE_BYTES,
         )).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
         shape.set_moveable(true);

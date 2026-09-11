@@ -2,7 +2,9 @@
 //!
 //! Формулы и жизненный цикл принадлежат `roarstate.rs`. Здесь остаются только
 //! временное извлечение владельцев региона и игрока, атомарная замена,
-//! перерасчёт свойств игрока и рассылка вокруг в порядке `End → Begin`.
+//! перерасчёт свойств цели и рассылка вокруг в порядке `End → Begin`.
+//! CRoar::AI: успешный Begin 0x0054B4EA → push_back 0x0054B500 →
+//! virtual UpdateProperty 0x0054B50A, отдельно для каждой достигнутой цели.
 
 use super::*;
 use crate::gameserver::appserver::skills::roarstate::{
@@ -57,9 +59,7 @@ impl CGame {
             true,
             || runtime.now_milliseconds(),
         );
-        if target.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(target.id);
-        }
+        let _ = self.update_move_shape_properties(region_id, target);
         true
     }
 

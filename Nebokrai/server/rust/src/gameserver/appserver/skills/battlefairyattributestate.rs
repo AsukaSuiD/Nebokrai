@@ -3,8 +3,8 @@
 //! Источник: `gameserver.exe` и `GameServer.pdb`, владельцы
 //! `pojia/pobing/pomo/pofa/yujia/yubing/yumo/yufa state`. Порядок состояний
 //! остаётся порядком исходного `m_vStates`: замена удаляет прежнюю запись и
-//! добавляет новую в хвост. Пакет начала передаёт исходные длительность и
-//! отметку времени, а не вычисленный остаток. Формулы игрока и монстра
+//! добавляет новую в хвост. Первый state-пакет принадлежит OnUpdateProperties
+//! после silent Begin и передаёт клиентский остаток срока. Формулы игрока и монстра
 //! разделены, поскольку часть ослаблений в оригинале не поддерживала монстров.
 //! Все восемь concrete vtable (`Pojia..Yufa`) направляют клиентский срок на
 //! `CFuryState::GetRemainedTime` по `0x00605E10` с двумя чтениями часов.
@@ -22,12 +22,20 @@
 //! Загруженный Begin(null, holder) возвращает до создания visual
 //! (0x005E83B0, 0x005E6EE0), поэтому base End лишь отмечает такой ключ:
 //! общий Clear удаляет остаток отдельно, таймер не выдумывает End-пакет.
+//! OnUpdateProperties(+0x24) требует GetUser до visual: Po* отправляют его
+//! user, Yu* — sufferer, после чего формула всегда обращается к user.
+//! Из монстровых ветвей существуют только Pobing0x005E7D90 (AddMin/MaxAtk,
+//! затем проверка живого getter) и Pomo0x005E7870 (Get/SetElementModifier).
+//! Усиления Yu* меняют только игрока. Visual проверяет собственный ended;
+//! ended/отсутствие цели сохраняют base tail, отсутствующий resource — нет.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     timed_client_state_time, resolve_state_move_shape, end_base_applied_state,
+    resolve_state_move_shape_mut, resolve_applied_state_user,
+    update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -140,27 +148,12 @@ impl BattleFairyAttributeState {
         properties
     }
 
-    pub(crate) const fn apply_to_monster_attack(self, value: u32) -> u32 {
-        match self.kind {
-            BattleFairyAttributeKind::AttackLoss => {
-                let next = (value as i32).wrapping_sub(self.value);
-                if next < 1 { 0 } else { next as u32 }
-            }
-            BattleFairyAttributeKind::AttackGain => {
-                let next = value.wrapping_add(self.value as u32);
-                if next > i32::MAX as u32 { i32::MAX as u32 } else { next }
-            }
-            _ => value,
-        }
-    }
-
     pub(crate) const fn apply_to_monster_element(self, value: i32) -> i32 {
         match self.kind {
             BattleFairyAttributeKind::ElementModifyLoss => {
                 let next = value.wrapping_sub(self.value);
                 if next < 1 { 0 } else { next }
             }
-            BattleFairyAttributeKind::ElementModifyGain => value.wrapping_add(self.value),
             _ => value,
         }
     }
@@ -198,6 +191,91 @@ pub(crate) fn send_battle_fairy_attribute_state_visual(
         message.add_long(state.started_at_ms() as i32);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn update_battle_fairy_attribute_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BattleFairyAttributeState>(key))
+    else { return false };
+    let visual_target = if state.kind.targets_self() {
+        StatePropertyTarget::Sufferer
+    } else {
+        StatePropertyTarget::User
+    };
+    if resolve_applied_state_user(game, region_id, holder, key).is_none() {
+        return false;
+    }
+    let _ = update_property_state_visual::<BattleFairyAttributeState>(
+        game, region_id, holder, key, visual_target, now,
+        |state, now| state.client_state_time(now),
+    );
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BattleFairyAttributeState>(key)).copied()
+    else { return false };
+    let Some((target_region, target)) = resolve_applied_state_user(
+        game, region_id, holder, key,
+    ) else { return false };
+    match target.object_type {
+        400 => {
+            let Some(player) = game.find_player_mut(target.id) else { return false };
+            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+        }
+        600 => match state.kind {
+            BattleFairyAttributeKind::AttackLoss => {
+                for minimum in [true, false] {
+                    let Some(shape) = resolve_state_move_shape_mut(game, target_region, target)
+                    else { return false };
+                    let modifiers = shape.property_modifiers_mut();
+                    let value = if minimum {
+                        &mut modifiers.minimum_attack
+                    } else {
+                        &mut modifiers.maximum_attack
+                    };
+                    *value = value.wrapping_sub(state.value);
+                    let Some(monster) = game.find_region(target_region)
+                        .and_then(|region| region.base().find_monster_by_id(target.id))
+                    else { return false };
+                    let Some(properties) = monster.base_property_key()
+                        .and_then(|name| game.find_monster_property_by_origin_name(name))
+                    else { return false };
+                    let (low, high) = monster.state_attack_bounds(
+                        properties.minimum_attack, properties.maximum_attack,
+                    );
+                    let current = (if minimum { low } else { high }) as i32;
+                    if current < 0 {
+                        let Some(shape) = resolve_state_move_shape_mut(game, target_region, target)
+                        else { return false };
+                        let modifiers = shape.property_modifiers_mut();
+                        let value = if minimum {
+                            &mut modifiers.minimum_attack
+                        } else {
+                            &mut modifiers.maximum_attack
+                        };
+                        *value = value.wrapping_sub(current);
+                    }
+                }
+            }
+            BattleFairyAttributeKind::ElementModifyLoss => {
+                let Some(monster) = game.find_region(target_region)
+                    .and_then(|region| region.base().find_monster_by_id(target.id))
+                else { return false };
+                let current = monster.element_modifier() as i32;
+                let value = state.apply_to_monster_element(current);
+                let Some(shape) = resolve_state_move_shape_mut(game, target_region, target)
+                else { return false };
+                shape.property_modifiers_mut().element_modify = value;
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    true
 }
 
 pub(crate) fn restart_battle_fairy_attribute_state(

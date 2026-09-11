@@ -1,4 +1,14 @@
 //! Достигнутая часть свойств и жизненного цикла `CMonster`.
+//! Runtime-модификаторы принадлежат одной базе CMoveShape::tagProperties
+//! (+0x84, 25 signed DWORD по PDB). Общий UpdateProperty обнуляет их и
+//! последовательно вызывает состояния; getter не повторяет этот обход.
+//! GetMinAtk/MaxAtk 0x004E6620/0x004E66C0, GetDef 0x004E6780 и
+//! GetElementResistant 0x004E6880 складывают ресурс и modifier до signed
+//! нижней границы и pet-множителя. GetElementModify 0x004E6900 читает
+//! только modifier +0xDC, без выдуманного resource-base. GetMaxHP 0x004E65A0
+//! сохраняет unsigned wrapping-сумму без clamp. Прежние x87-преобразования
+//! pet-факторов остаются у конкретных getters; готовые боевые свойства
+//! больше не дорабатываются повторными копиями MonsterPropertyState.
 //! Сведения об убийце принадлежат единственной базе CMoveShape: монстр
 //! лишь делегирует чтение потребляемой OnDied-проекции type/ID/guild.
 //! Native SetKilledMeAttackInfo (0x004CCE50) вызывается после пакета смерти 0xBF60B;
@@ -995,10 +1005,12 @@ impl CMonster {
     /// Exact `CMonster::GetMaxHP` (RVA `0x000E65A0`): factor `6` действует
     /// только при валидной player-owner связи, а x87 результат усекается.
     pub(crate) fn maximum_hp(&self, property: &MonsterProperties) -> u32 {
+        let base = property.maximum_hp
+            .wrapping_add_signed(self.move_shape.property_modifiers().maximum_hp);
         if !self.has_player_pet_master() {
-            return property.maximum_hp;
+            return base;
         }
-        let scaled = f64::from(property.maximum_hp)
+        let scaled = f64::from(base)
             * f64::from(f32::from_bits(self.factors[6]));
         scaled.trunc() as i32 as u32
     }
@@ -1306,7 +1318,7 @@ impl CMonster {
         &self,
         property: &MonsterProperties,
     ) -> MonsterCombatProperties {
-        let mut properties = MonsterCombatProperties {
+        MonsterCombatProperties {
             level: property.level as u8,
             defense: self.defense(property),
             dodge: u32::from(self.dodge(property)),
@@ -1315,20 +1327,15 @@ impl CMonster {
             attack_avoid: self.attack_avoid(property),
             element_avoid: self.element_avoid(property),
             promotion_magic_attack_factor: self.move_shape.promotion_magic_attack_factor(),
-        };
-        for state in self.move_shape.ordered_monster_property_states() {
-            if let super::moveshape::MonsterPropertyState::PoisonFog(state) = state {
-                properties = state.apply_to_monster(properties);
-            }
         }
-        properties
     }
 
     /// Виртуальный `CMonster::GetDodge`: базовое значение не ниже единицы,
     /// а приручённый monster-owner применяет свой pet-level factor до
     /// сужения результата к `ushort`.
     pub(crate) fn dodge(&self, property: &MonsterProperties) -> u16 {
-        let base = (property.dodge as i32).max(1) as u16;
+        let base = (property.dodge as i32)
+            .wrapping_add(self.move_shape.property_modifiers().dodge).max(1) as u16;
         if self.has_player_pet_master() {
             let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[4]));
             return scaled.trunc() as i32 as u16;
@@ -1336,31 +1343,35 @@ impl CMonster {
         base
     }
 
-    /// Достигнутая ресурсная часть `CMonster::GetHit` (RVA `0x000E6760`):
-    /// signed DWORD не выше нуля становится единицей до сужения к `ushort`.
+    /// `CMonster::GetHit` (RVA `0x000E6760`): signed сумма ресурса и modifier
+    /// не выше нуля становится единицей до сужения к `ushort`.
     pub(crate) fn hit(&self, property: &MonsterProperties) -> u16 {
-        (property.hit as i32).max(1) as u16
+        (property.hit as i32)
+            .wrapping_add(self.move_shape.property_modifiers().hit).max(1) as u16
     }
 
     /// Достигнутая ресурсная часть `CMonster::GetAttackAvoid`
     /// (RVA `0x000E64F0`): неположительное signed значение становится нулём,
     /// а положительное ограничивается `99`.
     pub(crate) fn attack_avoid(&self, property: &MonsterProperties) -> u16 {
-        (property.attack_avoid as i32).clamp(0, 99) as u16
+        (property.attack_avoid as i32)
+            .wrapping_add(self.move_shape.property_modifiers().attack_avoid).clamp(0, 99) as u16
     }
 
     /// Достигнутая ресурсная часть `CMonster::GetElementAvoid`
     /// (RVA `0x000E6520`): контракт совпадает с physical avoid, кроме
     /// разрешённой верхней границы `100`.
     pub(crate) fn element_avoid(&self, property: &MonsterProperties) -> u16 {
-        (property.element_avoid as i32).clamp(0, 100) as u16
+        (property.element_avoid as i32)
+            .wrapping_add(self.move_shape.property_modifiers().element_avoid).clamp(0, 100) as u16
     }
 
     /// Exact `CMonster::GetDef` (RVA `0x000E6780`): отрицательная сумма
     /// свойства и runtime modifier сначала становится нулём, затем pet factor
     /// `5` усекается x87 к signed DWORD.
     pub(crate) fn defense(&self, property: &MonsterProperties) -> u32 {
-        let base = (property.defence as i32).max(0) as u32;
+        let base = (property.defence as i32)
+            .wrapping_add(self.move_shape.property_modifiers().defense).max(0) as u32;
         if !self.has_player_pet_master() {
             return base;
         }
@@ -1369,14 +1380,10 @@ impl CMonster {
     }
 
     /// Exact `CMonster::GetElementResistant` (RVA `0x000E6880`): runtime
-    /// modifier (достигнутый Taiji state) входит до нижней границы и pet
-    /// factor `3`; последующие defense states применяются к готовому getter-у.
+    /// modifier входит до нижней границы и pet factor `3`.
     pub(crate) fn element_resistance(&self, property: &MonsterProperties) -> u32 {
-        let mut value = property.element_resistant;
-        if let Some(state) = self.move_shape.taiji_state() {
-            value = state.apply_to_monster(value);
-        }
-        let base = (value as i32).max(1) as u32;
+        let base = (property.element_resistant as i32)
+            .wrapping_add(self.move_shape.property_modifiers().element_resistance).max(1) as u32;
         if !self.has_player_pet_master() {
             return base;
         }
@@ -1385,24 +1392,26 @@ impl CMonster {
     }
 
     /// Достигнутая часть `CMonster::GetSoulResistant` (RVA `0x000E6970`):
-    /// текущая цепочка не имеет setter-а runtime modifier, но ресурсное
-    /// значение всё равно проходит исходную нижнюю границу до `ushort`.
+    /// сумма ресурса и modifier проходит нижнюю границу до `ushort`.
     pub(crate) fn soul_resistance(&self, property: &MonsterProperties) -> u16 {
-        (property.soul_resistant as i32).max(1) as u16
+        (property.soul_resistant as i32)
+            .wrapping_add(self.move_shape.property_modifiers().soul_resistance).max(1) as u16
     }
 
     /// Достигнутая часть `CMonster::GetHpRecoverSpeed` (RVA `0x000E6990`):
     /// dormant AI использует ресурсное значение после нижней границы `1` и
     /// исходного сужения к `ushort`.
     pub(crate) fn hp_recovery_speed(&self, property: &MonsterProperties) -> u16 {
-        (property.hp_recover_speed as i32).max(1) as u16
+        (property.hp_recover_speed as i32)
+            .wrapping_add(self.move_shape.property_modifiers().hp_recovery_speed).max(1) as u16
     }
 
-    /// Достигнутая ресурсная часть `CMonster::GetAddSoulAtk`
+    /// `CMonster::GetAddSoulAtk`
     /// (RVA `0x000E69D0`): signed DWORD не выше нуля даёт `0`, положительное
     /// значение сужается к младшим шестнадцати битам.
-    pub(crate) fn resource_soul_attack(property: &MonsterProperties) -> u16 {
-        let value = property.yao_attack as i32;
+    pub(crate) fn soul_attack(&self, property: &MonsterProperties) -> u16 {
+        let value = (property.yao_attack as i32)
+            .wrapping_add(self.move_shape.property_modifiers().additional_soul_attack);
         if value > 0 { value as u16 } else { 0 }
     }
 
@@ -1436,7 +1445,8 @@ impl CMonster {
     /// Exact `CMonster::GetAtcInterval` (RVA `0x000E69F0`): базовый virtual
     /// сначала сужает интервал к WORD, pet factor `7` затем усекается `__ftol2`.
     pub(crate) fn attack_interval(&self, property: &MonsterProperties) -> u32 {
-        let base = property.attack_speed as u16;
+        let base = (property.attack_speed as u16)
+            .wrapping_add(self.move_shape.property_modifiers().attack_speed as u16);
         if !self.has_player_pet_master() {
             return u32::from(base);
         }
@@ -1460,8 +1470,8 @@ impl CMonster {
         property: &MonsterProperties,
     ) -> PetAttackProperties {
         let (minimum_attack, maximum_attack) = self.state_attack_bounds(
-            self.pet_scaled_attack(property.minimum_attack, 1),
-            self.pet_scaled_attack(property.maximum_attack, 0),
+            property.minimum_attack,
+            property.maximum_attack,
         );
         PetAttackProperties {
             minimum_attack,
@@ -1474,69 +1484,21 @@ impl CMonster {
 
     pub(crate) fn state_attack_bounds(
         &self,
-        mut minimum: u32,
-        mut maximum: u32,
+        minimum: u32,
+        maximum: u32,
     ) -> (u32, u32) {
-        for state in self.move_shape.ordered_monster_property_states() {
-            match state {
-                super::moveshape::MonsterPropertyState::Swordship(state) => {
-                    (minimum, maximum) = state.apply_to_monster(minimum, maximum);
-                }
-                super::moveshape::MonsterPropertyState::BattleFairyAttribute(state) => {
-                    minimum = state.apply_to_monster_attack(minimum);
-                    maximum = state.apply_to_monster_attack(maximum);
-                }
-                super::moveshape::MonsterPropertyState::Fury(state) => {
-                    maximum = state.apply_to_monster_max_attack(maximum);
-                }
-                super::moveshape::MonsterPropertyState::Weak(state) => {
-                    (minimum, maximum) = state.apply_to_monster(minimum, maximum);
-                }
-                super::moveshape::MonsterPropertyState::GodBless(state) => {
-                    (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0);
-                }
-                super::moveshape::MonsterPropertyState::Roar(state) => {
-                    (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0);
-                }
-                super::moveshape::MonsterPropertyState::BossBlueFury(state) => {
-                    minimum = state.apply_to_monster_attack(minimum);
-                    maximum = state.apply_to_monster_attack(maximum);
-                }
-                super::moveshape::MonsterPropertyState::TaiJi(_)
-                | super::moveshape::MonsterPropertyState::Origin(_)
-                | super::moveshape::MonsterPropertyState::PoisonFog(_) => {}
-            }
-        }
-        (minimum, maximum)
+        let modifiers = self.move_shape.property_modifiers();
+        (
+            self.pet_scaled_attack(minimum.wrapping_add_signed(modifiers.minimum_attack), 1),
+            self.pet_scaled_attack(maximum.wrapping_add_signed(modifiers.maximum_attack), 0),
+        )
     }
 
     /// Exact `CMonster::GetElementModify` (RVA `0x000E6900`): накопленный
     /// runtime modifier сначала ограничивается нулём, затем pet factor `2`
     /// умножается в x87 и усекается к signed DWORD.
-    pub(crate) fn element_modifier(&self, mut value: i32) -> u32 {
-        for state in self.move_shape.ordered_monster_property_states() {
-            match state {
-                super::moveshape::MonsterPropertyState::Origin(state) => {
-                    value = state.apply_to_monster(value);
-                }
-                super::moveshape::MonsterPropertyState::GodBless(state) => {
-                    (_, _, value) = state.apply_to_monster(0, 0, value);
-                }
-                super::moveshape::MonsterPropertyState::Roar(state) => {
-                    (_, _, value) = state.apply_to_monster(0, 0, value);
-                }
-                super::moveshape::MonsterPropertyState::BattleFairyAttribute(state) => {
-                    value = state.apply_to_monster_element(value);
-                }
-                super::moveshape::MonsterPropertyState::TaiJi(_)
-                | super::moveshape::MonsterPropertyState::Swordship(_)
-                | super::moveshape::MonsterPropertyState::Fury(_)
-                | super::moveshape::MonsterPropertyState::Weak(_)
-                | super::moveshape::MonsterPropertyState::PoisonFog(_)
-                | super::moveshape::MonsterPropertyState::BossBlueFury(_) => {}
-            }
-        }
-        let base = value.max(0) as u32;
+    pub(crate) fn element_modifier(&self) -> u32 {
+        let base = self.move_shape.property_modifiers().element_modify.max(0) as u32;
         if !self.has_player_pet_master() {
             return base;
         }

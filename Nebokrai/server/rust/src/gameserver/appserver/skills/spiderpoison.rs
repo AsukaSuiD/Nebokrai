@@ -48,7 +48,6 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -482,12 +481,10 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory()); }
     send_visual(game, region, &source_shape, monster_id, skill_level, 2, Some((target_identity, target_x, target_y)));
-    let (minimum, maximum, element) = region.find_monster_by_id(monster_id).map(|monster| {
-        let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
-        let minimum = pet_attack.map_or(minimum, |pet| pet.minimum_attack);
-        let maximum = pet_attack.map_or(maximum, |pet| pet.maximum_attack);
-        (minimum as i32, maximum as i32, monster.element_modifier(0) as i32)
-    }).unwrap_or((property.minimum_attack as i32, property.maximum_attack as i32, 0));
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return true };
+    let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
+    let (minimum, maximum, element) = (minimum as i32, maximum as i32, monster.element_modifier() as i32);
+    let soul_attack = monster.soul_attack(&property);
     let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
     let physical = minimum.wrapping_add(game.skill_random_below(span));
     let _critical_roll = game.skill_random_below(100);
@@ -499,7 +496,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         damages: vec![
             AttackPower { kind: AttackPowerType::Physical, hp_damage: physical.max(0), mp_damage: 0 },
             AttackPower { kind: AttackPowerType::Element, hp_damage: element.max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(CMonster::resource_soul_attack(&property)), mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul_attack), mp_damage: 0 },
         ],
     };
     let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);

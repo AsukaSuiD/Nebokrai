@@ -10,8 +10,10 @@
 //! `mp_factor` сохраняется в `f32` перед умножением, а `hp_factor` — нет.
 //! Первичное масштабирование через `damage_factor` выполняется `FISTP dword`
 //! до поиска war-soul goods; ноль единицей не подменяется.
-//! AddCure (`0x005E2FD0`) завершает прежний Cure, начинает новый и вызывает
-//! UpdateProperty до эффекта завершения самого LifeShield (`0x005E3110`).
+//! AddCure (`0x005E2FD0`) завершает прежний Cure, начинает новый, добавляет
+//! его в общую арену и вызывает virtual UpdateProperty живого holder до эффекта
+//! завершения самого LifeShield (`0x005E3110`). Последующее удаление щита
+//! вызывает свой UpdateProperty отдельно: это второй исходный вызов.
 //! AddCure использует generic CState::GetSufferer, а не CPlayer cast:
 //! опубликованный holder переиспользует тот же Cure Begin/storage/visual.
 //! Сам щит остаётся в арене до завершения AddCure и своего visual End.
@@ -243,9 +245,7 @@ pub(crate) fn finish_life_shield_state_for_holder(
         send_cure_state_visual_for_holder(game, region_id, holder, cure, true);
         let _ = resolve_state_move_shape_mut(game, region_id, holder)
             .map(|shape| shape.push_cure_state(cure));
-        if holder.object_type == 400 {
-            let _ = game.update_player_properties(holder.id);
-        }
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     let mut message = CMessage::new(MANA_SHIELD_STATE_END_MESSAGE);
     message.add_long(holder.object_type);

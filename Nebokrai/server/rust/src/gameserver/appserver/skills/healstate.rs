@@ -39,6 +39,10 @@
 //! Unserialize 0x005EEC70 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
 
+//! Vtable четырёх вариантов 0x00660D9C/0x0066024C/0x00660A64/0x00660134
+//! в слоте +0x24 указывают на 0x0047B150: OnUpdateProperties возвращает 1
+//! без target lookup, visual и часов. Лечение остаётся только у AI.
+
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual,
 };
@@ -333,8 +337,8 @@ pub(crate) fn end_heal_state(
     }
     let removed = resolve_state_move_shape_mut(game, region_id, target)
         .and_then(|shape| shape.remove_heal_state_key(key)).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

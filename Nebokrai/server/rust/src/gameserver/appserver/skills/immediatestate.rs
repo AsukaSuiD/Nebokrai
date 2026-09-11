@@ -40,6 +40,10 @@
 //! AI на каждом проходе: EnlargeFullMiss/MaxMp/MaxHp — 0x00516893,
 //! 0x00516B23, 0x00516D63; TaiJi/Origin сохраняют тот же отказ в RAW owners.
 //! Отказ не снимает уже наложенное состояние, не публикует его и не пишет reuse.
+//! TaiJi (0x005AF89D/0x005AF8D3) и Origin (0x005AFB9D/0x005AFBD3)
+//! после replacement/append вызывают virtual UpdateProperty до End(1).
+//! Монстровая ветвь публикует настоящий регион на время общего пересчёта;
+//! после callback регион и монстр разрешаются заново.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
@@ -57,9 +61,8 @@ use super::wuxing::{execute_player_wuxing, is_wuxing_skill};
 use super::taijistate::TaiJiState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
 enum ImmediateStateKind {
@@ -94,9 +97,10 @@ impl MonsterImmediateSkill {
     }
 
     pub(crate) fn execute<Runtime: GameMainLoopRuntime>(
-        self, game: &CGame, region: &mut CServerRegion, monster_id: i32,
+        self, game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
         skill_id: u32, skill_level: i32, runtime: &mut Runtime,
     ) -> bool {
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false };
         if !region.find_monster_by_id(monster_id)
             .is_some_and(|monster| monster.move_shape().immediate_skill_started(skill_id, game.skill_factory()))
         {
@@ -104,10 +108,10 @@ impl MonsterImmediateSkill {
         }
         match self {
             Self::State => execute_monster_immediate_state(
-                game, region, monster_id, skill_id, skill_level, runtime,
+                game, owner, monster_id, skill_id, skill_level, runtime,
             ),
             Self::Swordship => super::swordship::execute_monster_auto_start_swordship(
-                game, region, monster_id, skill_id, skill_level,
+                game, owner, monster_id, skill_id, skill_level,
             ),
             Self::PlayerOnly => {
                 let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
@@ -125,13 +129,15 @@ impl MonsterImmediateSkill {
 /// `TaiJi/Origin` участвуют в monster combat getters; `601..603` сохраняют
 /// исходный player-only property gate, но остаются видимы в state snapshot.
 pub(crate) fn execute_monster_immediate_state<Runtime: GameMainLoopRuntime>(
-    game: &CGame,
-    region: &mut CServerRegion,
+    game: &mut CGame,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     skill_id: u32,
     skill_level: i32,
     runtime: &mut Runtime,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false };
+    let region_id = region.id;
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
         return false;
     };
@@ -172,7 +178,12 @@ pub(crate) fn execute_monster_immediate_state<Runtime: GameMainLoopRuntime>(
         }
         _ => return false,
     }
+    let holder = monster.move_shape().shape().identity();
     let _ = game.publish_owned_monster_states(region, monster_id);
+    let _ = game.with_published_region(owner, |game| {
+        game.update_move_shape_properties(region_id, holder)
+    });
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.mark_immediate_skill_used(skill_id, runtime.now_milliseconds(), game.skill_factory());
     }

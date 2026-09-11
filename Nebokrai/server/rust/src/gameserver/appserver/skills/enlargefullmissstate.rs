@@ -1,4 +1,6 @@
 //! Каноническая достигнутая часть `CEnlargeFullMissState`.
+//! OnUpdateProperties (0x005E2120) читает живого GetSufferer и применяет
+//! подтверждённую player-only формулу без visual и часов; NULL даёт false.
 //!
 //! Для игрока состояние `603` прибавляет младшие 16 бит знакового параметра
 //! к `full_miss` точным WORD-сложением с переполнением. Собственного
@@ -27,6 +29,19 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 pub(crate) const ENLARGE_FULL_MISS_STATE_BYTES: usize = 8;
+
+/// OnUpdateProperties 0x005E2120: GetSufferer, затем только player-формула.
+/// Visual, IsEnded-gate и чтения часов у этого override отсутствуют.
+pub(crate) fn update_enlarge_full_miss_state_properties(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    crate::gameserver::appserver::states::state::update_player_state_properties::<EnlargeFullMissState>(
+        game, region_id, holder, key, |state, player| {
+            player.update_state_combat_properties(|mut properties| { properties.full_miss = state.apply(properties.full_miss); properties });
+        },
+    )
+}
 
 pub(crate) fn restart_enlarge_full_miss_state(
     game: &mut CGame,

@@ -1,4 +1,6 @@
 //! Каноническое состояние семейства `CWuXing*State`.
+//! OnUpdateProperties (0x005E0080/0x005E08C0) читает живого GetSufferer и применяет
+//! подтверждённую player-only формулу без visual и часов; NULL даёт false.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий
 //! 0x5c-байтный набор параметров и одинаковый `OnUpdateProperties` для пяти
@@ -32,6 +34,21 @@ use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 
 pub(crate) const WUXING_STATE_BYTES: usize = 96;
+
+/// OnUpdateProperties 0x005E0080/0x005E08C0: GetSufferer, затем только player-формула.
+/// Visual, IsEnded-gate и чтения часов у этого override отсутствуют.
+pub(crate) fn update_wuxing_state_properties(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let coefficients = game.globe_setup().player_property_coefficients();
+    crate::gameserver::appserver::states::state::update_player_state_properties::<WuXingState>(
+        game, region_id, holder, key, |state, player| {
+            let occupation = usize::from(player.occupation()).min(2);
+            player.update_state_combat_properties(|properties| state.apply_to_player(properties, coefficients, occupation));
+        },
+    )
+}
 
 pub(crate) fn restart_wuxing_state(
     game: &mut CGame,

@@ -830,18 +830,24 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         {
             monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
         }
+        let mut state_owner = Some(owner);
         if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-            let _ = finish_blind_states_on_defense(
-                game,
-                owner.base_mut(),
-                ShapeIdentity {
-                    object_type: MONSTER_TYPE,
-                    id: target_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                now_ms,
-            );
+            let _ = game.with_published_region(&mut state_owner, |game| {
+                game.with_published_player_ai(player_id, player_ai, |game| {
+                    finish_blind_states_on_defense(
+                        game,
+                        region_id,
+                        ShapeIdentity {
+                            object_type: MONSTER_TYPE,
+                            id: target_id,
+                            ex_id: CGuid::GUID_INVALID,
+                        },
+                        now_ms,
+                    )
+                })
+            });
         }
+        let Some(owner) = state_owner else { return rejected() };
         game.restore_region_owner(owner);
 
         if attack.full_miss != 0 && current_health != 0 {

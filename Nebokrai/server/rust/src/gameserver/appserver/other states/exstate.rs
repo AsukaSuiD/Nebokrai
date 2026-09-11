@@ -1,4 +1,8 @@
 //! Владелец обычных extended-state `CExState/CExStateNew` GameServer.
+//! OnUpdateProperties +0x24 (0x005D95A0) обоих классов разрешает живого
+//! sufferer-player; ненулевой WORD addon сначала складывается как DWORD
+//! с переполнением, затем ограничивается INT_MAX. Нулевой addon не трогает
+//! поле. WORD и element складываются с переполнением; visual/часов нет.
 //!
 //! Контракт подтверждён `gameserver.exe + GameServer.pdb`, исходными owner-ами
 //! `other states/exstate.cpp`, `exstatenew.cpp` и caller-ом
@@ -445,19 +449,6 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CExState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\exstate.cpp:46
-// RVA: 0x001D95A0
-// ADDRESS: 005d95a0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CExState::Begin

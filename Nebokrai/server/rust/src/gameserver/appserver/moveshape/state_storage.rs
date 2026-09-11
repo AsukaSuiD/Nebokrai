@@ -22,8 +22,15 @@
 //! Запись арены различает runtime-установку и загрузку: StartAllStates
 //! (0x004CE050) вызывает Begin(nullptr, holder), не превращая пустой GetUser
 //! в текущего держателя. Это существенно для базового End (0x005DBCE0).
-//! Отметка ended фиксирует известный результат End; None не подменяет
-//! ещё не проведённые через общую базу constructor/Begin произвольным bool.
+//! Loaded ctor начинает с ended=true и visual=NULL. Runtime-регистрация
+//! фиксирует результат уже исполненного concrete Begin: ended=false и
+//! состояние base visual из единого callback-каталога, без повторной рассылки.
+//! Различаются loop=1, живой loop=0 GodBless2, уже завершённые one-shot
+//! Agility2/Promotion и owners без ресурса; повторный Begin заменяет ресурс.
+//! DecodeExStates 0x004D1B18 записывает sufferer type/id держателя, но оставляет
+//! region=0 из CState ctor 0x005DBCA0. Object Begin устанавливает текущий
+//! sufferer-region. Runtime-установки, ещё не проходящие общую базу, используют
+//! регион держателя; сохранённый ноль не заменяется этим fallback.
 //! Cache-span загруженной записи принадлежит тому же поколенческому ключу.
 //! Это технические границы Serialize-cache, не native input-offset:
 //! Tian читает 10 байт, но пишет 12. Удаление/вставка сдвигает общие spans,
@@ -158,6 +165,7 @@ pub(crate) struct AppliedStateEntries {
 struct AppliedStateInstance {
     payload: Option<StateData>,
     from_save: bool,
+    sufferer_region: Option<i32>,
     ended: Option<bool>,
     visual: Option<CVisualEffect>,
     serialized_span: Option<(usize, usize)>,
@@ -165,7 +173,14 @@ struct AppliedStateInstance {
 
 impl AppliedStateInstance {
     fn new(payload: StateData, from_save: bool) -> Self {
-        Self { payload: Some(payload), from_save, ended: None, visual: None, serialized_span: None }
+        let visual = (!from_save)
+            .then(|| crate::gameserver::appserver::states::state::registered_runtime_state_visual(&payload))
+            .flatten();
+        Self {
+            payload: Some(payload), from_save,
+            sufferer_region: from_save.then_some(0),
+            ended: Some(from_save), visual, serialized_span: None,
+        }
     }
 }
 
@@ -290,10 +305,29 @@ impl AppliedStateEntries {
         true
     }
 
-    pub(crate) fn mark_begun(&mut self, key: StateKey) -> bool {
+    pub(crate) fn mark_begun(&mut self, key: StateKey, region_id: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.ended = Some(false);
+        instance.sufferer_region = Some(region_id);
         true
+    }
+
+    pub(crate) fn sufferer_region(&self, key: StateKey, holder_region: i32) -> Option<i32> {
+        Some(self.instances.get(key)?.sufferer_region.unwrap_or(holder_region))
+    }
+
+    pub(crate) fn set_sufferer_region(&mut self, key: StateKey, region_id: i32) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        instance.sufferer_region = Some(region_id);
+        true
+    }
+
+    pub(crate) fn has_visual(&self, key: StateKey) -> bool {
+        self.instances.get(key).is_some_and(|instance| instance.visual.is_some())
+    }
+
+    pub(crate) fn visual_ended(&self, key: StateKey) -> Option<bool> {
+        Some(self.instances.get(key)?.visual.as_ref()?.is_ended())
     }
 
     pub(crate) fn begin_visual(&mut self, key: StateKey, loop_value: i32) -> bool {

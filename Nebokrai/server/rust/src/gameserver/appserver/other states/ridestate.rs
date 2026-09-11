@@ -11,6 +11,11 @@
 //! Wire-примитивы делегированы общему legacy codec поверх `bytes`.
 //! decode_at читает одну запись с заданного фабрикой offset; он сохраняет
 //! исходный нулевой check timestamp и не ищет похожий ID внутри данных.
+//! OnUpdateProperties0x004F9000 разрешает sufferer как CPlayer и ищет первый
+//! live packet goods через original-name index именно этого экземпляра.
+//! Он не использует и не меняет cached goods AI, не вызывает visual/часы.
+//! CPlayer::apply_ride_state_properties заимствует state и goods, затем
+//! выполняет общий MountEquipRide(true) → MountEquipRide(false)0x0043C5E0.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::default_client_state_time;
@@ -293,20 +298,6 @@ fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
 // RVA: 0x000F8FC0
 // ADDRESS: 004f8fc0
 // PROTOTYPE: void __thiscall ~CRideState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:124
-// RVA: 0x000F9000
-// ADDRESS: 004f9000
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

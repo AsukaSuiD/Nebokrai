@@ -1,6 +1,24 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! `CNotDisappearAfterDead`, GameServer.exe + GameServer.pdb,
+//! исходный owner `appserver/other states/notdisappearafterdead.cpp`.
+//! OnUpdateProperties (vtable 0x0065E2AC +0x24 →0x005D6580) получает
+//! GetSufferer: NULL даёт 0, только player 400 получает формулу, прочие — 1.
+//! Visual, End, IsEnded и часы в этой функции не участвуют. Типизированная
+//! арифметика находится в CPlayer::apply_undead_state_properties; вызов
+//! конкретного экземпляра выполняет общий property-проход states/state.rs.
+//! Проценты используют low32 IMUL, затем unsigned /100 (0x005D65D6,
+//! 0x005D67FA), включая wrapping negation отрицательных параметров.
+//! Вызванные setters 0x0042ACF0..0x0042AE10 ограничивают каждую unsigned
+//! сумму INT_MAX. Отрицательные direct/CON HP/DEF/INT MP сохраняют signed
+//! WORD-сужение, а STR/DEX и INT resistance/element — signed DWORD floor1.
+//! FILD/FMUL не заменены ранним округлением всего выражения в f32:
+//! STR/DEX используют полные целые; CON(-) сохраняет f32 только для DEF,
+//! CON/INT(+) percentage — для delta. INT(-) MP использует __ftol2/FISTP64
+//! и младший WORD (old полный, new f32), прочие производные INT(-) — f32.
+//! Absolute INT(+) повторно проецирует полное новое INT после native cap.
+//! Временный negation самого payload восстанавливается до возврата; между
+//! этими записями только чистые player getters/setters, поэтому Rust считает
+//! тот же результат без промежуточной мутации живого состояния.
+//! Остальные ещё не перенесённые тела ниже остаются RAW-комментариями.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

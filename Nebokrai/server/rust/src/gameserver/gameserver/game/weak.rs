@@ -2,12 +2,16 @@
 //!
 //! Условия cast, формула срока, прямоугольник и изменение атаки принадлежат
 //! `weak.rs`, `weakphalanx.rs` и `weakstate.rs`. Здесь остаются временное
-//! извлечение региона, каноническая установка состояния, перерасчёт player
+//! извлечение региона, каноническая установка состояния, перерасчёт живого
 //! owner-а и фактическая around-доставка.
+//! CWeakPhalanx::AI: Begin 0x00600EA3 → push_back 0x00600EB5 →
+//! UpdateProperty 0x00600EBE. Истечение области вызывает state End
+//! (0x00600C00), поэтому удаление использует тот же exact-key lifecycle.
 
 use super::*;
 use crate::gameserver::appserver::skills::weakphalanx::{weak_targets, CWeakPhalanx};
-use crate::gameserver::appserver::skills::weakstate::{WeakState, send_weak_state_visual};
+use crate::gameserver::appserver::skills::weakstate::{WeakState, end_weak_state, send_weak_state_visual};
+use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::appserver::skills::weak::WEAK_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
@@ -79,7 +83,7 @@ impl CGame {
                     });
                     if let Some((x, y)) = position {
                         send_weak_state_visual(self, region_id, target, x, y, state, true);
-                        let _ = self.update_player_properties(target.id);
+                        let _ = self.update_move_shape_properties(region_id, target);
                         applied = applied.wrapping_add(1);
                     }
                 }
@@ -96,6 +100,7 @@ impl CGame {
                     } else { None };
                     if let Some((x, y)) = position {
                         send_weak_state_visual(self, region_id, target, x, y, state, true);
+                        let _ = self.update_move_shape_properties(region_id, target);
                         applied = applied.wrapping_add(1);
                     }
                 }
@@ -108,37 +113,10 @@ impl CGame {
     pub(super) fn finish_weak_phalanx_targets(&mut self, region_id: i32, phalanx: &CWeakPhalanx) -> usize {
         let mut ended = 0usize;
         for target in weak_targets(self, region_id, phalanx) {
-            match target.object_type {
-                PLAYER_TYPE => {
-                    let removed = self.find_player_mut(target.id).and_then(|player| {
-                        let x = player.shape().get_tile_x().ok()?;
-                        let y = player.shape().get_tile_y().ok()?;
-                        let state = player.take_weak_state()?;
-                        Some((x, y, state))
-                    });
-                    if let Some((x, y, state)) = removed {
-                        send_weak_state_visual(self, region_id, target, x, y, state, false);
-                        let _ = self.update_player_properties(target.id);
-                        ended = ended.wrapping_add(1);
-                    }
-                }
-                MONSTER_TYPE => {
-                    let removed = if let Some(mut owner) = self.take_region_owner(region_id) {
-                        let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
-                            let x = monster.move_shape().shape().get_tile_x().ok()?;
-                            let y = monster.move_shape().shape().get_tile_y().ok()?;
-                            let state = monster.move_shape_mut().take_weak_state()?;
-                            Some((x, y, state))
-                        });
-                        self.restore_region_owner(owner);
-                        result
-                    } else { None };
-                    if let Some((x, y, state)) = removed {
-                        send_weak_state_visual(self, region_id, target, x, y, state, false);
-                        ended = ended.wrapping_add(1);
-                    }
-                }
-                _ => {}
+            let key = resolve_state_move_shape(self, region_id, target)
+                .and_then(|shape| shape.applied_state_key::<WeakState>());
+            if let Some(key) = key {
+                ended = ended.wrapping_add(usize::from(end_weak_state(self, region_id, target, key)));
             }
         }
         ended

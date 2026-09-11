@@ -13,15 +13,17 @@
 //! блокировок; одноразовая отметка освобождения не подменяет native End.
 //! Монстровая замена публикует настоящий ServerRegionOwner на время общего
 //! End; после него регион и экземпляр перечитываются, не возвращая старый payload.
+//! Новый Begin/append заканчивается общим UpdateProperty (0x0052EDAC),
+//! до skill End(1). Для этого короткого owning-вызова регион также публикуется.
+//! Begin состояния(0x005E8ED0) создаёт loop=1 visual без Update;
+//! начальный BFE03 обеих ветвей отправляет последующий OnUpdateProperties.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     time_reached,
 };
-use super::bossbluefurystate::{
-    BossBlueFuryState, send_boss_blue_fury_state_visual,
-};
+use super::bossbluefurystate::BossBlueFuryState;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::callosity::SKILL_USAGE_USER_RP_LOSE;
 use super::monsterattack::resolve_owned_monster_attack_target;
@@ -37,7 +39,6 @@ use crate::gameserver::appserver::skills::kernel::{
     skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
-use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -46,7 +47,6 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 const MONSTER_TYPE: i32 = 600;
-const PLAYER_TYPE: i32 = 400;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER: u32 = 10_003;
 const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
@@ -189,7 +189,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     if !is_player_boss_blue_fury_dispatch(dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    let Some((region_id, skill_level, initial_rp, dead)) = game
+    let Some((_region_id, skill_level, initial_rp, dead)) = game
         .find_player(player_id)
         .and_then(|player| {
             Some((
@@ -285,23 +285,6 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     let state = BossBlueFuryState::new(state_now_ms, keep_time_ms, damage_factor, weak_time_ms);
     let previous = game.find_player(player_id)
         .and_then(|player| player.move_shape().applied_state_key::<BossBlueFuryState>());
-    let identity = game
-        .find_player(player_id)
-        .map(|player| player.shape().identity())
-        .unwrap_or(ShapeIdentity {
-            object_type: PLAYER_TYPE,
-            id: player_id,
-            ex_id: CGuid::GUID_INVALID,
-        });
-    let (tile_x, tile_y) = game
-        .find_player(player_id)
-        .map(|player| {
-            (
-                player.shape().get_tile_x().unwrap_or_default(),
-                player.shape().get_tile_y().unwrap_or_default(),
-            )
-        })
-        .unwrap_or_default();
     if let Some(previous) = previous {
         let _ = super::bossbluefurystate::end_player_boss_blue_fury_state_key(
             game, player_id, previous, state_now_ms,
@@ -312,9 +295,6 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         player.set_skill_fightable(false);
         player.begin_boss_blue_fury_state(state);
     }
-    send_boss_blue_fury_state_visual(
-        game, region_id, identity, tile_x, tile_y, state, true, state_now_ms,
-    );
     let _ = game.update_player_properties(player_id);
     if let Some(kernel) = game.player_skill_execution_mut(player_id, BOSS_BLUE_FURY_SKILL_ID) {
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
@@ -427,17 +407,11 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     monster.move_shape_mut().set_moveable(false);
     monster.move_shape_mut().set_fightable(false);
     monster.move_shape_mut().begin_boss_blue_fury_state(state);
-    let state_shape = monster.move_shape().shape().clone();
-    send_owned_state_visual(
-        game,
-        region,
-        &state_shape,
-        state.skill_id(),
-        true,
-        state.client_time(|| now_ms),
-        0,
-    );
 
+    let _ = game.with_published_region(owner, |game| {
+        game.update_move_shape_properties(region_id, source.identity())
+    });
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
         let _ = monster.finish_base_attack_cast_with_clock(BOSS_BLUE_FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());

@@ -805,15 +805,12 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
         return;
     }
 
-    let (minimum, maximum) = region
-        .find_monster_by_id(monster_id)
-        .map(|monster| {
-            monster.state_attack_bounds(
-                attacker_property.minimum_attack,
-                attacker_property.maximum_attack,
-            )
-        })
-        .unwrap_or((attacker_property.minimum_attack, attacker_property.maximum_attack));
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return };
+    let (minimum, maximum) = monster.state_attack_bounds(
+        attacker_property.minimum_attack,
+        attacker_property.maximum_attack,
+    );
+    let soul_attack = monster.soul_attack(attacker_property);
     let minimum = minimum as i32;
     let maximum = maximum as i32;
     let span = 1_i32.wrapping_sub(minimum).wrapping_add(maximum);
@@ -851,7 +848,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: i32::from(CMonster::resource_soul_attack(attacker_property)),
+                hp_damage: i32::from(soul_attack),
                 mp_damage: 0,
             },
         ],

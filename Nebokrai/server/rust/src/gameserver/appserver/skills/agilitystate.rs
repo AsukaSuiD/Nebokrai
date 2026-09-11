@@ -1,4 +1,6 @@
 //! Каноническое постоянное состояние `CAgilityState`.
+//! OnUpdateProperties Agility/Natural/Rapture (0x005F02F0/0x005F3970/0x005F3E90):
+//! GetSufferer, затем player-only wrapping WORD addon, без visual и часов.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
 //! `agilitystate.cpp`. Состояние `0xda` публикует начало/завершение и добавляет
@@ -160,6 +162,19 @@ pub(crate) fn send_agility_family_state_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
+/// OnUpdateProperties 0x005F02F0/0x005F3970/0x005F3E90: GetSufferer, затем только player-формула.
+/// Visual, IsEnded-gate и чтения часов у этого override отсутствуют.
+pub(crate) fn update_persistent_agility_state_properties(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    crate::gameserver::appserver::states::state::update_player_state_properties::<PersistentAgilityFamilyState>(
+        game, region_id, holder, key, |state, player| {
+            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+        },
+    )
+}
+
 pub(crate) fn restart_persistent_agility_state(
     game: &mut CGame,
     region_id: i32,
@@ -205,8 +220,8 @@ pub(crate) fn end_persistent_agility_state(
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<PersistentAgilityFamilyState>(key, PERSISTENT_AGILITY_FAMILY_STATE_BYTES))
         .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

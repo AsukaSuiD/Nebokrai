@@ -19,8 +19,8 @@
 //! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
 //! формул игрока не запрещают жизненный цикл региональных держателей.
 //! Exact vtable 0x0066202C: End 0x006059A0 отправляет visual и вызывает базовый End 0x005DBCE0.
-//! После эффекта holder перечитывается; свойства пересчитываются только
-//! у игрока и только при фактическом удалении точной записи.
+//! После эффекта holder перечитывается; общий virtual UpdateProperty
+//! пересчитывает свойства только при фактическом удалении точной записи.
 //! Прямой End и AI используют один exact-key хвост без чтения часов.
 //! StartAllStates 0x004CE050 вызывает Begin(0, self); Begin 0x00605B70
 //! создаёт visual, но User остаётся NULL. Для загруженной записи базовый End
@@ -32,9 +32,15 @@
 //! concrete Update(0) → базовый visual-хвост.
 //! Его vtable +0x30/+0x38 ведёт на 0x00601200: пакет пишет два нуля без часов.
 
+//! OnUpdateProperties 0x00605A10: GetSufferer → RTTI CPlayer → семь запросов
+//! skill properties → элементная, физическая и защитная формулы. NULL/неигрок
+//! возвращает 0, отсутствующая запись skill — 1 без изменений. Visual и часов
+//! в этом callback нет; результат записывается в живой tagProperty.
+
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
 };
+use crate::gameserver::appserver::states::state::resolve_applied_state_sufferer;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
@@ -114,28 +120,20 @@ impl TianShenXiaFanState {
         else {
             return properties;
         };
-        properties.element_modify = properties.element_modify
-            .wrapping_add(skill.query_property(TARGET_ELEMENT_MODIFY_GAIN) as i32);
-        properties.minimum_attack = capped_gain(
-            properties.minimum_attack,
-            skill.query_property(TARGET_MINIMUM_ATTACK_GAIN),
-        );
-        properties.maximum_attack = capped_gain(
-            properties.maximum_attack,
-            skill.query_property(TARGET_MAXIMUM_ATTACK_GAIN),
-        );
-        properties.defense = capped_gain(
-            properties.defense,
-            skill.query_property(TARGET_DEFENSE_GAIN),
-        );
-        properties.element_resistance = capped_gain(
-            properties.element_resistance,
-            skill.query_property(TARGET_ELEMENT_RESISTANCE_GAIN),
-        );
-        properties.attack_avoid = properties.attack_avoid
-            .wrapping_add(skill.query_property(PHYSICAL_AVOID_GAIN) as u16);
-        properties.element_avoid = properties.element_avoid
-            .wrapping_add(skill.query_property(MAGIC_AVOID_GAIN) as u16);
+        let element = skill.query_property(TARGET_ELEMENT_MODIFY_GAIN);
+        let minimum = skill.query_property(TARGET_MINIMUM_ATTACK_GAIN);
+        let maximum = skill.query_property(TARGET_MAXIMUM_ATTACK_GAIN);
+        let defense = skill.query_property(TARGET_DEFENSE_GAIN);
+        let resistance = skill.query_property(TARGET_ELEMENT_RESISTANCE_GAIN);
+        let physical_avoid = skill.query_property(PHYSICAL_AVOID_GAIN);
+        let magic_avoid = skill.query_property(MAGIC_AVOID_GAIN);
+        properties.element_modify = properties.element_modify.wrapping_add(element as i32);
+        properties.minimum_attack = capped_gain(properties.minimum_attack, minimum);
+        properties.maximum_attack = capped_gain(properties.maximum_attack, maximum);
+        properties.defense = capped_gain(properties.defense, defense);
+        properties.element_resistance = capped_gain(properties.element_resistance, resistance);
+        properties.attack_avoid = properties.attack_avoid.wrapping_add(physical_avoid as u16);
+        properties.element_avoid = properties.element_avoid.wrapping_add(magic_avoid as u16);
         properties
     }
 }
@@ -165,6 +163,29 @@ pub(crate) fn send_tian_shen_xia_fan_state_visual(
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn update_tian_shen_xia_fan_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some((_, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    if target.object_type != 400 {
+        return false;
+    }
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<TianShenXiaFanState>(key)).copied()
+    else { return false; };
+    let Some(player) = game.find_player(target.id) else { return false; };
+    let properties = state.apply_to_player(player.combat_properties(), game.skill_factory());
+    if let Some(player) = game.find_player_mut(target.id) {
+        player.update_state_combat_properties(|_| properties);
+    }
+    true
 }
 
 pub(crate) fn restart_tian_shen_xia_fan_state(
@@ -303,19 +324,9 @@ pub(crate) fn end_tian_shen_xia_fan_state(
 //
 //
 
-// ============================================================================
-// FUNCTION: CTianShenXiaFanState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\tianshenxiafanstate.cpp:35
-// RVA: 0x00205A10
-// ADDRESS: 00605a10
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// CTianShenXiaFanState::OnUpdateProperties (0x00605A10) реализован
+// в update_tian_shen_xia_fan_state_properties; guards и порядок формул
+// зафиксированы в заголовке владельца.
 
 // ============================================================================
 // FUNCTION: CTianShenXiaFanState::Begin

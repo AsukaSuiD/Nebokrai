@@ -7,7 +7,7 @@
 //! срока и End не подменяют его первым состоянием с тем же ID.
 //! Direct End (vtable 0x006610DC +0x1C, тело 0x005FB800) сначала
 //! отправляет visual, затем снимает move-lock и удаляет точный ключ.
-//! RemoveState вызывает UpdateProperty игрока; timer и Cure используют
+//! RemoveState вызывает общий virtual UpdateProperty; timer и Cure используют
 //! этот же хвост без подмены direct End принудительным истечением.
 //! Vtable 0x006610dc, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
@@ -141,8 +141,8 @@ pub(crate) fn end_boa_lock_state(
     if shape.applied_state::<BoaLockState>(key).is_none() { return false }
     shape.set_moveable(true);
     let removed = shape.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

@@ -7,7 +7,7 @@
 //! `appserver/skills/{life,mana,machine}shieldstate.cpp` и `moveshape.cpp`.
 //! AI (`0x5E2D90`, `0x5F34B0`) проверяет срок, прочность, смерть и MP.
 //! End (`0x5E3110`, `0x5FD420`) выполняет эффект до RemoveState
-//! (`0x4CDAB0`), который вызывает UpdateProperty игрока. Поэтому следующий
+//! (`0x4CDAB0`), который вызывает общий virtual UpdateProperty. Поэтому следующий
 //! щит проверяется после полного завершения предыдущего, а LifeShield
 //! создаёт Cure до удаления самого щита. Экземплярами владеет общий
 //! `CMoveShape::state_entries`: SlotMap сохраняет identity, а список адресов —
@@ -206,8 +206,8 @@ pub(crate) fn end_defense_shield(
     }
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_defense_shield_key(key)).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

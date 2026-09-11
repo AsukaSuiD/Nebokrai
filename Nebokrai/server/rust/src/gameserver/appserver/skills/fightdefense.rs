@@ -25,6 +25,9 @@
 //! произведение целого урона и сохранённого `f32`-коэффициента усекается к нулю
 //! при записи обратно в целое поле. Прочие ещё не восстановленные состояния не
 //! подменяются этой реализацией.
+//! Общий FISTP DWORD-адаптер сначала усекает к нулю и лишь затем проверяет
+//! signed range: дробная часть выше INT_MAX ещё может усечься в INT_MAX.
+//! NaN, бесконечность и переполнение дают исходный indefinite INT_MIN.
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -33,6 +36,7 @@ use crate::gameserver::appserver::states::attackpower::{AttackInformation, Attac
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
 pub(crate) fn truncate_original(value: f64) -> i32 {
+    let value = value.trunc();
     if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
         i32::MIN
     } else {

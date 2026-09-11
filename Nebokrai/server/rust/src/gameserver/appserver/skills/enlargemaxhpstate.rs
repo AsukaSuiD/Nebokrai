@@ -1,4 +1,6 @@
 //! Каноническая достигнутая часть `CEnlargeMaxHpState`.
+//! OnUpdateProperties (0x005E2420) читает живого GetSufferer и применяет
+//! подтверждённую player-only формулу без visual и часов; NULL даёт false.
 //!
 //! Для игрока состояние `601` складывает текущий максимум HP и знаковый
 //! параметр как `u32` с переполнением, после чего ограничивает результат
@@ -28,6 +30,19 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 
 pub(crate) const ENLARGE_MAX_HP_STATE_BYTES: usize = 8;
+
+/// OnUpdateProperties 0x005E2420: GetSufferer, затем только player-формула.
+/// Visual, IsEnded-gate и чтения часов у этого override отсутствуют.
+pub(crate) fn update_enlarge_max_hp_state_properties(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    crate::gameserver::appserver::states::state::update_player_state_properties::<EnlargeMaxHpState>(
+        game, region_id, holder, key, |state, player| {
+            player.update_state_combat_properties(|mut properties| { properties.maximum_hp = state.apply(properties.maximum_hp); properties });
+        },
+    )
+}
 
 pub(crate) fn restart_enlarge_max_hp_state(
     game: &mut CGame,

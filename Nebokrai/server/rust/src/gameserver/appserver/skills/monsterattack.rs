@@ -581,8 +581,12 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
     }
     if attack.full_miss == 0 && current_health != 0 {
-        let _ = finish_blind_states_on_defense(game, region, target, now_ms);
+        let region_id = region.id;
+        let _ = game.with_published_region(owner, |game| {
+            finish_blind_states_on_defense(game, region_id, target, now_ms)
+        });
     }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return };
     if current_health == 0 {
         let mut died = CMessage::new(0x000b_f60b);
         died.add_long(MONSTER_TYPE);

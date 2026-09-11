@@ -15,7 +15,7 @@
 //! Exact vtable 0x006602FC: AI 0x005D60B0, End 0x005EEBA0.
 //! End только разрешает sufferer и удаляет запись: визуала и отдельной
 //! публикации HP/MP/RP/YP в этом пути нет.
-//! UpdateProperty вызывается только для игрока при фактическом удалении.
+//! После фактического удаления вызывается общий virtual UpdateProperty держателя.
 //! Прямой End и AI используют один exact-key хвост; проверка срока остаётся только в AI.
 
 //! Restart воспроизводит только Begin(NULL, holder) (0x005F0350):
@@ -26,6 +26,11 @@
 
 //! Unserialize 0x005F48E0 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+//! OnUpdateProperties 0x005F02F0: GetSufferer → type400/RTTI CPlayer →
+//! WORD-сложение full_miss. Этот callback не вызывает visual и не читает часы.
+
+use crate::gameserver::appserver::states::state::update_player_state_properties;
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -106,6 +111,18 @@ impl AgilityState2 {
 
 }
 
+pub(crate) fn update_agility_state_2_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    update_player_state_properties::<AgilityState2>(game, region_id, holder, key, |state, player| {
+        player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+    })
+}
+
 pub(crate) fn restart_agility_state_2(
     game: &mut CGame,
     region_id: i32,
@@ -157,8 +174,8 @@ pub(crate) fn end_agility_state_2(
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<AgilityState2>(key, AGILITY_STATE_2_BYTES))
         .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

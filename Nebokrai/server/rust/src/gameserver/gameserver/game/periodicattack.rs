@@ -772,16 +772,25 @@ impl CGame {
                 monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                let _ = super::finish_blind_states_on_defense(
-                    self,
-                    owner.base_mut(),
-                    ShapeIdentity {
-                        object_type: MONSTER_TYPE,
-                        id: target_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    now_ms,
-                );
+                let mut published_owner = Some(owner);
+                let _ = self.with_published_region(&mut published_owner, |game| {
+                    super::finish_blind_states_on_defense(
+                        game,
+                        region_id,
+                        ShapeIdentity {
+                            object_type: MONSTER_TYPE,
+                            id: target_id,
+                            ex_id: CGuid::GUID_INVALID,
+                        },
+                        now_ms,
+                    )
+                });
+                let Some(restored_owner) = published_owner else { return };
+                owner = restored_owner;
+                if owner.base().find_monster_by_id(target_id).is_none() {
+                    self.restore_region_owner(owner);
+                    return;
+                }
             }
             self.restore_region_owner(owner);
         }

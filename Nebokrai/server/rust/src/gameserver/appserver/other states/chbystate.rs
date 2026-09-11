@@ -27,14 +27,19 @@
 //! Чистый visual-снимок не копирует накопленный m_vskill и не владеет состоянием.
 //! Текущий runtime-install создаёт уже начатое состояние через from_factory,
 //! поэтому его список заранее содержит пять ID; decode оставляет список пустым.
+//! OnUpdateProperties0x005DA0F0 требует sufferer, но не user/Begin; для игрока
+//! сначала присваивает ненулевой mode, затем ненулевые добавки с DWORD wrapping
+//! до ограничения INT_MAX и WORD wrapping. Этот callback не вызывает visual
+//! и не читает часы; расчёт заимствует payload без копии накопленного m_vskill.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
-    resolve_state_move_shape, change_body_client_time,
+    resolve_state_move_shape, resolve_applied_state_sufferer, change_body_client_time,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -288,6 +293,37 @@ impl ChangeBodyState {
     }
 }
 
+pub(crate) fn update_change_body_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+    else { return false };
+    let mode = state.mode;
+    let Some((_, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false };
+    if target.object_type != 400 { return true }
+    if mode != 0 {
+        let Some(player) = game.find_player_mut(target.id) else { return false };
+        let (head, face, _) = player.appearance_and_mode();
+        player.restore_appearance_and_mode(head, face, mode);
+    }
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+    else { return false };
+    let Some(player) = game.find_player(target.id) else { return false };
+    let properties = CPlayer::apply_active_change_body_state_properties(
+        player.combat_properties(), state,
+    );
+    let Some(player) = game.find_player_mut(target.id) else { return false };
+    player.update_state_combat_properties(|_| properties);
+    true
+}
+
 pub(crate) fn restart_change_body_state(
     game: &mut CGame,
     region_id: i32,
@@ -486,20 +522,6 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-
-// ============================================================================
-// FUNCTION: CHBYState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:70
-// RVA: 0x001DA0F0
-// ADDRESS: 005da0f0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CHBYState::End

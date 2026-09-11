@@ -13,8 +13,8 @@
 //! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
 //! формул игрока не запрещают жизненный цикл региональных держателей.
 //! Exact vtable 0x006600D4: End 0x005FD420 отправляет visual до RemoveState.
-//! После эффекта holder перечитывается; свойства пересчитываются только
-//! у игрока и только при фактическом удалении точной записи.
+//! После эффекта holder перечитывается; общий virtual UpdateProperty
+//! пересчитывает свойства только при фактическом удалении точной записи.
 //! Прямой End и AI используют один exact-key хвост без чтения часов.
 
 //! Restart воспроизводит только Begin(NULL, holder) (0x005EE7A0):
@@ -23,6 +23,15 @@
 
 //! Unserialize 0x004F9D80 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+//! OnUpdateProperties 0x005EE740: GetSufferer → существующий visual Update(0)
+//! → type400 → wrapping-прибавка maximum HP с пределом INT_MAX. Изменение
+//! живого tagProperty не запускает повторный пересчёт остальных состояний.
+
+use crate::gameserver::appserver::states::state::{
+    resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
+    update_player_state_properties,
+};
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual,
@@ -131,6 +140,28 @@ pub(crate) fn send_hearten_state_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
+pub(crate) fn update_hearten_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_applied_state_sufferer(game, region_id, holder, key).is_none() {
+        return false;
+    }
+    let _ = update_property_state_visual::<HeartenState>(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+        |state, now| state.client_time(now) as u32,
+    );
+    update_player_state_properties::<HeartenState>(game, region_id, holder, key, |state, player| {
+        player.update_state_combat_properties(|mut properties| {
+            properties.maximum_hp = state.apply(properties.maximum_hp);
+            properties
+        });
+    })
+}
+
 pub(crate) fn restart_hearten_state(
     game: &mut CGame,
     region_id: i32,
@@ -183,8 +214,8 @@ pub(crate) fn end_hearten_state(
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<HeartenState>(key, HEARTEN_STATE_BYTES))
         .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

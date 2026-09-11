@@ -22,10 +22,9 @@
 //! перед callback. AI не добавляет alive-gate и не исключает нулевой срок.
 //! OnAction +0x34 общим не является: Blind/KnockOut/Seal вызывают
 //! 0x00607370 (End при ACTION_DEFENSE), SpiderWeb/Strike — 0x00601A70
-//! (ret 4). Пересчёт материализованных property overrides после удаления
-//! вызывает player UpdateProperty; monster читает state-модификации через
-//! живые getters. Для остальных форм неперенесённый override не подменяется
-//! придуманным callback. Region-adapter Defense использует того же владельца
+//! (ret 4). После фактического удаления общий virtual UpdateProperty
+//! пересчитывает живые свойства держателя, включая модификаторы монстра.
+//! Region-adapter Defense использует того же владельца
 //! payload и общий tail End, не копируя временную владеющую форму.
 //! Object Begin Blind/KnockOut/SpiderWeb/Seal/Strike по адресам
 //! 0x006075E0/0x005F5230/0x005EAA00/0x005FFAD0/0x00606AA0:
@@ -317,8 +316,8 @@ pub(crate) fn end_blind_state(
     }
     let removed = resolve_state_move_shape_mut(game, region_id, identity)
         .is_some_and(|shape| finish_blind_state(shape, key));
-    if removed && identity.object_type == 400 {
-        let _ = game.update_player_properties(identity.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, identity);
     }
     removed
 }
@@ -333,25 +332,4 @@ fn finish_blind_state(
     shape.set_fightable(true);
     shape.set_moveable(true);
     shape.remove_applied_state_data(key, BLIND_STATE_BYTES).is_some()
-}
-
-pub(crate) fn end_owned_monster_blind_state(
-    game: &CGame,
-    region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
-    monster_id: i32,
-    key: StateKey,
-) -> bool {
-    let Some(monster) = region.find_monster_by_id(monster_id) else { return false };
-    let shape = monster.move_shape();
-    let Some(state) = shape.applied_state_data(key).filter(|state| state.is_blind()) else {
-        return false;
-    };
-    let identity = shape.shape().identity();
-    let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.state_id() as i32);
-    let _ = game.send_game_shape_around(region, shape.shape(), None, &message);
-    region.find_monster_by_id_mut(monster_id)
-        .is_some_and(|monster| finish_blind_state(monster.move_shape_mut(), key))
 }

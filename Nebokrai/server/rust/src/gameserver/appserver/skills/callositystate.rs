@@ -8,7 +8,7 @@
 //! Vtable первой/второй закалки `0x006607d4/0x006603bc`, слот +0x0c,
 //! направляет AI на `0x005d60b0`: строгий абсолютный wrapping deadline.
 //! Общий End `0x005fd420` отправляет `0xBFE04` до RemoveState, который
-//! вызывает CPlayer::UpdateProperty (`vtable +0x9c`, `0x004593e0`).
+//! вызывает virtual UpdateProperty (`+0x9c`); player использует `0x004593e0`.
 //! Exact vtable обеих закалок направляет `GetRemainedTime` на `0x005D5F30`;
 //! additional-data остаётся базовым нулём.
 //! Общая exact-пара `Serialize/Unserialize` `0x005F1050/0x005F48E0` сохраняет
@@ -22,8 +22,8 @@
 //! Любое удаление адресует тот же экземпляр, а не первый дубль.
 //! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
 //! формул игрока не запрещают жизненный цикл региональных держателей.
-//! После visual владелец перечитывается; UpdateProperty вызывается только
-//! для игрока и только при фактическом удалении этой записи.
+//! После visual владелец перечитывается; общий virtual UpdateProperty
+//! вызывается только при фактическом удалении этой записи.
 //! Прямой End, замена и AI используют один exact-key хвост без чтения часов.
 
 //! Restart воспроизводит только Begin(NULL, holder) (0x005F4830/0x005F10F0):
@@ -33,6 +33,15 @@
 
 //! Unserialize 0x005F48E0 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+//! OnUpdateProperties 0x005F10B0 обеих закалок: GetSufferer → существующий
+//! visual Update(0) → type400 → WORD-сложение CCH в живом tagProperty.
+//! Отсутствующий/ended visual не запрещает формулу; часы читает только его getter.
+
+use crate::gameserver::appserver::states::state::{
+    resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
+    update_player_state_properties,
+};
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -222,10 +231,29 @@ pub(crate) fn end_callosity_state_key(
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<CallosityFamilyState>(key, CALLOSITY_STATE_BYTES))
         .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
+}
+
+pub(crate) fn update_callosity_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_applied_state_sufferer(game, region_id, holder, key).is_none() {
+        return false;
+    }
+    let _ = update_property_state_visual::<CallosityFamilyState>(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+        |state, now| state.client_state_time(now) as u32,
+    );
+    update_player_state_properties::<CallosityFamilyState>(game, region_id, holder, key, |state, player| {
+        player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+    })
 }
 
 pub(crate) fn restart_callosity_state(

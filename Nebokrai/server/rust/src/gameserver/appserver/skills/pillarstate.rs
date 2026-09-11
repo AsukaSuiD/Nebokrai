@@ -14,8 +14,8 @@
 //! Любое удаление адресует тот же экземпляр, а не первый дубль.
 //! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
 //! формул игрока не запрещают жизненный цикл региональных держателей.
-//! После visual владелец перечитывается; UpdateProperty вызывается только
-//! для игрока и только при фактическом удалении этой записи.
+//! После visual владелец перечитывается; общий virtual UpdateProperty
+//! вызывается только при фактическом удалении этой записи.
 //! Exact End 0x005FB800: visual → GetSufferer → SetMoveable(true) → RemoveState.
 //! Загрузка добавляет вложенный запрет движения для каждого экземпляра.
 //! Прямой End и AI используют один exact-key хвост без чтения часов.
@@ -28,6 +28,9 @@
 
 //! Unserialize 0x005D6190 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+//! Exact vtable 0x00660834 +0x24 указывает на 0x0047B150:
+//! OnUpdateProperties возвращает 1 без target lookup, visual, часов и формулы.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -166,8 +169,8 @@ pub(crate) fn end_pillar_state(
         shape.set_moveable(true);
         shape.remove_applied_state_record::<PillarState>(key, PILLAR_STATE_BYTES)
     }).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

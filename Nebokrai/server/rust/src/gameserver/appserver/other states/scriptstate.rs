@@ -18,6 +18,12 @@
 //! при NULL user, не трогая base/visual. AutoProtect0x005D4290 требует
 //! sufferer и отклоняет только CPlayer GM: base Begin → visual SetRun(1),
 //! без Update/пакета и часов. Timestamp сохраняет отдельный clock Unserialize.
+//! OnUpdateProperties пяти UseGoods получает sufferer, обновляет visual и
+//! лишь затем проверяет player type для формулы; user не является gate.
+//! ImproveExp0x005D5F10 вызывает только visual, без EXP-формулы и owner-gate.
+//! AutoProtect0x005D4240 сначала ставит флаг игроку не-GM, затем visual.
+//! Все эти visual проверяют собственный ended и сохраняют base tail даже
+//! без цели/пакета; очередь отложенных visual не заменяет живой вызов +0x24.
 
 use super::autoprotectstate::{AutoProtectState, AUTO_PROTECT_STATE_ID};
 use super::improveexpstate::{ImproveExpState, IMPROVE_EXP_STATE_ID};
@@ -42,7 +48,8 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
     timed_client_state_time, begin_base_applied_state, begin_applied_state_visual,
-    resolve_state_move_shape,
+    resolve_state_move_shape, resolve_applied_state_sufferer,
+    update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -69,7 +76,6 @@ pub(crate) struct ScriptMoveState {
     started_at_ms: u32,
     time_to_keep_ms: u32,
     serialized_value: Option<u32>,
-    visual_pending: bool,
 }
 
 impl ScriptMoveState {
@@ -114,7 +120,6 @@ impl ScriptMoveState {
             time_to_keep_ms: keep_time,
             serialized_value: (!matches!(kind, ScriptStateKind::AutoProtect(_)))
                 .then_some(coefficient),
-            visual_pending: !matches!(kind, ScriptStateKind::AutoProtect(_)),
             kind,
         })
     }
@@ -129,7 +134,7 @@ impl ScriptMoveState {
             reader.read_u32()?
         };
         Self::from_factory(state_id, keep_time as i32, value as i32, false, now_ms)
-            .map(|mut state| { state.visual_pending = false; state }).ok_or(
+            .ok_or(
             LegacyReadBlock {
                 offset,
                 needed: 4,
@@ -215,11 +220,7 @@ impl ScriptMoveState {
         self.started_at_ms.wrapping_add(self.time_to_keep_ms) < now_ms
     }
 
-    pub(crate) fn apply_properties(
-        self,
-        properties: &mut PlayerCombatProperties,
-        auto_protected: &mut bool,
-    ) {
+    fn apply_combat_properties(self, properties: &mut PlayerCombatProperties) {
         match self.kind {
             ScriptStateKind::EnlargeMaxHp(state) => state.apply(properties),
             ScriptStateKind::EnlargeMaxMp(state) => state.apply(properties),
@@ -227,7 +228,7 @@ impl ScriptMoveState {
             ScriptStateKind::EnlargeDefense(state) => state.apply(properties),
             ScriptStateKind::EnlargeElementDefense(state) => state.apply(properties),
             ScriptStateKind::EnlargeFullMiss(state) => state.apply(properties),
-            ScriptStateKind::AutoProtect(state) => state.apply(auto_protected),
+            ScriptStateKind::AutoProtect(_) => {}
         }
     }
 
@@ -238,11 +239,65 @@ impl ScriptMoveState {
         }
     }
 
-    pub(crate) fn take_pending_visual(&mut self) -> bool {
-        let pending = self.visual_pending;
-        self.visual_pending = false;
-        pending
+}
+
+pub(crate) fn update_script_move_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<ScriptMoveState>(key)).copied()
+    else { return false };
+    match state.kind {
+        ScriptStateKind::AutoProtect(_) => {
+            let Some((_, target)) = resolve_applied_state_sufferer(
+                game, region_id, holder, key,
+            ) else { return true };
+            if target.object_type != 400
+                || game.script_player_gm_level(target.id).unwrap_or(0) != 0
+            {
+                return true;
+            }
+            let Some(player) = game.find_player_mut(target.id) else { return true };
+            player.set_auto_protected(true);
+            let _ = update_property_state_visual::<ScriptMoveState>(
+                game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+                |state, now| state.client_state_time(now) as u32,
+            );
+        }
+        ScriptStateKind::ImproveExp(_) => {
+            let _ = update_property_state_visual::<ScriptMoveState>(
+                game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+                |state, now| state.client_state_time(now) as u32,
+            );
+        }
+        _ => {
+            if resolve_applied_state_sufferer(game, region_id, holder, key).is_none() {
+                return false;
+            }
+            let _ = update_property_state_visual::<ScriptMoveState>(
+                game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+                |state, now| state.client_state_time(now) as u32,
+            );
+            let Some(state) = resolve_state_move_shape(game, region_id, holder)
+                .and_then(|shape| shape.applied_state::<ScriptMoveState>(key)).copied()
+            else { return false };
+            let Some((_, target)) = resolve_applied_state_sufferer(
+                game, region_id, holder, key,
+            ) else { return false };
+            if target.object_type == 400 {
+                let Some(player) = game.find_player_mut(target.id) else { return false };
+                player.update_state_combat_properties(|mut properties| {
+                    state.apply_combat_properties(&mut properties);
+                    properties
+                });
+            }
+        }
     }
+    true
 }
 
 pub(crate) fn restart_script_move_state(

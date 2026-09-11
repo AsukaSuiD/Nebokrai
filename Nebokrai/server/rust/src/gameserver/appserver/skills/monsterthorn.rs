@@ -366,14 +366,12 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         return MonsterSkillCallOutcome::Handled;
     }
 
-    let ordinary_attack = region
-        .find_monster_by_id(monster_id)
-        .map(|monster| {
-            monster.state_attack_bounds(property.minimum_attack, property.maximum_attack)
-        })
-        .unwrap_or((property.minimum_attack, property.maximum_attack));
-    let physical_minimum = pet_attack.map_or(ordinary_attack.0, |pet| pet.minimum_attack) as i32;
-    let physical_maximum = pet_attack.map_or(ordinary_attack.1, |pet| pet.maximum_attack) as i32;
+    let Some(monster) = region.find_monster_by_id(monster_id) else {
+        return MonsterSkillCallOutcome::Handled;
+    };
+    let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
+    let physical_minimum = minimum as i32;
+    let physical_maximum = maximum as i32;
     let physical_span = physical_maximum
         .wrapping_sub(physical_minimum)
         .unsigned_abs()

@@ -12,9 +12,9 @@
 //! Runtime Begin и StartAllStates связывают sufferer с holder; MasterInfo
 //! остаётся источником атаки, а не владельцем удаляемого ключа. End работает
 //! с опубликованной формой и точным ключом; ошибка доставки не отменяет удаление.
-//! После RemoveState перенесённый player UpdateProperty вызывается явно;
-//! monster читает изменения состояния в живых getters. Остальные property
-//! overrides не подменяются выдуманным callback.
+//! После фактического RemoveState общий virtual UpdateProperty вызывается
+//! для живого держателя: player пересчитывает tagProperty, остальные формы
+//! пересчитывают упорядоченные состояния и накопленные модификаторы.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spriteburnstate.cpp`. Состояние хранит снимок
@@ -310,8 +310,8 @@ pub(crate) fn end_sprite_burn_state(
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES))
         .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

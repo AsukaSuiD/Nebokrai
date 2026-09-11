@@ -66,8 +66,8 @@ pub(crate) fn end_soul_collect_state(
         let _ = shape.mark_applied_state_ended(key);
         shape.remove_applied_state_record::<SoulCollectState>(key, SOUL_COLLECT_STATE_BYTES)
     }).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

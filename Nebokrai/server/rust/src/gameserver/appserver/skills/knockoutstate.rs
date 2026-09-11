@@ -15,11 +15,14 @@
 //! перегрузки сохранены ниже.
 //! Monster-визуал получает явного владельца региона, поэтому сохраняет around-
 //! доставку и тогда, когда AI временно извлёк регион из `CGame`.
+//! Защитное снятие проходит через опубликованный owner и общий CBlindState::End:
+//! visual → unlock → RemoveState → virtual UpdateProperty. Отдельного
+//! монстрового End без последнего callback больше нет.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, timed_client_state_time};
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 use super::sealstate::SEAL_STATE_ID;
@@ -167,19 +170,19 @@ pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id:
     changed
 }
 
-pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region: &mut CServerRegion, target: ShapeIdentity, now_ms: u32) -> bool {
+pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region_id: i32, target: ShapeIdentity, now_ms: u32) -> bool {
     if target.object_type == 400 {
         return finish_player_blind_states_on_defense(game, target.id, now_ms);
     }
     if target.object_type != 600 {
         return false;
     }
-    let order = region.find_monster_by_id(target.id)
-        .map(|monster| monster.move_shape().blind_state_instances()).unwrap_or_default();
+    let order = resolve_state_move_shape(game, region_id, target)
+        .map(|shape| shape.blind_state_instances()).unwrap_or_default();
     let mut changed = false;
     for (key, state_id) in order {
         if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID) {
-            changed |= super::blindstate::end_owned_monster_blind_state(game, region, target.id, key);
+            changed |= super::blindstate::end_blind_state(game, region_id, target, key);
         }
     }
     changed

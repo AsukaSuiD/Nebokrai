@@ -74,7 +74,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::{CMonster, MonsterBaseAttackCast, MonsterBaseAttackDispatch, PetAttackProperties};
+use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -603,7 +603,6 @@ pub(crate) struct WideArcAttackDispatch {
     property: MonsterProperties,
     attacker_master: MasterInfo,
     attacker_tamed: bool,
-    pet_attack: Option<PetAttackProperties>,
     now_ms: u32,
 }
 
@@ -770,7 +769,6 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         property,
         attacker_master: master,
         attacker_tamed: tamed,
-        pet_attack,
         now_ms,
     });
     MonsterSkillCallOutcome::Handled
@@ -780,25 +778,19 @@ fn wide_arc_attack(
     game: &mut CGame,
     region: &CServerRegion,
     dispatch: &WideArcAttackDispatch,
-) -> AttackInformation {
-    let (minimum, maximum) = region
-        .find_monster_by_id(dispatch.monster_id)
-        .map(|monster| {
-            let bounds = monster.state_attack_bounds(
-                dispatch.property.minimum_attack,
-                dispatch.property.maximum_attack,
-            );
-            dispatch
-                .pet_attack
-                .map_or(bounds, |pet| (pet.minimum_attack, pet.maximum_attack))
-        })
-        .unwrap_or((dispatch.property.minimum_attack, dispatch.property.maximum_attack));
+) -> Option<AttackInformation> {
+    let monster = region.find_monster_by_id(dispatch.monster_id)?;
+    let (minimum, maximum) = monster.state_attack_bounds(
+        dispatch.property.minimum_attack,
+        dispatch.property.maximum_attack,
+    );
+    let soul_attack = monster.soul_attack(&dispatch.property);
     let minimum = minimum as i32;
     let maximum = maximum as i32;
     let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
     let _critical_roll = game.skill_random_below(100);
-    AttackInformation {
+    Some(AttackInformation {
         skill_id: dispatch.skill_id,
         skill_level: dispatch.skill_level as u8,
         attacker_type: MONSTER_TYPE,
@@ -821,11 +813,11 @@ fn wide_arc_attack(
             AttackPower { kind: AttackPowerType::Element, hp_damage: 0, mp_damage: 0 },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: i32::from(CMonster::resource_soul_attack(&dispatch.property)),
+                hp_damage: i32::from(soul_attack),
                 mp_damage: 0,
             },
         ],
-    }
+    })
 }
 
 pub(crate) fn wide_arc_attack_cell_candidates(
@@ -864,7 +856,7 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
     {
         return false;
     }
-    let attack = wide_arc_attack(game, region, dispatch);
+    let Some(attack) = wide_arc_attack(game, region, dispatch) else { return false };
     let attack = defend_owned_monster_attack(
         game,
         identity,

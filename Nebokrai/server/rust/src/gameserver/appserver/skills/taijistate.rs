@@ -18,7 +18,15 @@
 //! от payload и не заменяет отсутствующего user держателем состояния.
 //! Runtime CTaiJi::AI0x005AF770 вызывает state Begin(self,self).
 
+//! OnUpdateProperties (точный vtable +0x24 TaiJiState) сначала
+//! разрешает GetSufferer; NULL возвращает 0. Type600/400 и RTTI выбирают
+//! живые monster modifiers либо player tagProperty. Визуала, таймера,
+//! повторного пересчёта и чтения итогового monster getter в этом callback нет.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/taijistate.cpp.
+
+
 use super::taiji::TAIJI_SKILL_ID;
+use crate::gameserver::appserver::states::state::resolve_applied_state_sufferer;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
@@ -62,9 +70,33 @@ impl TaiJiState {
         properties
     }
 
-    pub(crate) const fn apply_to_monster(self, value: u32) -> u32 {
-        value.wrapping_add(self.element_resistance_gain as u32)
+
+}
+
+pub(crate) fn update_tai_ji_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<TaiJiState>(key)).copied()
+    else { return false; };
+    if target.object_type == 600 {
+        if let Some(monster) = game.find_region_mut(target_region)
+            .and_then(|region| region.base_mut().find_monster_by_id_mut(target.id)) {
+            let modifiers = monster.move_shape_mut().property_modifiers_mut();
+            modifiers.element_resistance = modifiers.element_resistance.wrapping_add(state.element_resistance_gain);
+        }
+    } else if target.object_type == 400 {
+        if let Some(player) = game.find_player_mut(target.id) {
+            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+        }
     }
+    true
 }
 
 pub(crate) fn restart_tai_ji_state(
@@ -94,7 +126,7 @@ pub(crate) fn end_tai_ji_state(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранены конструктор по умолчанию и смешанная player/monster-функция свойств; player-ветвь подключена.
+// Сохранён недостигнутый конструктор по умолчанию; общий callback свойств реализован.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -118,23 +150,7 @@ pub(crate) fn end_tai_ji_state(
 //
 
 
-// ============================================================================
-// FUNCTION: CTaiJiState::OnUpdateProperties
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: `TaiJiState::apply_to_player` и `TaiJiState::apply_to_monster`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taijistate.cpp:37
-// RVA: 0x002010F0
-// ADDRESS: 006010f0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
+// CTaiJiState::OnUpdateProperties (0x006010F0) реализован
+// в update_tai_ji_state_properties; monster modifier меняется напрямую.
 
 // COMPONENT_VARIANT_END: GameServer

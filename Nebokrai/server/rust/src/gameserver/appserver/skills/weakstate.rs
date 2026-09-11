@@ -13,7 +13,7 @@
 //! остальные типы. AI 0x00606EF0 у type=1 читает часы для строгого срока,
 //! у type=2 проверяет область без часов, прочие типы сразу вызывают End.
 //! SetRegion 0x00606FA0 вызывает End только у type=2. Для других типов
-//! sufferer-region представлен текущим опубликованным региональным owner-ом.
+//! setter сохраняет sufferer-region у того же экземпляра общей арены.
 //! Достигнутый AI получает один поколенческий ключ общей арены;
 //! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
 //! Любое удаление адресует тот же экземпляр, а не первый дубль.
@@ -24,13 +24,18 @@
 //! Restart воспроизводит только Begin(NULL, holder) (0x00607150):
 //! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
 //! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
-//! Остаток общего property-прохода: OnUpdateProperties 0x00607020 после
-//! GetSufferer вызывает существующий visual Update(0) перед снижением атаки.
-//! Его BFE03 читает client-time через 0x00605E10 и additional=0, затем base
-//! visual tail; текущая property-проекция ещё не вызывает этот visual.
+
+//! OnUpdateProperties 0x00607020 после GetSufferer выполняет существующий
+//! visual Update(0) перед RTTI-формулой. BFE03 читает client-time через
+//! 0x00605E10 и additional=0, затем base visual tail. Игрок ограничивает loss
+//! текущей атакой и сужает до WORD; монстр складывает отрицательный полный
+//! DWORD loss с обоими модификаторами без предварительного ограничения.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual,
+};
+use crate::gameserver::appserver::states::state::{
+    resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::appserver::moveshape::StateKey;
 
@@ -118,9 +123,7 @@ impl WeakState {
         properties
     }
 
-    pub(crate) const fn apply_to_monster(self, minimum: u32, maximum: u32) -> (u32, u32) {
-        (minimum.wrapping_sub(self.attack_loss), maximum.wrapping_sub(self.attack_loss))
-    }
+
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической around-доставки")]
@@ -134,6 +137,37 @@ pub(crate) fn send_weak_state_visual(game: &mut CGame, region_id: i32, identity:
         message.add_long(state.attack_loss() as i32);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn update_weak_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    let _ = update_property_state_visual::<WeakState>(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+        |state, now| state.client_time(now) as u32,
+    );
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<WeakState>(key)).copied()
+    else { return false; };
+    if target.object_type == 600 {
+        if let Some(monster) = game.find_region_mut(target_region)
+            .and_then(|region| region.base_mut().find_monster_by_id_mut(target.id)) {
+            let modifiers = monster.move_shape_mut().property_modifiers_mut();
+            modifiers.minimum_attack = modifiers.minimum_attack.wrapping_sub(state.attack_loss as i32);
+            modifiers.maximum_attack = modifiers.maximum_attack.wrapping_sub(state.attack_loss as i32);
+        }
+    } else if target.object_type == 400 {
+        if let Some(player) = game.find_player_mut(target.id) {
+            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+        }
+    }
+    true
 }
 
 pub(crate) fn restart_weak_state(
@@ -189,10 +223,14 @@ pub(crate) fn set_weak_state_region(
     holder: ShapeIdentity,
     key: StateKey,
 ) {
-    if resolve_state_move_shape(game, region_id, holder)
+    let Some(state_type) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<WeakState>(key))
-        .is_some_and(|state| state.state_type == 2) {
+        .map(|state| state.state_type)
+    else { return; };
+    if state_type == 2 {
         let _ = end_weak_state(game, region_id, holder, key);
+    } else if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        let _ = shape.set_applied_state_sufferer_region(key, region_id);
     }
 }
 
@@ -214,8 +252,8 @@ pub(crate) fn end_weak_state(
         .and_then(|shape| {
             shape.remove_applied_state_record::<WeakState>(key, WEAK_STATE_BYTES)
         }).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

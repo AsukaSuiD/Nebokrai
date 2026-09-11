@@ -1,4 +1,8 @@
 //! Реализованная часть `CMoveShape` исторического GameServer.
+//! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
+//! dispatcher-ом states/state.rs. Здесь хранится одна PDB-структура
+//! tagProperties (+0x84, 25 signed LONG); её читают native monster getters.
+//! Снимки PlayerPropertyState/MonsterPropertyState больше не дублируют арену.
 //! Немедленный background-owner сохраняет признак End у навыка до следующего
 //! OnExecuteBackStageSkills (0x004C88E0): сначала проверка IsEnded, затем AI.
 //! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
@@ -47,9 +51,13 @@
 //! Save дописывает этот tail без изменения; это сохранение неизвестных байтов,
 //! а не гарантия native round-trip спорной записи. Полный сброс snapshot
 //! удаляет и tail, выборочный End — только доказанный cache-span.
-//! Пересчёт свойств игрока
-//! и монстра проецирует достигнутые property-state в том же insertion-order, включая
-//! повторные экземпляры одного ID. Добавление, замена,
+//! Общий UpdateProperty обнуляет единственный набор `property_modifiers`, затем
+//! вызывает живые property-state в исходном порядке, включая повторные ID.
+//! PDB `tagProperties` (type 0x6D94, fieldlist 0x6D93) задаёт 25 signed long,
+//! размер 0x64 и поле CMoveShape +0x84. Имена и порядок полей сохранены
+//! типизированной структурой; это не wire-layout и не копия свойств монстра.
+//! Monster-getters читают этот результат, а не запускают состояния повторно.
+//! Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
 //! Типизированные экземпляры используют общую арену
@@ -933,6 +941,35 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
     fn move_shape_is_alive(&self, identity: ShapeIdentity) -> Option<bool>;
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MoveShapePropertyModifiers {
+    pub(crate) maximum_hp: i32,
+    pub(crate) maximum_mp: i32,
+    pub(crate) maximum_yp: i32,
+    pub(crate) maximum_rp: i32,
+    pub(crate) strength: i32,
+    pub(crate) dexterity: i32,
+    pub(crate) constitution: i32,
+    pub(crate) intelligence: i32,
+    pub(crate) minimum_attack: i32,
+    pub(crate) maximum_attack: i32,
+    pub(crate) hit: i32,
+    pub(crate) burden: i32,
+    pub(crate) critical_hit: i32,
+    pub(crate) defense: i32,
+    pub(crate) dodge: i32,
+    pub(crate) attack_speed: i32,
+    pub(crate) element_resistance: i32,
+    pub(crate) hp_recovery_speed: i32,
+    pub(crate) mp_recovery_speed: i32,
+    pub(crate) soul_resistance: i32,
+    pub(crate) additional_element_attack: i32,
+    pub(crate) additional_soul_attack: i32,
+    pub(crate) element_modify: i32,
+    pub(crate) attack_avoid: i32,
+    pub(crate) element_avoid: i32,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
@@ -940,6 +977,7 @@ pub(crate) struct CMoveShape {
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     state_storage: CanonicalStateStorage,
+    property_modifiers: MoveShapePropertyModifiers,
     moveable_count: i32,
     moveable: bool,
     can_fight_count: i32,
@@ -1024,53 +1062,6 @@ impl DerefMut for CMoveShape {
     }
 }
 
-/// Типизированные состояния, влияющие на `CPlayer::UpdateProperty`.
-/// Значения копируются из канонического хранилища в порядке соответствующих
-/// записей `m_vStates`; сырой payload не задаёт runtime-порядок.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerPropertyState {
-    PersistentAgility(PersistentAgilityFamilyState),
-    Agility2(AgilityState2),
-    TaiJi(TaiJiState),
-    EnlargeMaxHp(EnlargeMaxHpState),
-    EnlargeMaxMp(EnlargeMaxMpState),
-    EnlargeFullMiss(EnlargeFullMissState),
-    Origin(OriginState),
-    Hearten(HeartenState),
-    Callosity(CallosityFamilyState),
-    Swordship(SwordshipState),
-    WuXing(WuXingState),
-    BattleFairyAttribute(BattleFairyAttributeState),
-    TianShenXiaFan(TianShenXiaFanState),
-    Weak(WeakState),
-    PoisonFog(PoisonFogState),
-    GodBless(GodBlessState),
-    Roar(RoarState),
-    Script(ScriptMoveState),
-    Undead(UndeadState),
-    Extended(ExtendedState),
-    ChangeBody(ChangeBodyState),
-    Ride(RideState),
-    RageBreak(RageBreakState),
-    Fury(FuryState),
-    Wangsheng(WangshengState),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MonsterPropertyState {
-    TaiJi(TaiJiState),
-    Origin(OriginState),
-    Swordship(SwordshipState),
-    BattleFairyAttribute(BattleFairyAttributeState),
-    Fury(FuryState),
-    Weak(WeakState),
-    PoisonFog(PoisonFogState),
-    GodBless(GodBlessState),
-    Roar(RoarState),
-    BossBlueFury(BossBlueFuryState),
-}
-
-
 
 impl Default for CMoveShape {
     fn default() -> Self {
@@ -1080,6 +1071,7 @@ impl Default for CMoveShape {
             current_skill_id: None,
             item_skill_ids: Vec::new(),
             state_storage: CanonicalStateStorage::default(),
+            property_modifiers: MoveShapePropertyModifiers::default(),
             moveable_count: 0,
             moveable: true,
             can_fight_count: 0,
@@ -1095,6 +1087,18 @@ impl Default for CMoveShape {
 }
 
 impl CMoveShape {
+    pub(crate) const fn property_modifiers(&self) -> &MoveShapePropertyModifiers {
+        &self.property_modifiers
+    }
+
+    pub(crate) const fn property_modifiers_mut(&mut self) -> &mut MoveShapePropertyModifiers {
+        &mut self.property_modifiers
+    }
+
+    pub(crate) fn reset_property_modifiers(&mut self) {
+        self.property_modifiers = MoveShapePropertyModifiers::default();
+    }
+
     pub(crate) fn set_killed_by(&mut self, attack: KillingAttackIdentity) {
         self.killed_by = Some(attack);
     }
@@ -1824,7 +1828,7 @@ impl CMoveShape {
         let offset = self.ex_states.len() - AUTOMATIC_RESTORE_STATE_BYTES;
         let key = self.state_entries.append(state);
         self.state_entries.set_serialized_span(key, (offset, AUTOMATIC_RESTORE_STATE_BYTES));
-        self.state_entries.mark_begun(key);
+        self.mark_applied_state_begun(key);
         self.state_entries.begin_visual(key, 1);
         key
     }
@@ -2585,7 +2589,24 @@ impl CMoveShape {
     }
 
     pub(crate) fn mark_applied_state_begun(&mut self, key: StateKey) -> bool {
-        self.state_entries.mark_begun(key)
+        let region_id = self.shape.get_region_id();
+        self.state_entries.mark_begun(key, region_id)
+    }
+
+    pub(crate) fn applied_state_sufferer_region(&self, key: StateKey) -> Option<i32> {
+        self.state_entries.sufferer_region(key, self.shape.get_region_id())
+    }
+
+    pub(crate) fn set_applied_state_sufferer_region(&mut self, key: StateKey, region_id: i32) -> bool {
+        self.state_entries.set_sufferer_region(key, region_id)
+    }
+
+    pub(crate) fn applied_state_has_visual(&self, key: StateKey) -> bool {
+        self.state_entries.has_visual(key)
+    }
+
+    pub(crate) fn applied_state_visual_ended(&self, key: StateKey) -> Option<bool> {
+        self.state_entries.visual_ended(key)
     }
 
     pub(crate) fn begin_applied_state_visual(&mut self, key: StateKey, loop_value: i32) -> bool {
@@ -2913,63 +2934,6 @@ impl CMoveShape {
         let state = self.state_entries.take_first::<EnergyHoldingState>()?;
         self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
         Some(state)
-    }
-    /// Проекция живых property-state в порядке `m_vStates`. Последняя смена
-    /// тела определяет текущую форму; остальные семейства сохраняют все дубли.
-    pub(crate) fn ordered_player_property_states(&self) -> Vec<PlayerPropertyState> {
-        let active_body = self.state_entries.entries().rev()
-            .find_map(|(key, state)| matches!(state, StateData::ChangeBody(_)).then_some(key));
-        self.state_entries.entries().filter_map(|(key, state)| {
-            Some(match state {
-                StateData::PersistentAgility(state) => PlayerPropertyState::PersistentAgility(*state),
-                StateData::Agility2(state) => PlayerPropertyState::Agility2(*state),
-                StateData::TaiJi(state) => PlayerPropertyState::TaiJi(*state),
-                StateData::EnlargeMaxHp(state) => PlayerPropertyState::EnlargeMaxHp(*state),
-                StateData::EnlargeMaxMp(state) => PlayerPropertyState::EnlargeMaxMp(*state),
-                StateData::EnlargeFullMiss(state) => PlayerPropertyState::EnlargeFullMiss(*state),
-                StateData::Origin(state) => PlayerPropertyState::Origin(*state),
-                StateData::Hearten(state) => PlayerPropertyState::Hearten(*state),
-                StateData::Callosity(state) => PlayerPropertyState::Callosity(*state),
-                StateData::Swordship(state) => PlayerPropertyState::Swordship(*state),
-                StateData::WuXing(state) => PlayerPropertyState::WuXing(*state),
-                StateData::BattleFairyAttribute(state) => PlayerPropertyState::BattleFairyAttribute(*state),
-                StateData::TianShenXiaFan(state) => PlayerPropertyState::TianShenXiaFan(*state),
-                StateData::Weak(state) => PlayerPropertyState::Weak(*state),
-                StateData::PoisonFog(state) => PlayerPropertyState::PoisonFog(*state),
-                StateData::GodBless(state) => PlayerPropertyState::GodBless(*state),
-                StateData::Roar(state) => PlayerPropertyState::Roar(*state),
-                StateData::Script(state) => PlayerPropertyState::Script(*state),
-                StateData::Undead(state) => PlayerPropertyState::Undead(state.clone()),
-                StateData::Extended(state) => PlayerPropertyState::Extended(state.clone()),
-                StateData::ChangeBody(state) if active_body == Some(key) => PlayerPropertyState::ChangeBody(state.clone()),
-                StateData::Ride(state) => PlayerPropertyState::Ride(state.clone()),
-                StateData::RageBreak(state) => PlayerPropertyState::RageBreak(*state),
-                StateData::Fury(state) => PlayerPropertyState::Fury(*state),
-                StateData::Wangsheng(state) => PlayerPropertyState::Wangsheng(*state),
-                _ => return None,
-            })
-        }).collect()
-    }
-
-    /// Проецирует monster-варианты `OnUpdateProperties` из того же общего
-    /// `m_vStates`. Это сохраняет некоммутативный порядок процентных,
-    /// аддитивных и заменяющих формул атаки и стихийного модификатора.
-    pub(crate) fn ordered_monster_property_states(&self) -> Vec<MonsterPropertyState> {
-        self.state_entries.iter_data().filter_map(|state| {
-            Some(match state {
-                StateData::TaiJi(state) => MonsterPropertyState::TaiJi(*state),
-                StateData::Origin(state) => MonsterPropertyState::Origin(*state),
-                StateData::Swordship(state) => MonsterPropertyState::Swordship(*state),
-                StateData::BattleFairyAttribute(state) => MonsterPropertyState::BattleFairyAttribute(*state),
-                StateData::Fury(state) => MonsterPropertyState::Fury(*state),
-                StateData::Weak(state) => MonsterPropertyState::Weak(*state),
-                StateData::PoisonFog(state) => MonsterPropertyState::PoisonFog(*state),
-                StateData::GodBless(state) => MonsterPropertyState::GodBless(*state),
-                StateData::Roar(state) => MonsterPropertyState::Roar(*state),
-                StateData::BossBlueFury(state) => MonsterPropertyState::BossBlueFury(*state),
-                _ => return None,
-            })
-        }).collect()
     }
 
     pub(crate) fn soul_collect_state(&self) -> Option<SoulCollectState> {
@@ -3439,15 +3403,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn take_pending_script_state_visuals(&mut self) -> Vec<ScriptMoveState> {
-        let mut pending = Vec::new();
-        self.state_entries.for_each_mut::<ScriptMoveState>(|state| {
-            if state.take_pending_visual() {
-                pending.push(*state);
-            }
-        });
-        pending
-    }
 
     pub(crate) fn tian_shen_xia_fan_state(&self) -> Option<TianShenXiaFanState> {
         self.state_entries.first::<TianShenXiaFanState>().copied()
@@ -5369,19 +5324,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::UpdateProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:93
-// RVA: 0x000CFB60
-// ADDRESS: 004cfb60
-// PROTOTYPE: void __thiscall UpdateProperty(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: Catch@004cfbff

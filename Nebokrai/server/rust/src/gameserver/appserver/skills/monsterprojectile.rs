@@ -37,7 +37,6 @@ use super::monsterattack::{
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -427,23 +426,12 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
     {
         return false;
     }
-    let bounds = region
-        .find_monster_by_id(dispatch.monster_id)
-        .map(|monster| {
-            if dispatch.attacker_tamed {
-                let pet = monster.pet_attack_properties(&dispatch.property);
-                (pet.minimum_attack, pet.maximum_attack)
-            } else {
-                monster.state_attack_bounds(
-                    dispatch.property.minimum_attack,
-                    dispatch.property.maximum_attack,
-                )
-            }
-        })
-        .unwrap_or((
-            dispatch.property.minimum_attack,
-            dispatch.property.maximum_attack,
-        ));
+    let Some(monster) = region.find_monster_by_id(dispatch.monster_id) else { return false };
+    let bounds = monster.state_attack_bounds(
+        dispatch.property.minimum_attack,
+        dispatch.property.maximum_attack,
+    );
+    let soul_attack = monster.soul_attack(&dispatch.property);
     let physical_minimum = bounds.0 as i32;
     let physical_span = (bounds.1 as i32)
         .wrapping_sub(physical_minimum)
@@ -483,7 +471,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
             },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: i32::from(CMonster::resource_soul_attack(&dispatch.property)),
+                hp_damage: i32::from(soul_attack),
                 mp_damage: 0,
             },
         ],

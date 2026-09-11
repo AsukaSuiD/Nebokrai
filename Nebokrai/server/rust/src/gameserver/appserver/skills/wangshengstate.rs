@@ -15,7 +15,7 @@
 //! Exact vtable 0x0066208C: timed AI 0x005E6E20 вызывает End(false)
 //! из slot +0x48 (0x005E7310): visual → базовый End → GetUser → RemoveState.
 //! Это не прямой slot +0x1C (0x005DBCE0), который сам visual не отправляет.
-//! UpdateProperty вызывается только для игрока при фактическом удалении.
+//! При фактическом удалении base End вызывает общий virtual UpdateProperty держателя.
 //! Прямой End не проверяет срок и не вызывает timer End(false).
 //! StartAllStates 0x004CE050 вызывает Begin(0, self); Begin 0x00606040
 //! сразу возвращает при NULL User, не создавая visual. Для загруженной записи
@@ -27,6 +27,15 @@
 //! Unserialize 0x005FD660 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
 
+//! OnUpdateProperties 0x00605FB0 сначала требует GetUser, затем обновляет
+//! существующий visual (он самостоятельно читает GetSufferer), после type400
+//! и RTTI CPlayer условно вызывает SetHealth(maximum). OnChangeStates и
+//! отдельного пакета HP здесь нет. Временная сумма +0x3C сериализатором
+//! не читается и остаётся локальным скаляром; loaded NULL user даёт return0.
+
+use crate::gameserver::appserver::states::state::{
+    resolve_applied_state_user, update_property_state_visual, StatePropertyTarget,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
@@ -115,6 +124,32 @@ pub(crate) fn send_wangsheng_state_visual(
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn update_wangsheng_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some((_, target)) = resolve_applied_state_user(game, region_id, holder, key)
+    else { return false; };
+    let _ = update_property_state_visual::<WangshengState>(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+        |state, now| state.client_time(now),
+    );
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<WangshengState>(key)).copied()
+    else { return false; };
+    if target.object_type == 400 {
+        if let Some(player) = game.find_player_mut(target.id) {
+            if let Some(health) = state.capped_health(player.health(), player.maximum_health()) {
+                player.set_health(health);
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn restart_wangsheng_state(

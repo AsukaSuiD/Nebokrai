@@ -8,6 +8,7 @@
 //! сохранены ниже.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 
 pub(crate) const USE_GOODS_ENLARGE_MAX_HP_STATE_ID: i32 = 100_007;
 
@@ -25,10 +26,9 @@ impl UseGoodsEnlargeMaxHpState {
     pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_MAX_HP_STATE_ID }
 
     pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
-        let delta = (f64::from(self.coefficient)
+        let delta = truncate_original(f64::from(self.coefficient)
             * f64::from(0.01_f32)
-            * f64::from(properties.maximum_hp))
-        .trunc() as i32 as u32;
+            * f64::from(properties.maximum_hp)) as u32;
         properties.maximum_hp = properties
             .maximum_hp
             .wrapping_add(delta)

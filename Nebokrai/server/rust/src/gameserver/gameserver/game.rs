@@ -1,4 +1,10 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Virtual UpdateProperty (+0x9C) обслуживает всех держателей состояния:
+//! player — equipment/state/OnChangeProperties, monster — CMoveShape +0x24.
+//! Извлечённый регион публикуется на время callback, затем перечитывается.
+//! Нормальный decoder-tail (0x44C3D0) перенесён до регистрации/login-script,
+//! после проверки ID/дубликата: отказанный вход не меняет чужого владельца.
+//! Это явное безопасное отличие от unchecked decoder malformed-пути EXE.
 //! Общий state AI вызывает конкретный экземпляр по StateKey. Exact AI/End
 //! Particular (0x004F9900), Team (0x005BFD20) и Ride (0x004F9110) завершают
 //! состояние при non-player sufferer; шесть Script-вариантов имеют общий
@@ -1338,7 +1344,6 @@ use crate::gameserver::appserver::skills::callosity::{
     cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
     CALLOSITY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::callositystate::send_callosity_state_begin;
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
     truncate_original,
@@ -1382,7 +1387,6 @@ use crate::gameserver::appserver::skills::hearten::{
 use crate::gameserver::appserver::skills::gibe::{
     cancel_player_gibe, execute_player_gibe, GIBE_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
 use crate::gameserver::appserver::skills::heal::{
     cancel_player_heal, complete_player_heal, execute_player_heal, is_heal_skill,
 };
@@ -6192,13 +6196,12 @@ impl CGame {
         let coefficients = self.globe_setup.player_property_coefficients();
         let base_combat_scales = self.globe_setup.base_combat_scales();
         let critical_rate = self.globe_setup.critical_rate();
-        let goods_factory = self.goods_factory.clone();
         let player = self.players.get_mut(&player_id)?;
         Some(player.recompute_update_property(
             coefficients,
             base_combat_scales,
             critical_rate,
-            &goods_factory,
+            &self.goods_factory,
         ))
     }
 
@@ -6207,7 +6210,7 @@ impl CGame {
         player_id: i32,
         recompute: PlayerPropertyRecompute,
     ) -> bool {
-        self.commit_player_property_recompute(player_id, recompute, true)
+        self.commit_player_property_recompute(player_id, recompute)
     }
 
     /// Публикует полный native tail в порядке `C0110 → BF721 → DoneTaoZhuang`.
@@ -6217,12 +6220,10 @@ impl CGame {
         &mut self,
         player_id: i32,
         recompute: PlayerPropertyRecompute,
-        publish_state_visuals: bool,
     ) -> Option<(i32, bool)> {
         if !self.commit_player_property_recompute(
             player_id,
             recompute,
-            publish_state_visuals,
         ) {
             return None;
         }
@@ -6238,13 +6239,11 @@ impl CGame {
         &mut self,
         player_id: i32,
         recompute: PlayerPropertyRecompute,
-        publish_state_visuals: bool,
     ) -> bool {
         let _ = self.send_ci_qing_property_result(player_id, &recompute.ci_qing_result_values);
         self.commit_recomputed_player_properties(
             player_id,
             recompute.properties,
-            publish_state_visuals,
         )
     }
 
@@ -6266,57 +6265,18 @@ impl CGame {
         &mut self,
         player_id: i32,
         properties: PlayerCombatProperties,
-        publish_state_visuals: bool,
     ) -> bool {
-        let coefficients = self.globe_setup.player_property_coefficients();
-        let goods_factory = self.goods_factory.clone();
-        let skill_factory = self.skill_factory.clone();
-        let Some(pass) = self
-            .find_player_mut(player_id)
-            .map(|player| {
-                player.apply_materialized_state_properties(
-                    properties,
-                    coefficients,
-                    &goods_factory,
-                    &skill_factory,
-                )
-            })
-        else {
-            return false;
-        };
-        if publish_state_visuals {
-            for state in pass.script_visuals {
-                let _ = self.send_script_move_state_visual(player_id, state, true);
-            }
-            if let Some(state) = pass.callosity_visual {
-                send_callosity_state_begin(self, player_id, state);
-            }
-            if let Some(state) = pass.hearten_visual {
-                send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds);
-            }
-        }
-        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-        let Some(player) = players.get_mut(&player_id) else {
-            return false;
-        };
-        player.apply_recomputed_combat_properties(pass.properties, goods_factory);
-        true
-    }
-
-    fn send_script_move_state_visual(
-        &mut self,
-        player_id: i32,
-        state: ScriptMoveState,
-        begin: bool,
-    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
-        let player = self.find_player(player_id)?;
-        let message = script_state_visual_message(
-            player.shape(),
-            state,
-            begin,
-            game_tick_milliseconds,
+        let Some(player) = self.find_player_mut(player_id) else { return false };
+        player.update_state_combat_properties(|_| properties);
+        let region_id = player.shape().get_region_id();
+        let holder = player.shape().identity();
+        crate::gameserver::appserver::states::state::update_move_shape_state_properties(
+            self, region_id, holder, &mut game_tick_milliseconds,
         );
-        self.send_player_shape_around(player_id, None, &message)
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        let Some(player) = players.get_mut(&player_id) else { return false };
+        player.apply_recomputed_combat_properties(player.combat_properties(), goods_factory);
+        true
     }
 
     pub(crate) fn add_script_move_state(
@@ -6328,7 +6288,7 @@ impl CGame {
     ) -> i32 {
         let sufferer_is_gm = self.script_player_gm_level(player_id).unwrap_or(0) != 0;
         let started_at_ms = game_tick_milliseconds();
-        let Some(state) = self.find_player_mut(player_id).and_then(|player| {
+        let Some(_state) = self.find_player_mut(player_id).and_then(|player| {
             player.add_script_move_state(
                 state_id,
                 value1,
@@ -6339,10 +6299,8 @@ impl CGame {
         }) else {
             return 0;
         };
-        if state.is_auto_protect() {
-            let _ = self.send_script_move_state_visual(player_id, state, true);
-        }
-        let _ = self.publish_player_states(player_id);
+        // AddState0x004D1560: successful Begin → push_back → virtual +0x9C.
+        let _ = self.update_player_properties(player_id);
         1
     }
 
@@ -17425,7 +17383,7 @@ impl CGame {
             let _ = player.set_script_value(property, value)?;
             recompute(player)
         };
-        let _ = self.publish_player_property_update(player_id, recomputed, true);
+        let _ = self.publish_player_property_update(player_id, recomputed);
         if property.eq_ignore_ascii_case(b"dwExp")
             && let Some(player) = self.find_player(player_id)
         {
@@ -17549,7 +17507,7 @@ impl CGame {
             .change_script_value(property, delta)
             .unwrap_or(0);
         let recomputed = self.recompute_player_properties_for_update(player_id)?;
-        let _ = self.publish_player_property_update(player_id, recomputed, true);
+        let _ = self.publish_player_property_update(player_id, recomputed);
         Some(applied)
     }
 
@@ -17574,7 +17532,7 @@ impl CGame {
             .unwrap_or(0);
 
         let recomputed = self.recompute_player_properties_for_update(player_id)?;
-        let _ = self.publish_player_property_update(player_id, recomputed, true);
+        let _ = self.publish_player_property_update(player_id, recomputed);
         let mut changed = CMessage::new(0x000b_f80c);
         changed.add_long(400);
         changed.add_long(player_id);
@@ -17745,7 +17703,7 @@ impl CGame {
             let current_properties = self
                 .recompute_player_properties_for_update(target_id)
                 .expect("realm skill mutation сохраняет canonical player");
-            let _ = self.publish_player_property_update(target_id, current_properties, true);
+            let _ = self.publish_player_property_update(target_id, current_properties);
         } else if let Some(response) = player_skill_learned_message(
             0x000b_f71d,
             mutation.skill_id,
@@ -24725,7 +24683,7 @@ impl CGame {
         let recompute = self
             .recompute_player_properties_for_update(player_id)
             .expect("CiQing refresh получает canonical player");
-        let _ = self.commit_player_property_recompute(player_id, recompute, false);
+        let _ = self.commit_player_property_recompute(player_id, recompute);
         self.players
             .get_mut(&player_id)
             .expect("CiQing result сохраняет canonical player")
@@ -28571,6 +28529,70 @@ impl CGame {
         let _ = self.send_player_shape_around(player_id, None, &message);
     }
 
+    /// CExState/CExStateNew +0x24 (0x005D95A0): каждый живой sufferer-player,
+    /// ненулевые DWORD addons с исходным wrapping, без visual и часов.
+    pub(crate) fn update_move_shape_extended_state_properties(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        _now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let Some((_, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(self, region_id, holder, key)
+        else { return false };
+        if target.object_type != PLAYER_TYPE { return true; }
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<ExtendedState>(key))
+        else { return false };
+        let Some(player) = self.find_player(target.id) else { return false };
+        let properties = CPlayer::apply_extended_state_properties(player.combat_properties(), state);
+        let Some(player) = self.find_player_mut(target.id) else { return false };
+        player.update_state_combat_properties(|_| properties);
+        true
+    }
+
+    /// CNotDisappearAfterDead +0x24 (0x005D6580): чистая формула читает
+    /// owning payload по ссылке; между чтением и записью нет callbacks.
+    pub(crate) fn update_move_shape_appellation_state_properties(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        _now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let Some((_, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(self, region_id, holder, key)
+        else { return false };
+        if target.object_type != PLAYER_TYPE { return true; }
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<UndeadState>(key))
+        else { return false };
+        let Some(player) = self.find_player(target.id) else { return false };
+        let properties = player.apply_undead_state_properties(
+            player.combat_properties(), self.globe_setup.player_property_coefficients(), state,
+        );
+        let Some(player) = self.find_player_mut(target.id) else { return false };
+        player.update_state_combat_properties(|_| properties);
+        true
+    }
+
+    /// CRideState +0x24 (0x004F9000): MountEquipRide(true), затем (false)
+    /// для первого packet-предмета с именем именно текущего состояния.
+    pub(crate) fn update_move_shape_ride_state_properties(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        _now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let Some((_, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(self, region_id, holder, key)
+        else { return true };
+        if target.object_type != PLAYER_TYPE { return true; }
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<RideState>(key))
+        else { return false };
+        let Some(player) = self.find_player(target.id) else { return false };
+        let properties = player.apply_ride_state_properties(
+            player.combat_properties(), state, self.globe_setup.player_property_coefficients(), &self.goods_factory,
+        );
+        let Some(player) = self.find_player_mut(target.id) else { return false };
+        player.update_state_combat_properties(|_| properties);
+        true
+    }
+
     /// Повторный объектный Begin CExState/CExStateNew (0x005D9780/0x005D9C40).
     /// NULL user сохраняет время загрузки и источник; sufferer — живой holder.
     pub(crate) fn restart_move_shape_extended_state(
@@ -28704,8 +28726,8 @@ impl CGame {
         let _ = self.send_move_shape_around(region_id, identity, &message);
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .is_some_and(|shape| !shape.delete_extended_state_key(key).removed.is_empty());
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -28751,8 +28773,8 @@ impl CGame {
         let _ = self.send_move_shape_around(region_id, identity, &message);
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .is_some_and(|shape| !shape.delete_undead_state_key(key).removed.is_empty());
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -28848,7 +28870,7 @@ impl CGame {
         player_id: i32,
         recompute: PlayerPropertyRecompute,
     ) {
-        let _ = self.publish_player_property_update(player_id, recompute, false);
+        let _ = self.publish_player_property_update(player_id, recompute);
     }
 
     pub(crate) fn update_move_shape_ride_state<Runtime: GameMainLoopRuntime>(
@@ -28895,8 +28917,8 @@ impl CGame {
         let _ = self.send_move_shape_around(region_id, identity, &message);
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .and_then(|shape| shape.end_ride_state_key(key)).is_some();
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29080,8 +29102,8 @@ impl CGame {
         }
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .is_some_and(|shape| shape.delete_change_body_state_key(key).removed.is_some());
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29141,8 +29163,8 @@ impl CGame {
         let _ = self.send_move_shape_around(region_id, identity, &message);
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .and_then(|shape| shape.remove_team_recruitment_state_key(key)).is_some();
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29190,8 +29212,8 @@ impl CGame {
         let _ = self.send_move_shape_around(region_id, identity, &message);
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .and_then(|shape| shape.remove_particular_state_key(key)).is_some();
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29248,8 +29270,8 @@ impl CGame {
             resolve_state_move_shape_mut(self, region_id, identity)
                 .and_then(|shape| shape.remove_script_state_key(key)).is_some()
         };
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29334,8 +29356,8 @@ impl CGame {
             .and_then(|shape| shape.remove_applied_state_record::<AutomaticRestoreState>(
                 key, AUTOMATIC_RESTORE_STATE_BYTES,
             )).is_some();
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29439,8 +29461,8 @@ impl CGame {
     ) -> bool {
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
             .is_some_and(|shape| shape.remove_consumable_restore_state(key));
-        if removed && identity.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(identity.id);
+        if removed {
+            let _ = self.update_move_shape_properties(region_id, identity);
         }
         removed
     }
@@ -29571,7 +29593,7 @@ impl CGame {
         let current_properties = self
             .recompute_player_properties_for_update(player_id)
             .expect("realm mutation сохраняет canonical player");
-        let _ = self.publish_player_property_update(player_id, current_properties, true);
+        let _ = self.publish_player_property_update(player_id, current_properties);
         Some(i32::from(mutation.succeeded))
     }
 
@@ -30868,6 +30890,21 @@ impl CGame {
                 player_id: expected_player_id,
             });
         }
+        // Decoder tail 0x44C3D0 вызывает UpdateProperty до регистрации player.
+        // Здесь этот tail следует за проверкой ID/дубликата: отклонённый вход
+        // не затрагивает существующего владельца. У загруженных state user=NULL,
+        // visual=NULL, а GetSufferer ищет player глобально и ещё получает NULL.
+        // Поэтому state-проход сбрасывает modifiers, но не применяет addons.
+        let recomputed = player.recompute_update_property(
+            self.globe_setup.player_property_coefficients(),
+            self.globe_setup.base_combat_scales(),
+            self.globe_setup.critical_rate(),
+            &self.goods_factory,
+        );
+        let _ = self.send_ci_qing_property_result(expected_player_id, &recomputed.ci_qing_result_values);
+        player.move_shape_mut().reset_property_modifiers();
+        player.apply_recomputed_combat_properties(recomputed.properties, &self.goods_factory);
+        let _ = self.send_player_properties_changed(&player);
         player.restore_login_team(captain, team_id);
         let team_session_id = (team_id != 0)
             .then(|| self.get_team_session_id(team_id as u32))
@@ -30974,10 +31011,6 @@ impl CGame {
         if let Some(player) = self.find_player_mut(expected_player_id) {
             player.set_current_skill_id(Some(default_skill_id));
         }
-        let recomputed = self
-            .recompute_player_properties_for_update(expected_player_id)
-            .expect("login script не удаляет player owner");
-        let _ = self.commit_player_property_recompute(expected_player_id, recomputed, false);
         let country_identity = self.player_country_identity(expected_player_id);
         let level_experience = self.player_list.level_experience(
             self.players
@@ -34999,8 +35032,22 @@ impl CGame {
     pub(crate) fn update_player_properties(&mut self, player_id: i32) -> Option<(i32, bool)> {
         let recompute = self.recompute_player_properties_for_update(player_id)?;
         let (property_delivery, tao_zhuang_ran) =
-            self.publish_player_property_update(player_id, recompute, true)?;
+            self.publish_player_property_update(player_id, recompute)?;
         Some((property_delivery, tao_zhuang_ran))
+    }
+
+    /// Virtual CMoveShape +0x9C: у player полный equipment/state/notification
+    /// проход, у остальных — исходный CMoveShape::UpdateProperty (0x004CFB60).
+    /// Callers с извлечённым регионом публикуют его на время этого вызова.
+    pub(crate) fn update_move_shape_properties(&mut self, region_id: i32, holder: ShapeIdentity) -> Option<()> {
+        if holder.object_type == PLAYER_TYPE {
+            self.update_player_properties(holder.id)?;
+        } else {
+            crate::gameserver::appserver::states::state::update_move_shape_state_properties(
+                self, region_id, holder, &mut game_tick_milliseconds,
+            )?;
+        }
+        Some(())
     }
 
     /// CPlayer::RestoreHpMp (0x004455D0): Particular и четыре AutomaticRestore
@@ -37853,7 +37900,7 @@ impl CGame {
             update.base_mut().add(&payload);
             let _ = update.send_to_player(self.net_server(), player_id);
             if let Some(properties) = self.recompute_player_properties_for_update(player_id) {
-                let _ = self.publish_player_property_update(player_id, properties, true);
+                let _ = self.publish_player_property_update(player_id, properties);
             }
         } else if old / 100 != current / 100 {
             let mut durability = CMessage::new(0x000b_f90c);
@@ -40579,17 +40626,20 @@ impl CGame {
     /// извлекается только для согласованного доступа к canonical monster и
     /// around-публикации состояния.
     fn execute_owned_monster_back_stage_skills<Runtime: GameMainLoopRuntime>(
-        &self,
-        region: &mut CServerRegion,
+        &mut self,
+        region_owner: &mut Option<ServerRegionOwner>,
         monster_id: i32,
         runtime: &mut Runtime,
     ) -> usize {
+        let Some(region) = region_owner.as_mut().map(ServerRegionOwner::base_mut) else { return 0 };
+        let region_id = region.id;
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.prepare_back_stage_skill_pass();
         }
         let mut index = 0;
         let mut execution_count = 0;
         loop {
+            let Some(region) = region_owner.as_mut().map(ServerRegionOwner::base_mut) else { break };
             let Some((skill_id, skill_level, ended)) = region.find_monster_by_id(monster_id)
                 .and_then(|monster| {
                     let shape = monster.move_shape();
@@ -40612,10 +40662,10 @@ impl CGame {
                 continue;
             };
             let has_effect = owner.has_effect();
-            let executed = owner.execute(self, region, monster_id, skill_id, skill_level, runtime);
+            let executed = owner.execute(self, region_owner, monster_id, skill_id, skill_level, runtime);
             execution_count += usize::from(has_effect);
             tracing::trace!(
-                region_id = region.id,
+                region_id,
                 monster_id,
                 skill_id,
                 executed,
@@ -45142,10 +45192,11 @@ impl CGame {
             {
                 monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
             }
+            self.restore_region_owner(owner);
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
                 let _ = finish_blind_states_on_defense(
                     self,
-                    owner.base_mut(),
+                    region_id,
                     ShapeIdentity {
                         object_type: MONSTER_TYPE,
                         id: target_id,
@@ -45154,7 +45205,6 @@ impl CGame {
                     now_ms,
                 );
             }
-            self.restore_region_owner(owner);
         }
         if attack.full_miss != 0 && current_health != 0 {
             let mut missed = CMessage::new(0x000b_f612);
@@ -46949,12 +46999,14 @@ impl CGame {
                 if pet_ai {
                     let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
                 }
-                if let Some(mut owner) = self.take_region_owner(region_id) {
+                if let Some(owner) = self.take_region_owner(region_id) {
+                    let mut back_stage_owner = Some(owner);
                     let _ = self.execute_owned_monster_back_stage_skills(
-                        owner.base_mut(),
+                        &mut back_stage_owner,
                         monster_id,
                         runtime,
                     );
+                    let Some(mut owner) = back_stage_owner else { continue };
                     let mut schedule_ready = false;
                     let mut attack_pending = false;
                     let mut move_pending = false;

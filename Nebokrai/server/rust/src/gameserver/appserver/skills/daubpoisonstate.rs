@@ -14,7 +14,7 @@
 //! `0x005F2CD0`, включая отдельное чтение часов для положительного остатка.
 //! End vtable+0x1C→0x005FD420 не имеет Player-gate: сначала visual, затем
 //! GetSufferer и RemoveState. Общий AI поэтому завершает и регионального
-//! держателя; player UpdateProperty остаётся отдельной проекцией удаления.
+//! держателя; фактическое удаление вызывает общий virtual UpdateProperty.
 //! Object Begin +0x08→0x005F1A50: guard null sufferer, base Begin,
 //! новый visual(0xC), BeginVisualEffect(1), Update(state,0), затем return 1.
 //! При Begin(NULL,holder) clock не читается и срок не перезапускается:
@@ -173,8 +173,8 @@ pub(crate) fn end_daub_poison_state(
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES))
         .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

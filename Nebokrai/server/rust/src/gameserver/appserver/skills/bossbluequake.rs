@@ -54,7 +54,6 @@ use crate::gameserver::appserver::ai::monsterai::{
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
@@ -711,9 +710,9 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     if target.dead || target.god || target.city_dead || !owned_monster_attackable(
         game, region.id, attacker_property, tamed, master, identity, &target,
     ) { return; }
-    let bounds = region.find_monster_by_id(monster_id)
-        .map(|monster| monster.state_attack_bounds(attacker_property.minimum_attack, attacker_property.maximum_attack))
-        .unwrap_or((attacker_property.minimum_attack, attacker_property.maximum_attack));
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return };
+    let bounds = monster.state_attack_bounds(attacker_property.minimum_attack, attacker_property.maximum_attack);
+    let soul_attack = monster.soul_attack(attacker_property);
     let minimum = bounds.0 as i32;
     let physical_difference = (bounds.1 as i32).wrapping_sub(minimum);
     let physical_width = (if physical_difference < 0 {
@@ -748,7 +747,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
         damages: vec![
             AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
             AttackPower { kind: AttackPowerType::Element, hp_damage: element, mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(CMonster::resource_soul_attack(attacker_property)), mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul_attack), mp_damage: 0 },
         ],
     };
     let attack = defend_owned_monster_attack(game, identity, target.mana, target.war_soul_mana,

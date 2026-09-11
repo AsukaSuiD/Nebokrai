@@ -27,6 +27,9 @@
 //! Unserialize 0x005EAAC0 сохраняет один собственный clock в timestamp;
 //! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
 
+//! Exact vtable 0x0065F934 +0x24 указывает на 0x0047B150:
+//! OnUpdateProperties возвращает 1 без target lookup, visual, часов и блокировок.
+
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
 };
@@ -186,8 +189,8 @@ pub(crate) fn end_boss_blue_quake_state(
             shape.set_moveable(true);
             shape.remove_applied_state_record::<BossBlueQuakeState>(key, BOSS_BLUE_QUAKE_STATE_BYTES)
         }).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

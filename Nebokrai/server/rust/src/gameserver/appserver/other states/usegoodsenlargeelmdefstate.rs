@@ -6,6 +6,7 @@
 //! исходное FISTP-усечение, wrapping-сложение и сужение к младшим 16 битам.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 
 pub(crate) const USE_GOODS_ENLARGE_ELM_DEF_STATE_ID: i32 = 100_011;
 
@@ -23,10 +24,9 @@ impl UseGoodsEnlargeElmDefState {
     pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_ELM_DEF_STATE_ID }
 
     pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
-        let delta = (f64::from(self.coefficient)
+        let delta = truncate_original(f64::from(self.coefficient)
             * f64::from(0.01_f32)
-            * f64::from(properties.element_resistance))
-        .trunc() as i32 as u32;
+            * f64::from(properties.element_resistance)) as u32;
         properties.element_resistance = properties.element_resistance.wrapping_add(delta) & 0xffff;
     }
 }

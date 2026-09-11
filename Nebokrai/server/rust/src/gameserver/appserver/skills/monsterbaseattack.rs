@@ -1030,8 +1030,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
         Some((MonsterImmediateSkill::from_skill_id(skill.id())?, skill.id(), skill.level()))
     });
-    if let Some((owner, skill_id, skill_level)) = immediate {
-        return owner.execute(game, region, monster_id, skill_id, skill_level, runtime);
+    if let Some((immediate, skill_id, skill_level)) = immediate {
+        return immediate.execute(game, owner, monster_id, skill_id, skill_level, runtime);
     }
     let Some((
         property,
@@ -1329,7 +1329,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
     let now_ms = runtime.now_milliseconds();
-    if let Some(owner) = MonsterImmediateSkill::from_skill_id(skill_id) {
+    if let Some(immediate) = MonsterImmediateSkill::from_skill_id(skill_id) {
         if cast.is_none() {
             let attack_interval = schedule_attack_interval(
                 property.ai,
@@ -1365,8 +1365,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             return true;
         }
-        let executed = owner.execute(
-            game, region, monster_id, skill_id, i32::from(skill_level), runtime,
+        let executed = immediate.execute(
+            game, owner, monster_id, skill_id, i32::from(skill_level), runtime,
         );
         return executed;
     }
@@ -1374,7 +1374,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_fury(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
@@ -1937,19 +1937,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     break;
                 }
             }
-            let ordinary_attack = region
-                .find_monster_by_id(monster_id)
-                .map(|monster| {
-                    monster.state_attack_bounds(
-                        property.minimum_attack,
-                        property.maximum_attack,
-                    )
-                })
-                .unwrap_or((property.minimum_attack, property.maximum_attack));
-            let physical_minimum = pet_attack_properties
-                .map_or(ordinary_attack.0, |pet| pet.minimum_attack) as i32;
-            let physical_maximum = pet_attack_properties
-                .map_or(ordinary_attack.1, |pet| pet.maximum_attack) as i32;
+            let Some(monster) = region.find_monster_by_id(monster_id) else { break };
+            let (minimum, maximum) = monster.state_attack_bounds(
+                property.minimum_attack,
+                property.maximum_attack,
+            );
+            let soul_attack = monster.soul_attack(&property);
+            let physical_minimum = minimum as i32;
+            let physical_maximum = maximum as i32;
             let difference = physical_maximum.wrapping_sub(physical_minimum);
             let physical_span = match dispatch.skill_id {
                 COMMON_BASE_ATTACK_SKILL_ID => difference.max(0),
@@ -1989,7 +1984,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     },
                     AttackPower {
                         kind: AttackPowerType::Soul,
-                        hp_damage: i32::from(CMonster::resource_soul_attack(&property)),
+                        hp_damage: i32::from(soul_attack),
                         mp_damage: 0,
                     },
                 ],

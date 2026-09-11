@@ -32,6 +32,15 @@
 //! этого ответа не получает, поскольку OnLoseTargetWarSoul видит IsEnded.
 //! В Rust внешний 4,2 отправляет только координатор после общего End(0);
 //! собственный 4,2 при смерти цели в AI остаётся перед текстом и visual-End.
+//! После Begin и добавления состояния Po вызывает общий UpdateProperty цели
+//! без player-only gate (Pojia 0x0052AA9C, Pobing 0x00529C0C,
+//! Pomo 0x00528D7C, Pofa 0x00527EEC), до собственного End(+0x94).
+//! Первичный replacement ещё содержит прежний typed replace и ручной visual
+//! старого состояния; его прямой base End без visual и Remove/Update до
+//! нового Begin предстоит связать с общим exact-key lifecycle отдельно.
+//! Object Begin состояния (Po/Yu 0x005E83B0/0x005E6EE0) создаёт loop1
+//! visual без initial Update. State BFE03 отправляется только последующим
+//! OnUpdateProperties через соответствующий GetUser/GetSufferer.
 
 use super::battlefairyattributestate::{
     send_battle_fairy_attribute_state_visual, BattleFairyAttributeKind,
@@ -237,12 +246,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
             game, region_id, target, tile_x, tile_y, previous, false,
         );
     }
-    send_battle_fairy_attribute_state_visual(
-        game, region_id, target, tile_x, tile_y, state, true,
-    );
-    if target.object_type == PLAYER_TYPE {
-        let _ = game.update_player_properties(target.id);
-    }
+    let _ = game.update_move_shape_properties(region_id, target);
     if let Some(execution) = game.battle_fairy_execution_mut(player_id, skill_id) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

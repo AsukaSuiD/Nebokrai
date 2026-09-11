@@ -1,4 +1,9 @@
 //! Достигнутая send-family проекция `CPlayer` исторического GameServer.
+//! UpdateProperty (0x004593E0, GameServer.exe/GameServer.pdb, player.cpp)
+//! оставляет формулы экипировки у player, а +0x24 каждого состояния выполняет
+//! общий живой CMoveShape-проход. Промежуточные tagProperty видны следующему
+//! callback; копии списка, фильтр «последний CHBY» и очередь visuals сняты.
+//! Чистые Ex/Undead/Ride-формулы читают owning payload по ссылке без callbacks.
 //! SelfTarget — объектная перегрузка Attack с самим игроком: обычный запрос
 //! вызывает virtual +0x78 в 0x00488E20, item — в 0x00489109/0x00489547,
 //! WarSoul — в 0x0048953D/0x00489547. Он имеет ту же цель type=400/id игрока,
@@ -164,6 +169,10 @@
 //! player combat state через setup scales `+0x8AC..+0x8B8`, затем повторно
 //! используют occupation-derived STR/DEX/INT формулы; signed pass и clamp
 //! совпадают с остальными equipment addon-ами.
+//! Общие прямые поля MountEquip0x00442610 и MountEquipRide0x0043C5E0
+//! сохраняют DWORD wrapping до negative gate/INT_MAX и WORD wrapping
+//! до отрицательного clamp; скорость атаки остаётся WORD без этого clamp.
+//! Отдельные FuMo и производные формулы не подменяются этим прямым адаптером.
 //! Battle-fairy cases `0x9B/0x9C/0x9E..0xA1` исполняются после slot-10
 //! prelude: base fallback мутирует canonical goods, живая BF HP разрешает
 //! масштабированный `0.0001` вклад в player properties, а BF HP/MP зажимаются
@@ -1658,13 +1667,6 @@ pub(crate) struct PlayerPropertyRecompute {
     pub(crate) ci_qing_result_values: BTreeMap<u32, u32>,
 }
 
-pub(crate) struct PlayerStatePropertyPass {
-    pub(crate) properties: PlayerCombatProperties,
-    pub(crate) callosity_visual: Option<super::skills::callositystate::CallosityFamilyState>,
-    pub(crate) hearten_visual: Option<super::skills::heartenstate::HeartenState>,
-    pub(crate) script_visuals: Vec<super::scriptstate::ScriptMoveState>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaoZhuangSetEvaluation {
     pub(crate) set_id: u32,
@@ -2209,6 +2211,18 @@ fn apply_equipment_goods_properties(
         let value = i32::from(*target).wrapping_add(delta);
         *target = if value < 0 { 0 } else { value as u16 };
     }
+    fn add_mount_u32(target: &mut u32, delta: i32) {
+        let value = target.wrapping_add(delta as u32);
+        *target = if delta < 0 && (value as i32) < 0 {
+            0
+        } else {
+            value.min(i32::MAX as u32)
+        };
+    }
+    fn add_mount_u16(target: &mut u16, delta: i32) {
+        let value = i32::from(*target).wrapping_add(delta);
+        *target = if delta < 0 && value < 0 { 0 } else { value as u16 };
+    }
     // `AddPreItemToPlayer`, `MountFuMoProperty` и `ActiveEquip` перед FISTP
     // выставляют x87 RC=truncate; производные поля усекают полную сумму.
     fn scaled_delta(value: i32, coefficient: f32) -> i32 {
@@ -2343,25 +2357,36 @@ fn apply_equipment_goods_properties(
             if (fumo && !positive_pass) || (!fumo && (delta >= 0) != positive_pass) {
                 continue;
             }
+            // MountEquip0x00442610 и MountEquipRide0x0043C5E0 складывают
+            // low32 до signed negative gate. Отдельный MountFuMoProperty
+            // здесь сохраняет прежний адаптер, не наследуя этот контракт.
+            let add_direct_u32 = if fumo { add_u32 } else { add_mount_u32 };
+            let add_direct_u16 = if fumo { add_u16 } else { add_mount_u16 };
             match property_type {
-                GAP_MINIMUM_ATTACK_CORRECTION => add_u32(&mut properties.minimum_attack, delta),
-                GAP_MAXIMUM_ATTACK_CORRECTION => add_u32(&mut properties.maximum_attack, delta),
+                GAP_MINIMUM_ATTACK_CORRECTION => add_direct_u32(&mut properties.minimum_attack, delta),
+                GAP_MAXIMUM_ATTACK_CORRECTION => add_direct_u32(&mut properties.maximum_attack, delta),
                 GAP_ELEMENT_ATTACK_CORRECTION => {
                     let value = properties.element_modify.wrapping_add(delta);
                     properties.element_modify = if delta < 0 && value < 0 { 0 } else { value };
                 }
-                GAP_ARMOR_CORRECTION => add_u32(&mut properties.defense, delta),
-                GAP_ATTACK_SPEED_CORRECTION => add_u16(&mut properties.attack_speed, delta),
-                GAP_HIT_RATE_CORRECTION => add_u16(&mut properties.hit, delta),
-                GAP_FATAL_BLOW_RATE_CORRECTION => add_u16(&mut properties.cch, delta),
-                GAP_DODGE_CORRECTION => add_u16(&mut properties.dodge, delta),
-                GAP_ELEMENT_RESISTANCE_CORRECTION => {
-                    add_u32(&mut properties.element_resistance, delta)
+                GAP_ARMOR_CORRECTION => add_direct_u32(&mut properties.defense, delta),
+                GAP_ATTACK_SPEED_CORRECTION => {
+                    if fumo {
+                        add_u16(&mut properties.attack_speed, delta);
+                    } else {
+                        properties.attack_speed = properties.attack_speed.wrapping_add(delta as u16);
+                    }
                 }
-                GAP_HP_RESTORE_SPEED_CORRECTION => add_u16(&mut properties.hp_recovery, delta),
-                GAP_MP_RESTORE_SPEED_CORRECTION => add_u16(&mut properties.mp_recovery, delta),
+                GAP_HIT_RATE_CORRECTION => add_direct_u16(&mut properties.hit, delta),
+                GAP_FATAL_BLOW_RATE_CORRECTION => add_direct_u16(&mut properties.cch, delta),
+                GAP_DODGE_CORRECTION => add_direct_u16(&mut properties.dodge, delta),
+                GAP_ELEMENT_RESISTANCE_CORRECTION => {
+                    add_direct_u32(&mut properties.element_resistance, delta)
+                }
+                GAP_HP_RESTORE_SPEED_CORRECTION => add_direct_u16(&mut properties.hp_recovery, delta),
+                GAP_MP_RESTORE_SPEED_CORRECTION => add_direct_u16(&mut properties.mp_recovery, delta),
                 GAP_STRENGTH_CORRECTION => {
-                    add_u32(&mut properties.strength, delta);
+                    add_direct_u32(&mut properties.strength, delta);
                     add_derived_u32(
                         &mut properties.maximum_attack,
                         delta,
@@ -2374,7 +2399,7 @@ fn apply_equipment_goods_properties(
                     );
                 }
                 GAP_AGILITY_CORRECTION => {
-                    add_u32(&mut properties.dexterity, delta);
+                    add_direct_u32(&mut properties.dexterity, delta);
                     add_derived_u32(
                         &mut properties.minimum_attack,
                         delta,
@@ -2387,7 +2412,7 @@ fn apply_equipment_goods_properties(
                     );
                 }
                 GAP_CONSTITUTION_CORRECTION => {
-                    add_u32(&mut properties.constitution, delta);
+                    add_direct_u32(&mut properties.constitution, delta);
                     add_derived_u32(
                         &mut properties.maximum_hp,
                         delta,
@@ -2400,7 +2425,7 @@ fn apply_equipment_goods_properties(
                     );
                 }
                 GAP_WAKAN_CORRECTION => {
-                    add_u32(&mut properties.intelligence, delta);
+                    add_direct_u32(&mut properties.intelligence, delta);
                     add_derived_i32(
                         &mut properties.element_modify,
                         delta,
@@ -2417,18 +2442,18 @@ fn apply_equipment_goods_properties(
                         coefficients.int_to_resistant[occupation],
                     );
                 }
-                GAP_HP_UPPER_LIMIT_CORRECTION => add_u32(&mut properties.maximum_hp, delta),
-                GAP_MP_UPPER_LIMIT_CORRECTION => add_u32(&mut properties.maximum_mp, delta),
-                GAP_STIFFEN_PROBABILITY_CORRECTION => add_u16(&mut properties.reank, delta),
-                GAP_BURDEN_UPPER_LIMIT_CORRECTION => add_u16(&mut properties.burden, delta),
-                GAP_ATTACK_AVOID => add_u16(&mut properties.attack_avoid, delta),
-                GAP_ELEMENT_AVOID => add_u16(&mut properties.element_avoid, delta),
-                GAP_FULL_MISS => add_u16(&mut properties.full_miss, delta),
-                GAP_BLAST_ATTACK => add_u16(&mut properties.blast_attack, delta),
+                GAP_HP_UPPER_LIMIT_CORRECTION => add_direct_u32(&mut properties.maximum_hp, delta),
+                GAP_MP_UPPER_LIMIT_CORRECTION => add_direct_u32(&mut properties.maximum_mp, delta),
+                GAP_STIFFEN_PROBABILITY_CORRECTION => add_direct_u16(&mut properties.reank, delta),
+                GAP_BURDEN_UPPER_LIMIT_CORRECTION => add_direct_u16(&mut properties.burden, delta),
+                GAP_ATTACK_AVOID => add_direct_u16(&mut properties.attack_avoid, delta),
+                GAP_ELEMENT_AVOID => add_direct_u16(&mut properties.element_avoid, delta),
+                GAP_FULL_MISS => add_direct_u16(&mut properties.full_miss, delta),
+                GAP_BLAST_ATTACK => add_direct_u16(&mut properties.blast_attack, delta),
                 GAP_BLAST_ELEMENT_ATTACK => {
                     // Legacy case 96 берёт base из wBlastAttack, не из target.
                     let mut value = properties.blast_attack;
-                    add_u16(&mut value, delta);
+                    add_direct_u16(&mut value, delta);
                     properties.blast_element_attack = value;
                 }
                 GAP_FAIRY_STRENGTH if include_fairy_properties => {
@@ -5709,107 +5734,6 @@ impl CPlayer {
         }
     }
 
-    /// Применяет все уже материализованные семейства общего
-    /// `CPlayer::UpdateProperty`. Типизированные состояния следуют byte-exact
-    /// insertion-order исходного `m_vStates`; формулы остаются методами
-    /// конкретных владельцев. Неактивные change-body записи сохраняются в
-    /// wire-кодеке, но, как и в исходном owner-е, свойства даёт только последняя.
-    pub(crate) fn apply_materialized_state_properties(
-        &mut self,
-        mut properties: PlayerCombatProperties,
-        coefficients: GlobePlayerPropertyCoefficients,
-        goods_factory: &CGoodsFactory,
-        skill_factory: &CSkillFactory,
-    ) -> PlayerStatePropertyPass {
-        let hearten_visual = self.move_shape.hearten_state();
-        let callosity_visual = self.callosity_state();
-        let occupation = usize::from(self.base_properties.occupation).min(2);
-        for state in self.move_shape.ordered_player_property_states() {
-            use super::moveshape::PlayerPropertyState as State;
-            properties = match state {
-                State::PersistentAgility(state) => state.apply_to_player(properties),
-                State::Agility2(state) => state.apply_to_player(properties),
-                State::TaiJi(state) => state.apply_to_player(properties),
-                State::EnlargeMaxHp(state) => {
-                    properties.maximum_hp = state.apply(properties.maximum_hp);
-                    properties
-                }
-                State::EnlargeMaxMp(state) => {
-                    properties.maximum_mp = state.apply(properties.maximum_mp);
-                    properties
-                }
-                State::EnlargeFullMiss(state) => {
-                    properties.full_miss = state.apply(properties.full_miss);
-                    properties
-                }
-                State::Origin(state) => {
-                    properties.element_modify =
-                        state.apply_to_player(properties.element_modify);
-                    properties
-                }
-                State::Hearten(state) => {
-                    properties.maximum_hp = state.apply(properties.maximum_hp);
-                    properties
-                }
-                State::Callosity(state) => state.apply_to_player(properties),
-                State::Swordship(state) => state.apply_to_player(properties),
-                State::WuXing(state) => {
-                    state.apply_to_player(properties, coefficients, occupation)
-                }
-                State::BattleFairyAttribute(state) => state.apply_to_player(properties),
-                State::TianShenXiaFan(state) => {
-                    state.apply_to_player(properties, skill_factory)
-                }
-                State::Weak(state) => state.apply_to_player(properties),
-                State::PoisonFog(state) => state.apply_to_player(self.level(), properties),
-                State::GodBless(state) => state.apply_to_player(properties),
-                State::Roar(state) => state.apply_to_player(properties),
-                State::Script(state) => {
-                    state.apply_properties(&mut properties, &mut self.auto_protected);
-                    properties
-                }
-                State::Undead(state) => {
-                    self.apply_undead_state_properties(properties, coefficients, &state)
-                }
-                State::Extended(state) => {
-                    Self::apply_extended_state_properties(properties, &state)
-                }
-                State::ChangeBody(state) => {
-                    Self::apply_active_change_body_state_properties(properties, &state)
-                }
-                State::Ride(_) => self.apply_ride_state_properties(
-                    properties,
-                    coefficients,
-                    goods_factory,
-                ),
-                State::RageBreak(state) => {
-                    properties.maximum_attack =
-                        state.apply_to_player_maximum_attack(properties.maximum_attack);
-                    properties
-                }
-                State::Fury(state) => {
-                    properties.maximum_attack =
-                        state.apply_to_player_maximum_attack(properties.maximum_attack);
-                    properties
-                }
-                State::Wangsheng(state) => {
-                    if let Some(health) =
-                        state.capped_health(self.health(), properties.maximum_hp)
-                    {
-                        self.base_properties.health = health;
-                    }
-                    properties
-                }
-            };
-        }
-        let script_visuals = self.move_shape.take_pending_script_state_visuals();
-        PlayerStatePropertyPass {
-            properties,
-            callosity_visual,
-            hearten_visual,
-            script_visuals,
-        }
-    }
 
     pub(crate) fn replace_mana_shield_state(
         &mut self,
@@ -6236,9 +6160,6 @@ impl CPlayer {
             sufferer_is_gm,
             started_at_ms,
         )?;
-        if state.is_auto_protect() {
-            self.auto_protected = true;
-        }
         Some(state)
     }
 
@@ -6267,6 +6188,10 @@ impl CPlayer {
 
     pub(crate) const fn is_auto_protected(&self) -> bool {
         self.auto_protected
+    }
+
+    pub(crate) const fn set_auto_protected(&mut self, value: bool) {
+        self.auto_protected = value;
     }
 
     pub(crate) fn improve_experience_multiplier(&self) -> f64 {
@@ -6452,41 +6377,26 @@ impl CPlayer {
         found.is_some()
     }
 
-    fn ride_goods(&mut self, factory: &CGoodsFactory) -> Option<CGoods> {
-        let state = self.move_shape.ride_state()?.clone();
+    fn ride_goods(
+        &self,
+        state: &super::ridestate::RideState,
+        factory: &CGoodsFactory,
+    ) -> Option<&CGoods> {
         let base_index = factory.query_goods_id_by_original_name(Some(state.goods_name()));
-        if base_index == 0 {
-            return None;
-        }
-        let found = self
-            .packet
+        self.packet
             .base()
-            .find(state.cached_goods_id())
-            .filter(|goods| goods.base_properties_index() == base_index)
-            .or_else(|| {
-                self.packet
-                    .base()
-                    .traversing_goods()
-                    .find(|goods| goods.base_properties_index() == base_index)
-            })
-            .cloned();
-        if let Some(state) = self.move_shape.ride_state_mut() {
-            if let Some(goods) = &found {
-                state.set_cached_goods_id(goods.identity().ex_id);
-            } else {
-                state.clear_cached_goods_id();
-            }
-        }
-        found
+            .traversing_goods()
+            .find(|goods| goods.base_properties_index() == base_index)
     }
 
     /// `CNotDisappearAfterDead::OnUpdateProperties` применяет прямые поля до
     /// базовых характеристик, а отрицательные STR/DEX/CON/INT проецирует как
-    /// разность производных старого и нового значения. X87-преобразования
-    /// усекают дробную часть; в отрицательных HP/MP/DEF-ветках сохраняется
+    /// разность производных старого и нового значения. IMUL сохраняет low32
+    /// до unsigned /100; каждый native setter ограничивает DWORD INT_MAX.
+    /// X87-преобразования усекают дробную часть; в отрицательных HP/MP/DEF-ветках сохраняется
     /// исходное знаковое WORD-сужение. Поле usage `20_001` соответствует
     /// `tagProperty.wHit +0x24`, а не соседнему `wAtcSpeed +0x32`.
-    fn apply_undead_state_properties(
+    pub(crate) fn apply_undead_state_properties(
         &self,
         mut properties: PlayerCombatProperties,
         coefficients: GlobePlayerPropertyCoefficients,
@@ -6496,14 +6406,34 @@ impl CPlayer {
             if (value as i32) < 1 { 1 } else { value }
         }
 
-        fn trunc_product(value: u32, coefficient: f32) -> i32 {
-            (value as f32 * coefficient).trunc() as i32
+        fn set_property(value: u32) -> u32 {
+            value.min(i32::MAX as u32)
+        }
+
+        fn trunc_product(value: f64, coefficient: f32) -> i32 {
+            super::skills::fightdefense::truncate_original(
+                (value * f64::from(coefficient)).trunc(),
+            )
+        }
+
+        fn ftol_word_product(value: f64, coefficient: f32) -> i16 {
+            let value = (value * f64::from(coefficient)).trunc();
+            // Только отрицательная INT→MP ветвь вызывает __ftol2 (FISTP64),
+            // а затем использует AX. Integer-indefinite поэтому даёт WORD 0.
+            if !value.is_finite()
+                || value < -9_223_372_036_854_775_808.0
+                || value >= 9_223_372_036_854_775_808.0
+            {
+                0
+            } else {
+                value as i64 as i16
+            }
         }
 
         fn direct_value(current: u32, value: i16, percentage: bool) -> u32 {
             if value < 0 {
                 let decrement = if percentage {
-                    (i64::from(current) * -i64::from(value) / 100) as i16
+                    (current.wrapping_mul(value.wrapping_neg() as i32 as u32) / 100) as i16
                 } else {
                     value.wrapping_neg()
                 };
@@ -6511,11 +6441,11 @@ impl CPlayer {
                 if narrowed < 1 { 1 } else { narrowed as u32 }
             } else if value > 0 {
                 let increment = if percentage {
-                    (i64::from(current) * i64::from(value) / 100) as u32
+                    current.wrapping_mul(value as u32) / 100
                 } else {
                     value as u32
                 };
-                current.wrapping_add(increment)
+                set_property(current.wrapping_add(increment))
             } else {
                 current
             }
@@ -6524,27 +6454,27 @@ impl CPlayer {
         fn changed_stat(current: u32, value: i32, percentage: bool) -> (u32, u32, bool) {
             if value < 0 {
                 let decrement = if percentage {
-                    i64::from(current) * -i64::from(value) / 100
+                    current.wrapping_mul(value.wrapping_neg() as u32) / 100
                 } else {
-                    -i64::from(value)
+                    value.wrapping_neg() as u32
                 };
-                let new = current.wrapping_sub(decrement as u32);
-                (clamp_wrapped_min_one(new), decrement as u32, false)
+                let new = current.wrapping_sub(decrement);
+                (clamp_wrapped_min_one(new), decrement, false)
             } else {
                 let increment = if percentage {
-                    (i64::from(current) * i64::from(value) / 100) as u32
+                    current.wrapping_mul(value as u32) / 100
                 } else {
                     value as u32
                 };
-                (current.wrapping_add(increment), increment, true)
+                (set_property(current.wrapping_add(increment)), increment, true)
             }
         }
 
-        fn add_positive_derived(current: u32, delta: u32, coefficient: f32) -> u32 {
-            current.wrapping_add(trunc_product(delta, coefficient) as u32)
+        fn add_positive_derived(current: u32, delta: f64, coefficient: f32) -> u32 {
+            set_property(current.wrapping_add(trunc_product(delta, coefficient) as u32))
         }
 
-        fn add_derived_difference(current: u32, old: u32, new: u32, coefficient: f32) -> u32 {
+        fn add_derived_difference(current: u32, old: f64, new: f64, coefficient: f32) -> u32 {
             let difference = trunc_product(new, coefficient)
                 .wrapping_sub(trunc_product(old, coefficient));
             clamp_wrapped_min_one(current.wrapping_add(difference as u32))
@@ -6552,8 +6482,8 @@ impl CPlayer {
 
         fn add_short_derived_difference(
             current: u32,
-            old: u32,
-            new: u32,
+            old: f64,
+            new: f64,
             coefficient: f32,
         ) -> u32 {
             let difference = (trunc_product(new, coefficient) as i16)
@@ -6581,14 +6511,14 @@ impl CPlayer {
             properties.maximum_attack = if positive {
                 add_positive_derived(
                     properties.maximum_attack,
-                    delta,
+                    f64::from(delta),
                     coefficients.str_to_max_attack[occupation],
                 )
             } else {
                 add_derived_difference(
                     properties.maximum_attack,
-                    old,
-                    new,
+                    f64::from(old),
+                    f64::from(new),
                     coefficients.str_to_max_attack[occupation],
                 )
             };
@@ -6601,14 +6531,14 @@ impl CPlayer {
             properties.minimum_attack = if positive {
                 add_positive_derived(
                     properties.minimum_attack,
-                    delta,
+                    f64::from(delta),
                     coefficients.dex_to_min_attack[occupation],
                 )
             } else {
                 add_derived_difference(
                     properties.minimum_attack,
-                    old,
-                    new,
+                    f64::from(old),
+                    f64::from(new),
                     coefficients.dex_to_min_attack[occupation],
                 )
             };
@@ -6620,27 +6550,28 @@ impl CPlayer {
                 changed_stat(old, state.constitution, state.percentage);
             properties.constitution = new;
             if positive {
+                let projected = if state.percentage { f64::from(delta as f32) } else { f64::from(delta) };
                 properties.maximum_hp = add_positive_derived(
                     properties.maximum_hp,
-                    delta,
+                    projected,
                     coefficients.con_to_max_hp[occupation],
                 );
                 properties.defense = add_positive_derived(
                     properties.defense,
-                    delta,
+                    projected,
                     coefficients.con_to_defense[occupation],
                 );
             } else {
                 properties.maximum_hp = add_short_derived_difference(
                     properties.maximum_hp,
-                    old,
-                    new,
+                    f64::from(old),
+                    f64::from(new),
                     coefficients.con_to_max_hp[occupation],
                 );
                 properties.defense = add_short_derived_difference(
                     properties.defense,
-                    old,
-                    new,
+                    f64::from(old as f32),
+                    f64::from(new as f32),
                     coefficients.con_to_defense[occupation],
                 );
             }
@@ -6654,7 +6585,7 @@ impl CPlayer {
             if positive {
                 // В абсолютной ветке оригинал повторно проецирует уже новое
                 // полное INT; процентная ветка проецирует только приращение.
-                let projected = if state.percentage { delta } else { new };
+                let projected = if state.percentage { f64::from(delta as f32) } else { f64::from(new) };
                 properties.maximum_mp = add_positive_derived(
                     properties.maximum_mp,
                     projected,
@@ -6669,21 +6600,20 @@ impl CPlayer {
                     trunc_product(projected, coefficients.int_to_element[occupation]),
                 );
             } else {
-                properties.maximum_mp = add_short_derived_difference(
-                    properties.maximum_mp,
-                    old,
-                    new,
-                    coefficients.int_to_max_mp[occupation],
-                );
+                let old_mp = ftol_word_product(f64::from(old), coefficients.int_to_max_mp[occupation]);
+                let new_mp = ftol_word_product(f64::from(new as f32), coefficients.int_to_max_mp[occupation]);
+                let maximum_mp = (properties.maximum_mp as i16)
+                    .wrapping_add(new_mp.wrapping_sub(old_mp));
+                properties.maximum_mp = maximum_mp.max(1) as u32;
                 properties.element_resistance = add_derived_difference(
                     properties.element_resistance,
-                    old,
-                    new,
+                    f64::from(old as f32),
+                    f64::from(new as f32),
                     coefficients.int_to_resistant[occupation],
                 );
-                let difference = trunc_product(new, coefficients.int_to_element[occupation])
+                let difference = trunc_product(f64::from(new as f32), coefficients.int_to_element[occupation])
                     .wrapping_sub(trunc_product(
-                        old,
+                        f64::from(old as f32),
                         coefficients.int_to_element[occupation],
                     ));
                 properties.element_modify = properties.element_modify.wrapping_add(difference);
@@ -6724,14 +6654,14 @@ impl CPlayer {
         properties
     }
 
-    fn apply_extended_state_properties(
+    pub(crate) fn apply_extended_state_properties(
         mut properties: PlayerCombatProperties,
         state: &super::exstate::ExtendedState,
     ) -> PlayerCombatProperties {
         let add = |target: &mut u32, value: u16| {
-            *target = (*target)
-                .saturating_add(u32::from(value))
-                .min(i32::MAX as u32);
+            if value != 0 {
+                *target = target.wrapping_add(u32::from(value)).min(i32::MAX as u32);
+            }
         };
         add(&mut properties.maximum_hp, state.maximum_hp);
         add(&mut properties.maximum_mp, state.maximum_mp);
@@ -6751,12 +6681,14 @@ impl CPlayer {
         properties
     }
 
-    fn apply_active_change_body_state_properties(
+    pub(crate) fn apply_active_change_body_state_properties(
         mut properties: PlayerCombatProperties,
         state: &super::chbystate::ChangeBodyState,
     ) -> PlayerCombatProperties {
         let add = |target: &mut u32, value: u32| {
-            *target = u32::min((*target).saturating_add(value), i32::MAX as u32);
+            if value != 0 {
+                *target = target.wrapping_add(value).min(i32::MAX as u32);
+            }
         };
         add(&mut properties.maximum_hp, state.maximum_hp);
         add(&mut properties.maximum_mp, state.maximum_mp);
@@ -6764,24 +6696,34 @@ impl CPlayer {
         add(&mut properties.maximum_attack, state.maximum_attack);
         add(&mut properties.defense, state.defense);
         add(&mut properties.element_resistance, state.element_resistance);
-        properties.cch = properties.cch.wrapping_add(state.cch);
-        properties.blast_attack = properties.blast_attack.wrapping_add(state.blast_attack);
-        properties.blast_element_attack = properties
-            .blast_element_attack
-            .wrapping_add(state.blast_element_attack);
+        if state.cch != 0 {
+            properties.cch = properties.cch.wrapping_add(state.cch);
+        }
+        if state.blast_attack != 0 {
+            properties.blast_attack = properties.blast_attack.wrapping_add(state.blast_attack);
+        }
+        if state.blast_element_attack != 0 {
+            properties.blast_element_attack = properties
+                .blast_element_attack
+                .wrapping_add(state.blast_element_attack);
+        }
         properties
     }
 
-    fn apply_ride_state_properties(
-        &mut self,
+    /// CRideState::OnUpdateProperties0x004F9000 выбирает первый packet goods
+    /// по имени именно этого экземпляра, не по AI-cache. Общий расчёт делает
+    /// MountEquipRide(true), затем(false), не копируя state или CGoods.
+    pub(crate) fn apply_ride_state_properties(
+        &self,
         mut properties: PlayerCombatProperties,
+        state: &super::ridestate::RideState,
         coefficients: GlobePlayerPropertyCoefficients,
         goods_factory: &CGoodsFactory,
     ) -> PlayerCombatProperties {
-        if let Some(goods) = self.ride_goods(goods_factory) {
+        if let Some(goods) = self.ride_goods(state, goods_factory) {
             apply_equipment_goods_properties(
                 &mut properties,
-                &goods,
+                goods,
                 goods_factory,
                 coefficients,
                 usize::from(self.base_properties.occupation).min(2),
@@ -7278,6 +7220,17 @@ impl CPlayer {
 
     pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
         self.combat_properties
+    }
+
+    /// Один concrete OnUpdateProperties меняет живой tagProperty.
+    /// Синхронизация wire — чистая проекция полей, без equipment callbacks,
+    /// пересчёта остальных состояний или отложенной публикации visual.
+    pub(crate) fn update_state_combat_properties(
+        &mut self,
+        update: impl FnOnce(PlayerCombatProperties) -> PlayerCombatProperties,
+    ) {
+        self.combat_properties = update(self.combat_properties);
+        self.sync_combat_property_wire();
     }
 
     /// Exact scalar checks `CanUseItem`; catalog/instance addon fallback

@@ -22,7 +22,15 @@
 //! от payload и не заменяет отсутствующего user держателем состояния.
 //! Runtime Begin0x005808BE/0x005588AE/0x0054B99E/0x0054B71E получает self,self.
 
+//! OnUpdateProperties (точный vtable +0x24 SwordshipState) сначала
+//! разрешает GetSufferer; NULL возвращает 0. Type600/400 и RTTI выбирают
+//! живые monster modifiers либо player tagProperty. Визуала, таймера,
+//! повторного пересчёта и чтения итогового monster getter в этом callback нет.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/swordshipstate.cpp.
+
+
 use super::swordship::is_swordship_skill;
+use crate::gameserver::appserver::states::state::resolve_applied_state_sufferer;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -33,6 +41,33 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
 pub(crate) const SWORDSHIP_STATE_BYTES: usize = 12;
+
+pub(crate) fn update_swordship_state_properties(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SwordshipState>(key)).copied()
+    else { return false; };
+    if target.object_type == 600 {
+        if let Some(monster) = game.find_region_mut(target_region)
+            .and_then(|region| region.base_mut().find_monster_by_id_mut(target.id)) {
+            let modifiers = monster.move_shape_mut().property_modifiers_mut();
+            modifiers.minimum_attack = modifiers.minimum_attack.wrapping_add(state.minimum_attack_gain);
+            modifiers.maximum_attack = modifiers.maximum_attack.wrapping_add(state.maximum_attack_gain);
+        }
+    } else if target.object_type == 400 {
+        if let Some(player) = game.find_player_mut(target.id) {
+            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+        }
+    }
+    true
+}
 
 pub(crate) fn restart_swordship_state(
     game: &mut CGame,
@@ -126,12 +161,7 @@ impl SwordshipState {
         properties
     }
 
-    pub(crate) const fn apply_to_monster(self, minimum: u32, maximum: u32) -> (u32, u32) {
-        (
-            minimum.wrapping_add(self.minimum_attack_gain as u32),
-            maximum.wrapping_add(self.maximum_attack_gain as u32),
-        )
-    }
+
 }
 
 fn apply_player_gain(value: u32, gain: i32) -> u32 {

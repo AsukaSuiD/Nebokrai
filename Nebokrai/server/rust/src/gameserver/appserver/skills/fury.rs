@@ -19,11 +19,16 @@
 //! (unsigned cmp/jb по 0x00536A9C).
 //! Cure добавляется без поиска и замены предыдущей записи: Begin по
 //! 0x00536D26, затем push_back по 0x00536D38. Накопление сохраняется в DB и AI.
+//! Общий UpdateProperty (0x00536D4D) следует после Fury, снятия конфликтов
+//! и Cure append, но до skill End(1). Монстровый вызов публикует настоящий
+//! region owner на время этого пересчёта и затем разрешает его заново.
+//! CFuryState::Begin(0x005EA500) только создаёт loop=1 visual; начальный
+//! BFE03 отправляет OnUpdateProperties, а не отдельный вызов после Begin.
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_in_region};
-use super::furystate::{FuryState, send_fury_state_visual, send_fury_state_visual_in_region};
+use super::furystate::FuryState;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -36,7 +41,7 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -170,7 +175,7 @@ fn remove_reached_conflict_states(
 
 pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
@@ -178,6 +183,8 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false };
+    let region_id = region.id;
     let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
@@ -280,7 +287,6 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
         keep_time_ms,
         properties.query_property(SKILL_USAGE_TARGET_ATK_GAIN) as i32,
     );
-    send_fury_state_visual_in_region(game, region, &source, fury, true, now_ms);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().push_fury_state(fury);
     }
@@ -293,6 +299,10 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
         monster.move_shape_mut().push_cure_state(cure);
     }
 
+    let _ = game.with_published_region(owner, |game| {
+        game.update_move_shape_properties(region_id, identity)
+    });
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
         let _ = monster.finish_base_attack_cast_with_clock(FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
@@ -441,7 +451,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
     let now_ms = runtime.now_milliseconds();
-    let Some((region_id, identity, tile_x, tile_y)) =
+    let Some((region_id, identity, _tile_x, _tile_y)) =
         game.find_player(player_id).and_then(|player| {
             Some((
                 player.server_region_id()?,
@@ -470,7 +480,6 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.push_fury_state(fury);
     }
-    send_fury_state_visual(game, region_id, identity, tile_x, tile_y, fury, true, now_ms);
 
     let state_order = game
         .find_player(player_id)

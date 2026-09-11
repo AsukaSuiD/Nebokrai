@@ -1,8 +1,15 @@
 //! Межвладельческая координация `GodBlessState`.
+//! Остаток первичной установки: replacement пока использует прежний typed
+//! replace и ручной End-пакет; полный Begin/End старого экземпляра до append
+//! ещё не сведён с общим exact-key lifecycle. Property-tail ниже уже общий.
 //!
 //! Формулы, replacement и lifecycle принадлежат skill/state-owner-ам. Здесь
-//! остаются только временное извлечение региона, перерасчёт player owner-а и
-//! фактическая around-доставка в подтверждённом порядке end → begin.
+//! остаются только временное извлечение региона, перерасчёт живого owner-а и
+//! фактическая around-доставка завершения прежнего состояния.
+//! CGodBless::AI 0x005B0911 добавляет состояние, затем 0x005B091B вызывает
+//! virtual UpdateProperty цели; тип монстра не исключён из этого хвоста.
+//! Begin GodBless1/2 создаёт visual без initial Update: BFE03 принадлежит
+//! последующему OnUpdateProperties, а не ручной отправке при установке.
 
 use super::*;
 use crate::gameserver::appserver::skills::godblessstate::{GodBlessState, send_god_bless_state_visual};
@@ -30,8 +37,7 @@ impl CGame {
         };
         let Some((x, y, previous)) = changed else { return false };
         if let Some(previous) = previous { send_god_bless_state_visual(self, region_id, target, x, y, previous, false, runtime.now_milliseconds()); }
-        send_god_bless_state_visual(self, region_id, target, x, y, state, true, runtime.now_milliseconds());
-        if target.object_type == PLAYER_TYPE { let _ = self.update_player_properties(target.id); }
+        let _ = self.update_move_shape_properties(region_id, target);
         true
     }
 

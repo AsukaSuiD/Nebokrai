@@ -1,8 +1,15 @@
 //! Межвладельческая координация ядовитого тумана.
+//! Первичный replacement ещё использует прежний typed replace и ручной
+//! End-пакет; порядок полного End/Remove/Update до нового Begin требует
+//! отдельного подключения общего lifecycle. After-append property-tail общий.
 //!
 //! Применение навыка, формулы состояния и жизненный цикл области принадлежат
 //! владельцам навыка. Здесь остаются проверки PK и региона, каноническая
 //! замена состояния, пересчёт свойств и фактическая доставка вокруг объекта.
+//! CPoisonFogPhalanx::AI: Begin 0x005FC3C0 → push_back 0x005FC3D6 →
+//! UpdateProperty 0x005FC3DF; пересчёт выполняется и для живого монстра.
+//! Object Begin0x00608420 только создаёт loop1 visual. Его первый BFE03
+//! отправляет OnUpdateProperties после append, без дополнительного Begin-пакета.
 
 use super::*;
 use crate::gameserver::appserver::skills::curestate::CURE_STATE_SKILL_ID;
@@ -45,11 +52,11 @@ impl CGame {
                 PLAYER_TYPE => {
                     let _ = self.player_on_first_skill(phalanx.master().master_id, target.id, Some(region_id), runtime);
                     let replaced = self.find_player_mut(target.id).and_then(|player| { let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let previous = player.replace_poison_fog_state(state, now); Some((x, y, previous)) });
-                    if let Some((x, y, previous)) = replaced { if let Some(previous) = previous { send_poison_fog_state_visual(self, region_id, target, x, y, previous, false, now); } send_poison_fog_state_visual(self, region_id, target, x, y, state, true, now); let _ = self.update_player_properties(target.id); applied = applied.wrapping_add(1); }
+                    if let Some((x, y, previous)) = replaced { if let Some(previous) = previous { send_poison_fog_state_visual(self, region_id, target, x, y, previous, false, now); } let _ = self.update_move_shape_properties(region_id, target); applied = applied.wrapping_add(1); }
                 }
                 MONSTER_TYPE => {
                     let replaced = if let Some(mut owner) = self.take_region_owner(region_id) { let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| { let x = monster.move_shape().shape().get_tile_x().ok()?; let y = monster.move_shape().shape().get_tile_y().ok()?; let previous = monster.move_shape_mut().replace_poison_fog_state(state, now); Some((x, y, previous)) }); self.restore_region_owner(owner); result } else { None };
-                    if let Some((x, y, previous)) = replaced { if let Some(previous) = previous { send_poison_fog_state_visual(self, region_id, target, x, y, previous, false, now); } send_poison_fog_state_visual(self, region_id, target, x, y, state, true, now); applied = applied.wrapping_add(1); }
+                    if let Some((x, y, previous)) = replaced { if let Some(previous) = previous { send_poison_fog_state_visual(self, region_id, target, x, y, previous, false, now); } let _ = self.update_move_shape_properties(region_id, target); applied = applied.wrapping_add(1); }
                 }
                 _ => {}
             }

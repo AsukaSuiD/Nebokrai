@@ -68,8 +68,8 @@ pub(crate) fn end_energy_holding_state(
         let _ = shape.mark_applied_state_ended(key);
         shape.remove_applied_state_record::<EnergyHoldingState>(key, ENERGY_HOLDING_STATE_BYTES)
     }).is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if removed {
+        let _ = game.update_move_shape_properties(region_id, holder);
     }
     removed
 }

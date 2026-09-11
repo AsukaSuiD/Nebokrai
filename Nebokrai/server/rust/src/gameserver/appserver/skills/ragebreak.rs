@@ -15,13 +15,15 @@
 //! AI (`0x005A00F0`) завершает прежний RageBreak (0x005A0322) и прежний
 //! Cure (0x005A047C) до Begin новых, включая отдельный UpdateProperty
 //! каждого удаления; после установки Cure пересчитывает свойства вновь.
+//! Begin RageBreakState(0x005FD5C0) создаёт loop=1 visual без Update;
+//! BFE03 состояния публикуется только последующим OnUpdateProperties.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, end_player_cure_state, send_cure_state_visual};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::ragebreakstate::{RageBreakState, end_player_rage_break_state, send_rage_break_state_visual};
+use super::ragebreakstate::{RageBreakState, end_player_rage_break_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -140,7 +142,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     }
 
     let now = runtime.now_milliseconds();
-    let Some((region_id, tile_x, tile_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
+    let Some((region_id, _tile_x, _tile_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
         finish_player_rage_break(game, player_id, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -148,7 +150,6 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     let _ = end_player_rage_break_state(game, player_id, now);
     let state_now = runtime.now_milliseconds();
     let state = RageBreakState::new(state_now, keep, attack_gain);
-    send_rage_break_state_visual(game, region_id, identity, tile_x, tile_y, state, true, state_now);
     if let Some(player) = game.find_player_mut(player_id) { player.replace_rage_break_state(state); }
 
     let order = game.find_player(player_id).map(CPlayer::curable_state_ids).unwrap_or_default();

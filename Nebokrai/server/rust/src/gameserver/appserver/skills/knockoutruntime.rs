@@ -41,7 +41,6 @@ use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -205,13 +204,7 @@ fn monster_attack(
 ) -> Option<(MasterInfo, AttackInformation)> {
     let monster = region.find_monster_by_id(monster_id)?;
     let master = monster.master_info();
-    let (minimum, maximum) = if monster.is_tamed() {
-        let attack = monster.pet_attack_properties(property);
-        (attack.minimum_attack, attack.maximum_attack)
-    } else {
-        let clamp = |value: u32| value.clamp(1, i32::MAX as u32);
-        monster.state_attack_bounds(clamp(property.minimum_attack), clamp(property.maximum_attack))
-    };
+    let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
     let minimum = minimum as i32;
     let difference = (maximum as i32).wrapping_sub(minimum);
     let span = if difference < 0 { difference.wrapping_neg() } else { difference }.wrapping_add(1);
@@ -227,9 +220,9 @@ fn monster_attack(
             AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
             // Виртуальный `CMonster::GetAddElementAtk` обычного monster-owner-а
             // возвращает ноль; GetAddSoulAtk оставляет младшие 16 бит только
-            // положительного `dwYaoAtk`.
+            // положительной суммы `dwYaoAtk` и modifier.
             AttackPower { kind: AttackPowerType::Element, hp_damage: 0, mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(CMonster::resource_soul_attack(property)), mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(monster.soul_attack(property)), mp_damage: 0 },
         ],
     };
     // `CMoveShape::GetCCH` для монстра равен нулю, но исходный owner всё

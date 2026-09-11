@@ -6,13 +6,15 @@
 //! `SKILL_USAGE_TARGET_MIN_ATK_GAIN` и `SKILL_USAGE_TARGET_MAX_ATK_GAIN`.
 //! Состояния разных ID сосуществуют, повторный навык заменяет только прежнее
 //! состояние того же ID, после чего обе достигнутые ветви пересчитывают
-//! canonical свойства игрока. Расходов, задержки, времени восстановления, RNG
+//! canonical свойства владельца. Расходов, задержки, времени восстановления, RNG
 //! и отдельного сетевого эффекта в подтверждённом пути нет.
 //! Monster auto-start использует те же состояния: `AI` по VA
 //! `0x00580820/0x00558810/0x0054B900/0x0054B680` не ограничивает тип владельца
 //! и завершает навык через `End(0)`. Поэтому фон не меняет reuse-clock и
-//! очередь завершения активной атаки. Monster attack getters применяют
-//! прибавки из canonical состояния при чтении свойств.
+//! очередь завершения активной атаки. UpdateProperty по 0x0058093F/0x00580975
+//! вызывается после replacement/append и до End(0), заполняя живые modifiers.
+//! Настоящий регион публикуется только на время этого owning callback;
+//! после него регион и монстр разрешаются заново.
 //! Player-вход также всегда заканчивает AI через End(0), в том числе
 //! 0x00580947/0x0055893A: нет AfterUseSkill, износа оружия и записи cooldown.
 //! Фоновый и активный вызовы используют одно тело AI; успешный Begin
@@ -26,9 +28,8 @@ use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
 pub(crate) const SWORDSHIP_SKILL_ID: u32 = 0x6f;
@@ -47,8 +48,8 @@ pub(crate) const fn is_swordship_skill(skill_id: u32) -> bool {
 }
 
 pub(crate) fn execute_monster_auto_start_swordship(
-    game: &CGame,
-    region: &mut CServerRegion,
+    game: &mut CGame,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     skill_id: u32,
     skill_level: i32,
@@ -56,6 +57,8 @@ pub(crate) fn execute_monster_auto_start_swordship(
     if !is_swordship_skill(skill_id) {
         return false;
     }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false };
+    let region_id = region.id;
     let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
         return false;
     };
@@ -69,7 +72,12 @@ pub(crate) fn execute_monster_auto_start_swordship(
         properties.query_property(SKILL_USAGE_TARGET_MAX_ATK_GAIN) as i32,
     );
     let _ = monster.move_shape_mut().replace_swordship_state(state);
+    let holder = monster.move_shape().shape().identity();
     let _ = game.publish_owned_monster_states(region, monster_id);
+    let _ = game.with_published_region(owner, |game| {
+        game.update_move_shape_properties(region_id, holder)
+    });
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().finish_immediate_skill(skill_id, game.skill_factory());
     }
