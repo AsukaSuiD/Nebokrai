@@ -14,6 +14,12 @@
 //! AfterUse и reuse выполняет общая граница зарегистрированного экземпляра:
 //! virtual override берётся из factory-каталога, износ относится к GetUser,
 //! а ключ экземпляра сохраняется через вызванный износом пересчёт экипировки.
+//! Базовая vtable CStateSkill 0x0065EC6C задаёт AI +0x0C→0x005B7230:
+//! это jmp на ret 0x00485540, не CState::AI (который вызывает End()).
+//! Serialize +0x40 унаследован от CState 0x005DBD00 и пишет четыре
+//! identity-DWORD без skill ID. Отдельного ShouldSerialize gate у
+//! AddExStatesToByteArray 0x004D10F0 нет: он вызывает concrete Serialize.
+//! Эти базовые привязки не заменяют overrides конкретных навыков.
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::gameserver::game::GameMainLoopRuntime;

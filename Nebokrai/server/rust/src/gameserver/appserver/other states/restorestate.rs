@@ -12,6 +12,10 @@
 //! список и вычисляет remaining-time отдельными исходными чтениями часов.
 //! Техническое SlotMap-хранилище не меняет порядок HP/MP-записей, повторные
 //! экземпляры, два чтения часов успешного Begin и сброс интервалов при загрузке.
+//! Общий AI работает с одним живым ключом этой арены. HP сохраняет generic
+//! CMoveShape health/OnChangeStates и death-pause; MP non-player немедленно
+//! заканчивается без часов. Во время публикации payload остаётся у владельца,
+//! после неё срок проверяется по тому же поколенческому ключу.
 
 use super::restorehpstate::{RESTORE_HP_STATE_ID, RestoreHpState};
 use super::restorempstate::{RESTORE_MP_STATE_ID, RestoreMpState};

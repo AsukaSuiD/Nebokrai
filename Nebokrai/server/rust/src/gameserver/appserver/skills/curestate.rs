@@ -19,6 +19,10 @@
 //! AI фиксирует начальную длину и перечитывает позиции; End удаляет ключ после visual,
 //! не подменяя его новым одноимённым состоянием, созданным вложенным вызовом.
 //! Загрузка активирует каждую запись; удаление синхронизирует DB-кодек и свойства.
+//! Опубликованный generic End используется также AddCure щита жизни:
+//! visual предшествует точному удалению, payload не извлекается до доставки.
+//! Player сохраняет собственный UpdateProperty; monster читает изменения
+//! состояний через живые getters, неперенесённые overrides не выдумываются.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 pub(crate) const CURE_STATE_BYTES: usize = 20;
@@ -27,11 +31,12 @@ use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::moveshape::{StateData, StateKey};
+use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::states::state::{
     decode_state_identities, encode_state_identities, timed_client_state_time,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
@@ -110,24 +115,45 @@ pub(crate) fn end_player_cure_state_key(game: &mut CGame, player_id: i32, key: S
     true
 }
 
-pub(crate) fn expire_player_cure_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let mut ended = false;
-    let initial_len = game.find_player(player_id)
-        .map_or(0, |player| player.move_shape().state_slot_count());
-    let mut position = 0;
-    while position < initial_len && game.find_player(player_id)
-        .is_some_and(|player| position < player.move_shape().state_slot_count())
-    {
-        let expired = game.find_player(player_id).and_then(|player| {
-            let (key, StateData::Cure(state)) = player.move_shape().state_at(position)? else { return None };
-            state.expired(now_ms).then_some(key)
-        });
-        if let Some(key) = expired {
-            ended |= end_player_cure_state_key(game, player_id, key);
-        }
-        position += 1;
+
+pub(crate) fn update_cure_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now_ms: u32,
+) -> bool {
+    let expired = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.cure_state_by_key(key))
+        .is_some_and(|state| state.expired(now_ms));
+    expired && end_cure_state_key(game, region_id, holder, key)
+}
+
+pub(crate) fn end_cure_state_key(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if holder.object_type == 400 {
+        return end_player_cure_state_key(game, holder.id, key);
     }
-    ended
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.cure_state_by_key(key)) else { return false };
+    send_cure_state_visual_for_holder(game, region_id, holder, state, false);
+    resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_cure_state_by_key(key)).is_some()
+}
+
+pub(crate) fn send_cure_state_visual_for_holder(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    state: CureState,
+    begin: bool,
+) {
+    let message = cure_state_message(holder, state, begin);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
 }
 
 pub(crate) fn send_cure_state_visual(
@@ -185,30 +211,6 @@ fn cure_state_message(identity: ShapeIdentity, state: CureState, begin: bool) ->
     message
 }
 
-pub(crate) fn expire_monster_cure_state(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    now_ms: u32,
-) -> bool {
-    let mut ended = false;
-    let initial_len = region.find_monster_by_id(monster_id)
-        .map_or(0, |monster| monster.move_shape().state_slot_count());
-    let mut position = 0;
-    while position < initial_len && region.find_monster_by_id(monster_id)
-        .is_some_and(|monster| position < monster.move_shape().state_slot_count())
-    {
-        let expired = region.find_monster_by_id(monster_id).and_then(|monster| {
-            let (key, StateData::Cure(state)) = monster.move_shape().state_at(position)? else { return None };
-            state.expired(now_ms).then_some(key)
-        });
-        if let Some(key) = expired {
-            ended |= end_monster_cure_state_key(game, region, monster_id, key);
-        }
-        position += 1;
-    }
-    ended
-}
 
 pub(crate) fn end_monster_cure_state_key(
     game: &CGame,

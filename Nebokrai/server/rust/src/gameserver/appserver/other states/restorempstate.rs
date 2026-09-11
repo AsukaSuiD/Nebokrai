@@ -10,7 +10,11 @@
 //! тела `Serialize/Unserialize` по `0x005F65F0/0x005EEC70`: DB-запись состоит
 //! из ID, оставшегося срока, частоты и прироста. Vtable также направляет
 //! `GetRemainedTime` на `0x005F2CD0`; visual-effect update `0x004F86F0`
-//! сетевых пакетов не создаёт.
+//! сетевых пакетов не создаёт. Exact AI 0x004F8AA0 сначала проверяет RTTI
+//! CPlayer: для живого non-player вызывается End без чтения часов даже при
+//! нулевом HP. Только игрок проходит death-gate и два последовательных clock.
+//! Общий End 0x005EEBA0 удаляет точный ключ sufferer без visual; отсутствие
+//! sufferer не даёт права удалить запись другого владельца.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;

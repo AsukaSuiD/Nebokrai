@@ -40,9 +40,8 @@
 //! source-aware действия. Null source не заменяется держателем реестра.
 //! Наличие owned visual независимо от concrete payload; политика не создаёт
 //! эффект и не разрешает пакет только по факту регистрации навыка.
-//! SpiderMist после возврата движения снимает техническую curable-регистрацию
-//! самого навыка. Это очистка его участия в Cure, не удаление самостоятельной
-//! CSpiderMistPhalanx или наложенных ею состояний.
+//! SpiderMist возвращает движение перед CSummonSkill::End. Его Begin не
+//! добавляет cast в m_vStates; End не удаляет самостоятельную phalanx.
 //! У Po/Yu и transfer-owner-ов End(bool) в `+0x94` не подменяет End(int)
 //! в `+0x68`. Удерживаемый HeartLessArrow при ненулевом End имеет отдельный
 //! ранний release-переход; эта карта не заменяет проверку его concrete-флагов.
@@ -131,8 +130,6 @@ pub(crate) enum SkillEndEffect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillEndPolicy {
     pub(crate) movement: SkillEndMovement,
-    /// Снять техническую curable-регистрацию навыка у держателя после movement.
-    pub(crate) release_curable_registration: bool,
     /// None сохраняет available; Some задаёт безусловную concrete-запись.
     pub(crate) available: Option<bool>,
     pub(crate) effect: SkillEndEffect,
@@ -143,13 +140,11 @@ pub(crate) struct SkillEndPolicy {
 impl SkillEndPolicy {
     const COMMON: Self = Self {
         movement: SkillEndMovement::None,
-        release_curable_registration: false,
         available: None,
         effect: SkillEndEffect::None,
         path_order: SkillEndPathOrder::BeforeMovement,
     };
     const USER: Self = Self { movement: SkillEndMovement::User, ..Self::COMMON };
-    const USER_CURABLE: Self = Self { release_curable_registration: true, ..Self::USER };
     const USER_OR_SUFFERER: Self = Self { movement: SkillEndMovement::UserOrSufferer, ..Self::COMMON };
     const USER_AVAILABLE: Self = Self { available: Some(true), ..Self::USER };
     const USER_UNAVAILABLE: Self = Self { available: Some(false), ..Self::USER };
@@ -317,7 +312,7 @@ skill_owners! {
     CSporeBlasting: State, USER, Weapon => 0x195,
     CYakshaSlash: Attack, USER, Weapon => 0x196,
     CMonsterThorn: Attack, USER, Weapon => 0x197,
-    CSpiderMist: Summon, USER_CURABLE, Weapon => 0x198,
+    CSpiderMist: Summon, USER, Weapon => 0x198,
     CSpiderWeb: State, USER, Weapon => 0x199,
     CSummonCorpseCandle: Summon, USER, Weapon => 0x19a,
     CSummonSkeleton: Summon, USER, Weapon => 0x19b,

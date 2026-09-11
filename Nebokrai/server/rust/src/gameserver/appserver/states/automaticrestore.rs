@@ -14,6 +14,13 @@
 //! свежими в указанном порядке; peace-варианты сохраняют объём как биты
 //! `float`, fight-варианты — как исходный `DWORD`. Живой `AI` по-прежнему
 //! читает актуальный объём из свойств игрока.
+//! HP AI (0x004FA8E0/0x004FA4D0) сначала проверяет смерть, HP/max HP и
+//! peace/fight обычного CMoveShape; неподходящий RTTI игрока затем оставляет
+//! состояние нетронутым без часов. MP AI (0x004FA130/0x004F9DB0) проверяет
+//! CPlayer до этих gates и для non-player вызывает End без чтения часов.
+//! Общий End 0x005EEBA0 только удаляет запись из живого sufferer без visual;
+//! отсутствие sufferer не позволяет удалить чужую запись. В обоих случаях
+//! новый общий dispatch передаёт один ключ существующей арены.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -135,6 +142,10 @@ impl AutomaticRestoreState {
             AutomaticRestoreKind::ManaPeace => AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,
             AutomaticRestoreKind::ManaFight => AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID,
         }
+    }
+
+    pub(crate) const fn is_health(self) -> bool {
+        matches!(self.kind, AutomaticRestoreKind::HealthPeace | AutomaticRestoreKind::HealthFight)
     }
 
     pub(crate) const fn should_check(

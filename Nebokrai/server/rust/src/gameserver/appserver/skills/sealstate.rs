@@ -135,51 +135,6 @@ pub(crate) fn replace_monster_seal_state(
     true
 }
 
-pub(crate) fn expire_monster_seal_state(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
-    now_ms: u32,
-) -> bool {
-    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_seal_state(key, now_ms)?;
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
-        Some((
-            state,
-            monster.move_shape().shape().clone(),
-        ))
-    });
-    let Some((state, shape)) = finished else {
-        return false;
-    };
-    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
-    true
-}
-
-pub(crate) fn finish_monster_seal_state_on_defense(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    _now_ms: u32,
-) -> bool {
-    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_seal_state()?;
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
-        Some((
-            state,
-            monster.move_shape().shape().clone(),
-        ))
-    });
-    let Some((state, shape)) = finished else {
-        return false;
-    };
-    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
-    true
-}
-
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E

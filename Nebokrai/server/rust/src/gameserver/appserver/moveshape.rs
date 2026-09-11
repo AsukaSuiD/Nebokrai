@@ -48,17 +48,19 @@
 //! Типизированные экземпляры используют общую арену
 //! `AppliedStateEntries`: поколенческий ключ задаёт экземпляр, отдельный список
 //! сохраняет исходную позицию и пустые места после удаления. Общий factory-проход
-//! загружает каждую известную запись, не схлопывая повторные ID. Полный
-//! межсемейный AI/End и ClearAllStates ещё не подключены; существующие точные
-//! обработчики не заменяются пустым End. Принадлежащий навыку CStateSkill
-//! представлен ссылкой на SkillSlot, а не вторым payload. Реестр навыков при
-//! удалении экземпляра освобождает и эту ссылку без дополнительного End.
+//! загружает каждую известную запись, не схлопывая повторные ID. Общий
+//! UpdateAbnormality в states/state.rs вызывает AI текущего экземпляра в порядке
+//! массива, перечитывая его после callback. Общие End и ClearAllStates пока
+//! не завершены; их нельзя заменить пустым End. Активные навыки не дублируются
+//! ссылками в m_vStates: проверка ID 0x198 в CastCure не доказывает AddState.
+//! Exact CSpiderMist наследует CSummonSkill и не регистрирует себя состоянием.
 //! Save кодирует записи одним обходом арены, включая порядок чтения часов,
 //! и выдаёт runtime-порядок только при полном сопоставлении с DB-кодеком.
 //! Неизвестный хвост, нематериализованная запись или неоднозначное соответствие
 //! сохраняют исходную раскладку вне подтверждённых обновлений. Padding не
 //! восстанавливается из потерявшего его typed-поля. Клиентский snapshot пока
-//! сохраняет wire-порядок и исходные offsets; Serialize CStateSkill не достигнут.
+//! сохраняет wire-порядок и исходные offsets. Активные cast не добавляются
+//! в DB-кодек без доказанного AddState и соответствующего формата записи.
 //! Замена Cure сохраняет runtime-позицию и отдельный offset DB-записи:
 //! между End и установкой нового экземпляра runtime-слот остаётся пустым.
 //! Уплотнение выполняется в начале UpdateAbnormality и mutable GameSave,
@@ -69,7 +71,7 @@
 //! У повторных защитных щитов удаление, DB-сериализация и клиентский life
 //! выбирают экземпляр по порядковому номеру среди того же ID, а не первый ID.
 //! Сбор душ хранится здесь без таймера; его DB-запись кодирует тот же payload. Порядок
-//! очищаемых, ослепляющих и периодических состояний проецируется из общей
+//! очищаемых и ослепляющих состояний проецируется из общей
 //! арены, без отдельных ID-наборов, теряющих повторные экземпляры.
 //! `CStrikeState` хранится типизированно в общей 8-байтной DB-записи,
 //! участвует в запретах движения и боя и удаляется при строгом истечении.
@@ -173,7 +175,7 @@
 //! Доказательства этих и остальных недостигнутых методов сохранены ниже.
 
 mod state_storage;
-pub(crate) use state_storage::{AppliedState, AppliedStateEntries, StateAddress, StateBatch, StateData, StateKey};
+pub(crate) use state_storage::{AppliedState, AppliedStateEntries, StateBatch, StateData, StateKey};
 
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
@@ -296,9 +298,7 @@ use crate::gameserver::appserver::skills::sealstate::{
 use crate::gameserver::appserver::skills::swordshipstate::{
     SWORDSHIP_STATE_BYTES, SwordshipState,
 };
-use crate::gameserver::appserver::skills::strikestate::{
-    STRIKE_STATE_BYTES, STRIKE_STATE_ID, StrikeState,
-};
+use crate::gameserver::appserver::skills::strikestate::StrikeState;
 use crate::gameserver::appserver::skills::bloodlossstate::{
     BloodLossState, BLOOD_LOSS_STATE_BYTES,
 };
@@ -307,7 +307,7 @@ use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CU
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
 use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
 use crate::gameserver::appserver::skills::bossbluefurystate::{
-    BossBlueFuryState, BossBlueFuryTick, BOSS_BLUE_FURY_STATE_BYTES,
+    BossBlueFuryState, BOSS_BLUE_FURY_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::bossbluequakestate::{
     BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES,
@@ -1529,12 +1529,7 @@ impl CMoveShape {
         let mut ordered_records = Vec::with_capacity(spans.len());
 
         for index in 0..self.state_entries.len() {
-            let Some(address) = self.state_entries.address(index) else { continue };
-            let StateAddress::Applied(key) = address else {
-                // Serialize зарегистрированного CStateSkill ещё не восстановлен.
-                complete = false;
-                continue;
-            };
+            let Some(key) = self.state_entries.address(index) else { continue };
             let Some(state) = self.state_entries.get(key) else {
                 complete = false;
                 continue;
@@ -1764,10 +1759,6 @@ impl CMoveShape {
         self.state_entries.first::<RideState>().is_some()
     }
 
-    pub(crate) fn has_materialized_abnormality(&self) -> bool {
-        self.state_entries.iter_data().any(StateData::has_materialized_ai)
-    }
-
     pub(crate) fn restore_automatic_hp_mp_states(
         &mut self,
         properties: super::player::PlayerCombatProperties,
@@ -1845,10 +1836,6 @@ impl CMoveShape {
         true
     }
 
-    pub(crate) fn consumable_restore_state_count(&self) -> usize {
-        self.state_entries.iter::<ConsumableRestoreState>().count()
-    }
-
     pub(crate) fn activate_loaded_consumable_restore_states(&mut self, now_ms: u32) -> usize {
         let mut activated = 0;
         self.state_entries.for_each_mut::<ConsumableRestoreState>(|state| {
@@ -1858,62 +1845,37 @@ impl CMoveShape {
         activated
     }
 
-    pub(crate) fn consumable_restore_state_is_health(&self, index: usize) -> Option<bool> {
-        self.state_entries.iter::<ConsumableRestoreState>().nth(index)
+    pub(crate) fn consumable_restore_state_is_health(&self, key: StateKey) -> Option<bool> {
+        self.applied_state::<ConsumableRestoreState>(key)
             .map(|state| state.is_health())
     }
 
     pub(crate) fn tick_consumable_restore_state(
         &mut self,
-        index: usize,
+        key: StateKey,
         checked_at_ms: u32,
         current: u32,
         maximum: u32,
     ) -> Option<ConsumableRestoreMutation> {
-        let key = *self.state_entries.keys::<ConsumableRestoreState>().get(index)?;
         ConsumableRestoreState::as_data_mut(self.state_entries.get_mut(key)?)?
             .tick(checked_at_ms, current, maximum)
     }
 
     pub(crate) fn consumable_restore_state_expired(
         &self,
-        index: usize,
+        key: StateKey,
         checked_at_ms: u32,
     ) -> Option<bool> {
-        self.state_entries.iter::<ConsumableRestoreState>().nth(index)
+        self.applied_state::<ConsumableRestoreState>(key)
             .map(|state| state.expired(checked_at_ms))
     }
 
-    pub(crate) fn remove_consumable_restore_state(&mut self, index: usize) -> bool {
-        let keys = self.state_entries.keys::<ConsumableRestoreState>();
-        let Some(&key) = keys.get(index) else {
+    pub(crate) fn remove_consumable_restore_state(&mut self, key: StateKey) -> bool {
+        let Some(state) = self.applied_state::<ConsumableRestoreState>(key) else {
             return false;
         };
-        let Some(state_id) = self.state_entries.get(key)
-            .and_then(ConsumableRestoreState::as_data_ref)
-            .map(|state| state.state_id())
-        else {
-            return false;
-        };
-        let occurrence = self.state_entries.iter::<ConsumableRestoreState>().take(index)
-            .filter(|state| state.state_id() == state_id)
-            .count();
-        let serialized_offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .filter(|offset| read_i32(&self.ex_states, *offset) == Some(state_id))
-            .nth(occurrence);
-        if self.state_entries.take::<ConsumableRestoreState>(key).is_none() {
-            return false;
-        }
-        if let Some(offset) = serialized_offset {
-            let amount = if state_id == RESTORE_HP_STATE_ID {
-                RESTORE_HP_STATE_BYTES
-            } else {
-                RESTORE_MP_STATE_BYTES
-            };
-            let _ = self.remove_serialized_state_record_at(offset, amount);
-        }
-        true
+        let amount = if state.is_health() { RESTORE_HP_STATE_BYTES } else { RESTORE_MP_STATE_BYTES };
+        self.remove_applied_state_record::<ConsumableRestoreState>(key, amount).is_some()
     }
 
     pub(crate) fn particular_states(&self) -> impl Iterator<Item = &ParticularState> {
@@ -1942,32 +1904,18 @@ impl CMoveShape {
         states
     }
 
-    pub(crate) fn remove_particular_state_at(
+
+    pub(crate) fn remove_particular_state_key(
         &mut self,
-        index: usize,
+        key: StateKey,
     ) -> Option<ParticularState> {
-        let key = self.state_entries.key_at::<ParticularState>(index)?;
-        let state = self.state_entries.take::<ParticularState>(key)?;
-        let offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(PARTICULAR_STATE_ID))
-            .nth(index);
-        if let Some(offset) = offset {
-            let _ = self.remove_serialized_state_record_at(offset, PARTICULAR_STATE_BYTES);
-        }
-        Some(state)
+        self.remove_applied_state_record::<ParticularState>(key, PARTICULAR_STATE_BYTES)
     }
 
     pub(crate) fn team_recruitment_states(&self) -> impl Iterator<Item = &CTeamState> {
         self.state_entries.iter::<CTeamState>()
     }
 
-    pub(crate) fn team_recruitment_state_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<&mut CTeamState> {
-        self.state_entries.nth_mut::<CTeamState>(index)
-    }
 
     pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
         self.append_serialized_state_record(&state.encoded_for_install());
@@ -1979,11 +1927,20 @@ impl CMoveShape {
         index: usize,
     ) -> Option<CTeamState> {
         let key = self.state_entries.key_at::<CTeamState>(index)?;
-        let state = self.state_entries.take::<CTeamState>(key)?;
+        self.remove_team_recruitment_state_key(key)
+    }
+
+    pub(crate) fn remove_team_recruitment_state_key(
+        &mut self,
+        key: StateKey,
+    ) -> Option<CTeamState> {
+        let index = self.state_entries.keys::<CTeamState>().iter()
+            .position(|candidate| *candidate == key)?;
         let offset = known_state_record_offsets(&self.ex_states)
             .into_iter()
             .filter(|offset| read_i32(&self.ex_states, *offset) == Some(TEAM_STATE_ID))
             .nth(index);
+        let state = self.state_entries.take::<CTeamState>(key)?;
         if let Some(offset) = offset
             && let Some(amount) = CTeamState::serialized_size(&self.ex_states, offset)
         {
@@ -1992,19 +1949,15 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn automatic_restore_state(&self, index: usize) -> Option<AutomaticRestoreState> {
-        self.state_entries.nth::<AutomaticRestoreState>(index).copied()
+    pub(crate) fn automatic_restore_state(&self, key: StateKey) -> Option<AutomaticRestoreState> {
+        self.applied_state::<AutomaticRestoreState>(key).copied()
     }
 
     pub(crate) fn automatic_restore_state_mut(
         &mut self,
-        index: usize,
+        key: StateKey,
     ) -> Option<&mut AutomaticRestoreState> {
-        self.state_entries.nth_mut::<AutomaticRestoreState>(index)
-    }
-
-    pub(crate) fn automatic_restore_state_count(&self) -> usize {
-        self.state_storage.state_entries.iter::<AutomaticRestoreState>().count()
+        self.applied_state_mut::<AutomaticRestoreState>(key)
     }
 
     /// Точный фабричный диапазон `CMoveShape::AddState`: остальные ID не
@@ -2257,10 +2210,6 @@ impl CMoveShape {
         self.state_entries.iter::<HealState>().copied().collect()
     }
 
-    pub(crate) fn heal_state_keys(&self) -> Vec<StateKey> {
-        self.state_entries.keys::<HealState>()
-    }
-
     pub(crate) fn remove_heal_state_key(&mut self, key: StateKey) -> Option<HealState> {
         let state = HealState::as_data_ref(self.state_entries.get(key)?)?;
         let skill_id = state.skill_id();
@@ -2292,10 +2241,6 @@ impl CMoveShape {
     pub(crate) fn remove_fury_state(&mut self, position: usize) -> Option<FuryState> {
         let key = self.state_entries.key_at::<FuryState>(position)?;
         self.remove_fury_state_key(key)
-    }
-
-    pub(crate) fn fury_state_keys(&self) -> Vec<StateKey> {
-        self.state_entries.keys::<FuryState>()
     }
 
     pub(crate) fn remove_fury_state_key(&mut self, key: StateKey) -> Option<FuryState> {
@@ -2360,19 +2305,7 @@ impl CMoveShape {
         self.state_entries.first::<BossBlueFuryState>().copied()
     }
 
-    pub(crate) fn tick_boss_blue_fury_state(
-        &mut self,
-        key: StateKey,
-        now_ms: u32,
-    ) -> Option<(BossBlueFuryState, BossBlueFuryTick)> {
-        let state = self.applied_state_mut::<BossBlueFuryState>(key)?;
-        let tick = state.tick(now_ms);
-        let snapshot = *state;
-        if tick.expired {
-            self.remove_applied_state_record::<BossBlueFuryState>(key, BOSS_BLUE_FURY_STATE_BYTES);
-        }
-        Some((snapshot, tick))
-    }
+
 
     pub(crate) fn activate_loaded_boss_blue_fury_state(
         &mut self,
@@ -2502,18 +2435,6 @@ impl CMoveShape {
         })
     }
 
-    pub(crate) fn take_expired_promotion_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<PromotionState> {
-        let key = self.defense_shield_keys().into_iter().find(|key| {
-            matches!(self.defense_shield(*key), Some(DefenseShieldState::Promotion(promotion)) if promotion.expired(now_ms))
-        })?;
-        match self.remove_defense_shield_key(key)? {
-            DefenseShieldState::Promotion(state) => Some(state),
-            _ => unreachable!("экземпляр состояния Promotion проверен"),
-        }
-    }
 
     pub(crate) fn defense_shields(&self) -> impl Iterator<Item = &DefenseShieldState> {
         self.state_entries.iter::<DefenseShieldState>()
@@ -2685,10 +2606,7 @@ impl CMoveShape {
     }
 
     fn state_id_at(&self, index: usize) -> Option<u32> {
-        match self.state_entries.address(index)? {
-            StateAddress::Applied(key) => Some(self.state_entries.get(key)?.state_id()),
-            StateAddress::Skill(slot) => Some(self.skill_at(slot)?.id),
-        }
+        Some(self.state_entries.get(self.state_entries.address(index)?)?.state_id())
     }
 
     pub(crate) fn applied_state_key<T: AppliedState>(&self) -> Option<StateKey> {
@@ -2707,12 +2625,16 @@ impl CMoveShape {
         T::as_data_mut(self.state_entries.get_mut(key)?)
     }
 
+    pub(crate) fn applied_state_data(&self, key: StateKey) -> Option<&StateData> {
+        self.state_entries.get(key)
+    }
+
     pub(crate) fn compact_state_slots(&mut self) -> bool {
         self.state_entries.compact()
     }
 
     pub(crate) fn state_at(&self, position: usize) -> Option<(StateKey, &StateData)> {
-        let StateAddress::Applied(key) = self.state_entries.address(position)? else { return None };
+        let key = self.state_entries.address(position)?;
         Some((key, self.state_entries.get(key)?))
     }
 
@@ -2749,10 +2671,21 @@ impl CMoveShape {
         key: StateKey,
         amount: usize,
     ) -> Option<T> {
+        T::as_data_ref(self.state_entries.get(key)?)?;
+        self.remove_applied_state_data(key, amount).and_then(T::from_data)
+    }
+
+    /// Только удаление точного payload и его wire-записи; игровой End с
+    /// visual, счётчиками и UpdateProperty выполняется владельцем снаружи.
+    pub(crate) fn remove_applied_state_data(
+        &mut self,
+        key: StateKey,
+        amount: usize,
+    ) -> Option<StateData> {
         let state_id = self.state_entries.get(key)?.state_id();
-        let occurrence = self.state_entries.keys::<T>().into_iter()
-            .filter(|candidate| self.state_entries.get(*candidate).is_some_and(|state| state.state_id() == state_id))
-            .position(|candidate| candidate == key)?;
+        let occurrence = self.state_entries.entries()
+            .filter(|(_, state)| state.state_id() == state_id)
+            .position(|(candidate, _)| candidate == key)?;
         let offset = known_state_record_offsets(&self.ex_states).into_iter()
             .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
             .nth(occurrence);
@@ -2764,7 +2697,8 @@ impl CMoveShape {
             StateData::MeteorArrow(state) => state.serialized_span(),
             _ => offset.map(|offset| (offset, amount)),
         };
-        let state = self.state_entries.take::<T>(key)?;
+        let position = self.state_entries.index_of(key)?;
+        let state = self.state_entries.remove_at(position)?;
         if let Some((offset, amount)) = span {
             self.remove_serialized_state_record_at(offset, amount);
         }
@@ -2787,15 +2721,6 @@ impl CMoveShape {
         states
     }
 
-    pub(crate) fn take_expired_daub_poison_state(
-        &mut self,
-        key: StateKey,
-        now_ms: u32,
-    ) -> Option<DaubPoisonState> {
-        self.applied_state::<DaubPoisonState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
         let previous = self.state_entries.first_key::<SealState>()
@@ -2815,11 +2740,6 @@ impl CMoveShape {
         states
     }
 
-    pub(crate) fn take_expired_seal_state(&mut self, key: StateKey, now_ms: u32) -> Option<SealState> {
-        self.applied_state::<SealState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn take_seal_state(&mut self) -> Option<SealState> {
         let key = self.state_entries.first_key::<SealState>()?;
@@ -3084,15 +3004,6 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn take_expired_spider_web_state(
-        &mut self,
-        key: StateKey,
-        now_ms: u32,
-    ) -> Option<SpiderWebState> {
-        self.applied_state::<SpiderWebState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<SpiderWebState>(key, SPIDER_WEB_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
         let key = self.state_entries.first_key::<SpiderWebState>()?;
@@ -3128,11 +3039,6 @@ impl CMoveShape {
         states
     }
 
-    pub(crate) fn take_expired_blind_state(&mut self, key: StateKey, now_ms: u32) -> Option<BlindState> {
-        self.applied_state::<BlindState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<BlindState>(key, BLIND_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn take_blind_state(&mut self) -> Option<BlindState> {
         let key = self.state_entries.first_key::<BlindState>()?;
@@ -3257,11 +3163,6 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn take_expired_knock_out_state(&mut self, key: StateKey, now_ms: u32) -> Option<KnockOutState> {
-        self.applied_state::<KnockOutState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
         let key = self.state_entries.first_key::<KnockOutState>()?;
@@ -3300,35 +3201,8 @@ impl CMoveShape {
     }
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
-        (0..self.state_entries.len()).filter_map(|index| {
-            match self.state_entries.address(index)? {
-                StateAddress::Applied(key) => {
-                    let state = self.state_entries.get(key)?;
-                    state.is_curable().then_some(state.state_id())
-                }
-                StateAddress::Skill(slot) => Some(self.skill_at(slot)?.id),
-            }
-        }).collect()
-    }
-
-    pub(crate) fn register_curable_skill_state(&mut self, slot: SkillSlot) {
-        self.state_entries.detach_skill(slot);
-        self.state_entries.append_skill(slot);
-    }
-
-    pub(crate) fn finish_curable_skill_state(&mut self, skill_id: u32) {
-        for index in 0..self.state_entries.len() {
-            if let Some(StateAddress::Skill(slot)) = self.state_entries.address(index)
-                && self.skill_at(slot).is_some_and(|skill| skill.id == skill_id)
-            {
-                self.finish_curable_skill_slot(slot);
-                break;
-            }
-        }
-    }
-
-    pub(crate) fn finish_curable_skill_slot(&mut self, slot: SkillSlot) {
-        self.state_entries.detach_skill(slot);
+        self.state_entries.iter_data().filter(|state| state.is_curable())
+            .map(StateData::state_id).collect()
     }
 
     pub(crate) fn replace_poison_fog_state(&mut self, mut state: PoisonFogState, now_ms: u32) -> Option<PoisonFogState> {
@@ -3523,30 +3397,7 @@ impl CMoveShape {
         self.state_entries.iter::<StrikeState>().cloned().collect()
     }
 
-    pub(crate) fn take_expired_strike_states(&mut self, now_ms: u32) -> Vec<StrikeState> {
-        let mut ended = Vec::new();
-        let mut position = 0usize;
-        while position < self.state_entries.iter::<StrikeState>().count() {
-            if !self.state_entries.nth::<StrikeState>(position).expect("семейная позиция проверена до изменения списка").expired(now_ms) { position += 1; continue; }
-            let state = self.state_entries.take_nth::<StrikeState>(position).expect("семейная позиция проверена до удаления");
-            if let Some(offset) = known_state_record_offsets(&self.ex_states).into_iter().filter(|offset| read_u32(&self.ex_states, *offset) == Some(STRIKE_STATE_ID)).nth(position) {
-                self.remove_serialized_state_record_at(offset, STRIKE_STATE_BYTES);
-            }
-            self.set_moveable(true); self.set_fightable(true); ended.push(state);
-        }
-        ended
-    }
 
-    pub(crate) fn take_strike_states(&mut self) -> Vec<StrikeState> {
-        let ended: Vec<_> = self.state_entries.keys::<StrikeState>().into_iter()
-            .filter_map(|key| self.state_entries.take::<StrikeState>(key)).collect();
-        for _ in 0..ended.len() {
-            self.remove_serialized_state_record(STRIKE_STATE_ID, STRIKE_STATE_BYTES);
-            self.set_moveable(true);
-            self.set_fightable(true);
-        }
-        ended
-    }
 
     pub(crate) fn kerosene_state(&self) -> Option<KeroseneState> { self.state_entries.first::<KeroseneState>().copied() }
     pub(crate) fn replace_kerosene_state(&mut self, mut state: KeroseneState, now_ms: u32) -> Option<KeroseneState> {
@@ -3590,30 +3441,15 @@ impl CMoveShape {
         previous
     }
 
-    pub(crate) fn take_expired_battle_fairy_attribute_states(
+    pub(crate) fn take_expired_battle_fairy_attribute_state(
         &mut self,
+        key: StateKey,
         now_ms: u32,
-    ) -> Vec<BattleFairyAttributeState> {
-        let mut expired = Vec::new();
-        let mut position = 0;
-        while let Some(state) = self.state_entries.nth::<BattleFairyAttributeState>(position).copied() {
-            if !state.expired(now_ms) {
-                position += 1;
-                continue;
-            }
-            let occurrence = self.state_entries.iter::<BattleFairyAttributeState>()
-                .take(position).filter(|candidate| candidate.skill_id() == state.skill_id()).count();
-            let offset = known_state_record_offsets(&self.ex_states).into_iter()
-                .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state.skill_id()))
-                .nth(occurrence);
-            let state = self.state_entries.take_nth::<BattleFairyAttributeState>(position)
-                .expect("семейная позиция проверена до удаления");
-            if let Some(offset) = offset {
-                self.remove_serialized_state_record_at(offset, BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
-            }
-            expired.push(state);
+    ) -> Option<BattleFairyAttributeState> {
+        if !self.applied_state::<BattleFairyAttributeState>(key)?.expired(now_ms) {
+            return None;
         }
-        expired
+        self.remove_applied_state_record::<BattleFairyAttributeState>(key, BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES)
     }
 
     pub(crate) fn activate_loaded_battle_fairy_attribute_states(&mut self, now_ms: u32) -> Vec<BattleFairyAttributeState> {
@@ -3629,11 +3465,6 @@ impl CMoveShape {
         states
     }
 
-    pub(crate) fn periodic_attack_states(&self) -> Vec<(StateKey, u32)> {
-        self.state_entries.entries()
-            .filter(|(_, state)| state.is_periodic_attack())
-            .map(|(key, state)| (key, state.state_id())).collect()
-    }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {
         self.state_entries.iter::<PersistentAgilityFamilyState>().find_map(|state| match state {
@@ -3723,27 +3554,16 @@ impl CMoveShape {
         self.state_entries.iter::<ScriptMoveState>()
     }
 
-    pub(crate) fn script_state(&self, index: usize) -> Option<ScriptMoveState> {
-        self.state_entries.nth::<ScriptMoveState>(index).copied()
-    }
 
     pub(crate) fn remove_script_state_at(&mut self, index: usize) -> Option<ScriptMoveState> {
-        let state = self.state_entries.nth::<ScriptMoveState>(index).copied()?;
-        let occurrence = self.state_entries.iter::<ScriptMoveState>().take(index)
-            .filter(|candidate| candidate.state_id() == state.state_id())
-            .count();
-        let offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state.state_id() as u32))
-            .nth(occurrence);
         let key = self.state_entries.key_at::<ScriptMoveState>(index)?;
-        let removed = self.state_entries.take::<ScriptMoveState>(key)?;
-        if let Some(offset) = offset
-            && let Some(size) = ScriptMoveState::serialized_size(state.state_id())
-        {
-            self.remove_serialized_state_record_at(offset, size);
-        }
-        Some(removed)
+        self.remove_script_state_key(key)
+    }
+
+    pub(crate) fn remove_script_state_key(&mut self, key: StateKey) -> Option<ScriptMoveState> {
+        let state = self.applied_state::<ScriptMoveState>(key)?;
+        let amount = ScriptMoveState::serialized_size(state.state_id())?;
+        self.remove_applied_state_record::<ScriptMoveState>(key, amount)
     }
 
     pub(crate) fn activate_loaded_script_states(&mut self, now_ms: u32) -> Vec<ScriptMoveState> {
@@ -3808,7 +3628,14 @@ impl CMoveShape {
     }
 
     pub(crate) fn end_ride_state(&mut self) -> Option<RideState> {
-        let state = self.state_entries.take_first::<RideState>()?;
+        let key = self.state_entries.first_key::<RideState>()?;
+        self.end_ride_state_key(key)
+    }
+
+    pub(crate) fn end_ride_state_key(&mut self, key: StateKey) -> Option<RideState> {
+        self.applied_state::<RideState>(key)?;
+        self.set_fightable(true);
+        let state = self.state_entries.take::<RideState>(key)?;
         if let Some((offset, amount)) = state.serialized_span()
             && offset + amount <= self.ex_states.len()
         {
@@ -3819,7 +3646,6 @@ impl CMoveShape {
             }
             self.shift_serialized_state_offsets_after(offset, amount);
         }
-        self.set_fightable(true);
         Some(state)
     }
 
@@ -3966,25 +3792,25 @@ impl CMoveShape {
 
     pub(crate) fn undead_state_tick(
         &mut self,
-        now_ms: u32,
-        dead: bool,
-    ) -> (Vec<StateKey>, Vec<(StateKey, u32, u32)>) {
-        let mut ended = Vec::new();
-        let mut item_due = Vec::new();
-        for key in self.state_entries.keys::<UndeadState>() {
-            let Some(state) = self.state_entries.get_mut(key).and_then(UndeadState::as_data_mut) else {
-                continue;
-            };
-            if state.expired(now_ms) || (dead && state.disappear_after_dead) {
-                ended.push(key);
-                continue;
-            }
-            if state.item_due(now_ms) {
-                state.last_item_tick_ms = now_ms;
-                item_due.push((key, state.item_index, state.item_amount));
-            }
+        key: StateKey,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> (bool, Option<(u32, u32)>) {
+        let Some(state) = self.applied_state_mut::<UndeadState>(key) else {
+            return (false, None);
+        };
+        if state.keep_time_ms != 0 && state.expired(now_milliseconds()) {
+            return (true, None);
         }
-        (ended, item_due)
+        if state.last_item_tick_ms == 0 {
+            state.last_item_tick_ms = state.started_ms;
+        }
+        if state.frequency_ms != 0 && state.item_index != 0 && state.item_amount != 0
+            && state.item_due(now_milliseconds())
+        {
+            state.last_item_tick_ms = now_milliseconds();
+            return (false, Some((state.item_index, state.item_amount)));
+        }
+        (false, None)
     }
 
     pub(crate) fn add_extended_state(
@@ -4124,24 +3950,27 @@ impl CMoveShape {
 
     pub(crate) fn extended_state_tick(
         &mut self,
-        now_ms: u32,
-    ) -> (Vec<StateKey>, Vec<(StateKey, u32, u32)>) {
-        let mut expired = Vec::new();
-        let mut item_due = Vec::new();
-        for key in self.state_entries.keys::<ExtendedState>() {
-            let Some(state) = self.state_entries.get_mut(key).and_then(ExtendedState::as_data_mut) else {
-                continue;
-            };
-            if state.expired(now_ms) {
-                expired.push(key);
-                continue;
+        key: StateKey,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> (bool, Option<(u32, u32)>) {
+        let Some(state) = self.applied_state_mut::<ExtendedState>(key) else {
+            return (false, None);
+        };
+        if state.keep_time_ms != 0 && state.expired(now_milliseconds()) {
+            return (true, None);
+        }
+        if state.kind == ExtendedStateKind::New {
+            if state.last_item_tick_ms == 0 {
+                state.last_item_tick_ms = state.started_ms;
             }
-            if state.item_due(now_ms) {
-                state.restart_item_clock(now_ms);
-                item_due.push((key, state.item_index, state.item_amount));
+            if state.frequency_ms != 0 && state.item_index != 0 && state.item_amount != 0
+                && state.item_due(now_milliseconds())
+            {
+                state.restart_item_clock(now_milliseconds());
+                return (false, Some((state.item_index, state.item_amount)));
             }
         }
-        (expired, item_due)
+        (false, None)
     }
 
     pub(crate) fn add_change_body_state(
@@ -4254,12 +4083,6 @@ impl CMoveShape {
         storage.state_entries.iter::<ChangeBodyState>().cloned().collect()
     }
 
-    pub(crate) fn expired_change_body_state_keys(&self, now_ms: u32) -> Vec<StateKey> {
-        self.state_entries.keys::<ChangeBodyState>().into_iter()
-            .filter(|key| self.state_entries.get(*key).and_then(ChangeBodyState::as_data_ref)
-                .is_some_and(|state| state.expired(now_ms)))
-            .collect()
-    }
 
     pub(crate) fn change_body_region_transition_end_keys(&mut self) -> Vec<StateKey> {
         let mut ended = Vec::new();
@@ -4522,11 +4345,6 @@ impl CMoveShape {
             self.current_skill_id = None;
         }
         for category in [SkillCategory::Attack, SkillCategory::Defense, SkillCategory::Summon, SkillCategory::State] {
-            let slots: Vec<_> = self.skills[category as usize].order.iter()
-                .map(|&entity| SkillSlot { category, entity }).collect();
-            for slot in slots {
-                self.state_entries.detach_skill(slot);
-            }
             self.skills[category as usize].clear();
         }
     }
@@ -4665,8 +4483,6 @@ impl CMoveShape {
         let skills = &self.skills[category as usize];
         let index = skills.iter().position(|skill| skill.id == skill_id);
         if let Some(index) = index {
-            let slot = SkillSlot { category, entity: skills.order[index] };
-            self.state_entries.detach_skill(slot);
             self.skills[category as usize].remove(index);
         }
     }
@@ -5777,19 +5593,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::UpdateAbnormality
-// STATUS: PARTIALLY_MATERIALIZED_KNOWN_STATE_OWNERS
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:247
-// RVA: 0x000CFD00
-// ADDRESS: 004cfd00
-// PROTOTYPE: void __thiscall UpdateAbnormality(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: Catch@004d002e

@@ -5,16 +5,23 @@
 //! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/daubpoisonstate.cpp`. Состояние принадлежит только
-//! игроку, хранит строгий wrapping-срок и публикует исходные пакеты начала и
+//! `appserver/skills/daubpoisonstate.cpp`. Достигнутый cast создаёт состояние
+//! игроку; само состояние хранит строгий wrapping-срок и публикует пакеты начала и
 //! завершения. Проверки стрел читают этот единственный типизированный
 //! экземпляр через `GetStateBySkillID`. Persisted-запись `ID + remaining time`
 //! занимает 8 байт и активируется при spatial login. Vtable exact EXE
 //! подтверждает общий с `CBlindState` `GetRemainedTime` по адресу
 //! `0x005F2CD0`, включая отдельное чтение часов для положительного остатка.
+//! End vtable+0x1C→0x005FD420 не имеет Player-gate: сначала visual, затем
+//! GetSufferer и RemoveState. Общий AI поэтому завершает и регионального
+//! держателя; player UpdateProperty остаётся отдельной проекцией удаления.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -93,16 +100,29 @@ pub(crate) fn replace_player_daub_poison_state(
     true
 }
 
-pub(crate) fn expire_player_daub_poison_state(
+pub(crate) fn update_daub_poison_state(
     game: &mut CGame,
-    player_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
     now_ms: u32,
 ) -> bool {
-    let state = game
-        .find_player_mut(player_id)
-        .and_then(|player| player.take_expired_daub_poison_state(key, now_ms));
-    let Some(state) = state else { return false };
-    send_daub_poison_state_visual(game, player_id, state, false, || now_ms);
-    true
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<DaubPoisonState>(key))
+        .is_some_and(|state| state.expired(now_ms))
+    {
+        return false;
+    }
+    let mut message = CMessage::new(STATE_END_MESSAGE);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(DAUB_POISON_STATE_ID as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES))
+        .is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }

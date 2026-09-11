@@ -1985,11 +1985,6 @@ impl CMonster {
         }, factory) {
             return;
         }
-        if skill_id == SPIDER_MIST_SKILL_ID
-            && let Some(slot) = self.move_shape.skill_slot(skill_id, factory)
-        {
-            self.move_shape.register_curable_skill_state(slot);
-        }
         if let Some(ai) = self.selected_base_ai_mut() {
             ai.add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);
         }
@@ -2094,9 +2089,6 @@ impl CMonster {
         if Self::attack_end_restores_movement(skill_id) {
             self.move_shape.set_moveable(true);
         }
-        if skill_id == SPIDER_MIST_SKILL_ID {
-            self.move_shape.finish_curable_skill_state(skill_id);
-        }
     }
 
     fn finish_base_attack_cast_with_reuse(
@@ -2176,18 +2168,6 @@ impl CMonster {
         }
         self.move_shape.set_current_skill_id(None);
         self.move_shape.finish_skill_base(skill_id, factory, termination.unwrap_or(SkillTermination::Cancelled));
-    }
-
-    /// Удаление CState из Cure не вызывает CSkill::End(int).
-    pub(crate) fn remove_curable_attack_cast(&mut self, skill_id: u32, factory: &CSkillFactory) -> bool {
-        if !self.move_shape.clear_monster_execution(skill_id, factory) {
-            return false;
-        }
-        self.move_shape.finish_curable_skill_state(skill_id);
-        if self.move_shape.current_skill_id() == Some(skill_id) {
-            self.move_shape.set_current_skill_id(None);
-        }
-        true
     }
 
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {

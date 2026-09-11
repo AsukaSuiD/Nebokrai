@@ -7,9 +7,18 @@
 //! этот legacy defect сохранён при загрузке: остаток сужается до `WORD`, а
 //! level читается с `+6`. Типизированный owner участвует в login, пересчёте
 //! свойств, строгом `CBlindState::AI`, визуалах и обратном DB-кодеке.
-//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
-//! повторные записи сохраняются, после удаления и публикаций следующий
-//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! Достигнутый AI получает один поколенческий ключ общей арены;
+//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
+//! Любое удаление адресует тот же экземпляр, а не первый дубль.
+//! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
+//! формул игрока не запрещают жизненный цикл региональных держателей.
+//! Exact vtable 0x0066202C: End 0x006059A0 отправляет visual и вызывает базовый End 0x005DBCE0.
+//! После эффекта holder перечитывается; свойства пересчитываются только
+//! у игрока и только при фактическом удалении точной записи.
+
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -145,22 +154,29 @@ pub(crate) fn send_tian_shen_xia_fan_state_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-pub(crate) fn expire_player_tian_shen_xia_fan_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().applied_state_keys::<TianShenXiaFanState>()).unwrap_or_default();
-    let mut ended = false;
-    for key in keys {
-        let removed = game.find_player_mut(player_id).and_then(|player| {
-            player.move_shape().applied_state::<TianShenXiaFanState>(key).filter(|state| state.expired(now_ms))?;
-            player.move_shape_mut().remove_applied_state_record::<TianShenXiaFanState>(key, TIAN_SHEN_XIA_FAN_STATE_BYTES)
-        });
-        if let Some(state) = removed {
-            send_tian_shen_xia_fan_state_visual(game, player_id, state, false, || now_ms);
-            let _ = game.update_player_properties(player_id);
-            ended = true;
-        }
+pub(crate) fn update_tian_shen_xia_fan_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now_ms: u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<TianShenXiaFanState>(key))
+        .filter(|state| state.expired(now_ms)).copied()
+        else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.state_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<TianShenXiaFanState>(key, TIAN_SHEN_XIA_FAN_STATE_BYTES))
+        .is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
     }
-    ended
+    true
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

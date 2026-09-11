@@ -9,10 +9,18 @@
 //! Общая с `CBossBlueFuryState` serializer-пара `0x005E7330/0x005D6190`
 //! сохраняет 12 байт: `ID + remaining time + IEEE-754 factor bits`;
 //! spatial login восстанавливает срок и вложенный запрет движения.
-//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
-//! повторные записи сохраняются, после удаления и публикаций следующий
-//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! Достигнутый AI получает один поколенческий ключ общей арены;
+//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
+//! Любое удаление адресует тот же экземпляр, а не первый дубль.
+//! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
+//! формул игрока не запрещают жизненный цикл региональных держателей.
+//! После visual владелец перечитывается; UpdateProperty вызывается только
+//! для игрока и только при фактическом удалении этой записи.
+//! Exact End 0x005FB800: visual → GetSufferer → SetMoveable(true) → RemoveState.
 //! Загрузка добавляет вложенный запрет движения для каждого экземпляра.
+
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -80,23 +88,28 @@ pub(crate) fn replace_player_pillar_state(
     send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms); true
 }
 
-pub(crate) fn expire_player_pillar_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().applied_state_keys::<PillarState>()).unwrap_or_default();
-    let mut ended_any = false;
-    for key in keys {
-        if !game.find_player(player_id)
-            .and_then(|player| player.move_shape().applied_state::<PillarState>(key))
-            .is_some_and(|state| state.expired(now_ms)) {
-            continue;
-        }
-        let finished = game.find_player_mut(player_id).and_then(|player| {
-            let state = player.move_shape_mut().remove_applied_state_record::<PillarState>(key, PILLAR_STATE_BYTES)?; player.set_skill_moveable(true);
-            Some((state, player.server_region_id()?, player.shape().identity(),
-                player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-        });
-        let Some((state, region_id, identity, tile_x, tile_y)) = finished else { continue; };
-        send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms); ended_any = true;
+pub(crate) fn update_pillar_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now_ms: u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PillarState>(key))
+        .filter(|state| state.expired(now_ms)).copied()
+        else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder).and_then(|shape| {
+        shape.set_moveable(true);
+        shape.remove_applied_state_record::<PillarState>(key, PILLAR_STATE_BYTES)
+    }).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
     }
-    ended_any
+    true
 }

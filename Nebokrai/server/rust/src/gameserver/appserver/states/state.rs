@@ -19,16 +19,332 @@
 //! текущим держателем навыка. Эти адаптеры работают с опубликованным регионом,
 //! не создавая копий owning форм или их ресурсов.
 
+//! Общий UpdateAbnormality ниже повторяет CMoveShape::UpdateAbnormality
+//! (0x004CFD00): уплотнение в прологе, исходная длина после UpdateProperty,
+//! новое чтение позиции до каждого AI и контроль длины после callback.
+//! SlotMap удерживает идентичность, но не продлевает жизнь удалённого payload.
+//! Часы принадлежат конкретному AI; общий проход их не читает. End не вызывает
+//! уплотнения. GS0121/GS0122 используют исходные StringTable и 32-битные аргументы.
+//! Для постоянных Agility/Natural/Rapture, TaiJi, Enlarge*, Origin, MeteorArrow,
+//! EnergyHolding, SoulCollect, Swordship1–4 и WuXing exact vtable+0x0C указывает
+//! на 0x00485540 (ret), а не базовый CState::AI 0x005DBC90, вызывающий End.
+//! Прочие варианты перечислены явно: отсутствующий override не становится no-op.
+//! Сейчас общий проход вызывают живые player/monster; property-проекция игрока
+//! пересчитывается через CGame, monster читает модификаторы из живых состояний.
+
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::moveshape::{CMoveShape, StateData, StateKey};
+use crate::gameserver::appserver::skills;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillLifecycle;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
+
+type StateAi<Runtime> = fn(&mut CGame, i32, ShapeIdentity, StateKey, &mut Runtime);
+
+/// Исходный массив перечитывается после каждого callback: добавленное состояние
+/// не расширяет границу этого прохода, а удалённое не оживает из снимка ключей.
+pub(crate) fn update_move_shape_states<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    runtime: &mut Runtime,
+) -> Option<()> {
+    let changed = resolve_state_move_shape_mut(game, region_id, identity)?.compact_state_slots();
+    if changed && identity.object_type == 400 {
+        let _ = game.update_player_properties(identity.id);
+    }
+    let initial_len = resolve_state_move_shape(game, region_id, identity)?.state_slot_count();
+    for index in 0..initial_len {
+        let shape = resolve_state_move_shape(game, region_id, identity)?;
+        let current_len = shape.state_slot_count();
+        if index >= current_len {
+            log_state_array_change(game, shape.shape(), b"GS0121", None, initial_len, current_len, index);
+            return Some(());
+        }
+        let Some((key, state)) = shape.state_at(index) else { continue };
+        let state_id = state.state_id();
+        let ai = state_ai::<Runtime>(state);
+        ai(game, region_id, identity, key, runtime);
+        let shape = resolve_state_move_shape(game, region_id, identity)?;
+        let current_len = shape.state_slot_count();
+        if current_len != initial_len {
+            log_state_array_change(game, shape.shape(), b"GS0122", Some(state_id), initial_len, current_len, index);
+        }
+    }
+    Some(())
+}
+
+fn log_state_array_change(
+    game: &CGame,
+    shape: &CShape,
+    string_id: &[u8],
+    state_id: Option<u32>,
+    initial_len: usize,
+    current_len: usize,
+    index: usize,
+) {
+    use crate::gameserver::gameserver::game::{format_legacy_mixed, LegacyFormatArgument};
+    let mut args = vec![LegacyFormatArgument::Bytes(shape.base_object().get_name())];
+    if let Some(state_id) = state_id {
+        args.push(LegacyFormatArgument::Word32(state_id));
+    }
+    args.extend([initial_len, current_len, index].map(|value| LegacyFormatArgument::Word32(value as u32)));
+    let text = format_legacy_mixed(game.get_string_by_id(string_id), &args, 0xff);
+    crate::public::tools::put_debug_string(&text);
+}
+
+/// Только адаптер краткого заимствования уже существующих regional End.
+/// Отправки, повторно ищущие регион в CGame, выполняются после возврата owner.
+fn with_state_region<R>(
+    game: &mut CGame,
+    region_id: i32,
+    update: impl FnOnce(&mut CGame, &mut CServerRegion) -> R,
+) -> Option<R> {
+    let mut owner = game.take_region_owner(region_id)?;
+    let result = update(game, owner.base_mut());
+    game.restore_region_owner(owner);
+    Some(result)
+}
+
+fn state_ai<Runtime: GameMainLoopRuntime>(state: &StateData) -> StateAi<Runtime> {
+    match state {
+        StateData::PersistentAgility(_) | StateData::TaiJi(_)
+        | StateData::EnlargeFullMiss(_) | StateData::EnlargeMaxHp(_)
+        | StateData::EnlargeMaxMp(_) | StateData::Origin(_)
+        | StateData::MeteorArrow(_) | StateData::EnergyHolding(_)
+        | StateData::SoulCollect(_) | StateData::Swordship(_)
+        | StateData::WuXing(_) => |_, _, _, _, _| {},
+        StateData::Agility2(_) => |game, region, target, key, runtime| {
+            skills::agilitystate2::update_agility_state_2(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::Callosity(_) => |game, region, target, key, runtime| {
+            skills::callositystate::update_callosity_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::Hearten(_) => |game, region, target, key, runtime| {
+            skills::heartenstate::update_hearten_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::RageBreak(_) => |game, region, target, key, runtime| {
+            skills::ragebreakstate::update_rage_break_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::Pillar(_) => |game, region, target, key, runtime| {
+            skills::pillarstate::update_pillar_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::TianShenXiaFan(_) => |game, region, target, key, runtime| {
+            skills::tianshenxiafanstate::update_tian_shen_xia_fan_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::Wangsheng(_) => |game, region, target, key, runtime| {
+            skills::wangshengstate::update_wangsheng_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::Blind(_) | StateData::KnockOut(_) | StateData::SpiderWeb(_)
+        | StateData::Seal(_) | StateData::Strike(_) => |game, region, target, key, runtime| {
+            skills::blindstate::update_blind_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::Heal(_) => |game, region, target, key, runtime| {
+            skills::healstate::update_stored_heal_state(game, region, target, key, || runtime.now_milliseconds());
+        },
+        StateData::PoisonArrow(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::poisonarrowstate::update_player_poison_arrow_state(game, target.id, key, runtime); }
+                600 => { skills::poisonarrowstate::update_monster_poison_arrow_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::SpiderPoison(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::spiderpoisonstate::update_player_spider_poison_state(game, target.id, key, runtime); }
+                600 => { skills::spiderpoisonstate::update_monster_spider_poison_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::SpriteBurn(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::spriteburnstate::update_player_sprite_burn_state(game, target.id, key, runtime); }
+                600 => { skills::spriteburnstate::update_monster_sprite_burn_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::BloodLoss(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::bloodlossstate::update_player_blood_loss_state(game, target.id, key, runtime); }
+                600 => { skills::bloodlossstate::update_monster_blood_loss_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::LeafCut(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::leafcutstate::update_player_leaf_cut_state(game, target.id, key, runtime); }
+                600 => { skills::leafcutstate::update_monster_leaf_cut_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::LeafCut2(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::leafcutstate2::update_player_leaf_cut_2_state(game, target.id, key, runtime); }
+                600 => { skills::leafcutstate2::update_monster_leaf_cut_2_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::LeafCut3(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::leafcutstate3::update_player_leaf_cut_3_state(game, target.id, key, runtime); }
+                600 => { skills::leafcutstate3::update_monster_leaf_cut_3_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::Kerosene(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::kerosenestate::update_player_kerosene_state(game, target.id, key, runtime); }
+                600 => { skills::kerosenestate::update_monster_kerosene_state(game, region, target.id, key, runtime); }
+                _ => {}
+            }
+        },
+        StateData::Cure(_) => |game, region, target, key, runtime| {
+            skills::curestate::update_cure_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::BossBlueQuake(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::bossbluequakestate::expire_player_boss_blue_quake_state(game, target.id, key, now); }
+                600 => { with_state_region(game, region, |game, region| skills::bossbluequakestate::expire_monster_boss_blue_quake_state(game, region, target.id, key, now)); }
+                _ => {}
+            }
+        },
+        StateData::BoaLock(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::boalockstate::expire_player_boa_lock_state(game, target.id, key, now); }
+                600 => { with_state_region(game, region, |game, region| skills::boalockstate::expire_monster_boa_lock_state(game, region, target.id, key, now)); }
+                _ => {}
+            }
+        },
+        StateData::Rush(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::rushstate::expire_player_rush_state(game, target.id, key, now); }
+                600 => { with_state_region(game, region, |game, region| skills::rushstate::expire_monster_rush_state(game, region, target.id, key, now)); }
+                _ => {}
+            }
+        },
+        StateData::Rush2(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::rushstate2::expire_player_rush_2_state(game, target.id, key, now); }
+                600 => { with_state_region(game, region, |game, region| skills::rushstate2::expire_monster_rush_2_state(game, region, target.id, key, now)); }
+                _ => {}
+            }
+        },
+        StateData::KnightCut(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::knightcutstate::expire_player_knight_cut_state(game, target.id, key, now); }
+                600 => { with_state_region(game, region, |game, region| skills::knightcutstate::expire_monster_knight_cut_state(game, region, target.id, key, now)); }
+                _ => {}
+            }
+        },
+        StateData::GodBless(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::godblessstate::finish_player_god_bless(game, target.id, key, now, runtime); }
+                600 => { skills::godblessstate::finish_monster_god_bless(game, region, target.id, key, now); }
+                _ => {}
+            }
+        },
+        StateData::Roar(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::roarstate::finish_player_roar(game, target.id, key, now, runtime); }
+                600 => { skills::roarstate::finish_monster_roar(game, region, target.id, key, now); }
+                _ => {}
+            }
+        },
+        StateData::Weak(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::weakstate::finish_player_weak_outside(game, target.id, key, runtime); }
+                600 => { skills::weakstate::finish_monster_weak_outside(game, region, target.id, key); }
+                _ => {}
+            }
+        },
+        StateData::Fury(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::furystate::expire_player_fury_state(game, target.id, key, now, runtime); }
+                600 => { with_state_region(game, region, |game, region| skills::furystate::expire_monster_fury_state(game, region, target.id, key, now)); }
+                _ => {}
+            }
+        },
+        StateData::BossBlueFury(_) => |game, region, target, key, runtime| {
+            match target.object_type {
+                400 => { skills::bossbluefurystate::expire_player_boss_blue_fury_state(game, target.id, key, || runtime.now_milliseconds()); }
+                600 => { with_state_region(game, region, |game, region| skills::bossbluefurystate::expire_monster_boss_blue_fury_state(game, region, target.id, key, || runtime.now_milliseconds())); }
+                _ => {}
+            }
+        },
+        StateData::PoisonFog(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::poisonfogstate::expire_player_poison_fog_state(game, target.id, key, now, runtime); }
+                600 => {
+                    if let Some(Some(end)) = with_state_region(game, region, |_, region| skills::poisonfogstate::take_expired_monster_poison_fog_state(region, target.id, key, now)) {
+                        end.deliver(game, region, now);
+                    }
+                }
+                _ => {}
+            }
+        },
+        StateData::BattleFairyAttribute(_) => |game, region, target, key, runtime| {
+            let now = runtime.now_milliseconds();
+            match target.object_type {
+                400 => { skills::battlefairyattributestate::expire_player_battle_fairy_attribute_state(game, target.id, key, now); }
+                600 => {
+                    if let Some(Some(end)) = with_state_region(game, region, |_, region| skills::battlefairyattributestate::take_expired_monster_battle_fairy_attribute_state(region, target.id, key, now)) {
+                        end.deliver(game, region);
+                    }
+                }
+                _ => {}
+            }
+        },
+        StateData::DefenseShield(_) => |game, region, target, key, runtime| {
+            skills::shieldstate::update_defense_shield(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::DaubPoison(_) => |game, region, target, key, runtime| {
+            skills::daubpoisonstate::update_daub_poison_state(game, region, target, key, runtime.now_milliseconds());
+        },
+        StateData::AutomaticRestore(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_automatic_restore_state(region, target, key, runtime);
+        },
+        StateData::ConsumableRestore(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_consumable_restore_state(region, target, key, runtime);
+        },
+        StateData::Particular(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_particular_state(region, target, key, runtime);
+        },
+        StateData::Team(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_team_recruitment_state(region, target, key, runtime);
+        },
+        StateData::Script(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_script_move_state(region, target, key, runtime);
+        },
+        StateData::ChangeBody(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_change_body_state(region, target, key, runtime);
+        },
+        StateData::Extended(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_extended_state(region, target, key, runtime);
+        },
+        StateData::Undead(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_appellation_state(region, target, key, runtime);
+        },
+        StateData::Ride(_) => |game, region, target, key, runtime| {
+            game.update_move_shape_ride_state(region, target, key, runtime);
+        },
+    }
+}
+
+
 
 /// Факты объектного CState::Begin при временно извлечённом регионе.
 /// Запоминаются только region/type/id, без нового GUID-фильтра. Для

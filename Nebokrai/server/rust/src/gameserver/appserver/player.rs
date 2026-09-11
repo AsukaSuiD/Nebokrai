@@ -3951,16 +3951,7 @@ impl CPlayer {
         self.move_shape.team_recruitment_states().next()
     }
 
-    pub(crate) fn team_recruitment_state(&self, index: usize) -> Option<&CTeamState> {
-        self.move_shape.team_recruitment_states().nth(index)
-    }
 
-    pub(crate) fn team_recruitment_state_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<&mut CTeamState> {
-        self.move_shape.team_recruitment_state_mut(index)
-    }
 
     pub(crate) fn remove_team_recruitment_state_at(
         &mut self,
@@ -4876,13 +4867,6 @@ impl CPlayer {
         self.move_shape.activate_loaded_undead_states(now_ms)
     }
 
-    pub(crate) fn appellation_state_tick(
-        &mut self,
-        now_ms: u32,
-    ) -> (Vec<super::moveshape::StateKey>, Vec<(super::moveshape::StateKey, u32, u32)>) {
-        let dead = self.is_dead();
-        self.move_shape.undead_state_tick(now_ms, dead)
-    }
 
     pub(crate) fn change_body_check(&self) -> bool {
         self.base_properties.mode == 0
@@ -4982,9 +4966,6 @@ impl CPlayer {
         self.move_shape.activate_loaded_change_body_states(now_ms)
     }
 
-    pub(crate) fn expired_change_body_state_keys(&self, now_ms: u32) -> Vec<super::moveshape::StateKey> {
-        self.move_shape.expired_change_body_state_keys(now_ms)
-    }
 
     pub(crate) fn change_body_region_transition_end_keys(&mut self) -> Vec<super::moveshape::StateKey> {
         self.move_shape.change_body_region_transition_end_keys()
@@ -5000,10 +4981,6 @@ impl CPlayer {
 
     pub(crate) fn is_rider(&self) -> bool {
         self.move_shape.has_ride_state()
-    }
-
-    pub(crate) fn has_materialized_abnormality(&self) -> bool {
-        self.move_shape.has_materialized_abnormality()
     }
 
     pub(crate) fn callosity_state(
@@ -5989,24 +5966,9 @@ impl CPlayer {
     }
     pub(crate) fn activate_loaded_daub_poison_state(&mut self, now_ms: u32) -> Vec<super::skills::daubpoisonstate::DaubPoisonState> { self.move_shape.activate_loaded_daub_poison_state(now_ms) }
 
-    pub(crate) fn take_expired_daub_poison_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::daubpoisonstate::DaubPoisonState> {
-        self.move_shape.take_expired_daub_poison_state(key, now_ms)
-    }
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
         self.move_shape.curable_state_ids()
-    }
-
-    pub(crate) fn register_curable_skill_state(&mut self, slot: super::moveshape::SkillSlot) {
-        self.move_shape.register_curable_skill_state(slot);
-    }
-
-    pub(crate) fn finish_curable_skill_state(&mut self, skill_id: u32) {
-        self.move_shape.finish_curable_skill_state(skill_id);
     }
 
     pub(crate) fn replace_poison_arrow_state(
@@ -6118,16 +6080,7 @@ impl CPlayer {
         self.move_shape.begin_boss_blue_fury_state(state);
     }
 
-    pub(crate) fn tick_boss_blue_fury_state(
-        &mut self,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<(
-        super::skills::bossbluefurystate::BossBlueFuryState,
-        super::skills::bossbluefurystate::BossBlueFuryTick,
-    )> {
-        self.move_shape.tick_boss_blue_fury_state(key, now_ms)
-    }
+
 
     pub(crate) fn activate_loaded_boss_blue_fury_state(
         &mut self,
@@ -6165,13 +6118,6 @@ impl CPlayer {
         self.move_shape.take_weak_state_outside(tile_x, tile_y)
     }
 
-    pub(crate) fn take_expired_spider_web_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
-        self.move_shape.take_expired_spider_web_state(key, now_ms)
-    }
 
     pub(crate) fn take_spider_web_state(
         &mut self,
@@ -6221,13 +6167,6 @@ impl CPlayer {
         self.move_shape.activate_loaded_agility_states(now_ms)
     }
 
-    pub(crate) fn take_expired_blind_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::blindstate::BlindState> {
-        self.move_shape.take_expired_blind_state(key, now_ms)
-    }
 
     pub(crate) fn take_blind_state(
         &mut self,
@@ -6315,13 +6254,6 @@ impl CPlayer {
         self.move_shape.take_pillar_state()
     }
 
-    pub(crate) fn take_expired_knock_out_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::knockoutstate::KnockOutState> {
-        self.move_shape.take_expired_knock_out_state(key, now_ms)
-    }
 
     pub(crate) fn take_knock_out_state(
         &mut self,
@@ -6416,18 +6348,7 @@ impl CPlayer {
         self.move_shape.activate_loaded_strike_states(now_ms)
     }
 
-    pub(crate) fn take_expired_strike_states(
-        &mut self,
-        now_ms: u32,
-    ) -> Vec<super::skills::strikestate::StrikeState> {
-        self.move_shape.take_expired_strike_states(now_ms)
-    }
 
-    pub(crate) fn take_strike_states(
-        &mut self,
-    ) -> Vec<super::skills::strikestate::StrikeState> {
-        self.move_shape.take_strike_states()
-    }
 
     pub(crate) fn replace_leaf_cut_3_state(
         &mut self,
@@ -6463,11 +6384,8 @@ impl CPlayer {
         self.move_shape.replace_battle_fairy_attribute_state(state)
     }
 
-    pub(crate) fn take_expired_battle_fairy_attribute_states(
-        &mut self,
-        now_ms: u32,
-    ) -> Vec<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
-        self.move_shape.take_expired_battle_fairy_attribute_states(now_ms)
+    pub(crate) fn take_expired_battle_fairy_attribute_state(&mut self, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> Option<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
+        self.move_shape.take_expired_battle_fairy_attribute_state(key, now_ms)
     }
 
     pub(crate) fn activate_loaded_battle_fairy_attribute_states(
@@ -6488,9 +6406,6 @@ impl CPlayer {
         self.move_shape.activate_loaded_blood_loss_state(now_ms)
     }
 
-    pub(crate) fn periodic_attack_states(&self) -> Vec<(super::moveshape::StateKey, u32)> {
-        self.move_shape.periodic_attack_states()
-    }
 
     pub(crate) fn add_script_move_state(
         &mut self,
@@ -6513,18 +6428,13 @@ impl CPlayer {
         Some(state)
     }
 
-    pub(crate) fn script_move_state(
-        &self,
-        index: usize,
-    ) -> Option<super::scriptstate::ScriptMoveState> {
-        self.move_shape.script_state(index)
-    }
 
-    pub(crate) fn remove_script_move_state_at(
+
+    pub(crate) fn remove_script_move_state_key(
         &mut self,
-        index: usize,
+        key: super::moveshape::StateKey,
     ) -> Option<super::scriptstate::ScriptMoveState> {
-        let removed = self.move_shape.remove_script_state_at(index)?;
+        let removed = self.move_shape.remove_script_state_key(key)?;
         if removed.is_auto_protect() {
             self.auto_protected = false;
         }
@@ -6724,21 +6634,36 @@ impl CPlayer {
         self.move_shape.end_ride_state()
     }
 
+    pub(crate) fn end_ride_state_key(
+        &mut self,
+        key: super::moveshape::StateKey,
+    ) -> Option<super::ridestate::RideState> {
+        self.move_shape.end_ride_state_key(key)
+    }
+
     pub(crate) fn activate_loaded_ride_state(&mut self) -> Vec<super::ridestate::RideState> {
         self.move_shape.activate_loaded_ride_state()
     }
 
-    pub(crate) fn ride_goods_check_due(&self, now_ms: u32) -> bool {
+    pub(crate) fn ride_goods_check_due(
+        &self,
+        key: super::moveshape::StateKey,
+        now_ms: u32,
+    ) -> bool {
         self.move_shape
-            .ride_state()
+            .applied_state::<super::ridestate::RideState>(key)
             .is_some_and(|state| state.goods_check_due(now_ms))
     }
 
     /// Exact `CRideState::AI` packet scan: имя здесь не участвует, только
     /// addon mount type/level. Успех обновляет безопасный GUID cache вместо
     /// старого сырого `CGoods*`, но timestamp намеренно не меняется.
-    pub(crate) fn refresh_ride_goods_cache(&mut self, factory: &CGoodsFactory) -> bool {
-        let Some(state) = self.move_shape.ride_state() else {
+    pub(crate) fn refresh_ride_goods_cache(
+        &mut self,
+        key: super::moveshape::StateKey,
+        factory: &CGoodsFactory,
+    ) -> bool {
+        let Some(state) = self.move_shape.applied_state::<super::ridestate::RideState>(key) else {
             return false;
         };
         let (mount_type, level, cached_id) =
@@ -6759,7 +6684,7 @@ impl CPlayer {
                     .find(|goods| matches(goods))
             })
             .map(|goods| goods.identity().ex_id);
-        if let Some(state) = self.move_shape.ride_state_mut() {
+        if let Some(state) = self.move_shape.applied_state_mut::<super::ridestate::RideState>(key) {
             if let Some(goods_id) = found {
                 state.set_cached_goods_id(goods_id);
             } else {
@@ -7158,12 +7083,6 @@ impl CPlayer {
         self.move_shape.get_extended_state(kind, state_id)
     }
 
-    pub(crate) fn extended_state_tick(
-        &mut self,
-        now_ms: u32,
-    ) -> (Vec<super::moveshape::StateKey>, Vec<(super::moveshape::StateKey, u32, u32)>) {
-        self.move_shape.extended_state_tick(now_ms)
-    }
 
     pub(crate) fn activate_loaded_extended_states(
         &mut self,
@@ -14301,27 +14220,19 @@ impl CPlayer {
         self.move_shape.activate_loaded_automatic_restore_states(now_ms)
     }
 
-    pub(crate) fn consumable_restore_state_count(&self) -> usize {
-        self.move_shape.consumable_restore_state_count()
-    }
-
-    pub(crate) fn consumable_restore_state_is_health(&self, index: usize) -> Option<bool> {
-        self.move_shape.consumable_restore_state_is_health(index)
-    }
-
     pub(crate) fn tick_consumable_restore_state(
         &mut self,
-        index: usize,
+        key: crate::gameserver::appserver::moveshape::StateKey,
         checked_at_ms: u32,
     ) -> Option<ConsumableRestoreMutation> {
-        let health = self.move_shape.consumable_restore_state_is_health(index)?;
+        let health = self.move_shape.consumable_restore_state_is_health(key)?;
         let (current, maximum) = if health {
             (self.health(), self.maximum_health())
         } else {
             (self.mana(), self.maximum_mana())
         };
         let mutation = self.move_shape.tick_consumable_restore_state(
-            index,
+            key,
             checked_at_ms,
             current,
             maximum,
@@ -14333,30 +14244,11 @@ impl CPlayer {
         Some(mutation)
     }
 
-    pub(crate) fn consumable_restore_state_expired(
-        &self,
-        index: usize,
-        checked_at_ms: u32,
-    ) -> Option<bool> {
-        self.move_shape
-            .consumable_restore_state_expired(index, checked_at_ms)
-    }
-
-    pub(crate) fn remove_consumable_restore_state(&mut self, index: usize) -> bool {
-        self.move_shape.remove_consumable_restore_state(index)
-    }
-
     pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
         self.move_shape.take_particular_states()
     }
 
-    pub(crate) fn particular_state(&self, index: usize) -> Option<ParticularState> {
-        self.move_shape.particular_states().nth(index).copied()
-    }
 
-    pub(crate) fn remove_particular_state_at(&mut self, index: usize) -> Option<ParticularState> {
-        self.move_shape.remove_particular_state_at(index)
-    }
 
     pub(crate) fn particular_state_goods_present(
         &self,
@@ -14409,13 +14301,9 @@ impl CPlayer {
         begun
     }
 
-    pub(crate) fn automatic_restore_state_count(&self) -> usize {
-        self.move_shape.automatic_restore_state_count()
-    }
-
-    pub(crate) fn automatic_restore_needs_clock(&self, index: usize) -> bool {
+    pub(crate) fn automatic_restore_needs_clock(&self, key: crate::gameserver::appserver::moveshape::StateKey) -> bool {
         self.move_shape
-            .automatic_restore_state(index)
+            .automatic_restore_state(key)
             .is_some_and(|state| {
                 state.should_check(
                     self.is_dead(),
@@ -14428,9 +14316,9 @@ impl CPlayer {
             })
     }
 
-    pub(crate) fn automatic_restore_due(&self, index: usize, checked_at_ms: u32) -> bool {
+    pub(crate) fn automatic_restore_due(&self, key: crate::gameserver::appserver::moveshape::StateKey, checked_at_ms: u32) -> bool {
         self.move_shape
-            .automatic_restore_state(index)
+            .automatic_restore_state(key)
             .is_some_and(|state| state.due(checked_at_ms))
     }
 
@@ -14438,7 +14326,7 @@ impl CPlayer {
     /// что исходный виртуальный `OnChangeStates` обязан быть вызван немедленно.
     pub(crate) fn apply_automatic_restore(
         &mut self,
-        index: usize,
+        key: crate::gameserver::appserver::moveshape::StateKey,
         recorded_at_ms: u32,
     ) -> bool {
         let properties = self.combat_properties;
@@ -14448,7 +14336,7 @@ impl CPlayer {
         let maximum_mana = self.maximum_mana();
         let mutation = self
             .move_shape
-            .automatic_restore_state_mut(index)
+            .automatic_restore_state_mut(key)
             .and_then(|state| {
                 state.apply(
                     recorded_at_ms,

@@ -8,7 +8,9 @@
 //! собственного `BossBlueFuryState`. Состояние остаётся каноническим в
 //! `CMoveShape`; `CGame` только координирует владельца и доставку. Обе ветви
 //! используют абсолютный срок `CSkill::IsRestored`; cast-delay остаётся
-//! elapsed-проверкой.
+//! elapsed-проверкой. Замена первого собственного состояния вызывает общий
+//! exact-key End владельца: visual, удаление той же записи и снятие обеих
+//! блокировок; одноразовая отметка освобождения не подменяет native End.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
@@ -279,9 +281,8 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     }
     let state_now_ms = runtime.now_milliseconds();
     let state = BossBlueFuryState::new(state_now_ms, keep_time_ms, damage_factor, weak_time_ms);
-    let previous = game
-        .find_player_mut(player_id)
-        .and_then(CPlayer::take_boss_blue_fury_state);
+    let previous = game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state_key::<BossBlueFuryState>());
     let identity = game
         .find_player(player_id)
         .map(|player| player.shape().identity())
@@ -300,15 +301,9 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         })
         .unwrap_or_default();
     if let Some(previous) = previous {
-        send_boss_blue_fury_state_visual(
-            game, region_id, identity, tile_x, tile_y, previous, false, state_now_ms,
+        let _ = super::bossbluefurystate::end_player_boss_blue_fury_state_key(
+            game, player_id, previous, state_now_ms,
         );
-        if previous.control_locked() {
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.set_skill_moveable(true);
-                player.set_skill_fightable(true);
-            }
-        }
     }
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(false);
@@ -414,16 +409,12 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as i32,
         properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER),
     );
-    let previous = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let previous = monster.move_shape_mut().take_boss_blue_fury_state();
-        if previous.is_some_and(BossBlueFuryState::control_locked) {
-            monster.move_shape_mut().set_moveable(true);
-            monster.move_shape_mut().set_fightable(true);
-        }
-        previous
-    });
+    let previous = region.find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().applied_state_key::<BossBlueFuryState>());
     if let Some(previous) = previous {
-        send_owned_state_visual(game, region, &source, previous.skill_id(), false, 0, 0);
+        let _ = super::bossbluefurystate::end_monster_boss_blue_fury_state_key(
+            game, region, monster_id, previous,
+        );
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().set_moveable(false);

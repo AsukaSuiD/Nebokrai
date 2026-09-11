@@ -16,6 +16,13 @@
 //! End (0x00540890) снимает ещё один. Счётчик не нормализуется. Второй вызов,
 //! очистку регистрации навыка и Stiffen-End выполняет общий CMonster;
 //! область тумана остаётся независимой от завершённого навыка.
+//! RTTI 0x0066F16C задаёт CSpiderMist→CSummonSkill→CSkill→CState,
+//! а не CStateSkill. Три Begin (0x005406F0/0x005407C0/0x005408F0)
+//! и CheckCastCondition (0x00540F40) не вызывают AddState: успешная
+//! проверка лишь запрещает движение. Слот AI vtable 0x006584BC+0x0C
+//! указывает на активный cast 0x005409B0; повторной регистрации в m_vStates
+//! нет. Унаследованный Serialize +0x40→0x005DBD00 пишет только четыре
+//! identity-DWORD без skill ID; отдельный persisted cast здесь не создаётся.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
@@ -184,7 +191,6 @@ fn send_player_visual(
 fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.finish_curable_skill_state(SPIDER_MIST_SKILL_ID);
     }
 }
 
@@ -276,18 +282,9 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
             send_player_failure(game, player_id, 0x0f);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        let state_slot = game.find_player(player_id).and_then(|player| {
-            player.move_shape().skill_slot(SPIDER_MIST_SKILL_ID, game.skill_factory())
-        });
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPIDER_MIST_SKILL_ID));
-            // `CSpiderMist` является `CStateSkill`: native owner помещает
-            // активный cast в общий ordered `m_vStates`, откуда его может
-            // снять `CCure` до создания phalanx.
-            if let Some(slot) = state_slot {
-                player.register_curable_skill_state(slot);
-            }
         }
         game.begin_player_skill_execution(player_id, PlayerSpiderMistExecutionState::begin(
             dispatch,

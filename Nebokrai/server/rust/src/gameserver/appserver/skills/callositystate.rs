@@ -17,9 +17,17 @@
 //! Коэффициент `CCH` применяется только при общем `UpdateProperty`; каждый
 //! такой проход повторно публикует начальный визуальный эффект, как
 //! `OnUpdateProperties`.
-//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
-//! повторные записи сохраняются, после удаления и публикаций следующий
-//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! Достигнутый AI получает один поколенческий ключ общей арены;
+//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
+//! Любое удаление адресует тот же экземпляр, а не первый дубль.
+//! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
+//! формул игрока не запрещают жизненный цикл региональных держателей.
+//! После visual владелец перечитывается; UpdateProperty вызывается только
+//! для игрока и только при фактическом удалении этой записи.
+
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::shape::ShapeIdentity;
 
 use super::callosity::CALLOSITY_SKILL_ID;
 use super::callosity2::CALLOSITY_2_SKILL_ID;
@@ -186,41 +194,49 @@ impl CallosityFamilyState {
 }
 
 pub(crate) fn end_player_callosity_state(game: &mut CGame, player_id: i32) -> bool {
-    let Some(key) = game.find_player(player_id)
-        .and_then(|player| player.move_shape().applied_state_key::<CallosityFamilyState>()) else {
-        return false;
-    };
-    end_player_callosity_state_key(game, player_id, key)
+    let Some((region_id, holder, key)) = game.find_player(player_id).and_then(|player| {
+        Some((player.shape().get_region_id(), player.shape().identity(),
+            player.move_shape().applied_state_key::<CallosityFamilyState>()?))
+    }) else { return false };
+    end_callosity_state_key(game, region_id, holder, key)
 }
 
-fn end_player_callosity_state_key(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey) -> bool {
-    let Some((state, identity)) = game.find_player(player_id).and_then(|player| {
-        Some((*player.move_shape().applied_state::<CallosityFamilyState>(key)?, player.shape().identity()))
-    }) else { return false };
+fn end_callosity_state_key(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<CallosityFamilyState>(key)).copied()
+        else { return false };
     let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
     message.add_long(state.skill_id() as i32);
-    let _ = game.send_player_shape_around(player_id, None, &message);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.move_shape_mut().remove_applied_state_record::<CallosityFamilyState>(key, CALLOSITY_STATE_BYTES);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<CallosityFamilyState>(key, CALLOSITY_STATE_BYTES))
+        .is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
     }
-    let _ = game.update_player_properties(player_id);
     true
 }
 
-pub(crate) fn expire_player_callosity_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().applied_state_keys::<CallosityFamilyState>()).unwrap_or_default();
-    let mut ended = false;
-    for key in keys {
-        if game.find_player(player_id)
-            .and_then(|player| player.move_shape().applied_state::<CallosityFamilyState>(key))
-            .is_some_and(|state| state.expired(now_ms)) {
-            ended |= end_player_callosity_state_key(game, player_id, key);
-        }
+pub(crate) fn update_callosity_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    now_ms: u32,
+) -> bool {
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<CallosityFamilyState>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
     }
-    ended
+    end_callosity_state_key(game, region_id, holder, key)
 }
 
 pub(crate) fn send_callosity_state_begin(

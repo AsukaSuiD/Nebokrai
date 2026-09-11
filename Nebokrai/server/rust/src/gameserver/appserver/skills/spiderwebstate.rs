@@ -8,7 +8,9 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spiderwebstate.cpp`. Состояние сохраняет wrapping-время,
 //! запрещает движение и бой через счётчики `CMoveShape`, снимает оба запрета
-//! при замене, истечении или защитном действии и публикует `0xBFE03/0xBFE04`.
+//! при замене, истечении или Cure и публикует `0xBFE03/0xBFE04`.
+//! End +0x1C наследует CBlindState, но OnAction +0x34→0x00601A70
+//! является ret 4: защитное действие само по себе паутину не снимает.
 //! Persisted-запись `ID + remaining time` декодируется, активируется при
 //! spatial login и удаляется вместе с canonical state. Vtable exact EXE
 //! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0`,
@@ -16,11 +18,8 @@
 
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{
-    send_owned_state_visual, timed_client_state_time,
-};
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -95,107 +94,17 @@ pub(crate) fn send_spider_web_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-fn finish_player_state(
-    game: &mut CGame,
-    player_id: i32,
-    now_ms: u32,
-    expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>,
-) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = if let Some(key) = expired_key {
-            player.take_expired_spider_web_state(key, now_ms)?
-        } else {
-            player.take_spider_web_state()?
-        };
-        player.set_skill_moveable(true);
-        player.set_skill_fightable(true);
-        Some((
-            state,
-            player.server_region_id()?,
-            player.shape().identity(),
-            player.shape().get_tile_x().ok()?,
-            player.shape().get_tile_y().ok()?,
-        ))
-    });
-    let Some((state, region_id, identity, tile_x, tile_y)) = finished else {
-        return false;
-    };
-    send_spider_web_state_visual(
-        game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-    );
-    true
-}
-
-fn finish_monster_state(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    now_ms: u32,
-    expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>,
-) -> bool {
-    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = if let Some(key) = expired_key {
-            monster
-                .move_shape_mut()
-                .take_expired_spider_web_state(key, now_ms)?
-        } else {
-            monster.move_shape_mut().take_spider_web_state()?
-        };
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
-        Some((
-            state,
-            monster.move_shape().shape().clone(),
-        ))
-    });
-    let Some((state, shape)) = finished else {
-        return false;
-    };
-    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
-    true
-}
-
-pub(crate) fn expire_player_spider_web_state(
-    game: &mut CGame,
-    player_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
-    now_ms: u32,
-) -> bool {
-    finish_player_state(game, player_id, now_ms, Some(key))
-}
-
 pub(crate) fn finish_player_spider_web_state_on_defense(
     game: &mut CGame,
     player_id: i32,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
-    finish_player_state(game, player_id, now_ms, None)
-}
-
-pub(crate) fn expire_monster_spider_web_state(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
-    now_ms: u32,
-) -> bool {
-    finish_monster_state(game, region, monster_id, now_ms, Some(key))
-}
-
-/// `CMoveShape::OnAction(ACTION_DEFENSE)` вызывает `CBlindState::OnAction`
-/// до итогового пакета полученного удара. Здесь сохраняется тот же момент,
-/// включая снятие обоих вложенных запретов перед `0xBFE04`.
-pub(crate) fn finish_spider_web_state_on_defense(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    target: ShapeIdentity,
-    now_ms: u32,
-) -> bool {
-    match target.object_type {
-        400 => finish_player_state(game, target.id, now_ms, None),
-        600 => finish_monster_state(game, region, target.id, now_ms, None),
-        _ => false,
-    }
+    let context = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.shape().identity(),
+            player.move_shape().applied_state_key::<SpiderWebState>()?))
+    });
+    let Some((region_id, identity, key)) = context else { return false };
+    super::blindstate::end_blind_state(game, region_id, identity, key)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

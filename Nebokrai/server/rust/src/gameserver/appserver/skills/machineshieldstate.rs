@@ -59,9 +59,12 @@ impl MachineShieldState {
         self.life
     }
 
+    pub(crate) const fn lifetime_expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms || self.life < 1
+    }
+
     pub(crate) const fn expired(self, now_ms: u32, player_mana: u32, dead: bool) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-            || self.life < 1
+        self.lifetime_expired(now_ms)
             || dead
             || player_mana == 0
     }

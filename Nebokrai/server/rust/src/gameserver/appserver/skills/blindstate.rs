@@ -13,6 +13,20 @@
 //! `CanonicalStateStorage`; неизменённый legacy payload служит его кодеком.
 //! Перегрузки `Begin`, для которых ещё нет настоящего создающего caller-а,
 //! сохранены ниже как RAW.
+//! Vtable Blind/KnockOut/SpiderWeb/Seal/Strike
+//! 0x00662214/0x00660894/0x0065FBCC/0x006615F4/0x00662154 имеют общие
+//! AI +0x0C→0x005D5BA0 и End +0x1C→0x005EA9A0. End сначала публикует
+//! окончание, затем SetFightable(1), SetMoveable(1), RemoveState и его
+//! UpdateProperty. Общая single-key цепочка ниже работает с опубликованным
+//! владельцем и перечитывает тот же ключ после доставки, не вынимая payload
+//! перед callback. AI не добавляет alive-gate и не исключает нулевой срок.
+//! OnAction +0x34 общим не является: Blind/KnockOut/Seal вызывают
+//! 0x00607370 (End при ACTION_DEFENSE), SpiderWeb/Strike — 0x00601A70
+//! (ret 4). Пересчёт материализованных property overrides после удаления
+//! вызывает player UpdateProperty; monster читает state-модификации через
+//! живые getters. Для остальных форм неперенесённый override не подменяется
+//! придуманным callback. Region-adapter Defense использует того же владельца
+//! payload и общий tail End, не копируя временную владеющую форму.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -21,19 +35,6 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.h
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp
 
-// ============================================================================
-// FUNCTION: CBlindState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp:106
-// RVA: 0x001D5BA0
-// ADDRESS: 005d5ba0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBlindState::OnChangeRegion
@@ -49,19 +50,6 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CBlindState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp:90
-// RVA: 0x001EA9A0
-// ADDRESS: 005ea9a0
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBlindState::Unserialize
@@ -212,8 +200,11 @@
 // COMPONENT_VARIANT_END: GameServer
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use crate::gameserver::appserver::moveshape::{StateData, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -291,50 +282,82 @@ pub(crate) fn send_blind_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-fn finish_player_blind_state(
+pub(crate) fn update_blind_state(
     game: &mut CGame,
-    player_id: i32,
+    region_id: i32,
+    identity: ShapeIdentity,
+    key: StateKey,
     now_ms: u32,
-    expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>,
 ) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = if let Some(key) = expired_key {
-            player.take_expired_blind_state(key, now_ms)?
-        } else {
-            player.take_blind_state()?
-        };
-        player.set_skill_moveable(true);
-        player.set_skill_fightable(true);
-        Some((
-            state,
-            player.server_region_id()?,
-            player.shape().identity(),
-            player.shape().get_tile_x().ok()?,
-            player.shape().get_tile_y().ok()?,
-        ))
+    let expired = resolve_state_move_shape(game, region_id, identity)
+        .and_then(|shape| shape.applied_state_data(key))
+        .is_some_and(|state| match state {
+            StateData::Blind(state) => state.expired(now_ms),
+            StateData::KnockOut(state) => state.expired(now_ms),
+            StateData::SpiderWeb(state) => state.expired(now_ms),
+            StateData::Seal(state) => state.expired(now_ms),
+            StateData::Strike(state) => state.expired(now_ms),
+            _ => false,
+        });
+    expired && end_blind_state(game, region_id, identity, key)
+}
+
+pub(crate) fn end_blind_state(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let context = resolve_state_move_shape(game, region_id, identity).and_then(|shape| {
+        let state = shape.applied_state_data(key).filter(|state| state.is_blind())?;
+        let position = shape.shape().get_tile_x().ok().zip(shape.shape().get_tile_y().ok());
+        Some((state.state_id(), position))
     });
-    let Some((state, region_id, identity, tile_x, tile_y)) = finished else {
+    let Some((state_id, position)) = context else { return false };
+    if let Some((tile_x, tile_y)) = position {
+        let mut message = CMessage::new(0x000b_fe04);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(state_id as i32);
+        let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    }
+    let removed = resolve_state_move_shape_mut(game, region_id, identity)
+        .is_some_and(|shape| finish_blind_state(shape, key));
+    if removed && identity.object_type == 400 {
+        let _ = game.update_player_properties(identity.id);
+    }
+    removed
+}
+
+fn finish_blind_state(
+    shape: &mut crate::gameserver::appserver::moveshape::CMoveShape,
+    key: StateKey,
+) -> bool {
+    if !shape.applied_state_data(key).is_some_and(StateData::is_blind) {
+        return false;
+    }
+    shape.set_fightable(true);
+    shape.set_moveable(true);
+    shape.remove_applied_state_data(key, BLIND_STATE_BYTES).is_some()
+}
+
+pub(crate) fn end_owned_monster_blind_state(
+    game: &CGame,
+    region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
+    monster_id: i32,
+    key: StateKey,
+) -> bool {
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return false };
+    let shape = monster.move_shape();
+    let Some(state) = shape.applied_state_data(key).filter(|state| state.is_blind()) else {
         return false;
     };
-    send_blind_state_visual(
-        game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-    );
-    true
-}
-
-pub(crate) fn expire_player_blind_state(
-    game: &mut CGame,
-    player_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
-    now_ms: u32,
-) -> bool {
-    finish_player_blind_state(game, player_id, now_ms, Some(key))
-}
-
-pub(crate) fn finish_player_blind_state_on_defense(
-    game: &mut CGame,
-    player_id: i32,
-    now_ms: u32,
-) -> bool {
-    finish_player_blind_state(game, player_id, now_ms, None)
+    let identity = shape.shape().identity();
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.state_id() as i32);
+    let _ = game.send_game_shape_around(region, shape.shape(), None, &message);
+    region.find_monster_by_id_mut(monster_id)
+        .is_some_and(|monster| finish_blind_state(monster.move_shape_mut(), key))
 }

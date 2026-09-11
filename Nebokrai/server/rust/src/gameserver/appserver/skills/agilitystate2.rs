@@ -7,9 +7,19 @@
 //! Жизненный цикл принадлежит `CanonicalStateStorage`; DB-запись хранит
 //! остаток срока и WORD-прибавку полного уклонения. Истечение сразу запускает
 //! полный пересчёт свойств, чтобы снятая прибавка не оставалась в combat snapshot.
-//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
-//! повторные записи сохраняются, после удаления и публикаций следующий
-//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! Достигнутый AI получает один поколенческий ключ общей арены;
+//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
+//! Любое удаление адресует тот же экземпляр, а не первый дубль.
+//! AI/End разрешают общий CMoveShape по region/type/id; правила свойств
+//! игрока не запрещают жизненный цикл региональных держателей.
+//! Exact vtable 0x006602FC: AI 0x005D60B0, End 0x005EEBA0.
+//! End только разрешает sufferer и удаляет запись: визуала и отдельной
+//! публикации HP/MP/RP/YP в этом пути нет.
+//! UpdateProperty вызывается только для игрока при фактическом удалении.
+
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 
 use super::agility2::AGILITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -84,24 +94,23 @@ impl AgilityState2 {
     }
 }
 
-pub(crate) fn expire_player_agility_state_2(
+pub(crate) fn update_agility_state_2(
     game: &mut CGame,
-    player_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
     now_ms: u32,
 ) -> bool {
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().applied_state_keys::<AgilityState2>()).unwrap_or_default();
-    let mut ended = false;
-    for key in keys {
-        let removed = game.find_player_mut(player_id).and_then(|player| {
-            player.move_shape().applied_state::<AgilityState2>(key).filter(|state| state.expired(now_ms))?;
-            player.move_shape_mut().remove_applied_state_record::<AgilityState2>(key, AGILITY_STATE_2_BYTES)
-        }).is_some();
-        if removed {
-            let _ = game.publish_player_states(player_id);
-            let _ = game.update_player_properties(player_id);
-            ended = true;
-        }
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<AgilityState2>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
     }
-    ended
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<AgilityState2>(key, AGILITY_STATE_2_BYTES))
+        .is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    true
 }

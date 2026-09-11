@@ -22,18 +22,8 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
-use super::spiderweb::SPIDER_WEB_SKILL_ID;
-use super::spiderwebstate::{
-    expire_monster_spider_web_state, expire_player_spider_web_state,
-    finish_player_spider_web_state_on_defense, finish_spider_web_state_on_defense,
-};
-use super::sealstate::{
-    SEAL_STATE_ID, expire_monster_seal_state, finish_monster_seal_state_on_defense,
-};
-use super::blindstate::{
-    BLIND_STATE_ID, expire_player_blind_state, finish_player_blind_state_on_defense,
-};
-use super::strikestate::{STRIKE_STATE_ID, finish_player_strike_states_on_defense};
+use super::sealstate::SEAL_STATE_ID;
+use super::blindstate::BLIND_STATE_ID;
 
 pub(crate) const KNOCK_OUT_STATE_ID: u32 = 0x192;
 pub(crate) const KNOCK_OUT_STATE_BYTES: usize = 8;
@@ -154,102 +144,44 @@ pub(crate) fn replace_monster_knock_out_state(
     true
 }
 
-fn finish_player_state(game: &mut CGame, player_id: i32, now_ms: u32, expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = if let Some(key) = expired_key { player.take_expired_knock_out_state(key, now_ms)? } else { player.take_knock_out_state()? };
-        player.set_skill_fightable(true);
-        player.set_skill_moveable(true);
-        Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+pub(crate) fn finish_player_knock_out_state_on_defense(game: &mut CGame, player_id: i32, _now_ms: u32) -> bool {
+    let context = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.shape().identity(),
+            player.move_shape().applied_state_key::<KnockOutState>()?))
     });
-    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms);
-    true
+    let Some((region_id, identity, key)) = context else { return false };
+    super::blindstate::end_blind_state(game, region_id, identity, key)
 }
 
-fn finish_monster_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32, expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>) -> bool {
-    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = if let Some(key) = expired_key { monster.move_shape_mut().take_expired_knock_out_state(key, now_ms)? } else { monster.move_shape_mut().take_knock_out_state()? };
-        monster.move_shape_mut().set_fightable(true);
-        monster.move_shape_mut().set_moveable(true);
-        Some((state, monster.move_shape().shape().clone()))
+pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id: i32, _now_ms: u32) -> bool {
+    let context = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.shape().identity(),
+            player.move_shape().blind_state_instances()))
     });
-    let Some((state, shape)) = finished else { return false };
-    send_owned_monster_knock_out_state_visual(game, region, &shape, state, false, || now_ms);
-    true
-}
-
-pub(crate) fn expire_player_knock_out_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool { finish_player_state(game, player_id, now_ms, Some(key)) }
-pub(crate) fn finish_player_knock_out_state_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool { finish_player_state(game, player_id, now_ms, None) }
-pub(crate) fn expire_monster_knock_out_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool { finish_monster_state(game, region, monster_id, now_ms, Some(key)) }
-pub(crate) fn finish_knock_out_state_on_defense(game: &mut CGame, region: &mut CServerRegion, target: ShapeIdentity, now_ms: u32) -> bool {
-    match target.object_type { 400 => finish_player_state(game, target.id, now_ms, None), 600 => finish_monster_state(game, region, target.id, now_ms, None), _ => false }
-}
-
-pub(crate) fn expire_player_blind_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let order = game.find_player(player_id).map(|player| player.move_shape().blind_state_instances()).unwrap_or_default();
+    let Some((region_id, identity, order)) = context else { return false };
     let mut changed = false;
     for (key, state_id) in order {
-        changed |= match state_id {
-            BLIND_STATE_ID => expire_player_blind_state(game, player_id, key, now_ms),
-            SPIDER_WEB_SKILL_ID => expire_player_spider_web_state(game, player_id, key, now_ms),
-            KNOCK_OUT_STATE_ID => expire_player_knock_out_state(game, player_id, key, now_ms),
-            _ => false,
-        };
-    }
-    changed
-}
-
-pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let order = game.find_player(player_id).map(|player| player.blind_state_order()).unwrap_or_default();
-    let mut changed = false;
-    for state_id in order {
-        changed |= match state_id {
-            BLIND_STATE_ID => finish_player_blind_state_on_defense(game, player_id, now_ms),
-            SPIDER_WEB_SKILL_ID => finish_player_spider_web_state_on_defense(game, player_id, now_ms),
-            KNOCK_OUT_STATE_ID => finish_player_knock_out_state_on_defense(game, player_id, now_ms),
-            STRIKE_STATE_ID => finish_player_strike_states_on_defense(game, player_id, now_ms),
-            _ => false,
-        };
-    }
-    changed
-}
-
-pub(crate) fn expire_monster_blind_states(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
-    let order = region.find_monster_by_id(monster_id).map(|monster| monster.move_shape().blind_state_instances()).unwrap_or_default();
-    let mut changed = false;
-    for (key, state_id) in order {
-        changed |= match state_id {
-            SPIDER_WEB_SKILL_ID => expire_monster_spider_web_state(game, region, monster_id, key, now_ms),
-            KNOCK_OUT_STATE_ID => expire_monster_knock_out_state(game, region, monster_id, key, now_ms),
-            SEAL_STATE_ID => expire_monster_seal_state(game, region, monster_id, key, now_ms),
-            _ => false,
-        };
+        if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID) {
+            changed |= super::blindstate::end_blind_state(game, region_id, identity, key);
+        }
     }
     changed
 }
 
 pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region: &mut CServerRegion, target: ShapeIdentity, now_ms: u32) -> bool {
-    let order = match target.object_type {
-        400 => game.find_player(target.id).map(|player| player.blind_state_order()),
-        600 => region.find_monster_by_id(target.id).map(|monster| monster.move_shape().blind_state_order()),
-        _ => None,
-    }.unwrap_or_default();
+    if target.object_type == 400 {
+        return finish_player_blind_states_on_defense(game, target.id, now_ms);
+    }
+    if target.object_type != 600 {
+        return false;
+    }
+    let order = region.find_monster_by_id(target.id)
+        .map(|monster| monster.move_shape().blind_state_instances()).unwrap_or_default();
     let mut changed = false;
-    for state_id in order {
-        changed |= match state_id {
-            BLIND_STATE_ID if target.object_type == 400 => {
-                finish_player_blind_state_on_defense(game, target.id, now_ms)
-            }
-            SPIDER_WEB_SKILL_ID => finish_spider_web_state_on_defense(game, region, target, now_ms),
-            KNOCK_OUT_STATE_ID => finish_knock_out_state_on_defense(game, region, target, now_ms),
-            STRIKE_STATE_ID if target.object_type == 400 => {
-                finish_player_strike_states_on_defense(game, target.id, now_ms)
-            }
-            SEAL_STATE_ID if target.object_type == 600 => {
-                finish_monster_seal_state_on_defense(game, region, target.id, now_ms)
-            }
-            _ => false,
-        };
+    for (key, state_id) in order {
+        if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID) {
+            changed |= super::blindstate::end_owned_monster_blind_state(game, region, target.id, key);
+        }
     }
     changed
 }

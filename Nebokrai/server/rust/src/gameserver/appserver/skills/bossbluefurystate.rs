@@ -10,9 +10,13 @@
 //! усекается в `i32`. Визуальные начало и завершение сохраняют `0xBFE03/04`.
 //! DB-запись содержит остаток срока и коэффициент атаки;
 //! `weak_time` после загрузки остаётся нулевым, а `Begin` повторно не вызывается.
-//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
-//! повторные записи сохраняются, после удаления и публикаций следующий
-//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! AI получает один ключ общей арены; общий CMoveShape задаёт порядок прохода.
+//! Exact AI `0x005E8D50` отдельно читает часы перед слабой и общей границами.
+//! После слабой границы запреты снимаются на каждом AI, без one-shot флага.
+//! End `0x005E8D10` отправляет эффект, удаляет тот же экземпляр и отдельно
+//! снимает оба запрета; окончание срока не подменяет проверку слабой границы.
+
+use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
@@ -115,7 +119,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::AI
 // STATUS: IMPLEMENTED
-// Слабая и общая границы времени выполняются `BossBlueFuryState::tick`.
+// Слабая и общая границы читают часы раздельно в concrete single-key AI.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:147
@@ -211,14 +215,9 @@ pub(crate) struct BossBlueFuryState {
     keep_time_ms: u32,
     attack_factor_percent: i32,
     weak_time_ms: u32,
-    weak_released: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BossBlueFuryTick {
-    pub(crate) release_control: bool,
-    pub(crate) expired: bool,
-}
+
 
 impl BossBlueFuryState {
     pub(crate) const fn new(
@@ -232,7 +231,6 @@ impl BossBlueFuryState {
             keep_time_ms,
             attack_factor_percent,
             weak_time_ms,
-            weak_released: false,
         }
     }
 
@@ -240,9 +238,7 @@ impl BossBlueFuryState {
         BOSS_BLUE_FURY_STATE_ID
     }
 
-    pub(crate) const fn control_locked(self) -> bool {
-        !self.weak_released
-    }
+
 
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
@@ -273,17 +269,12 @@ impl BossBlueFuryState {
         self.started_at_ms = now_ms;
     }
 
-    pub(crate) fn tick(&mut self, now_ms: u32) -> BossBlueFuryTick {
-        let expired = self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms;
-        let release_control = !self.weak_released
-            && (self.started_at_ms.wrapping_add(self.weak_time_ms) < now_ms || expired);
-        if release_control {
-            self.weak_released = true;
-        }
-        BossBlueFuryTick {
-            release_control,
-            expired,
-        }
+    pub(crate) const fn weak_elapsed(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.weak_time_ms) < now_ms
+    }
+
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) fn apply_to_monster_attack(self, attack: u32) -> u32 {
@@ -317,72 +308,98 @@ pub(crate) fn send_boss_blue_fury_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
+pub(crate) fn end_monster_boss_blue_fury_state_key(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    key: StateKey,
+) -> bool {
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return false };
+    let Some(state) = monster.move_shape().applied_state::<BossBlueFuryState>(key)
+        else { return false };
+    send_owned_state_visual(game, region, monster.move_shape().shape(), state.skill_id(), false, 0, 0);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.move_shape_mut().remove_applied_state_record::<BossBlueFuryState>(
+            key, BOSS_BLUE_FURY_STATE_BYTES,
+        );
+        monster.move_shape_mut().set_moveable(true);
+        monster.move_shape_mut().set_fightable(true);
+    }
+    true
+}
+
 pub(crate) fn expire_monster_boss_blue_fury_state(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
-    now_ms: u32,
+    key: StateKey,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) -> bool {
-    let keys = region.find_monster_by_id(monster_id)
-        .map(|monster| monster.move_shape().applied_state_keys::<BossBlueFuryState>()).unwrap_or_default();
-    let mut updated = false;
-    for key in keys {
-        let Some((shape, state, tick)) = region
-            .find_monster_by_id_mut(monster_id)
-            .and_then(|monster| {
-                let shape = monster.move_shape().shape().clone();
-                let (state, tick) = monster.move_shape_mut().tick_boss_blue_fury_state(key, now_ms)?;
-                if tick.release_control {
-                    monster.move_shape_mut().set_moveable(true);
-                    monster.move_shape_mut().set_fightable(true);
-                }
-                Some((shape, state, tick))
-            })
-        else {
-            continue;
-        };
-        if tick.expired {
-            send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
+    let Some(state) = region.find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().applied_state::<BossBlueFuryState>(key)).copied()
+        else { return false };
+    if state.weak_elapsed(now_milliseconds()) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().set_moveable(true);
+            monster.move_shape_mut().set_fightable(true);
         }
-        updated = true;
     }
-    updated
+    if state.expired(now_milliseconds()) {
+        let _ = end_monster_boss_blue_fury_state_key(game, region, monster_id, key);
+    }
+    true
 }
 
-pub(crate) fn expire_player_boss_blue_fury_state<Runtime: crate::gameserver::gameserver::game::GameMainLoopRuntime>(
+pub(crate) fn end_player_boss_blue_fury_state_key(
     game: &mut CGame,
     player_id: i32,
+    key: StateKey,
     now_ms: u32,
-    _runtime: &mut Runtime,
 ) -> bool {
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().applied_state_keys::<BossBlueFuryState>()).unwrap_or_default();
-    let mut updated = false;
-    for key in keys {
-        let Some((region_id, identity, tile_x, tile_y, state, tick)) = game
-            .find_player_mut(player_id)
-            .and_then(|player| {
-                let region_id = player.server_region_id()?;
-                let identity = player.shape().identity();
-                let tile_x = player.shape().get_tile_x().ok()?;
-                let tile_y = player.shape().get_tile_y().ok()?;
-                let (state, tick) = player.tick_boss_blue_fury_state(key, now_ms)?;
-                if tick.release_control {
-                    player.set_skill_moveable(true);
-                    player.set_skill_fightable(true);
-                }
-                Some((region_id, identity, tile_x, tile_y, state, tick))
-            })
-        else {
-            continue;
-        };
-        if tick.expired {
-            send_boss_blue_fury_state_visual(
-                game, region_id, identity, tile_x, tile_y, state, false, now_ms,
-            );
-            let _ = game.update_player_properties(player_id);
-        }
-        updated = true;
+    let Some(state) = game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state::<BossBlueFuryState>(key)).copied()
+        else { return false };
+    let context = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.shape().identity(),
+            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+    });
+    if let Some((region_id, identity, tile_x, tile_y)) = context {
+        send_boss_blue_fury_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+        );
     }
-    updated
+    let removed = game.find_player_mut(player_id)
+        .and_then(|player| player.move_shape_mut().remove_applied_state_record::<BossBlueFuryState>(
+            key, BOSS_BLUE_FURY_STATE_BYTES,
+        )).is_some();
+    if removed {
+        let _ = game.update_player_properties(player_id);
+    }
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_skill_fightable(true);
+    }
+    true
+}
+
+pub(crate) fn expire_player_boss_blue_fury_state(
+    game: &mut CGame,
+    player_id: i32,
+    key: StateKey,
+    mut now_milliseconds: impl FnMut() -> u32,
+) -> bool {
+    let Some(state) = game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state::<BossBlueFuryState>(key)).copied()
+        else { return false };
+    if state.weak_elapsed(now_milliseconds()) {
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(true);
+            player.set_skill_fightable(true);
+        }
+    }
+    let now_ms = now_milliseconds();
+    if state.expired(now_ms) {
+        let _ = end_player_boss_blue_fury_state_key(game, player_id, key, now_ms);
+    }
+    true
 }

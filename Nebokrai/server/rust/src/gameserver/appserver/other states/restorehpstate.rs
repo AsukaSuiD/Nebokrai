@@ -2,7 +2,7 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/other states/restorehpstate.cpp`. Состояние хранит исходные
-//! `DWORD` срока, частоты, прироста и счётчика. Живой игрок получает один шаг,
+//! `DWORD` срока, частоты, прироста и счётчика. Живой CMoveShape получает один шаг,
 //! когда `frequency * count + started < now`; сложение выполняется с
 //! переполнением и ограничивается текущим максимумом HP. После второго чтения
 //! часов состояние завершается при строгом `time_to_keep + started < now`.
@@ -10,7 +10,14 @@
 //! тела `Serialize/Unserialize` по `0x005F65F0/0x005EEC70`: DB-запись состоит
 //! из ID, оставшегося срока, частоты и прироста. Vtable также направляет
 //! `GetRemainedTime` на `0x005F2CD0`; visual-effect update `0x004F86F0`
-//! сетевых пакетов не создаёт.
+//! сетевых пакетов не создаёт. Exact AI 0x004F8650 не содержит CPlayer RTTI:
+//! HP читается и записывается virtual slots +0xD0/+0xD8/+0xD4, затем вызывается
+//! OnChangeStates +0x164. Поэтому общий ключ лечит также монстра и постройку;
+//! NPC vtable 0x0065DA1C возвращает HP=0 и останавливается на death-gate.
+//! Vtable Monster 0x00652AE4, Build 0x0065E704 и CityGate 0x0065E8C4
+//! направляют публикацию на базовый 0x004CD3E0 (BFE02), без player team-route.
+//! End 0x005EEBA0 разрешает sufferer и удаляет только его точный ключ,
+//! без visual; свойства игрока пересчитываются после фактического удаления.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;

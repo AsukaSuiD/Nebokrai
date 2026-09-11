@@ -19,6 +19,10 @@
 //! захваченный поколенческий ключ не подменяется после внешнего эффекта.
 //! Порядок живых ключей сохраняет соответствие повторных DB-записей,
 //! удаление оставляет пустой слот до общего уплотнения CMoveShape.
+//! Общий CMoveShape::UpdateAbnormality передаёт один ключ; этот owner
+//! не запускает отдельный семейный обход и сохраняет границы своих callbacks.
+
+use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -153,34 +157,30 @@ fn fury_state_message(
     message
 }
 
-pub(crate) fn expire_monster_fury_states(
+pub(crate) fn expire_monster_fury_state(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    key: StateKey,
     now_ms: u32,
 ) -> usize {
-    let mut count = 0;
-    let keys = region.find_monster_by_id(monster_id)
-        .map(|monster| monster.move_shape().fury_state_keys()).unwrap_or_default();
-    for key in keys {
-        let Some((shape, state)) = region.find_monster_by_id(monster_id).and_then(|monster| {
-            Some((monster.move_shape().shape().clone(),
-                *monster.move_shape().applied_state::<FuryState>(key)?))
-        }) else { continue };
-        if !state.expired(now_ms) {
-            continue;
-        }
-        send_fury_state_visual_in_region(game, region, &shape, state, false, now_ms);
-        let _ = region.find_monster_by_id_mut(monster_id)
-            .and_then(|monster| monster.move_shape_mut().remove_fury_state_key(key));
-        count += 1;
+    let Some((shape, state)) = region.find_monster_by_id(monster_id).and_then(|monster| {
+        Some((monster.move_shape().shape().clone(),
+            *monster.move_shape().applied_state::<FuryState>(key)?))
+    }) else { return 0; };
+    if !state.expired(now_ms) {
+        return 0;
     }
-    count
+    send_fury_state_visual_in_region(game, region, &shape, state, false, now_ms);
+    let _ = region.find_monster_by_id_mut(monster_id)
+        .and_then(|monster| monster.move_shape_mut().remove_fury_state_key(key));
+    1
 }
 
-pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
+pub(crate) fn expire_player_fury_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    key: StateKey,
     now_ms: u32,
     _runtime: &mut Runtime,
 ) -> usize {
@@ -192,27 +192,21 @@ pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
             player.shape().get_tile_y().ok()?,
         ))
     });
-    let mut count = 0;
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().fury_state_keys()).unwrap_or_default();
-    for key in keys {
-        let Some(state) = game.find_player(player_id)
-            .and_then(|player| player.move_shape().applied_state::<FuryState>(key)).copied()
-            else { continue };
-        if !state.expired(now_ms) {
-            continue;
-        }
-        if let Some((region_id, identity, tile_x, tile_y)) = context {
-            send_fury_state_visual(
-                game, region_id, identity, tile_x, tile_y, state, false, now_ms,
-            );
-        }
-        let _ = game.find_player_mut(player_id)
-            .and_then(|player| player.move_shape_mut().remove_fury_state_key(key));
-        let _ = game.update_player_properties(player_id);
-        count += 1;
+    let Some(state) = game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state::<FuryState>(key)).copied()
+        else { return 0; };
+    if !state.expired(now_ms) {
+        return 0;
     }
-    count
+    if let Some((region_id, identity, tile_x, tile_y)) = context {
+        send_fury_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+        );
+    }
+    let _ = game.find_player_mut(player_id)
+        .and_then(|player| player.move_shape_mut().remove_fury_state_key(key));
+    let _ = game.update_player_properties(player_id);
+    1
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

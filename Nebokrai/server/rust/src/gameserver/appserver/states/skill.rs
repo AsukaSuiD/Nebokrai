@@ -40,9 +40,8 @@
 //! Производные visual, кроме подключённых видов, не имитируются пустым пакетом.
 //! Нулевой End имеет вход без runtime: он использует тот же derived/base код,
 //! но не требует фиктивных часов или реализации износа для region-entry/recall.
-//! SpiderMist снимает у держателя техническую curable-регистрацию после
-//! возврата движения, до AfterUse/base End. SkillOwner задаёт это действие
-//! вместе с остальной политикой; самостоятельная phalanx не принадлежит cast.
+//! SpiderMist возвращает движение до CSummonSkill::End; самостоятельная
+//! phalanx не принадлежит cast. Его Begin не добавляет навык в m_vStates.
 
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -330,10 +329,6 @@ impl CGame {
             && let Some(target) = resolve_state_move_shape_mut(self, region, target)
         {
             target.set_moveable(true);
-        }
-        if policy.release_curable_registration {
-            resolve_state_move_shape_mut(self, address.holder.0, address.holder.1)?
-                .finish_curable_skill_slot(address.slot);
         }
         if policy.path_order == SkillEndPathOrder::AfterMovement {
             self.registered_skill_mut(address)?.clear_end_paths();

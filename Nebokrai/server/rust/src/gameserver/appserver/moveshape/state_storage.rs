@@ -1,13 +1,14 @@
 //! Хранилище экземпляров `CMoveShape::m_vStates` из GameServer.exe/GameServer.pdb.
 //! Исходный владелец — CMoveShape; сохранённые RAW RemoveState (0x004CDAB0,
-//! 0x004CDB20), UpdateAbnormality (0x004CFD00) и AddExStatesToByteArray
-//! (0x004D10F0) находятся в родительском moveshape.rs.
+//! 0x004CDB20) и AddExStatesToByteArray (0x004D10F0) находятся в родительском
+//! moveshape.rs, общий UpdateAbnormality (0x004CFD00) — в states/state.rs.
 //! Порядок добавления и пустые позиции после удаления принадлежат этому
 //! контейнеру; уплотнение выполняется только явно. Новый экземпляр получает
 //! новый поколенческий ключ даже при замене в прежней позиции. Общий End
 //! вызывается снаружи и может изменить тот же список до перечитывания позиции.
-//! Ссылка на CStateSkill обозначает уже зарегистрированный навык: удаление
-//! такой ссылки не уничтожает его и не вызывает CSkill::End вместо CState::End.
+//! Активный CSpiderMist не входит в этот контейнер: exact RTTI 0x0066F16C
+//! задаёт CSummonSkill→CSkill→CState, а три Begin не вызывают AddState.
+//! Проверка ID 0x198 внутри CastCure сама по себе не создаёт state-owner.
 //! SlotMap заменяет владение сырыми указателями, Vec сохраняет нативный порядок.
 //! Для пяти участков чистого расчёта CFightDefense существует временный slice-
 //! адаптер StateBatch: ключи и позиции остаются живыми при вынутом payload.
@@ -23,12 +24,6 @@ use super::*;
 
 new_key_type! {
     pub(crate) struct StateKey;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StateAddress {
-    Applied(StateKey),
-    Skill(SkillSlot),
 }
 
 pub(crate) trait AppliedState: Sized + 'static {
@@ -146,17 +141,10 @@ applied_states! {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AppliedStateEntries {
     instances: SlotMap<StateKey, Option<StateData>>,
-    order: Vec<Option<StateAddress>>,
+    order: Vec<Option<StateKey>>,
 }
 
 impl StateData {
-    pub(crate) fn has_materialized_ai(&self) -> bool {
-        !matches!(self, Self::PersistentAgility(_) | Self::Callosity(_) | Self::TaiJi(_)
-            | Self::EnlargeFullMiss(_) | Self::EnlargeMaxHp(_) | Self::EnlargeMaxMp(_)
-            | Self::Origin(_) | Self::MeteorArrow(_) | Self::EnergyHolding(_)
-            | Self::Swordship(_) | Self::WuXing(_) | Self::AutomaticRestore(_))
-    }
-
     pub(crate) fn is_curable(&self) -> bool {
         matches!(self, Self::Seal(_) | Self::PoisonFog(_) | Self::SpiderPoison(_)
             | Self::SpriteBurn(_) | Self::SpiderWeb(_) | Self::KnockOut(_)
@@ -169,11 +157,6 @@ impl StateData {
             | Self::Seal(_) | Self::Strike(_))
     }
 
-    pub(crate) fn is_periodic_attack(&self) -> bool {
-        matches!(self, Self::PoisonArrow(_) | Self::SpiderPoison(_) | Self::SpriteBurn(_)
-            | Self::BloodLoss(_) | Self::LeafCut(_) | Self::LeafCut2(_)
-            | Self::LeafCut3(_) | Self::Kerosene(_))
-    }
 }
 
 #[derive(Debug)]
@@ -203,11 +186,8 @@ impl PartialEq for AppliedStateEntries {
             && self.order.iter().zip(&other.order).all(|(left, right)| {
                 match (left, right) {
                     (None, None) => true,
-                    (Some(StateAddress::Applied(left)), Some(StateAddress::Applied(right))) => {
+                    (Some(left), Some(right)) => {
                         self.instances.get(*left) == other.instances.get(*right)
-                    }
-                    (Some(StateAddress::Skill(left)), Some(StateAddress::Skill(right))) => {
-                        left == right
                     }
                     _ => false,
                 }
@@ -224,20 +204,8 @@ impl AppliedStateEntries {
 
     pub(crate) fn append_data(&mut self, state: StateData) -> StateKey {
         let key = self.instances.insert(Some(state));
-        self.order.push(Some(StateAddress::Applied(key)));
+        self.order.push(Some(key));
         key
-    }
-
-    pub(crate) fn append_skill(&mut self, slot: SkillSlot) {
-        self.order.push(Some(StateAddress::Skill(slot)));
-    }
-
-    pub(crate) fn detach_skill(&mut self, slot: SkillSlot) {
-        for address in &mut self.order {
-            if *address == Some(StateAddress::Skill(slot)) {
-                *address = None;
-            }
-        }
     }
 
     pub(crate) fn get(&self, key: StateKey) -> Option<&StateData> {
@@ -248,7 +216,7 @@ impl AppliedStateEntries {
         self.instances.get_mut(key)?.as_mut()
     }
 
-    pub(crate) fn address(&self, index: usize) -> Option<StateAddress> {
+    pub(crate) fn address(&self, index: usize) -> Option<StateKey> {
         self.order.get(index).copied().flatten()
     }
 
@@ -259,14 +227,12 @@ impl AppliedStateEntries {
     pub(crate) fn index_of(&self, key: StateKey) -> Option<usize> {
         self.order
             .iter()
-            .position(|address| *address == Some(StateAddress::Applied(key)))
+            .position(|address| *address == Some(key))
     }
 
     pub(crate) fn remove_at(&mut self, index: usize) -> Option<StateData> {
-        match self.order.get_mut(index)?.take()? {
-            StateAddress::Applied(key) => self.instances.remove(key).flatten(),
-            StateAddress::Skill(_) => None,
-        }
+        let key = self.order.get_mut(index)?.take()?;
+        self.instances.remove(key).flatten()
     }
 
     pub(crate) fn first_key<T: AppliedState>(&self) -> Option<StateKey> {
@@ -275,16 +241,14 @@ impl AppliedStateEntries {
 
     pub(crate) fn key_at<T: AppliedState>(&self, index: usize) -> Option<StateKey> {
         self.order.iter().filter_map(|address| {
-            let StateAddress::Applied(key) = (*address)? else {
-                return None;
-            };
+            let key = (*address)?;
             T::as_data_ref(self.get(key)?).map(|_| key)
         }).nth(index)
     }
 
     pub(crate) fn entries(&self) -> impl DoubleEndedIterator<Item = (StateKey, &StateData)> {
         self.order.iter().filter_map(|address| {
-            let StateAddress::Applied(key) = (*address)? else { return None };
+            let key = (*address)?;
             Some((key, self.get(key)?))
         })
     }
@@ -297,9 +261,7 @@ impl AppliedStateEntries {
         self.order
             .iter()
             .filter_map(|address| {
-                let StateAddress::Applied(key) = (*address)? else {
-                    return None;
-                };
+                let key = (*address)?;
                 T::as_data_ref(self.get(key)?).map(|_| key)
             })
             .collect()
@@ -330,16 +292,14 @@ impl AppliedStateEntries {
 
     pub(crate) fn iter<T: AppliedState>(&self) -> impl Iterator<Item = &T> {
         self.order.iter().filter_map(|address| {
-            let StateAddress::Applied(key) = (*address)? else {
-                return None;
-            };
+            let key = (*address)?;
             T::as_data_ref(self.get(key)?)
         })
     }
 
     pub(crate) fn for_each_mut<T: AppliedState>(&mut self, mut update: impl FnMut(&mut T)) {
         for address in &self.order {
-            let Some(StateAddress::Applied(key)) = address else {
+            let Some(key) = address else {
                 continue;
             };
             if let Some(state) = self.instances
@@ -377,9 +337,9 @@ impl AppliedStateEntries {
     pub(crate) fn replace_at<T: AppliedState>(&mut self, index: usize, state: T) -> Option<StateData> {
         let address = &mut self.order[index];
         let key = self.instances.insert(Some(state.into_data()));
-        match address.replace(StateAddress::Applied(key)) {
-            Some(StateAddress::Applied(previous)) => self.instances.remove(previous).flatten(),
-            Some(StateAddress::Skill(_)) | None => None,
+        match address.replace(key) {
+            Some(previous) => self.instances.remove(previous).flatten(),
+            None => None,
         }
     }
 

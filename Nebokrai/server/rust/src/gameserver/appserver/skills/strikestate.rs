@@ -9,9 +9,9 @@
 //! идентификатор и остаток срока занимают восемь байт. Player-login повторно
 //! начинает срок, восстанавливает вложенные запреты движения/боя и публикует
 //! begin-визуал, а logout сохраняет отдельный остаток для каждого экземпляра
-//! состояния. Унаследованный `OnAction(ACTION_DEFENSE)` снимает все экземпляры
-//! через достигнутый combat-dispatcher. Создание остаётся RAW до настоящего
-//! runtime-caller-а.
+//! состояния. AI и End общие с CBlindState, но OnAction +0x34→0x00601A70
+//! является ret 4 и не снимает Strike при Defense. Создание остаётся RAW до
+//! настоящего runtime-caller-а.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -51,20 +51,6 @@ impl StrikeState {
 
 pub(crate) fn send_strike_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: StrikeState, begin: bool, now_ms: u32) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(STRIKE_STATE_ID as i32); if begin { message.add_ulong(state.client_time(|| now_ms)); message.add_ulong(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
-}
-
-pub(crate) fn expire_player_strike_states(game: &mut CGame, player_id: i32, now_ms: u32) -> usize {
-    let context = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)));
-    let ended = game.find_player_mut(player_id).map(|player| player.take_expired_strike_states(now_ms)).unwrap_or_default();
-    if let Some((region_id, identity, x, y)) = context { for state in &ended { send_strike_state_visual(game, region_id, identity, x, y, *state, false, now_ms); } }
-    ended.len()
-}
-
-pub(crate) fn finish_player_strike_states_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let context = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)));
-    let ended = game.find_player_mut(player_id).map(|player| player.take_strike_states()).unwrap_or_default();
-    if let Some((region_id, identity, x, y)) = context { for state in &ended { send_strike_state_visual(game, region_id, identity, x, y, *state, false, now_ms); } }
-    !ended.is_empty()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

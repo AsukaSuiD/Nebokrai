@@ -12,8 +12,16 @@
 //! до поиска war-soul goods; ноль единицей не подменяется.
 //! AddCure (`0x005E2FD0`) завершает прежний Cure, начинает новый и вызывает
 //! UpdateProperty до эффекта завершения самого LifeShield (`0x005E3110`).
+//! AddCure использует generic CState::GetSufferer, а не CPlayer cast:
+//! опубликованный holder переиспользует тот же Cure Begin/storage/visual.
+//! Сам щит остаётся в арене до завершения AddCure и своего visual End.
+//! Граница unchecked player MP/war-soul части AI зафиксирована в shieldstate.rs;
+//! чистый lifetime-префикс не подставляет вымышленные ресурсы другой форме.
 
-use super::curestate::{end_player_cure_state, send_cure_state_visual, CureState};
+use super::curestate::{
+    end_cure_state_key, end_player_cure_state, send_cure_state_visual,
+    send_cure_state_visual_for_holder, CureState,
+};
 use super::fightdefense::truncate_original;
 use super::lifeshield::{
     LIFE_SHIELD_SKILL_ID, SKILL_USAGE_STATE_PERSIST_TIME,
@@ -23,7 +31,10 @@ use super::manashieldstate::{
 };
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::AttackPower;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -70,6 +81,10 @@ impl LifeShieldState {
         self.life
     }
 
+    pub(crate) const fn lifetime_expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms || self.life < 1
+    }
+
     pub(crate) const fn expired(
         self,
         now_ms: u32,
@@ -77,8 +92,7 @@ impl LifeShieldState {
         dead: bool,
         war_soul_mana: Option<i32>,
     ) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-            || self.life < 1
+        self.lifetime_expired(now_ms)
             || dead
             || player_mana == 0
             || match war_soul_mana {
@@ -235,6 +249,36 @@ pub(crate) fn finish_life_shield_state(
         let _ = game.update_player_properties(player_id);
     }
     send_life_shield_state_visual(game, player_id, state, false, || now_ms);
+}
+
+pub(crate) fn finish_life_shield_state_for_holder(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    state: LifeShieldState,
+) {
+    if game.skill_base_properties(state.skill_id(), state.skill_level())
+        .map(|properties| properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME)).is_some()
+        && resolve_state_move_shape(game, region_id, holder).is_some()
+    {
+        if let Some(key) = resolve_state_move_shape(game, region_id, holder)
+            .and_then(|shape| shape.cure_state_key())
+        {
+            let _ = end_cure_state_key(game, region_id, holder, key);
+        }
+        let cure = CureState::new(holder, holder).begin_now();
+        send_cure_state_visual_for_holder(game, region_id, holder, cure, true);
+        let _ = resolve_state_move_shape_mut(game, region_id, holder)
+            .map(|shape| shape.push_cure_state(cure));
+        if holder.object_type == 400 {
+            let _ = game.update_player_properties(holder.id);
+        }
+    }
+    let mut message = CMessage::new(MANA_SHIELD_STATE_END_MESSAGE);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

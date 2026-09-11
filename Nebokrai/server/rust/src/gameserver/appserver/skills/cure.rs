@@ -8,7 +8,7 @@
 //! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
 //! в порядке исходного вектора состояний. Из уже типизированных состояний
 //! достигнуты `0x67`, `0x73`, `0x7C`, `0xC9`, `0xD2`, `0x138`, `0x191`,
-//! `0x192`, активный `CStateSkill` `0x198`, эффекты `0x199`, `0x1A6` и
+//! `0x192`, эффекты `0x199`, `0x1A6` и
 //! `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
 //! доставку. Координатная перегрузка `Begin` использует точный базовый
@@ -27,17 +27,12 @@
 //! прежней записи новый экземпляр добавляется в конец без UpdateProperty.
 //! CastCure (0x005ADB10) допускает 0x198 (cmp в 0x005ADC0A) без
 //! исключения для самого заклинателя и вызывает End состояния через +0x1C
-//! в 0x005ADC58. На время очищения извлечённый AI публикуется в CPlayer:
-//! завершение собственного SpiderMist видит тот же экземпляр и возвращает
-//! изменённый AI, сохраняя Cure и остальные независимые исполнения.
-//! SpiderMist использует CState::End() 0x005DBCE0, а не End(int):
-//! RemoveState (0x004CDAB0) удаляет экземпляр и вызывает UpdateProperty.
-//! Деструкторы 0x005406D0 → 0x005E0F20 → 0x004D81A0 не возвращают
-//! движение и не фиксируют reuse. Rust удаляет только совпавшее исполнение
-//! и его state-запись; ссылку выбора на удалённый экземпляр обнуляет безопасно,
-//! не сохраняя native dangling pointer. Созданный phalanx остаётся независимым.
-//! Эта отдельная граница не проходит skill-End dispatcher: captured ключ
-//! SpiderMist очищается здесь до пересчёта свойств и не разрешается повторно.
+//! в 0x005ADC58. Этот фильтр ID не доказывает наличие активного SpiderMist
+//! в m_vStates: exact RTTI 0x0066F16C задаёт базу CSummonSkill, а его
+//! Begin/CheckCastCondition не вызывают AddState (см. spidermist.rs).
+//! Поэтому недостигнутый producer записи 0x198 не заменяется выдуманной
+//! регистрацией cast и его отменой. На время owning callbacks извлечённый
+//! AI заклинателя публикуется в CPlayer и затем возвращается тому же владельцу.
 
 use super::fightdefense::truncate_original;
 use super::bossbluequakestate::{
@@ -59,7 +54,6 @@ use super::knightcutstate::{
     send_knight_cut_state_visual,
 };
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
-use super::spidermist::SPIDER_MIST_SKILL_ID;
 use super::spiderpoisonstate::{
     SpiderPoisonState, finish_player_spider_poison_state_on_cure,
     send_spider_poison_state_visual,
@@ -243,33 +237,6 @@ fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec
     }
 }
 
-fn finish_active_spider_mist_on_cure<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    _runtime: &mut Runtime,
-) -> bool {
-    let instance = game.registered_player_skill(player_id, SPIDER_MIST_SKILL_ID);
-    let Some(mut player_ai) = game.find_player_mut(player_id).map(CPlayer::take_player_ai) else {
-        return false;
-    };
-    let finished = game.player_skill_execution(player_id, SPIDER_MIST_SKILL_ID)
-        .map(SkillExecutionKernel::dispatch)
-        .is_some_and(|dispatch| game.finish_registered_player_command(instance, &mut player_ai, dispatch, SkillTermination::Cancelled));
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.restore_player_ai(player_ai);
-        if finished {
-            player.finish_curable_skill_state(SPIDER_MIST_SKILL_ID);
-            if player.current_skill_id() == Some(SPIDER_MIST_SKILL_ID) {
-                player.set_current_skill_id(None);
-            }
-        }
-    }
-    if finished {
-        let _ = game.update_player_properties(player_id);
-    }
-    finished
-}
-
 enum RemovedMonsterCurableState {
     BoaLock(BoaLockState),
     Rush(RushState),
@@ -282,7 +249,6 @@ enum RemovedMonsterCurableState {
     BossBlueQuake(BossBlueQuakeState),
     KnightCut(KnightCutState),
     PoisonFog(PoisonFogState),
-    ActiveSpiderMist,
 }
 
 fn finish_monster_curable_state(
@@ -345,12 +311,6 @@ fn finish_monster_curable_state(
                 RemovedMonsterCurableState::KnightCut(state)
             }
             POISON_FOG_STATE_ID => RemovedMonsterCurableState::PoisonFog(monster.move_shape_mut().take_poison_fog_state()?),
-            SPIDER_MIST_SKILL_ID => {
-                if !monster.remove_curable_attack_cast(SPIDER_MIST_SKILL_ID, game.skill_factory()) {
-                    return None;
-                }
-                RemovedMonsterCurableState::ActiveSpiderMist
-            }
             _ => return None,
         };
         Some((removed, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?))
@@ -392,9 +352,6 @@ fn finish_monster_curable_state(
             game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
         ),
         RemovedMonsterCurableState::PoisonFog(state) => send_poison_fog_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
-        // У `CSpiderMist` нет собственного override `CState::End`: native
-        // cure-path только удаляет active state-skill из owner-а.
-        RemovedMonsterCurableState::ActiveSpiderMist => {}
     }
     true
 }
@@ -604,13 +561,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             if game.skill_random_below(100) < threshold {
                 // Пакеты завершения этих состояний не содержат время; дополнительное
                 // чтение часов между вызовами генератора MSVCRT исходный `CastCure` не делал.
-                properties_changed |= if state_id == SPIDER_MIST_SKILL_ID
-                    && target.identity.object_type == PLAYER_TYPE
-                {
-                    finish_active_spider_mist_on_cure(game, target.identity.id, runtime)
-                } else {
-                    finish_curable_state(game, region_id, target.identity, state_id, 0)
-                };
+                properties_changed |= finish_curable_state(game, region_id, target.identity, state_id, 0);
             }
         }
         properties_changed

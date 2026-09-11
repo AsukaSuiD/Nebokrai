@@ -1,4 +1,13 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Общий state AI вызывает конкретный экземпляр по StateKey. Exact AI/End
+//! Particular (0x004F9900), Team (0x005BFD20) и Ride (0x004F9110) завершают
+//! состояние при non-player sufferer; шесть Script-вариантов имеют общий
+//! timer/Remove без End-visual, AutoProtect End допускает только player !GM.
+//! Extended/Undead сохраняют отдельные keep/item/record clocks и результат
+//! use_item как фактическое число предметов: zero завершает, partial только
+//! уведомляет (GS0128/GS1147). Сырые Player-cast в этих owners и CHBY заменены
+//! проверкой настоящего типизированного владельца packet/hotkeys; lifetime,
+//! визуальный End и DelSkill/Remove продолжаются через живой CMoveShape.
 //! Повторный Attack проверяет requested CSkill: IsEnded и prepared (+0x44),
 //! не равенство выбранному ID. Object (0x00509FF0) и point (0x0050A230)
 //! при наличии prepared в фоне сначала дают Reject, затем OnLoseTarget.
@@ -868,6 +877,9 @@ use crate::gameserver::appserver::region::{
     RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
+use crate::gameserver::appserver::states::state::{
+    resolve_state_move_shape, resolve_state_move_shape_mut,
+};
 use crate::gameserver::appserver::script::function::{
     ScriptAwardAuthenticationContext, ScriptAwardAuthenticationSubmission, ScriptFunctionRuntime,
 };
@@ -909,7 +921,7 @@ use crate::gameserver::appserver::serverwarregion::{
     WarRegionOwnership,
 };
 use crate::gameserver::appserver::teamstate::{
-    CTeamState, team_state_end_message, team_state_update_message,
+    CTeamState, team_state_update_message,
 };
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
@@ -952,7 +964,6 @@ use crate::gameserver::appserver::skills::agility::{
     cancel_player_agility_family, execute_player_agility_family, AGILITY_2_SKILL_ID,
     AGILITY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::agilitystate2::expire_player_agility_state_2;
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
 use crate::gameserver::appserver::skills::tianshenxiafanstate::send_tian_shen_xia_fan_state_visual;
@@ -1043,7 +1054,7 @@ use crate::gameserver::appserver::skills::daubpoison::{
     cancel_player_daub_poison, complete_player_daub_poison, execute_player_daub_poison,
     is_daub_poison_dispatch, DAUB_POISON_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::daubpoisonstate::{expire_player_daub_poison_state, send_daub_poison_state_visual};
+use crate::gameserver::appserver::skills::daubpoisonstate::send_daub_poison_state_visual;
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -1089,27 +1100,19 @@ use crate::gameserver::appserver::skills::thunderslashphalanx::{
 use crate::gameserver::appserver::skills::pillar::{
     cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::pillarstate::{
-    expire_player_pillar_state, send_pillar_state_visual,
-};
+use crate::gameserver::appserver::skills::pillarstate::send_pillar_state_visual;
 use crate::gameserver::appserver::skills::rush::{
     cancel_player_rush, execute_player_rush, is_rush_dispatch, RUSH_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::rushstate::{
-    expire_monster_rush_state, expire_player_rush_state, send_rush_state_visual,
-};
+use crate::gameserver::appserver::skills::rushstate::send_rush_state_visual;
 use crate::gameserver::appserver::skills::rush2::{
     cancel_player_rush_2, execute_player_rush_2, is_rush_2_dispatch, RUSH_2_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::rushstate2::{
-    expire_monster_rush_2_state, expire_player_rush_2_state, send_rush_2_state_visual,
-};
+use crate::gameserver::appserver::skills::rushstate2::send_rush_2_state_visual;
 use crate::gameserver::appserver::skills::roar::{
     cancel_player_roar, execute_player_roar, is_roar_dispatch, ROAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::roarstate::{
-    finish_monster_roar, finish_player_roar, send_roar_state_visual,
-};
+use crate::gameserver::appserver::skills::roarstate::send_roar_state_visual;
 use crate::gameserver::appserver::skills::energyholding::{
     cancel_player_energy_holding, execute_player_energy_holding, is_energy_holding_dispatch,
     ENERGY_HOLDING_SKILL_ID,
@@ -1311,18 +1314,14 @@ use crate::gameserver::appserver::skills::battlefairyattribute::{
     definition as battle_fairy_attribute_definition, execute_battle_fairy_attribute,
 };
 use crate::gameserver::appserver::skills::battlefairyattributestate::{
-    expire_player_battle_fairy_attribute_states,
-    send_battle_fairy_attribute_state_visual,
-    take_expired_monster_battle_fairy_attribute_states, BattleFairyAttributeState,
+    send_battle_fairy_attribute_state_visual, BattleFairyAttributeState,
 };
 use crate::gameserver::appserver::skills::callosity::{
     cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
     CALLOSITY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::callositystate::{expire_player_callosity_state, send_callosity_state_begin};
-use crate::gameserver::appserver::skills::curestate::{
-    expire_monster_cure_state, send_cure_state_visual,
-};
+use crate::gameserver::appserver::skills::callositystate::send_callosity_state_begin;
+use crate::gameserver::appserver::skills::curestate::send_cure_state_visual;
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
     truncate_original,
@@ -1330,20 +1329,9 @@ use crate::gameserver::appserver::skills::fightdefense::{
 use crate::gameserver::appserver::skills::fury::{
     cancel_player_fury, execute_player_fury, is_fury_dispatch, FURY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::furystate::{
-    expire_monster_fury_states, expire_player_fury_states, send_fury_state_visual,
-};
-use crate::gameserver::appserver::skills::bossbluefurystate::{
-    expire_monster_boss_blue_fury_state, expire_player_boss_blue_fury_state,
-};
-use crate::gameserver::appserver::skills::bossbluequakestate::{
-    expire_monster_boss_blue_quake_state, expire_player_boss_blue_quake_state,
-    send_boss_blue_quake_state_visual,
-};
-use crate::gameserver::appserver::skills::knightcutstate::{
-    expire_monster_knight_cut_state, expire_player_knight_cut_state,
-    send_knight_cut_state_visual,
-};
+use crate::gameserver::appserver::skills::furystate::send_fury_state_visual;
+use crate::gameserver::appserver::skills::bossbluequakestate::send_boss_blue_quake_state_visual;
+use crate::gameserver::appserver::skills::knightcutstate::send_knight_cut_state_visual;
 use crate::gameserver::appserver::ai::baseai::{
     AiShapeAction, PassiveDeathAction, PassiveStiffenAction,
 };
@@ -1380,13 +1368,10 @@ use crate::gameserver::appserver::skills::hearten::{
 use crate::gameserver::appserver::skills::gibe::{
     cancel_player_gibe, execute_player_gibe, GIBE_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::heartenstate::{
-    expire_player_hearten_state, send_hearten_state_visual,
-};
+use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
 use crate::gameserver::appserver::skills::heal::{
     cancel_player_heal, complete_player_heal, execute_player_heal, is_heal_skill,
 };
-use crate::gameserver::appserver::skills::healstate::update_stored_heal_states;
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
@@ -1404,17 +1389,12 @@ use crate::gameserver::appserver::skills::knockoutruntime::{
 };
 use crate::gameserver::appserver::skills::knockout::is_knock_out_dispatch;
 use crate::gameserver::appserver::skills::knockoutstate::{
-    expire_monster_blind_states, expire_player_blind_states,
-    finish_blind_states_on_defense, finish_player_blind_states_on_defense,
-    send_knock_out_state_visual,
+    finish_blind_states_on_defense, finish_player_blind_states_on_defense, send_knock_out_state_visual,
 };
 use crate::gameserver::appserver::skills::blindstate::send_blind_state_visual;
 use crate::gameserver::appserver::skills::sealstate::send_seal_state_visual;
 use crate::gameserver::appserver::skills::spiderwebstate::send_spider_web_state_visual;
-use crate::gameserver::appserver::skills::boalockstate::{
-    expire_monster_boa_lock_state, expire_player_boa_lock_state,
-    send_boa_lock_state_visual,
-};
+use crate::gameserver::appserver::skills::boalockstate::send_boa_lock_state_visual;
 use crate::gameserver::appserver::skills::snowstorm::{
     cancel_player_snow_storm, complete_player_snow_storm, execute_player_snow_storm,
     is_snow_storm_target, SNOW_STORM_SKILL_ID,
@@ -1427,9 +1407,7 @@ use crate::gameserver::appserver::skills::weak::{
     cancel_player_weak, complete_player_weak, execute_player_weak, is_weak_target, WEAK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
-use crate::gameserver::appserver::skills::weakstate::{
-    finish_monster_weak_outside, finish_player_weak_outside, send_weak_state_visual,
-};
+use crate::gameserver::appserver::skills::weakstate::send_weak_state_visual;
 use crate::gameserver::appserver::skills::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::skills::yinyang::{
     cancel_player_yin_yang_family, complete_player_yin_yang_family,
@@ -1476,8 +1454,7 @@ use crate::gameserver::appserver::skills::godbless::{
 };
 use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
-    GOD_BLESS_STATE_ID, finish_monster_god_bless, finish_player_god_bless,
-    send_god_bless_state_visual,
+    GOD_BLESS_STATE_ID, send_god_bless_state_visual,
 };
 use crate::gameserver::appserver::skills::cure::{
     cancel_player_cure, complete_player_cure, execute_player_cure, is_cure_target, CURE_SKILL_ID,
@@ -1502,52 +1479,34 @@ use crate::gameserver::appserver::skills::monstertaming::{
 use crate::gameserver::appserver::skills::poisonarrow::{
     POISON_ARROW_SKILL_ID, execute_battle_fairy_poison_arrow,
 };
-use crate::gameserver::appserver::skills::poisonarrowstate::{
-    PoisonArrowState, update_monster_poison_arrow_state, update_player_poison_arrow_state,
-};
+use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::promotion::{
     cancel_player_promotion, complete_player_promotion, execute_player_promotion,
     PROMOTION_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::promotionstate::expire_monster_promotion_state;
-use crate::gameserver::appserver::skills::poisonfogstate::{
-    expire_player_poison_fog_state, take_expired_monster_poison_fog_state,
 };
 use crate::gameserver::appserver::skills::spiderpoison::{
     SPIDER_POISON_SKILL_ID, cancel_player_spider_poison, execute_player_spider_poison,
     is_player_spider_poison_dispatch,
 };
-use crate::gameserver::appserver::skills::spiderpoisonstate::{
-    send_spider_poison_state_visual, update_monster_spider_poison_state, update_player_spider_poison_state,
-};
-use crate::gameserver::appserver::skills::spriteburnstate::{
-    send_sprite_burn_state_visual, update_monster_sprite_burn_state, update_player_sprite_burn_state,
-};
+use crate::gameserver::appserver::skills::spiderpoisonstate::send_spider_poison_state_visual;
+use crate::gameserver::appserver::skills::spriteburnstate::send_sprite_burn_state_visual;
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
-use crate::gameserver::appserver::skills::bloodlossstate::{
-    BloodLossState, update_monster_blood_loss_state, update_player_blood_loss_state,
-};
+use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{
-    LeafCutState, send_leaf_cut_state_visual, update_monster_leaf_cut_state,
-    update_player_leaf_cut_state,
+    LeafCutState, send_leaf_cut_state_visual,
 };
 use crate::gameserver::appserver::skills::leafcutstate2::{
-    LeafCutState2, LEAF_CUT_2_STATE_ID, send_leaf_cut_2_state_visual,
-    update_monster_leaf_cut_2_state, update_player_leaf_cut_2_state,
+    LeafCutState2, send_leaf_cut_2_state_visual,
 };
 use crate::gameserver::appserver::skills::leafcutstate3::{
-    LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
-    update_monster_leaf_cut_3_state, update_player_leaf_cut_3_state,
+    LeafCutState3, send_leaf_cut_3_state_visual,
 };
-use crate::gameserver::appserver::skills::strikestate::{expire_player_strike_states, send_strike_state_visual};
+use crate::gameserver::appserver::skills::strikestate::send_strike_state_visual;
 use crate::gameserver::appserver::skills::kerosene::{
     cancel_player_kerosene, complete_player_kerosene, execute_player_kerosene,
     is_kerosene_dispatch, KEROSENE_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::kerosenestate::{
-    update_monster_kerosene_state, update_player_kerosene_state,
 };
 use crate::gameserver::appserver::skills::ignition::{
     cancel_player_ignition, complete_player_ignition, execute_player_ignition,
@@ -1591,9 +1550,7 @@ use crate::gameserver::appserver::skills::selfshield::{
     is_self_shield_skill,
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
-use crate::gameserver::appserver::skills::shieldstate::{
-    expire_player_defense_shields, DefenseShieldState,
-};
+use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -28362,18 +28319,6 @@ impl CGame {
         self.finish_appellation_state_removal(player_id, mutation, now_ms)
     }
 
-    fn delete_player_appellation_state_key(
-        &mut self,
-        player_id: i32,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        now_ms: u32,
-    ) -> u32 {
-        let Some(player) = self.players.get_mut(&player_id) else {
-            return 0;
-        };
-        let mutation = player.delete_appellation_state_key(key);
-        self.finish_appellation_state_removal(player_id, mutation, now_ms)
-    }
 
     fn finish_appellation_state_removal(
         &mut self,
@@ -28514,19 +28459,6 @@ impl CGame {
         self.finish_extended_state_removal(player_id, mutation, now_ms)
     }
 
-    fn delete_player_extended_state_key(
-        &mut self,
-        player_id: i32,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        now_ms: u32,
-    ) -> u32 {
-        let Some(mutation) = self.find_player_mut(player_id)
-            .map(|player| player.delete_extended_state_key(key))
-        else {
-            return 0;
-        };
-        self.finish_extended_state_removal(player_id, mutation, now_ms)
-    }
 
     fn finish_extended_state_removal(
         &mut self,
@@ -28604,128 +28536,138 @@ impl CGame {
         let _ = self.send_player_shape_around(player_id, None, &message);
     }
 
-    fn update_player_extended_states(
+    pub(crate) fn update_move_shape_extended_state<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
-        now_ms: u32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        runtime: &mut Runtime,
     ) -> (usize, u32) {
-        let (expired, item_due) = self
-            .find_player_mut(player_id)
-            .map(|player| player.extended_state_tick(now_ms))
+        let (expired, item_due) = resolve_state_move_shape_mut(self, region_id, identity)
+            .map(|shape| shape.extended_state_tick(key, || runtime.now_milliseconds()))
             .unwrap_or_default();
-        let mut ended = 0;
-        let mut items_consumed = 0_u32;
-        for key in expired {
-            ended += usize::from(
-                self.delete_player_extended_state_key(player_id, key, now_ms) != 0,
-            );
+        if expired {
+            return (usize::from(self.end_move_shape_extended_state(region_id, identity, key)), 0);
         }
-        for (key, item_index, item_amount) in item_due {
-            let enough = self
-                .find_player(player_id)
-                .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
-            if !enough {
-                let goods_name = self
-                    .goods_factory
-                    .query_goods_name(item_index)
-                    .unwrap_or_default();
-                let text = format_legacy_text_fields(
-                    self.get_string_by_id(b"GS0128"),
-                    &[goods_name],
-                    0xff,
-                );
-                let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
-                    .send_to_player(self.net_server(), player_id);
-                ended += usize::from(
-                    self.delete_player_extended_state_key(player_id, key, now_ms)
-                        != 0,
-                );
-                continue;
-            }
-            let consumptions = self
-                .find_player_mut(player_id)
-                .map(|player| player.remove_item_in_packet(item_index, item_amount))
-                .unwrap_or_default();
-            let removed = consumptions.iter().fold(0_u32, |total, consumption| {
-                total.wrapping_add(
-                    consumption
-                        .previous_amount
-                        .wrapping_sub(consumption.remaining_amount),
-                )
-            });
-            for consumption in &consumptions {
-                let _ = self.send_player_packet_consumption(consumption);
-            }
-            items_consumed = items_consumed.wrapping_add(removed);
-            if removed != item_amount {
-                ended += usize::from(
-                    self.delete_player_extended_state_key(player_id, key, now_ms)
-                        != 0,
-                );
-            }
-        }
-        (ended, items_consumed)
+        let Some((item_index, item_amount)) = item_due else {
+            return (0, 0);
+        };
+        let removed = self.use_move_shape_state_item(identity, item_index, item_amount, b"GS0128");
+        let ended = removed == 0
+            && self.end_move_shape_extended_state(region_id, identity, key);
+        (usize::from(ended), removed)
     }
 
-    fn update_player_appellation_states(
+    fn end_move_shape_extended_state(
         &mut self,
-        player_id: i32,
-        now_ms: u32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+    ) -> bool {
+        let Some(state) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ExtendedState>(key)).cloned()
+        else {
+            return false;
+        };
+        let mut message = CMessage::new(0x0b_fe04);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(state.state_id() as i32);
+        message.add_ulong(state.level);
+        let _ = self.send_move_shape_around(region_id, identity, &message);
+        let removed = resolve_state_move_shape_mut(self, region_id, identity)
+            .is_some_and(|shape| !shape.delete_extended_state_key(key).removed.is_empty());
+        if removed && identity.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(identity.id);
+        }
+        removed
+    }
+
+    pub(crate) fn update_move_shape_appellation_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        runtime: &mut Runtime,
     ) -> (usize, u32) {
-        let (expired, item_due) = self
-            .find_player_mut(player_id)
-            .map(|player| player.appellation_state_tick(now_ms))
+        let (expired, item_due) = resolve_state_move_shape_mut(self, region_id, identity)
+            .map(|shape| shape.undead_state_tick(key, || runtime.now_milliseconds()))
             .unwrap_or_default();
-        let mut ended = 0;
-        let mut items_consumed = 0_u32;
-        for key in expired {
-            ended += usize::from(
-                self.delete_player_appellation_state_key(player_id, key, now_ms) != 0,
-            );
+        if expired {
+            return (usize::from(self.end_move_shape_appellation_state(region_id, identity, key)), 0);
         }
-        for (key, item_index, item_amount) in item_due {
-            let enough = self
-                .find_player(player_id)
-                .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
-            if !enough {
-                let goods_name = self
-                    .goods_factory
-                    .query_goods_name(item_index)
-                    .unwrap_or_default();
-                let text = format_legacy_text_fields(
-                    self.get_string_by_id(b"GS0128"),
-                    &[goods_name],
-                    0xff,
-                );
-                let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
-                    .send_to_player(self.net_server(), player_id);
-                ended += usize::from(
-                    self.delete_player_appellation_state_key(player_id, key, now_ms) != 0,
-                );
-                continue;
-            }
-            let consumptions = self
-                .find_player_mut(player_id)
+        let Some((item_index, item_amount)) = item_due else {
+            return (0, 0);
+        };
+        let removed = self.use_move_shape_state_item(identity, item_index, item_amount, b"GS1147");
+        let ended = removed == 0
+            && self.end_move_shape_appellation_state(region_id, identity, key);
+        (usize::from(ended), removed)
+    }
+
+    fn end_move_shape_appellation_state(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+    ) -> bool {
+        let Some(state) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<UndeadState>(key)).cloned()
+        else {
+            return false;
+        };
+        let mut message = CMessage::new(0x0b_fe04);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(56 as i32);
+        message.add_ulong(state.state_id());
+        let _ = self.send_move_shape_around(region_id, identity, &message);
+        let removed = resolve_state_move_shape_mut(self, region_id, identity)
+            .is_some_and(|shape| !shape.delete_undead_state_key(key).removed.is_empty());
+        if removed && identity.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(identity.id);
+        }
+        removed
+    }
+
+    fn use_move_shape_state_item(
+        &mut self,
+        identity: ShapeIdentity,
+        item_index: u32,
+        item_amount: u32,
+        notice_id: &[u8],
+    ) -> u32 {
+        // В EXE use_item статически трактует GetSufferer как CPlayer.
+        // У безопасного адаптера packet есть только у настоящего игрока.
+        // Для non-player он безопасно возвращает 0: оригинальный доступ
+        // через неподходящий Player-cast имеет неопределённое поведение.
+        if identity.object_type != PLAYER_TYPE || self.find_player(identity.id).is_none() {
+            return 0;
+        }
+        let enough = self.find_player(identity.id)
+            .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
+        let consumptions = if enough {
+            self.find_player_mut(identity.id)
                 .map(|player| player.remove_item_in_packet(item_index, item_amount))
-                .unwrap_or_default();
-            let removed = consumptions.iter().fold(0_u32, |total, consumption| {
-                total.wrapping_add(
-                    consumption
-                        .previous_amount
-                        .wrapping_sub(consumption.remaining_amount),
-                )
-            });
-            for consumption in &consumptions {
-                let _ = self.send_player_packet_consumption(consumption);
-            }
-            items_consumed = items_consumed.wrapping_add(removed);
-            if removed != item_amount {
-                ended += usize::from(
-                    self.delete_player_appellation_state_key(player_id, key, now_ms) != 0,
-                );
-            }
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let removed = consumptions.iter().fold(0_u32, |total, consumption| {
+            total.wrapping_add(
+                consumption.previous_amount.wrapping_sub(consumption.remaining_amount),
+            )
+        });
+        for consumption in &consumptions {
+            let _ = self.send_player_packet_consumption(consumption);
         }
-        (ended, items_consumed)
+        if removed != item_amount {
+            let goods_name = self.goods_factory.query_goods_name(item_index).unwrap_or_default();
+            let text = format_legacy_text_fields(self.get_string_by_id(notice_id), &[goods_name], 0xff);
+            let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
+                .send_to_player(self.net_server(), identity.id);
+        }
+        removed
     }
 
     fn send_ride_visual(&mut self, player_id: i32, state: &RideState, begin: bool) {
@@ -28763,9 +28705,18 @@ impl CGame {
     }
 
     pub(crate) fn end_player_ride(&mut self, player_id: i32) -> bool {
+        let Some(key) = self.find_player(player_id)
+            .and_then(|player| player.move_shape().applied_state_key::<RideState>())
+        else {
+            return false;
+        };
+        self.end_player_ride_key(player_id, key)
+    }
+
+    fn end_player_ride_key(&mut self, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey) -> bool {
         let Some(state) = self
             .find_player_mut(player_id)
-            .and_then(CPlayer::end_ride_state)
+            .and_then(|player| player.end_ride_state_key(key))
         else {
             return false;
         };
@@ -28792,27 +28743,45 @@ impl CGame {
         self.apply_player_state_properties(player_id, properties);
     }
 
-    fn update_player_ride_state<Context>(
+    pub(crate) fn update_move_shape_ride_state<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
-        now_ms: u32,
-        context: &mut Context,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        runtime: &mut Runtime,
     ) -> bool {
-        if !self
-            .find_player(player_id)
-            .is_some_and(|player| player.ride_goods_check_due(now_ms))
-        {
+        let now_ms = runtime.now_milliseconds();
+        let due = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<RideState>(key))
+            .is_some_and(|state| state.goods_check_due(now_ms));
+        if !due {
             return false;
         }
-        let goods_factory = self.goods_factory.clone();
-        let exists = self
-            .find_player_mut(player_id)
-            .is_some_and(|player| player.refresh_ride_goods_cache(&goods_factory));
-        if !exists && self.end_player_ride(player_id) {
-            self.refresh_ride_properties(player_id, context);
-            return true;
+        if identity.object_type == PLAYER_TYPE {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            if players.get_mut(&identity.id)
+                .is_some_and(|player| player.refresh_ride_goods_cache(key, goods_factory))
+            {
+                return false;
+            }
         }
-        false
+        let Some(shape) = resolve_state_move_shape(self, region_id, identity) else {
+            return false;
+        };
+        if shape.applied_state::<RideState>(key).is_none() {
+            return false;
+        }
+        let mut message = CMessage::new(0x0b_fe04);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(RIDE_STATE_ID as i32);
+        let _ = self.send_move_shape_around(region_id, identity, &message);
+        let removed = resolve_state_move_shape_mut(self, region_id, identity)
+            .and_then(|shape| shape.end_ride_state_key(key)).is_some();
+        if removed && identity.object_type == PLAYER_TYPE {
+            self.refresh_ride_properties(identity.id, runtime);
+        }
+        removed
     }
 
     pub(crate) fn add_script_change_body_state(
@@ -28867,20 +28836,6 @@ impl CGame {
         self.finish_change_body_state_removal(player_id, mutation)
     }
 
-    fn delete_player_change_body_state_key(
-        &mut self,
-        player_id: i32,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-    ) -> u32 {
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            let Some(player) = players.get_mut(&player_id) else {
-                return 0;
-            };
-            player.delete_change_body_state_key(key, skill_factory)
-        };
-        self.finish_change_body_state_removal(player_id, mutation)
-    }
 
     fn finish_change_body_state_removal(
         &mut self,
@@ -28916,6 +28871,28 @@ impl CGame {
         Some(state_id)
     }
 
+    fn end_change_body_state(
+        &mut self,
+        player_id: i32,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        notice_id: Option<&[u8]>,
+    ) -> bool {
+        let Some(player) = self.find_player(player_id) else {
+            return false;
+        };
+        if player.move_shape().applied_state::<ChangeBodyState>(key).is_none() {
+            return false;
+        }
+        let region_id = player.shape().get_region_id();
+        let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        if let Some(notice_id) = notice_id {
+            let text = self.get_string_by_id(notice_id);
+            let _ = colored_player_notice_message(0xffff_ffff, 0, text)
+                .send_to_player(self.net_server(), player_id);
+        }
+        self.end_move_shape_change_body_state(region_id, identity, key)
+    }
+
     fn end_change_body_states(
         &mut self,
         player_id: i32,
@@ -28923,174 +28900,213 @@ impl CGame {
         notice_id: Option<&[u8]>,
     ) {
         for key in state_keys {
-            if let Some(notice_id) = notice_id {
-                let text = self.get_string_by_id(notice_id);
-                let _ = colored_player_notice_message(0xffff_ffff, 0, text)
-                    .send_to_player(self.net_server(), player_id);
-            }
-            let _ = self.delete_player_change_body_state_key(player_id, key);
+            let _ = self.end_change_body_state(player_id, key, notice_id);
         }
     }
 
-    fn update_player_change_body_states(
+    pub(crate) fn update_move_shape_change_body_state<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
-        now_ms: u32,
-    ) -> usize {
-        let expired = self
-            .find_player(player_id)
-            .map(|player| player.expired_change_body_state_keys(now_ms))
-            .unwrap_or_default();
-        let mut ended = expired.len();
-        for key in expired {
-            self.end_change_body_states(player_id, vec![key], Some(b"GS1145"));
-        }
-        let death_ended = self
-            .find_player(player_id)
-            .filter(|player| player.is_dead())
-            .map(CPlayer::change_body_death_end_keys)
-            .unwrap_or_default();
-        if !death_ended.is_empty() {
-            ended = ended.wrapping_add(death_ended.len());
-            self.change_body_after_player_death(player_id);
-        }
-        ended
-    }
-
-    fn update_player_team_recruitment_states<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        first_sampled_at_ms: u32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
         runtime: &mut Runtime,
     ) -> usize {
-        let initial_count = self
-            .find_player(player_id)
-            .map(CPlayer::team_recruitment_state_count)
-            .unwrap_or_default();
-        let mut ended = 0usize;
-        for index in 0..initial_count {
-            let sampled_at_ms = if index == 0 {
-                first_sampled_at_ms
-            } else {
-                runtime.now_milliseconds()
-            };
-            let due = self
-                .find_player(player_id)
-                .and_then(|player| player.team_recruitment_state(index))
-                .is_some_and(|state| state.check_due(sampled_at_ms));
-            if !due {
-                continue;
-            }
-            let recorded_at_ms = runtime.now_milliseconds();
-            let Some(player) = self.find_player_mut(player_id) else {
-                break;
-            };
-            let Some(state) = player.team_recruitment_state_mut(index) else {
-                break;
-            };
-            state.record_check(recorded_at_ms);
+        let needs_clock = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+            .is_some_and(|state| state.keep_time_ms != 0);
+        if !needs_clock {
+            return 0;
+        }
+        let now_ms = runtime.now_milliseconds();
+        let expired = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+            .is_some_and(|state| state.expired(now_ms));
+        if !expired {
+            return 0;
+        }
+        if identity.object_type == PLAYER_TYPE {
+            let text = self.get_string_by_id(b"GS1145");
+            let _ = colored_player_notice_message(0xffff_ffff, 0, text)
+                .send_to_player(self.net_server(), identity.id);
+        }
+        usize::from(self.end_move_shape_change_body_state(region_id, identity, key))
+    }
 
-            let team_id = self
-                .find_player(player_id)
-                .map(CPlayer::team_id)
-                .unwrap_or_default();
+    fn end_move_shape_change_body_state(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+    ) -> bool {
+        let Some(state) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ChangeBodyState>(key)).cloned()
+        else {
+            return false;
+        };
+        let mut message = CMessage::new(0x0b_fe04);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(0x37);
+        message.add_long(0);
+        message.add_ulong(state.level);
+        for (skill_id, _) in state.skills {
+            message.base_mut().add_short(skill_id as i16);
+        }
+        let _ = self.send_move_shape_around(region_id, identity, &message);
+        let Some(live) = resolve_state_move_shape_mut(self, region_id, identity)
+            .and_then(|shape| shape.applied_state_mut::<ChangeBodyState>(key))
+        else {
+            return false;
+        };
+        live.mode = 0;
+        if identity.object_type == PLAYER_TYPE {
+            if let Some(player) = self.find_player_mut(identity.id) {
+                let (head, face, _) = player.appearance_and_mode();
+                player.restore_appearance_and_mode(head, face, 0);
+            }
+            for (index, value) in state.old_hotkeys.iter().copied().enumerate() {
+                if let Some(player) = self.find_player_mut(identity.id) {
+                    let _ = player.set_hotkey((index + 12) as u8, value);
+                }
+                self.send_change_body_hotkeys(identity.id, std::iter::once(index + 12));
+            }
+        }
+        let factory = self.skill_factory.clone();
+        for (skill_id, _) in state.skills {
+            if skill_id != 0
+                && let Some(shape) = resolve_state_move_shape_mut(self, region_id, identity)
+            {
+                let _ = shape.delete_skill(u32::from(skill_id), &factory);
+            }
+        }
+        let removed = resolve_state_move_shape_mut(self, region_id, identity)
+            .is_some_and(|shape| shape.delete_change_body_state_key(key).removed.is_some());
+        if removed && identity.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(identity.id);
+        }
+        removed
+    }
+
+    pub(crate) fn update_move_shape_team_recruitment_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let sampled_at_ms = runtime.now_milliseconds();
+        let due = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<CTeamState>(key))
+            .is_some_and(|state| state.check_due(sampled_at_ms));
+        if !due {
+            return 0;
+        }
+        let recorded_at_ms = runtime.now_milliseconds();
+        let Some(state) = resolve_state_move_shape_mut(self, region_id, identity)
+            .and_then(|shape| shape.applied_state_mut::<CTeamState>(key))
+        else {
+            return 0;
+        };
+        state.record_check(recorded_at_ms);
+        if identity.object_type == PLAYER_TYPE {
+            let Some(player) = self.find_player(identity.id) else {
+                return 0;
+            };
+            let team_id = player.team_id();
             let team_leader_id = (team_id != 0)
                 .then(|| self.get_team_session_id(team_id as u32))
                 .and_then(|session_id| self.session_factory.query_team(session_id))
                 .map(|team| team.leader_id());
-            if !CTeamState::ends_for_team(player_id, team_id, team_leader_id) {
-                continue;
-            }
-            let removed = self
-                .find_player_mut(player_id)
-                .and_then(|player| player.remove_team_recruitment_state_at(index));
-            if removed.is_none() {
-                break;
-            }
-            let message = team_state_end_message(player_id);
-            let delivery = self.send_player_shape_around(player_id, None, &message);
-            tracing::trace!(
-                player_id,
-                team_id,
-                ?delivery,
-                "набор в группу завершён после смены лидера"
-            );
-            ended = ended.wrapping_add(1);
-        }
-        ended
-    }
-
-    fn update_player_particular_states(&mut self, player_id: i32, now_ms: u32) -> usize {
-        let mut ended = 0usize;
-        let mut index = 0usize;
-        loop {
-            let Some(state) = self
-                .find_player(player_id)
-                .and_then(|player| player.particular_state(index))
-            else {
-                break;
-            };
-            if !state.due(now_ms) {
-                index = index.wrapping_add(1);
-                continue;
-            }
-            let present = self.find_player(player_id).is_some_and(|player| {
-                player.particular_state_goods_present(
-                    state.additional_data(),
-                    &self.goods_factory,
-                )
-            });
-            if present {
-                index = index.wrapping_add(1);
-                continue;
-            }
-            let removed = self
-                .find_player_mut(player_id)
-                .and_then(|player| player.remove_particular_state_at(index));
-            if let (Some(removed), Some(player)) = (removed, self.find_player(player_id)) {
-                let _ = self.send_particular_state_visual_for_player(player, removed, false);
-                ended = ended.wrapping_add(1);
-            } else {
-                break;
+            if !CTeamState::ends_for_team(identity.id, team_id, team_leader_id) {
+                return 0;
             }
         }
-        ended
+        let mut message = CMessage::new(0x0b_fe04);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(crate::gameserver::appserver::teamstate::TEAM_STATE_ID);
+        let _ = self.send_move_shape_around(region_id, identity, &message);
+        let removed = resolve_state_move_shape_mut(self, region_id, identity)
+            .and_then(|shape| shape.remove_team_recruitment_state_key(key)).is_some();
+        if removed && identity.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(identity.id);
+        }
+        usize::from(removed)
     }
 
-    /// Исполняет общий virtual `AI` семи состояний `CMoveShape::AddState`.
-    /// После удаления размер вектора меняется, но исходный индекс всё равно
-    /// увеличивается, поэтому сдвинувшийся сосед обрабатывается лишь в следующий
-    /// проход `UpdateAbnormality`.
-    fn update_player_script_move_states(
+    pub(crate) fn update_move_shape_particular_state<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
-        now_ms: u32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        runtime: &mut Runtime,
     ) -> usize {
-        let mut ended = 0usize;
-        let mut index = 0usize;
-        loop {
-            let Some(state) = self
-                .find_player(player_id)
-                .and_then(|player| player.script_move_state(index))
-            else {
-                break;
-            };
-            if !state.expired(now_ms) {
-                index = index.wrapping_add(1);
-                continue;
-            }
-            let removed = self
-                .find_player_mut(player_id)
-                .and_then(|player| player.remove_script_move_state_at(index));
-            let Some(removed) = removed else {
-                break;
-            };
-            let _ = self.send_script_move_state_visual(player_id, removed, false);
-            let _ = self.update_player_properties(player_id);
-            ended = ended.wrapping_add(1);
-            index = index.wrapping_add(1);
+        let now_ms = runtime.now_milliseconds();
+        let Some(shape) = resolve_state_move_shape(self, region_id, identity) else {
+            return 0;
+        };
+        let Some(state) = shape.applied_state::<ParticularState>(key).copied() else {
+            return 0;
+        };
+        if !state.due(now_ms) {
+            return 0;
         }
-        ended
+        if identity.object_type == PLAYER_TYPE
+            && self.find_player(identity.id).is_some_and(|player| {
+                player.particular_state_goods_present(state.additional_data(), &self.goods_factory)
+            })
+        {
+            return 0;
+        }
+        let message = particular_state_visual_message(shape.shape(), state, false);
+        let _ = self.send_move_shape_around(region_id, identity, &message);
+        let removed = resolve_state_move_shape_mut(self, region_id, identity)
+            .and_then(|shape| shape.remove_particular_state_key(key)).is_some();
+        if removed && identity.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(identity.id);
+        }
+        usize::from(removed)
+    }
+
+    /// Исполняет virtual `AI` одного достигнутого состояния `CMoveShape::AddState`.
+    /// Общий обход владеет позицией, а End удаляет только переданный ключ.
+    pub(crate) fn update_move_shape_script_move_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let now_ms = runtime.now_milliseconds();
+        let Some(shape) = resolve_state_move_shape(self, region_id, identity) else {
+            return 0;
+        };
+        let Some(state) = shape.applied_state::<ScriptMoveState>(key).copied() else {
+            return 0;
+        };
+        if !state.expired(now_ms) {
+            return 0;
+        }
+        if state.is_auto_protect() {
+            if identity.object_type != PLAYER_TYPE
+                || self.script_player_gm_level(identity.id).unwrap_or(0) != 0
+            {
+                return 0;
+            }
+            let message = script_state_visual_message(shape.shape(), state, false, || now_ms);
+            let _ = self.send_move_shape_around(region_id, identity, &message);
+        }
+        let removed = if identity.object_type == PLAYER_TYPE {
+            self.find_player_mut(identity.id)
+                .and_then(|player| player.remove_script_move_state_key(key)).is_some()
+        } else {
+            resolve_state_move_shape_mut(self, region_id, identity)
+                .and_then(|shape| shape.remove_script_state_key(key)).is_some()
+        };
+        if removed && identity.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(identity.id);
+        }
+        usize::from(removed)
     }
 
     /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:
@@ -29102,241 +29118,199 @@ impl CGame {
         player_id: i32,
         runtime: &mut Runtime,
     ) -> Option<()> {
-        if self.find_player_mut(player_id)?.move_shape_mut().compact_state_slots() {
-            let _ = self.update_player_properties(player_id);
-        }
-        let materialized = self
-            .find_player(player_id)
-            .is_some_and(CPlayer::has_materialized_abnormality);
-        let sampled_at_ms = materialized.then(|| runtime.now_milliseconds());
-        let Some(now_ms) = sampled_at_ms else {
-            return self.find_player(player_id).map(|_| ());
-        };
-        let particular_states_ended =
-            self.update_player_particular_states(player_id, now_ms);
-        let team_recruitment_states_ended =
-            self.update_player_team_recruitment_states(player_id, now_ms, runtime);
-        let script_move_states_ended =
-            self.update_player_script_move_states(player_id, now_ms);
-        let _ = expire_player_pillar_state(self, player_id, now_ms);
-        let _ = expire_player_callosity_state(self, player_id, now_ms);
-        for key in self.find_player(player_id)
-            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate::RushState>())
-            .unwrap_or_default()
-        {
-            let _ = expire_player_rush_state(self, player_id, key, now_ms);
-        }
-        for key in self.find_player(player_id)
-            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate2::Rush2State>())
-            .unwrap_or_default()
-        {
-            let _ = expire_player_rush_2_state(self, player_id, key, now_ms);
-        }
-        let _ = expire_player_blind_states(self, player_id, now_ms);
-        let strike_states_ended = expire_player_strike_states(self, player_id, now_ms);
-        for key in self.find_player(player_id)
-            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::boalockstate::BoaLockState>())
-            .unwrap_or_default()
-        {
-            let _ = expire_player_boa_lock_state(self, player_id, key, now_ms);
-        }
-        let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
-        let _ = expire_player_boss_blue_fury_state(self, player_id, now_ms, runtime);
-        for key in self.find_player(player_id)
-            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::knightcutstate::KnightCutState>())
-            .unwrap_or_default()
-        {
-            let _ = expire_player_knight_cut_state(self, player_id, key, now_ms);
-        }
-        for key in self.find_player(player_id)
-            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState>())
-            .unwrap_or_default()
-        {
-            let _ = expire_player_daub_poison_state(self, player_id, key, now_ms);
-        }
-        let _ = crate::gameserver::appserver::skills::tianshenxiafanstate::expire_player_tian_shen_xia_fan_states(
-            self, player_id, now_ms,
-        );
-        let _ = crate::gameserver::appserver::skills::wangshengstate::expire_player_wangsheng_states(
-            self, player_id, now_ms,
-        );
-        for key in self.find_player(player_id)
-            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState>())
-            .unwrap_or_default()
-        {
-            let _ = expire_player_poison_fog_state(self, player_id, key, now_ms, runtime);
-        }
-        let _ = crate::gameserver::appserver::skills::ragebreakstate::expire_player_rage_break_states(
-            self, player_id, now_ms,
-        );
-        let _ = expire_player_fury_states(self, player_id, now_ms, runtime);
-        let weak_ended = finish_player_weak_outside(self, player_id, runtime);
-        let god_bless_ended = finish_player_god_bless(self, player_id, now_ms, runtime);
-        let roar_ended = finish_player_roar(self, player_id, now_ms, runtime);
-        let expired_cure = crate::gameserver::appserver::skills::curestate::expire_player_cure_states(
-            self, player_id, now_ms,
-        );
-        let periodic_state_ids = self
-            .find_player(player_id)
-            .map(CPlayer::periodic_attack_states)
-            .unwrap_or_default();
-        let mut periodic_attacks_updated = 0usize;
-        for (key, state_id) in periodic_state_ids {
-            let updated = match state_id {
-                POISON_ARROW_SKILL_ID => {
-                    update_player_poison_arrow_state(self, player_id, key, runtime)
-                }
-                SPIDER_POISON_SKILL_ID => {
-                    update_player_spider_poison_state(self, player_id, key, runtime)
-                }
-                SPRITE_BURN_SKILL_ID => {
-                    update_player_sprite_burn_state(self, player_id, key, runtime)
-                }
-                BLOOD_LOSS_SKILL_ID => update_player_blood_loss_state(self, player_id, key, runtime),
-                crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
-                    update_player_leaf_cut_state(self, player_id, key, runtime)
-                }
-                LEAF_CUT_2_STATE_ID => update_player_leaf_cut_2_state(self, player_id, key, runtime),
-                LEAF_CUT_3_STATE_ID => update_player_leaf_cut_3_state(self, player_id, key, runtime),
-                crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => update_player_kerosene_state(self, player_id, key, runtime),
-                _ => false,
-            };
-            periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
-        }
-        if let Some(region_id) = self.find_player(player_id).and_then(CPlayer::server_region_id) {
-            update_stored_heal_states(
-                self,
-                region_id,
-                ShapeIdentity {
-                    object_type: PLAYER_TYPE,
-                    id: player_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                || runtime.now_milliseconds(),
-            );
-        }
-        let agility_state_2_ended =
-            expire_player_agility_state_2(self, player_id, now_ms);
-        let hearten_ended = expire_player_hearten_state(self, player_id, now_ms);
-        let battle_fairy_attribute_states_ended =
-            expire_player_battle_fairy_attribute_states(self, player_id, now_ms, runtime);
-        let defense_shields_ended = expire_player_defense_shields(self, player_id, now_ms);
-        let change_body_states_ended =
-            self.update_player_change_body_states(player_id, now_ms);
-        let (extended_states_ended, extended_items_consumed) =
-            self.update_player_extended_states(player_id, now_ms);
-        let (appellation_states_ended, appellation_items_consumed) =
-            self.update_player_appellation_states(player_id, now_ms);
-        let ride_ended = self.update_player_ride_state(player_id, now_ms, runtime);
-        tracing::trace!(
-            player_id,
-            sampled_at_ms = now_ms,
-            change_body_states_ended,
-            extended_states_ended,
-            extended_items_consumed,
-            appellation_states_ended,
-            appellation_items_consumed,
-            ride_ended,
-            weak_ended,
-            god_bless_ended,
-            roar_ended,
-            strike_states_ended,
-            agility_state_2_ended,
-            hearten_ended,
-            cure_ended = expired_cure,
-            periodic_attacks_updated,
-            defense_shields_ended,
-            battle_fairy_attribute_states_ended,
-            particular_states_ended,
-            team_recruitment_states_ended,
-            script_move_states_ended,
-            "обновлены временные состояния игрока"
-        );
-        Some(())
+        let player = self.find_player(player_id)?;
+        let region_id = player.shape().get_region_id();
+        let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        crate::gameserver::appserver::states::state::update_move_shape_states(self, region_id, identity, runtime)
     }
 
-    /// Исполняет четыре автоматических состояния после остальных достигнутых
-    /// состояний и до ещё внешнего хвоста `CMoveShape::UpdateAbnormality`. У
-    /// каждого подходящего состояния часы читаются ровно дважды: для строгой
-    /// проверки срока и затем для сохранения нового момента срабатывания.
-    fn update_player_automatic_restore_states<Runtime: GameMainLoopRuntime>(
+    /// Один общий ключ AutomaticRestore: HP сохраняет исходные health/fight
+    /// gates до CPlayer RTTI; MP non-player вызывает End без часов.
+    /// Второе чтение фиксирует срабатывание только после строгого срока.
+    pub(crate) fn update_move_shape_automatic_restore_state<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
+        region_id: i32,
+        holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
         runtime: &mut Runtime,
     ) {
-        let state_count = self
-            .find_player(player_id)
-            .map(CPlayer::automatic_restore_state_count)
-            .unwrap_or(0);
-        for index in 0..state_count {
-            let needs_clock = self
-                .find_player(player_id)
-                .is_some_and(|player| player.automatic_restore_needs_clock(index));
-            if !needs_clock {
-                continue;
+        use crate::gameserver::appserver::states::automaticrestore::{
+            AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES,
+        };
+        use crate::gameserver::appserver::states::state::{
+            resolve_state_move_shape, resolve_state_move_shape_mut,
+        };
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.automatic_restore_state(key)) else { return };
+        if state.is_health() {
+            let Some(health) = self.move_shape_health(region_id, holder) else { return };
+            if health == 0 {
+                return;
             }
-            let checked_at_ms = runtime.now_milliseconds();
-            let due = self
-                .find_player(player_id)
-                .is_some_and(|player| player.automatic_restore_due(index, checked_at_ms));
-            if !due {
-                continue;
+            let Some(maximum) = self.move_shape_maximum_health(region_id, holder) else { return };
+            if maximum == health {
+                return;
             }
-            let recorded_at_ms = runtime.now_milliseconds();
-            let changed = self
-                .find_player_mut(player_id)
-                .is_some_and(|player| player.apply_automatic_restore(index, recorded_at_ms));
-            if changed {
-                let _ = self.publish_player_states(player_id);
+            let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return };
+            if !state.should_check(false, shape.shape().get_state(), health, maximum, 0, 0) {
+                return;
             }
+            if holder.object_type != PLAYER_TYPE {
+                return;
+            }
+        } else {
+            if holder.object_type != PLAYER_TYPE {
+                let _ = resolve_state_move_shape_mut(self, region_id, holder)
+                    .and_then(|shape| shape.remove_applied_state_record::<AutomaticRestoreState>(
+                        key, AUTOMATIC_RESTORE_STATE_BYTES,
+                    ));
+                return;
+            }
+            if !self.find_player(holder.id)
+                .is_some_and(|player| player.automatic_restore_needs_clock(key)) {
+                return;
+            }
+        }
+        let checked_at_ms = runtime.now_milliseconds();
+        let due = self.find_player(holder.id)
+            .is_some_and(|player| player.automatic_restore_due(key, checked_at_ms));
+        if !due {
+            return;
+        }
+        let recorded_at_ms = runtime.now_milliseconds();
+        let changed = self.find_player_mut(holder.id)
+            .is_some_and(|player| player.apply_automatic_restore(key, recorded_at_ms));
+        if changed {
+            let _ = self.publish_player_states(holder.id);
         }
     }
 
-    /// Исполняет единый живой список `CRestoreHpState/CRestoreMpState` после
-    /// ранее созданных автоматических состояний. Для живого игрока часы
-    /// читаются сначала для шага, затем отдельно для строгого истечения.
-    /// После удаления индекс продолжает расти и сохраняет исходный пропуск
-    /// сдвинутого элемента в текущем проходе `UpdateAbnormality`.
-    fn update_player_consumable_restore_states<Runtime: GameMainLoopRuntime>(
+    /// Один общий ключ ConsumableRestore: HP использует virtual health
+    /// живого CMoveShape, MP требует игрока. Native NPC health равен нулю;
+    /// Build/CityGate и Monster публикуют базовый OnChangeStates (0x4CD3E0).
+    /// После публикации перечитывается тот же ключ, затем второй clock
+    /// проверяет истечение. End не отправляет visual.
+    pub(crate) fn update_move_shape_consumable_restore_state<Runtime: GameMainLoopRuntime>(
         &mut self,
-        player_id: i32,
+        region_id: i32,
+        holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
         runtime: &mut Runtime,
-    ) -> usize {
-        let state_count = self
-            .find_player(player_id)
-            .map(CPlayer::consumable_restore_state_count)
-            .unwrap_or_default();
-        let mut removed = 0usize;
-        for index in 0..state_count {
-            let Some(dead) = self.find_player(player_id).map(CPlayer::is_dead) else {
-                break;
-            };
-            if dead {
-                continue;
+    ) -> bool {
+        use crate::gameserver::appserver::restorestate::ConsumableRestoreMutation;
+        use crate::gameserver::appserver::states::state::{
+            resolve_state_move_shape, resolve_state_move_shape_mut,
+        };
+        let Some(health_state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.consumable_restore_state_is_health(key)) else { return false };
+        if !health_state && holder.object_type != PLAYER_TYPE {
+            return resolve_state_move_shape_mut(self, region_id, holder)
+                .is_some_and(|shape| shape.remove_consumable_restore_state(key));
+        }
+        let Some(health) = self.move_shape_health(region_id, holder) else { return false };
+        if health == 0 {
+            return false;
+        }
+        let checked_at_ms = runtime.now_milliseconds();
+        let mutation = if holder.object_type == PLAYER_TYPE {
+            self.find_player_mut(holder.id)
+                .and_then(|player| player.tick_consumable_restore_state(key, checked_at_ms))
+        } else {
+            let Some(maximum) = self.move_shape_maximum_health(region_id, holder) else { return false };
+            let mutation = resolve_state_move_shape_mut(self, region_id, holder)
+                .and_then(|shape| shape.tick_consumable_restore_state(
+                    key, checked_at_ms, health, maximum,
+                ));
+            if let Some(ConsumableRestoreMutation::Health(value)) = mutation {
+                match holder.object_type {
+                    MONSTER_TYPE => {
+                        let Some(monster) = self.find_region_mut(region_id)
+                            .and_then(|owner| owner.base_mut().find_monster_by_id_mut(holder.id))
+                            else { return false };
+                        monster.set_hit_points(value);
+                    }
+                    1_100 | 1_200 => {
+                        let Some(build) = self.find_region_mut(region_id)
+                            .and_then(|owner| owner.stationary_build_mut(holder))
+                            else { return false };
+                        build.set_hp(value);
+                    }
+                    _ => return false,
+                }
             }
-            let checked_at_ms = runtime.now_milliseconds();
-            let changed = self
-                .find_player_mut(player_id)
-                .and_then(|player| player.tick_consumable_restore_state(index, checked_at_ms));
-            if changed.is_some() {
-                let _ = self.publish_player_states(player_id);
-            }
-            let expiry_checked_at_ms = runtime.now_milliseconds();
-            let expired = self
-                .find_player(player_id)
-                .and_then(|player| {
-                    player.consumable_restore_state_expired(index, expiry_checked_at_ms)
-                })
-                .unwrap_or(false);
-            if expired
-                && self
-                    .find_player_mut(player_id)
-                    .is_some_and(|player| player.remove_consumable_restore_state(index))
-            {
-                removed = removed.wrapping_add(1);
+            mutation
+        };
+        if mutation.is_some() {
+            match holder.object_type {
+                PLAYER_TYPE => { let _ = self.publish_player_states(holder.id); }
+                MONSTER_TYPE => {
+                    if let Some(owner) = self.find_region(region_id) {
+                        let _ = self.publish_owned_monster_states(owner.base(), holder.id);
+                    }
+                }
+                1_100 | 1_200 => {
+                    if let Some(health) = self.move_shape_health(region_id, holder) {
+                        let mut message = CMessage::new(0x000b_fe02);
+                        message.add_long(holder.object_type);
+                        message.add_long(holder.id);
+                        message.add_ulong(health);
+                        message.add_ulong(0);
+                        message.add_short(0);
+                        message.add_short(0);
+                        let _ = self.send_move_shape_around(region_id, holder, &message);
+                    }
+                }
+                _ => {}
             }
         }
+        let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return false };
+        if shape.consumable_restore_state_is_health(key).is_none() {
+            return false;
+        }
+        let expiry_checked_at_ms = runtime.now_milliseconds();
+        let expired = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.consumable_restore_state_expired(key, expiry_checked_at_ms))
+            .unwrap_or(false);
+        if !expired {
+            return false;
+        }
+        let removed = resolve_state_move_shape_mut(self, region_id, holder)
+            .is_some_and(|shape| shape.remove_consumable_restore_state(key));
+        if removed && holder.object_type == PLAYER_TYPE {
+            let _ = self.update_player_properties(holder.id);
+        }
         removed
+    }
+
+    pub(crate) fn move_shape_health(&self, region_id: i32, holder: ShapeIdentity) -> Option<u32> {
+        match holder.object_type {
+            PLAYER_TYPE => Some(self.find_player(holder.id)?.health()),
+            NPC_TYPE => {
+                self.find_region(region_id)?.base().find_npc_by_id(holder.id)?;
+                Some(0)
+            }
+            MONSTER_TYPE => Some(self.find_region(region_id)?.base()
+                .find_monster_by_id(holder.id)?.hit_points()),
+            1_100 | 1_200 => Some(self.find_region(region_id)?.stationary_build(holder)?.hp),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn move_shape_maximum_health(&self, region_id: i32, holder: ShapeIdentity) -> Option<u32> {
+        match holder.object_type {
+            PLAYER_TYPE => Some(self.find_player(holder.id)?.maximum_health()),
+            NPC_TYPE => {
+                self.find_region(region_id)?.base().find_npc_by_id(holder.id)?;
+                Some(0)
+            }
+            MONSTER_TYPE => {
+                let monster = self.find_region(region_id)?.base().find_monster_by_id(holder.id)?;
+                let property = self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                Some(monster.maximum_hp(property))
+            }
+            1_100 | 1_200 => Some(self.find_region(region_id)?.stationary_build(holder)?.max_hp),
+            _ => None,
+        }
     }
 
     pub(crate) fn change_body_after_region_transition(&mut self, player_id: i32) {
@@ -47162,8 +47136,6 @@ impl CGame {
                         if self.update_player_abnormality(player_id, runtime).is_some() {
                             player_abnormalities = player_abnormalities.wrapping_add(1);
                         }
-                        self.update_player_automatic_restore_states(player_id, runtime);
-                        let _ = self.update_player_consumable_restore_states(player_id, runtime);
                         if self.find_player(player_id).is_some() {
                             if let Some(fight_state) = self.update_player_current_state(
                                 player_id,
@@ -47494,161 +47466,7 @@ impl CGame {
                 {
                     continue;
                 }
-                if let Some(monster) = self.find_region_mut(region_id)
-                    .and_then(|owner| owner.base_mut().find_monster_by_id_mut(monster_id))
-                {
-                    let _ = monster.move_shape_mut().compact_state_slots();
-                }
-                let _ = finish_monster_weak_outside(self, region_id, monster_id);
-                let _ = finish_monster_god_bless(self, region_id, monster_id, now_ms);
-                let _ = finish_monster_roar(self, region_id, monster_id, now_ms);
-                if let Some(mut owner) = self.take_region_owner(region_id) {
-                    for key in owner.base().find_monster_by_id(monster_id)
-                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate::RushState>())
-                        .unwrap_or_default()
-                    {
-                        let _ = expire_monster_rush_state(
-                            self, owner.base_mut(), monster_id, key, now_ms,
-                        );
-                    }
-                    for key in owner.base().find_monster_by_id(monster_id)
-                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate2::Rush2State>())
-                        .unwrap_or_default()
-                    {
-                        let _ = expire_monster_rush_2_state(
-                            self, owner.base_mut(), monster_id, key, now_ms,
-                        );
-                    }
-                    let _ = expire_monster_blind_states(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    for key in owner.base().find_monster_by_id(monster_id)
-                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::boalockstate::BoaLockState>())
-                        .unwrap_or_default()
-                    {
-                        let _ = expire_monster_boa_lock_state(
-                            self, owner.base_mut(), monster_id, key, now_ms,
-                        );
-                    }
-                    let _ = expire_monster_cure_state(self, owner.base_mut(), monster_id, now_ms);
-                    let _ = expire_monster_fury_states(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    let _ = expire_monster_boss_blue_fury_state(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    let _ = expire_monster_boss_blue_quake_state(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    for key in owner.base().find_monster_by_id(monster_id)
-                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::knightcutstate::KnightCutState>())
-                        .unwrap_or_default()
-                    {
-                        let _ = expire_monster_knight_cut_state(
-                            self, owner.base_mut(), monster_id, key, now_ms,
-                        );
-                    }
-                    let poison_fog_keys = owner.base().find_monster_by_id(monster_id)
-                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState>())
-                        .unwrap_or_default();
-                    let expired_poison_fog: Vec<_> = poison_fog_keys.into_iter().filter_map(|key| {
-                        take_expired_monster_poison_fog_state(owner.base_mut(), monster_id, key, now_ms)
-                    }).collect();
-                    let _ = expire_monster_promotion_state(
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    self.restore_region_owner(owner);
-                    for expired in expired_poison_fog {
-                        expired.deliver(self, region_id, now_ms);
-                    }
-                }
-                let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {
-                    let result = take_expired_monster_battle_fairy_attribute_states(
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    self.restore_region_owner(owner);
-                    result
-                } else {
-                    None
-                };
-                if let Some(expired) = expired_attribute_states {
-                    let _ = expired.deliver(self, region_id);
-                }
-                let periodic_state_ids = self
-                    .find_region(region_id)
-                    .and_then(|owner| owner.base().find_monster_by_id(monster_id))
-                    .map(|monster| monster.move_shape().periodic_attack_states())
-                    .unwrap_or_default();
-                for (key, state_id) in periodic_state_ids {
-                    match state_id {
-                        POISON_ARROW_SKILL_ID => {
-                            let _ = update_monster_poison_arrow_state(
-                                self,
-                                region_id,
-                                monster_id,
-                                key,
-                                runtime,
-                            );
-                        }
-                        SPIDER_POISON_SKILL_ID => {
-                            let _ = update_monster_spider_poison_state(
-                                self,
-                                region_id,
-                                monster_id,
-                                key,
-                                runtime,
-                            );
-                        }
-                        SPRITE_BURN_SKILL_ID => {
-                            let _ = update_monster_sprite_burn_state(
-                                self,
-                                region_id,
-                                monster_id,
-                                key,
-                                runtime,
-                            );
-                        }
-                        BLOOD_LOSS_SKILL_ID => {
-                            let _ = update_monster_blood_loss_state(
-                                self,
-                                region_id,
-                                monster_id,
-                                key,
-                                runtime,
-                            );
-                        }
-                        crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
-                            let _ = update_monster_leaf_cut_state(self, region_id, monster_id, key, runtime);
-                        }
-                        LEAF_CUT_2_STATE_ID => {
-                            let _ = update_monster_leaf_cut_2_state(self, region_id, monster_id, key, runtime);
-                        }
-                        LEAF_CUT_3_STATE_ID => {
-                            let _ = update_monster_leaf_cut_3_state(self, region_id, monster_id, key, runtime);
-                        }
-                        crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => {
-                            let _ = update_monster_kerosene_state(self, region_id, monster_id, key, runtime);
-                        }
-                        _ => {}
-                    }
-                }
-                update_stored_heal_states(
+                let _ = crate::gameserver::appserver::states::state::update_move_shape_states(
                     self,
                     region_id,
                     ShapeIdentity {
@@ -47656,7 +47474,7 @@ impl CGame {
                         id: monster_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
-                    || runtime.now_milliseconds(),
+                    runtime,
                 );
                 // CMoveShape::AI после states вызывает только ненулевой GetAI;
                 // tamed sign не участвует ни в этом gate, ни в выборе CPet.
@@ -50028,11 +49846,13 @@ pub(crate) enum LegacyFormatArgument<'a> {
     Bytes(&'a [u8]),
     Signed(i32),
     Unsigned(u32),
+    Word32(u32),
 }
 
 /// Ограниченная замена достигнутых SZLGS-шаблонов `%s/%d/%u`. Сохраняет
 /// `%%`, а несовпавшую конверсию оставляет буквально, не читая отсутствующий
 /// vararg за границей подтверждённого контракта вызова.
+/// `Word32` сохраняет битовый аргумент C-varargs: знаковость задаёт `%d/%u`.
 pub(crate) fn format_legacy_mixed(
     template: &[u8],
     arguments: &[LegacyFormatArgument<'_>],
@@ -50067,6 +49887,10 @@ pub(crate) fn format_legacy_mixed(
                 value.to_string().into_bytes()
             }
             (Some(b'u'), LegacyFormatArgument::Unsigned(value)) => value.to_string().into_bytes(),
+            (Some(b'd' | b'i'), LegacyFormatArgument::Word32(value)) => {
+                (*value as i32).to_string().into_bytes()
+            }
+            (Some(b'u'), LegacyFormatArgument::Word32(value)) => value.to_string().into_bytes(),
             _ => {
                 output.push(b'%');
                 offset += 1;

@@ -10,9 +10,11 @@
 //! собственную serializer-пару `0x005F65F0/0x005ECC60`. Persisted-запись
 //! `ID + remaining time + attack loss + element attack loss` занимает 16 байт;
 //! spatial login восстанавливает срок до общего пересчёта свойств.
-//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
-//! повторные записи сохраняются, после удаления и публикаций следующий
-//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! Достигнутый AI получает один поколенческий ключ общей арены;
+//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
+//! Любое удаление адресует тот же экземпляр, а не первый дубль.
+
+use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -106,69 +108,58 @@ pub(crate) fn send_roar_state_visual(
 pub(crate) fn finish_player_roar<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    key: StateKey,
     now_ms: u32,
     _runtime: &mut Runtime,
 ) -> bool {
-    let keys = game.find_player(player_id)
-        .map(|player| player.move_shape().applied_state_keys::<RoarState>()).unwrap_or_default();
-    let mut ended_any = false;
-    for key in keys {
-        if !game.find_player(player_id)
-            .and_then(|player| player.move_shape().applied_state::<RoarState>(key))
-            .is_some_and(|state| state.expired(now_ms)) {
-            continue;
-        }
-        let ended = game.find_player_mut(player_id).and_then(|player| {
-            let region_id = player.server_region_id()?;
-            let x = player.shape().get_tile_x().ok()?;
-            let y = player.shape().get_tile_y().ok()?;
-            let identity = player.shape().identity();
-            let state = player.move_shape_mut().remove_applied_state_record::<RoarState>(key, ROAR_STATE_BYTES)?;
-            Some((region_id, x, y, identity, state))
-        });
-        let Some((region_id, x, y, identity, state)) = ended else {
-            continue;
-        };
-        send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
-        let _ = game.update_player_properties(player_id);
-        ended_any = true;
+    if !game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state::<RoarState>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
     }
-    ended_any
+    let ended = game.find_player_mut(player_id).and_then(|player| {
+        let region_id = player.server_region_id()?;
+        let x = player.shape().get_tile_x().ok()?;
+        let y = player.shape().get_tile_y().ok()?;
+        let identity = player.shape().identity();
+        let state = player.move_shape_mut().remove_applied_state_record::<RoarState>(key, ROAR_STATE_BYTES)?;
+        Some((region_id, x, y, identity, state))
+    });
+    let Some((region_id, x, y, identity, state)) = ended else {
+        return false;
+    };
+    send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
+    let _ = game.update_player_properties(player_id);
+    true
 }
 
 pub(crate) fn finish_monster_roar(
     game: &mut CGame,
     region_id: i32,
     monster_id: i32,
+    key: StateKey,
     now_ms: u32,
 ) -> bool {
-    let keys = game.find_region(region_id)
-        .and_then(|owner| owner.base().find_monster_by_id(monster_id))
-        .map(|monster| monster.move_shape().applied_state_keys::<RoarState>()).unwrap_or_default();
-    let mut ended_any = false;
-    for key in keys {
-        let ended = if let Some(mut owner) = game.take_region_owner(region_id) {
-            let ended = owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .and_then(|monster| {
-                    let x = monster.move_shape().shape().get_tile_x().ok()?;
-                    let y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let identity = monster.move_shape().shape().identity();
-                    monster.move_shape().applied_state::<RoarState>(key).filter(|state| state.expired(now_ms))?;
-                    let state = monster.move_shape_mut().remove_applied_state_record::<RoarState>(key, ROAR_STATE_BYTES)?;
-                    Some((x, y, identity, state))
-                });
-            game.restore_region_owner(owner);
-            ended
-        } else {
-            None
-        };
-        let Some((x, y, identity, state)) = ended else {
-            continue;
-        };
-        send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
-        ended_any = true;
-    }
-    ended_any
+    let ended = if let Some(mut owner) = game.take_region_owner(region_id) {
+        let ended = owner
+            .base_mut()
+            .find_monster_by_id_mut(monster_id)
+            .and_then(|monster| {
+                let x = monster.move_shape().shape().get_tile_x().ok()?;
+                let y = monster.move_shape().shape().get_tile_y().ok()?;
+                let identity = monster.move_shape().shape().identity();
+                monster.move_shape().applied_state::<RoarState>(key).filter(|state| state.expired(now_ms))?;
+                let state = monster.move_shape_mut().remove_applied_state_record::<RoarState>(key, ROAR_STATE_BYTES)?;
+                Some((x, y, identity, state))
+            });
+        game.restore_region_owner(owner);
+        ended
+    } else {
+        None
+    };
+    let Some((x, y, identity, state)) = ended else {
+        return false;
+    };
+    send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
+    true
 }

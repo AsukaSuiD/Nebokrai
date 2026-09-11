@@ -26,6 +26,10 @@
 //! AI (`0x005EEDF0`) читает часы отдельно для интервала и для срока после
 //! OnChangeStates; время общего прохода не заменяет эти два чтения. Мёртвая
 //! цель завершает состояние до обращения к часам.
+//! Общий CMoveShape::UpdateAbnormality передаёт один ключ; этот owner
+//! не запускает отдельный семейный обход и сохраняет границы своих callbacks.
+
+use crate::gameserver::appserver::moveshape::StateKey;
 
 use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -229,57 +233,54 @@ fn target_heal_values(
 
 /// Счётчик меняется в живом payload до OnChangeStates. Между публикацией HP
 /// и End экземпляр перечитывается по тому же ключу, без возврата старого снимка.
-pub(crate) fn update_stored_heal_states(
+pub(crate) fn update_stored_heal_state(
     game: &mut CGame,
     region_id: i32,
     storage: ShapeIdentity,
+    key: StateKey,
     mut now_milliseconds: impl FnMut() -> u32,
 ) {
     if !matches!(storage.object_type, 400 | 600) {
         return;
     }
-    let Some(keys) = resolve_state_move_shape(game, region_id, storage)
-        .map(|shape| shape.heal_state_keys()) else { return };
-    for key in keys {
-        let Some(target) = resolve_state_move_shape(game, region_id, storage)
-            .and_then(|shape| shape.applied_state::<HealState>(key))
-            .map(|state| state.effect_target()) else { continue };
-        let Some((health, maximum_health, dead, promotion)) = target_heal_values(game, region_id, target)
-            else { continue };
-        let Some(pass) = resolve_state_move_shape_mut(game, region_id, storage)
-            .and_then(|shape| shape.applied_state_mut::<HealState>(key))
-            .map(|state| state.advance(&mut now_milliseconds, health, maximum_health, dead, promotion))
-            else { continue };
-        match target.object_type {
-            400 => {
-                let Some(player) = game.find_player_mut(target.id)
-                    .filter(|player| player.server_region_id() == Some(region_id)) else { continue };
-                player.set_health(pass.health);
-                if pass.changed {
-                    let _ = game.publish_player_states(target.id);
-                }
+    let Some(target) = resolve_state_move_shape(game, region_id, storage)
+        .and_then(|shape| shape.applied_state::<HealState>(key))
+        .map(|state| state.effect_target()) else { return };
+    let Some((health, maximum_health, dead, promotion)) = target_heal_values(game, region_id, target)
+        else { return };
+    let Some(pass) = resolve_state_move_shape_mut(game, region_id, storage)
+        .and_then(|shape| shape.applied_state_mut::<HealState>(key))
+        .map(|state| state.advance(&mut now_milliseconds, health, maximum_health, dead, promotion))
+        else { return };
+    match target.object_type {
+        400 => {
+            let Some(player) = game.find_player_mut(target.id)
+                .filter(|player| player.server_region_id() == Some(region_id)) else { return };
+            player.set_health(pass.health);
+            if pass.changed {
+                let _ = game.publish_player_states(target.id);
             }
-            600 => {
-                let Some(monster) = game.find_region_mut(region_id)
-                    .and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.id))
-                    else { continue };
-                monster.set_hit_points(pass.health);
-                if pass.changed && let Some(owner) = game.find_region(region_id) {
-                    let _ = game.publish_owned_monster_states(owner.base(), target.id);
-                }
-            }
-            _ => continue,
         }
-        let Some(state) = resolve_state_move_shape(game, region_id, storage)
-            .and_then(|shape| shape.applied_state::<HealState>(key)) else { continue };
-        let ended = pass.dead
-            || state.started_at_ms.wrapping_add(state.keep_time_ms) < now_milliseconds();
-        if ended && target.object_type == storage.object_type && target.id == storage.id {
-            let removed = resolve_state_move_shape_mut(game, region_id, storage)
-                .and_then(|shape| shape.remove_heal_state_key(key));
-            if removed.is_some() && storage.object_type == 400 {
-                let _ = game.update_player_properties(storage.id);
+        600 => {
+            let Some(monster) = game.find_region_mut(region_id)
+                .and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.id))
+                else { return };
+            monster.set_hit_points(pass.health);
+            if pass.changed && let Some(owner) = game.find_region(region_id) {
+                let _ = game.publish_owned_monster_states(owner.base(), target.id);
             }
+        }
+        _ => return,
+    }
+    let Some(state) = resolve_state_move_shape(game, region_id, storage)
+        .and_then(|shape| shape.applied_state::<HealState>(key)) else { return };
+    let ended = pass.dead
+        || state.started_at_ms.wrapping_add(state.keep_time_ms) < now_milliseconds();
+    if ended && target.object_type == storage.object_type && target.id == storage.id {
+        let removed = resolve_state_move_shape_mut(game, region_id, storage)
+            .and_then(|shape| shape.remove_heal_state_key(key));
+        if removed.is_some() && storage.object_type == 400 {
+            let _ = game.update_player_properties(storage.id);
         }
     }
 }
