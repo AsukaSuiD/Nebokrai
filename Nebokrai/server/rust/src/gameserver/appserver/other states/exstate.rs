@@ -22,6 +22,22 @@
 //! только читает остаток; эти два пути нельзя объединять по побочным эффектам.
 //! Payload хранится в общей арене CMoveShape; decode_at читает только
 //! достигнутую фабрикой запись, сохраняя её вариант и serialized offset.
+//! AddEx/AddExNew (0x004D1E40/0x004D20D0) сначала сохраняют параметры фабрики,
+//! затем обходят все живые позиции того же ID с совпавшим WORD type или level:
+//! direct End, свежий остаток той же позиции и его destructor, без уплотнения.
+//! Только после этого Begin(this,this) (0x005D9780/0x005D9C40) проверяет sufferer,
+//! читает один базовый clock, создаёт loop1 visual и делает Update(0) до append.
+//! Успех завершает отдельный UpdateProperty; самостоятельного OnChangeStates нет.
+//! Конструкторы часов не читают: base timestamp равен нулю, New.last_item_tick
+//! также ноль (0x005D99A0); из этих двух времён объектный Begin меняет только
+//! базовый timestamp, не перезапуская item clock.
+//! Vtable 0x0065E33C/0x0065E39C имеют End +0x1C = 0x005FD420:
+//! optional visual Update(1), свежий GetSufferer и RemoveState, без base End
+//! и без записи state.ended. Visual 0x005D9830/0x005D9CF0 проверяет свой ended
+//! и фактического sufferer; base visual tail выполняется и при missing sufferer.
+//! Технический cache новой записи имеет 44/56 байт вместе с ID и полный keepTime,
+//! без игрового Serialize и часов. При save общей записи меняется только остаток:
+//! исходные padding-байты загруженного tagExState не заменяются нулями.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -80,19 +96,11 @@ pub(crate) struct ExtendedState {
     serialized_offset: Option<usize>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExtendedStateMutation {
-    pub(crate) removed: Vec<ExtendedState>,
-    pub(crate) added: Option<ExtendedState>,
-    pub(crate) legacy_return: u32,
-}
-
 impl ExtendedState {
     pub(crate) fn from_factory(
         kind: ExtendedStateKind,
         level: u32,
         factory: &CSkillFactory,
-        now_ms: u32,
     ) -> Option<Self> {
         if level == 0 {
             return None;
@@ -126,10 +134,14 @@ impl ExtendedState {
             frequency_ms: (kind == ExtendedStateKind::New)
                 .then(|| p(6_001))
                 .unwrap_or(0),
-            started_ms: now_ms,
-            last_item_tick_ms: now_ms,
+            started_ms: 0,
+            last_item_tick_ms: 0,
             serialized_offset: None,
         })
+    }
+
+    pub(crate) fn begin_primary_at(&mut self, now_ms: u32) {
+        self.started_ms = now_ms;
     }
 
     pub(crate) fn decode_at(payload: &[u8], offset: usize, now_ms: u32) -> Option<Self> {
@@ -197,11 +209,6 @@ impl ExtendedState {
         self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_ms = now_ms;
-        self.last_item_tick_ms = now_ms;
-    }
-
     pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
         let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
         match self.kind {
@@ -239,12 +246,13 @@ impl ExtendedState {
         self.last_item_tick_ms = now_ms;
     }
 
-    pub(crate) fn write_serialized(&mut self, payload: &mut [u8], offset: usize) {
-        let base = offset + 4;
-        write_u32(payload, offset, self.state_id());
-        write_u16(payload, base, self.state_type);
-        write_u32(payload, base + 4, self.level);
-        write_u32(payload, base + 8, self.keep_time_ms);
+    pub(crate) fn encoded_for_install(&self) -> Vec<u8> {
+        let mut payload = vec![0; 4 + self.kind.parameter_bytes()];
+        let base = 4;
+        write_u32(&mut payload, 0, self.state_id());
+        write_u16(&mut payload, base, self.state_type);
+        write_u32(&mut payload, base + 4, self.level);
+        write_u32(&mut payload, base + 8, self.keep_time_ms);
         for (position, value) in [
             (12, self.maximum_hp),
             (14, self.maximum_mp),
@@ -260,41 +268,25 @@ impl ExtendedState {
             (34, self.hit),
             (36, self.dodge),
         ] {
-            write_u16(payload, base + position, value);
+            write_u16(&mut payload, base + position, value);
         }
         if self.kind == ExtendedStateKind::New {
-            write_u32(payload, base + 40, self.item_index);
-            write_u32(payload, base + 44, self.item_amount);
-            write_u32(payload, base + 48, self.frequency_ms);
+            write_u32(&mut payload, base + 40, self.item_index);
+            write_u32(&mut payload, base + 44, self.item_amount);
+            write_u32(&mut payload, base + 48, self.frequency_ms);
         }
-        self.serialized_offset = Some(offset);
+        payload
     }
 
-    pub(crate) fn update_serialized_runtime(&self, payload: &mut [u8], now_ms: u32) {
-        let Some(offset) = self.serialized_offset else {
-            return;
-        };
-        if offset + 4 + self.kind.parameter_bytes() <= payload.len() {
+    pub(crate) fn update_serialized_record(&self, payload: &mut [u8], offset: usize, now_ms: u32) {
+        if offset.checked_add(4 + self.kind.parameter_bytes())
+            .is_some_and(|end| end <= payload.len()) {
             write_u32(payload, offset + 12, self.remaining_time_ms(now_ms));
         }
     }
 
     pub(crate) fn commit_saved_time(&mut self, now_ms: u32) {
         self.keep_time_ms = self.remaining_time_ms(now_ms);
-    }
-
-    pub(crate) fn remove_serialized(&self, payload: &mut Vec<u8>) {
-        let Some(offset) = self.serialized_offset else {
-            return;
-        };
-        let end = offset + 4 + self.kind.parameter_bytes();
-        if end > payload.len() {
-            return;
-        }
-        payload.drain(offset..end);
-        if let Some(count) = read_u32(payload, 0) {
-            write_u32(payload, 0, count.saturating_sub(1));
-        }
     }
 
     pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {

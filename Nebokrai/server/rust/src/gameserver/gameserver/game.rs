@@ -1463,7 +1463,7 @@ use crate::gameserver::appserver::skills::godbless::{
 };
 use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
-    GOD_BLESS_STATE_ID, send_god_bless_state_visual,
+    GOD_BLESS_STATE_ID,
 };
 use crate::gameserver::appserver::skills::cure::{
     cancel_player_cure, complete_player_cure, execute_player_cure, is_cure_target, CURE_SKILL_ID,
@@ -28365,80 +28365,82 @@ impl CGame {
                 .contains(&goods_base_index)
     }
 
+    /// AddEx/AddExNew: все совпавшие позиции проходят End и свежий destructor,
+    /// затем Begin(this,this) отправляет initial visual до append нового ключа.
+    /// Callback не удерживает заимствование holder; параметры фабрики уже сняты.
     pub(crate) fn add_script_extended_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         kind: ExtendedStateKind,
-        now_ms: u32,
+        now: &mut dyn FnMut() -> u32,
     ) -> u32 {
-        if kind == ExtendedStateKind::Original
-            && self
-                .skill_factory
-                .query_skill_base_properties(kind.state_id(), state_id as i32)
-                .is_some_and(|properties| properties.query_property(20_010) == 0x12f)
-        {
-            self.remove_script_god_bless_state(player_id, now_ms);
-        }
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            let Some(player) = players.get_mut(&player_id) else {
-                return 0;
-            };
-            player.add_extended_state(kind, state_id, skill_factory, now_ms)
-        };
-        for removed in &mutation.removed {
-            self.send_extended_state_visual(player_id, removed, false, now_ms);
-        }
-        if let Some(added) = mutation.added.as_ref() {
-            self.send_extended_state_visual(player_id, added, true, now_ms);
-        }
-        if !mutation.removed.is_empty() || mutation.added.is_some() {
-            self.refresh_script_change_body_properties(player_id);
-            self.send_script_player_state_changed(player_id);
-        }
-        mutation.legacy_return
-    }
+        use crate::gameserver::appserver::moveshape::StateData;
+        use crate::gameserver::appserver::states::state::end_and_destroy_state_at;
 
-    /// Exact prefix `CMoveShape::AddExState`: state type `0x12F` вызывает
-    /// `RemoveState(SKILL_GOD_BLESS)` до поиска/replacement extended state.
-    /// End-visual и `OnChangeStates` поэтому также завершаются до новой
-    /// мутации, даже если последующее создание extended state откажет.
-    fn remove_script_god_bless_state(
-        &mut self,
-        player_id: i32,
-        now_ms: u32,
-    ) -> bool {
-        let removed = self.find_player_mut(player_id).and_then(|player| {
-            let delivery = player.server_region_id().and_then(|region_id| {
-                Some((
-                    region_id,
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                ))
+        let Some(player) = self.find_player(player_id) else { return 0 };
+        let region_id = player.shape().get_region_id();
+        let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let Some(mut state) = ExtendedState::from_factory(kind, state_id, &self.skill_factory)
+        else { return 0 };
+        if kind == ExtendedStateKind::Original && state.state_type == 0x12f {
+            self.remove_script_god_bless_state(player_id);
+        }
+
+        let mut index = 0;
+        loop {
+            let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return 0 };
+            if index >= shape.state_slot_count() { break; }
+            let selected = shape.state_at(index).is_some_and(|(_, data)| {
+                matches!(data, StateData::Extended(previous)
+                    if previous.kind == kind
+                        && (previous.state_type == state.state_type || previous.level == state_id))
             });
-            let state = player.take_god_bless_state(GOD_BLESS_STATE_ID)?;
-            Some((delivery, player.shape().identity(), state))
-        });
-        let Some((delivery, identity, state)) = removed else {
-            return false;
-        };
-        if let Some((region_id, tile_x, tile_y)) = delivery {
-            send_god_bless_state_visual(
-                self, region_id, identity, tile_x, tile_y, state, false, now_ms,
-            );
+            if selected && end_and_destroy_state_at(self, region_id, holder, index).is_none() {
+                return 0;
+            }
+            index += 1;
         }
-        self.refresh_script_change_body_properties(player_id);
-        self.send_script_player_state_changed(player_id);
-        true
+
+        let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return 0 };
+        let begin_region = shape.shape().get_region_id();
+        let participant = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.shape().identity() };
+        state.begin_primary_at(now());
+        let message = Self::extended_state_visual_message(participant, &state, Some(now));
+        let _ = self.send_move_shape_around(begin_region, participant, &message);
+
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return 0 };
+        let record = state.encoded_for_install();
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some((begin_region, participant)));
+        shape.set_applied_state_sufferer(key, Some((begin_region, participant)));
+        // Общий каталог создаёт один loop1 visual: initial Update(0) выше
+        // не меняет его остаточное состояние и не требует нового Begin.
+        let _ = self.update_move_shape_properties(begin_region, participant);
+        1
     }
 
+    /// CMoveShape::AddExState (0x004D1FAD): после проверки WORD subtype
+    /// вызывается RemoveState(0x12F) для всех GodBless1, но не GodBless2.
+    /// Каждый End и внешний Update заканчиваются до replacement extended;
+    /// самостоятельных часов, ручного visual и отдельного OnChangeStates нет.
+    fn remove_script_god_bless_state(&mut self, player_id: i32) {
+        let Some(player) = self.find_player(player_id) else { return };
+        let region_id = player.shape().get_region_id();
+        let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let _ = crate::gameserver::appserver::states::state::remove_move_shape_states_by_id(
+            self, region_id, identity, GOD_BLESS_STATE_ID,
+        );
+    }
+
+    /// DelExState/DelExStateNew (0x004CE9C0/0x004CEAA0): первый level,
+    /// direct End и отдельный Update; собственного clock и destructor нет.
     pub(crate) fn delete_script_extended_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         kind: ExtendedStateKind,
-        _now_ms: u32,
     ) -> u32 {
         let Some(player) = self.find_player(player_id) else {
             return 0;
@@ -28457,11 +28459,12 @@ impl CGame {
         state_id
     }
 
+    /// DelExStateByType (0x004CEA30) сохраняет level до End, затем выполняет
+    /// отдельный Update. Возврат level не зависит от результата удаления.
     pub(crate) fn delete_script_extended_state_by_type(
         &mut self,
         player_id: i32,
         state_type: u16,
-        _now_ms: u32,
     ) -> u32 {
         let Some(player) = self.find_player(player_id) else {
             return 0;
@@ -28503,28 +28506,6 @@ impl CGame {
         -1
     }
 
-    fn send_extended_state_visual(
-        &mut self,
-        player_id: i32,
-        state: &ExtendedState,
-        begin: bool,
-        now_ms: u32,
-    ) {
-        let Some(player) = self.find_player(player_id) else {
-            return;
-        };
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
-        message.add_long(identity.object_type);
-        message.add_long(player_id);
-        message.add_long(state.state_id() as i32);
-        message.add_ulong(state.level);
-        if begin {
-            message.add_ulong(state.remaining_time_ms(now_ms));
-            message.add_ulong(0);
-        }
-        let _ = self.send_player_shape_around(player_id, None, &message);
-    }
 
     /// CExState/CExStateNew +0x24 (0x005D95A0): каждый живой sufferer-player,
     /// ненулевые DWORD addons с исходным wrapping, без visual и часов.
@@ -28590,30 +28571,55 @@ impl CGame {
         true
     }
 
+    /// Поля двух visual owners (0x005D9830/0x005D9CF0) после проверки
+    /// ресурса и GetSufferer. Some(clock) — Update(0), None — Update(1).
+    /// Чистый encoder также обслуживает первичный Begin до append в арену.
+    fn extended_state_visual_message(
+        target: ShapeIdentity,
+        state: &ExtendedState,
+        begin_now: Option<&mut dyn FnMut() -> u32>,
+    ) -> CMessage {
+        let mut message = CMessage::new(if begin_now.is_some() { 0x0b_fe03 } else { 0x0b_fe04 });
+        message.add_long(target.object_type);
+        message.add_long(target.id);
+        message.add_ulong(state.state_id());
+        message.add_ulong(state.level);
+        if let Some(now) = begin_now {
+            let remaining = match state.kind {
+                ExtendedStateKind::Original => crate::gameserver::appserver::states::state::change_body_client_time(state.started_ms, state.keep_time_ms, now),
+                ExtendedStateKind::New => crate::gameserver::appserver::states::state::extended_client_time(state.started_ms, state.keep_time_ms, now),
+            };
+            message.add_ulong(remaining);
+            message.add_ulong(0);
+        }
+        message
+    }
+
     /// Повторный объектный Begin CExState/CExStateNew (0x005D9780/0x005D9C40).
     /// NULL user сохраняет время загрузки и источник; sufferer — живой holder.
+    /// Новый loop1 visual делает Update(0) до return1; ни база с NULL User,
+    /// ни concrete Begin не сбрасывают New.last_item_tick_ms.
     pub(crate) fn restart_move_shape_extended_state(
         &mut self, region_id: i32, holder: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
         _after_death: bool, now: &mut dyn FnMut() -> u32,
     ) -> bool {
-        let Some(state) = resolve_state_move_shape(self, region_id, holder)
-            .and_then(|shape| shape.applied_state::<ExtendedState>(key)).cloned() else { return false };
-        begin_base_applied_state(self, region_id, holder, key);
-        begin_applied_state_visual(self, region_id, holder, key, 1);
-        let remaining = match state.kind {
-            ExtendedStateKind::Original => crate::gameserver::appserver::states::state::change_body_client_time(state.started_ms, state.keep_time_ms, now),
-            ExtendedStateKind::New => crate::gameserver::appserver::states::state::extended_client_time(state.started_ms, state.keep_time_ms, now),
-        };
-        let mut message = CMessage::new(0x0b_fe03);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_ulong(state.state_id());
-        message.add_ulong(state.level);
-        message.add_ulong(remaining);
-        message.add_ulong(0);
-        let _ = self.send_move_shape_around(region_id, holder, &message);
-        update_applied_state_visual_base(self, region_id, holder, key);
+        if resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<ExtendedState>(key)).is_none()
+            || !begin_base_applied_state(self, region_id, holder, key)
+        {
+            return false;
+        }
+        if begin_applied_state_visual(self, region_id, holder, key, 1) {
+            if let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(self, region_id, holder, key) {
+                if let Some(state) = resolve_state_move_shape(self, region_id, holder)
+                    .and_then(|shape| shape.applied_state::<ExtendedState>(key)) {
+                    let message = Self::extended_state_visual_message(target, state, Some(now));
+                    let _ = self.send_move_shape_around(target_region, target, &message);
+                }
+            }
+            update_applied_state_visual_base(self, region_id, holder, key);
+        }
         true
     }
 
@@ -28704,29 +28710,45 @@ impl CGame {
         (usize::from(ended), removed)
     }
 
+    /// Оба ExState vtable (0x0065E33C/0x0065E39C) используют +0x1C=0x005FD420:
+    /// существующий visual.Update(1), затем свежий GetSufferer и RemoveState.
+    /// Здесь нет base End, записи state.ended или внешнего GetUser-gate.
     pub(crate) fn end_move_shape_extended_state(
         &mut self,
         region_id: i32,
         identity: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
     ) -> bool {
-        let Some(state) = resolve_state_move_shape(self, region_id, identity)
-            .and_then(|shape| shape.applied_state::<ExtendedState>(key)).cloned()
-        else {
+        if resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ExtendedState>(key)).is_none()
+        {
             return false;
-        };
-        let mut message = CMessage::new(0x0b_fe04);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(state.state_id() as i32);
-        message.add_ulong(state.level);
-        let _ = self.send_move_shape_around(region_id, identity, &message);
-        let removed = resolve_state_move_shape_mut(self, region_id, identity)
-            .is_some_and(|shape| !shape.delete_extended_state_key(key).removed.is_empty());
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
         }
-        removed
+        if let Some(ended) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state_visual_ended(key)) {
+            if !ended {
+                if let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(self, region_id, identity, key) {
+                    if let Some(state) = resolve_state_move_shape(self, region_id, identity)
+                        .and_then(|shape| shape.applied_state::<ExtendedState>(key)) {
+                        let message = Self::extended_state_visual_message(target, state, None);
+                        let _ = self.send_move_shape_around(target_region, target, &message);
+                    }
+                }
+            }
+            update_applied_state_visual_base(self, region_id, identity, key);
+        }
+        let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(self, region_id, identity, key)
+        else { return false };
+        let Some(bytes) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ExtendedState>(key))
+            .map(|state| match state.kind {
+                ExtendedStateKind::Original => 44,
+                ExtendedStateKind::New => 56,
+            })
+        else { return false };
+        crate::gameserver::appserver::states::state::remove_applied_state_from(
+            self, region_id, identity, key, (target_region, target), bytes,
+        )
     }
 
     pub(crate) fn update_move_shape_appellation_state<Runtime: GameMainLoopRuntime>(

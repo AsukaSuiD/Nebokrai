@@ -5893,7 +5893,6 @@ impl CPlayer {
         self.move_shape.replace_weak_state(state)
     }
 
-    pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_god_bless_state(skill_id) }
 
     pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
 
@@ -6726,38 +6725,6 @@ impl CPlayer {
         properties
     }
 
-    pub(crate) fn add_extended_state(
-        &mut self,
-        kind: super::exstate::ExtendedStateKind,
-        state_id: u32,
-        factory: &CSkillFactory,
-        now_ms: u32,
-    ) -> super::exstate::ExtendedStateMutation {
-        self.move_shape
-            .add_extended_state(kind, state_id, factory, now_ms)
-    }
-
-    pub(crate) fn delete_extended_state(
-        &mut self,
-        kind: super::exstate::ExtendedStateKind,
-        state_id: u32,
-    ) -> super::exstate::ExtendedStateMutation {
-        self.move_shape.delete_extended_state(kind, state_id)
-    }
-
-    pub(crate) fn delete_extended_state_key(
-        &mut self,
-        key: super::moveshape::StateKey,
-    ) -> super::exstate::ExtendedStateMutation {
-        self.move_shape.delete_extended_state_key(key)
-    }
-
-    pub(crate) fn delete_extended_state_by_type(
-        &mut self,
-        state_type: u16,
-    ) -> super::exstate::ExtendedStateMutation {
-        self.move_shape.delete_extended_state_by_type(state_type)
-    }
 
     pub(crate) const fn remain_jing_li_dan_count(&self) -> u16 {
         self.base_properties.remain_jing_li_dan_count

@@ -6,6 +6,12 @@
 //! Первичная замена GodBless/Fog/BF использует общий поиск живой позиции и
 //! регистрацию записи с поколенческим ключом/DB-span. Предикат выбора и
 //! наличие destructor после End остаются у native caller-а, а не у storage.
+//! AddExState/AddExStateNew также используют этот общий lifecycle: прежняя
+//! пачка removed/added и копия владельца для отложенных visual устранены.
+//! Кодек extended-state пишет запись по span общей арены; первичный payload
+//! не получает фиктивный offset, а сохранение не зависит от способа установки.
+//! Обновление remaining сохраняет исходные padding-байты загруженного Ex,
+//! не пересоздавая всю запись из полей, которых нет в игровом контракте.
 //! Немедленный background-owner сохраняет признак End у навыка до следующего
 //! OnExecuteBackStageSkills (0x004C88E0): сначала проверка IsEnded, затем AI.
 //! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
@@ -205,7 +211,7 @@ use slotmap::{SlotMap, new_key_type};
 use super::ai::baseai::CBaseAI;
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
 use super::exstate::{
-    EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
+    EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind,
 };
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
@@ -348,7 +354,7 @@ use crate::gameserver::appserver::skills::wangshengstate::{
 };
 use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
 use crate::gameserver::appserver::skills::godblessstate::{
-    GOD_BLESS_STATE_BYTES, GodBlessState,
+    GodBlessState,
 };
 use crate::gameserver::appserver::skills::soulcollectstate::{
     SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
@@ -1637,7 +1643,9 @@ impl CMoveShape {
                     None
                 }
                 StateData::Extended(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    if let Some(record_index) = record_index {
+                        state.update_serialized_record(&mut payload, spans[record_index].0, now_ms);
+                    }
                     None
                 }
                 StateData::Undead(state) => {
@@ -2930,13 +2938,6 @@ impl CMoveShape {
 
     pub(crate) fn god_bless_state(&self) -> Option<GodBlessState> { self.state_entries.first::<GodBlessState>().copied() }
 
-    pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<GodBlessState> {
-        let position = self.state_entries.iter::<GodBlessState>()
-            .position(|state| state.skill_id() == skill_id)?;
-        let state = self.state_entries.take_nth::<GodBlessState>(position)?;
-        self.remove_serialized_state_record(skill_id, GOD_BLESS_STATE_BYTES);
-        Some(state)
-    }
     pub(crate) fn roar_state(&self) -> Option<RoarState> { self.state_entries.first::<RoarState>().copied() }
     pub(crate) fn replace_roar_state(&mut self, state: RoarState) -> Option<RoarState> {
         self.remove_serialized_state_record(state.skill_id(), ROAR_STATE_BYTES);
@@ -3620,120 +3621,6 @@ impl CMoveShape {
         (false, None)
     }
 
-    pub(crate) fn add_extended_state(
-        &mut self,
-        kind: ExtendedStateKind,
-        state_id: u32,
-        factory: &CSkillFactory,
-        now_ms: u32,
-    ) -> ExtendedStateMutation {
-        let Some(mut added) = ExtendedState::from_factory(kind, state_id, factory, now_ms) else {
-            return ExtendedStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        let mut removed = Vec::new();
-        let mut index = 0;
-        while index < self.state_entries.iter::<ExtendedState>().count() {
-            if self.state_entries.nth::<ExtendedState>(index).expect("семейная позиция проверена до изменения списка").kind == kind
-                && (self.state_entries.nth::<ExtendedState>(index).expect("семейная позиция проверена до изменения списка").state_type == added.state_type
-                    || self.state_entries.nth::<ExtendedState>(index).expect("семейная позиция проверена до изменения списка").level == state_id)
-            {
-                let state = self.state_entries.take_nth::<ExtendedState>(index).expect("семейная позиция проверена до удаления");
-                self.remove_extended_state_serialized(&state);
-                removed.push(state);
-            } else {
-                index += 1;
-            }
-        }
-        if self.ex_states.len() < 4 {
-            self.ex_states.clear();
-            LegacyWriter::new(&mut self.ex_states).write_u32(0);
-        }
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        let offset = self.ex_states.len();
-        let size = match kind {
-            ExtendedStateKind::Original => 44,
-            ExtendedStateKind::New => 56,
-        };
-        self.ex_states.resize(offset + size, 0);
-        added.write_serialized(&mut self.ex_states, offset);
-        self.state_entries.append(added.clone());
-        ExtendedStateMutation {
-            removed,
-            added: Some(added),
-            legacy_return: 1,
-        }
-    }
-
-    pub(crate) fn delete_extended_state(
-        &mut self,
-        kind: ExtendedStateKind,
-        state_id: u32,
-    ) -> ExtendedStateMutation {
-        let key = self.state_entries.iter::<ExtendedState>()
-            .position(|state| state.kind == kind && state.level == state_id)
-            .and_then(|index| self.state_entries.key_at::<ExtendedState>(index));
-        let Some(key) = key else {
-            return ExtendedStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        self.delete_extended_state_key(key)
-    }
-
-    pub(crate) fn delete_extended_state_key(&mut self, key: StateKey) -> ExtendedStateMutation {
-        let Some(removed) = self.state_entries.take::<ExtendedState>(key) else {
-            return ExtendedStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        let legacy_return = removed.level;
-        self.remove_extended_state_serialized(&removed);
-        ExtendedStateMutation {
-            removed: vec![removed],
-            added: None,
-            legacy_return,
-        }
-    }
-
-    pub(crate) fn delete_extended_state_by_type(
-        &mut self,
-        state_type: u16,
-    ) -> ExtendedStateMutation {
-        let Some(index) = self.state_entries.iter::<ExtendedState>().position(|state| {
-            state.kind == ExtendedStateKind::Original && state.state_type == state_type
-        }) else {
-            return ExtendedStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        let removed = self.state_entries.take_nth::<ExtendedState>(index).expect("семейная позиция проверена до удаления");
-        let legacy_return = removed.level;
-        self.remove_extended_state_serialized(&removed);
-        ExtendedStateMutation {
-            removed: vec![removed],
-            added: None,
-            legacy_return,
-        }
-    }
-
-    fn remove_extended_state_serialized(&mut self, state: &ExtendedState) {
-        let span = state.serialized_span();
-        state.remove_serialized(&mut self.ex_states);
-        if let Some((offset, amount)) = span {
-            self.shift_serialized_state_offsets_after(offset, amount);
-        }
-    }
 
     pub(crate) fn get_extended_state(&self, kind: ExtendedStateKind, state_id: u32) -> u32 {
         self.state_entries.iter::<ExtendedState>()

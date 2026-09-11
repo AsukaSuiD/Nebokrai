@@ -56,7 +56,6 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time};
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const GOD_BLESS_STATE_ID: u32 = 0x12f;
 pub(crate) const GOD_BLESS_STATE_BYTES: usize = 20;
@@ -121,15 +120,6 @@ impl GodBlessState {
 
 }
 
-#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической around-доставки")]
-pub(crate) fn send_god_bless_state_visual(game: &mut CGame, region_id: i32, target: ShapeIdentity, tile_x: i32, tile_y: i32, state: GodBlessState, begin: bool, now_ms: u32) {
-    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(target.object_type);
-    message.add_long(target.id);
-    message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
-}
 
 pub(crate) fn update_god_bless_state_properties(
     game: &mut CGame,

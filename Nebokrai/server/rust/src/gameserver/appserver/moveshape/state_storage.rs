@@ -29,7 +29,7 @@
 //! Agility2/Promotion и owners без ресурса; повторный Begin заменяет ресурс.
 //! DecodeExStates 0x004D1B18 записывает sufferer type/id держателя, но оставляет
 //! region=0 из CState ctor 0x005DBCA0. Object Begin устанавливает текущий
-//! sufferer-region. Первичная установка GodBless/Fog/BF записывает фактические
+//! sufferer-region. Первичная установка GodBless/Fog/BF/Ex записывает фактические
 //! User/Sufferer identity и region, включая допустимый NULL; Begin(NULL,holder)
 //! при повторном входе сохраняет User. Для ещё не перенесённых primary owners
 //! остаётся явная holder-привязка. Отдельный признак from_save больше не

@@ -40,6 +40,9 @@
 //! ID, прямой GetCell и строгий байт Undead==1. End и destructor-only хвост
 //! разделены; по окончании End перечитывается текущая позиция. Общий хвост
 //! использует также CastCure, без второго UpdateProperty и уплотнения.
+//! RemoveState(tagSkillID) (0x004CDB20) использует тот же End/destructor,
+//! но обходит все совпадения с живой длиной и после каждого отдельно вызывает
+//! UpdateProperty. Он не равен first-match удалению или RemoveState(pointer).
 //! StartAllStates (0x004CE050) использует живой индекс: SetRegion, повторное
 //! чтение позиции, затем object Begin(NULL, holder). Фильтр после смерти
 //! и специальный трёхаргументный CHBY Begin сохраняются отдельно. Отказ Begin
@@ -47,7 +50,7 @@
 //! читаются конкретным Unserialize. Общий CVisualEffect принадлежит экземпляру;
 //! новый Begin освобождает старый ресурс безопасно, без пакетов из Drop.
 //! User/Sufferer хранят NULL либо identity/region конкретного Begin; первичная
-//! установка GodBless/Fog/BF больше не подставляет держателя вместо caster.
+//! установка GodBless/Fog/BF/Ex сохраняет конкретные стороны вызова Begin.
 //! Для ещё не перенесённых primary owners сохраняется прежняя holder-привязка.
 //! Базовый End разрешает настоящий User; локальный StateKey нельзя применить
 //! к другой арене даже при совпадении его численного представления.
@@ -382,6 +385,33 @@ pub(crate) fn end_and_destroy_state_at(
         if let Some((remaining, _)) = shape.state_at(index) {
             shape.remove_applied_state(remaining);
         }
+    }
+    Some(())
+}
+
+/// CMoveShape::RemoveState(tagSkillID), moveshape.cpp:744, 0x004CDB20.
+/// Каждый выбранный ID получает End (0x004CDB62), затем destructor свежего
+/// остатка той же позиции и самостоятельный UpdateProperty (0x004CDB93).
+/// Даже если End уже удалил запись и обновил свойства, внешний Update остаётся.
+/// Длина перечитывается после callback: новые хвостовые состояния участвуют
+/// в этом проходе; пропуски не уплотняются, End-result и ended не фильтруются.
+pub(crate) fn remove_move_shape_states_by_id(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    state_id: u32,
+) -> Option<()> {
+    let mut index = 0;
+    loop {
+        let shape = resolve_state_move_shape(game, region_id, holder)?;
+        if index >= shape.state_slot_count() { break; }
+        let selected = shape.state_at(index)
+            .is_some_and(|(_, state)| state.state_id() == state_id);
+        if selected {
+            end_and_destroy_state_at(game, region_id, holder, index)?;
+            let _ = game.update_move_shape_properties(region_id, holder);
+        }
+        index += 1;
     }
     Some(())
 }
