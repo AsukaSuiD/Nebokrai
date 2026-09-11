@@ -3,6 +3,9 @@
 //! dispatcher-ом states/state.rs. Здесь хранится одна PDB-структура
 //! tagProperties (+0x84, 25 signed LONG); её читают native monster getters.
 //! Снимки PlayerPropertyState/MonsterPropertyState больше не дублируют арену.
+//! Первичная замена GodBless/Fog/BF использует общий поиск живой позиции и
+//! регистрацию записи с поколенческим ключом/DB-span. Предикат выбора и
+//! наличие destructor после End остаются у native caller-а, а не у storage.
 //! Немедленный background-owner сохраняет признак End у навыка до следующего
 //! OnExecuteBackStageSkills (0x004C88E0): сначала проверка IsEnded, затем AI.
 //! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
@@ -1653,10 +1656,7 @@ impl CMoveShape {
                     if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
                     None
                 }
-                StateData::PoisonFog(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
-                    None
-                }
+                StateData::PoisonFog(state) => Some(state.encoded(now_ms)),
                 StateData::MeteorArrow(state) => {
                     if record_index.is_some() { state.update_serialized(&mut payload); }
                     None
@@ -2490,6 +2490,32 @@ impl CMoveShape {
         self.ex_states.extend_from_slice(record);
     }
 
+    /// Общий push_back уже успешно начатого concrete state. DB-cache здесь
+    /// технический: record подготовлен owner-ом без вызова игрового Serialize
+    /// и без повторных часов. Новый span принадлежит тому же поколенческому
+    /// ключу, поэтому дубли ID удаляются независимо. End/Update остаются caller-у.
+    pub(crate) fn append_applied_state_record<T: AppliedState>(
+        &mut self, state: T, record: &[u8],
+    ) -> StateKey {
+        self.append_serialized_state_record(record);
+        let span = (self.ex_states.len() - record.len(), record.len());
+        let key = self.state_entries.append(state);
+        self.state_entries.set_serialized_span(key, span);
+        key
+    }
+
+    /// Первый живой слот исходного m_vStates. Предикат задаёт игровой выбор
+    /// caller-а; метод не копирует payload, не уплотняет и не вызывает End.
+    /// После callback caller перечитывает эту позицию, если это требует EXE.
+    pub(crate) fn find_state_position(
+        &self, mut matches: impl FnMut(&StateData) -> bool,
+    ) -> Option<(usize, StateKey)> {
+        (0..self.state_slot_count()).find_map(|index| {
+            let (key, state) = self.state_at(index)?;
+            matches(state).then_some((index, key))
+        })
+    }
+
     fn remove_serialized_state_record(&mut self, state_id: u32, amount: usize) -> bool {
         let Some(offset) = known_state_record_offsets(&self.ex_states)
             .into_iter()
@@ -2580,10 +2606,6 @@ impl CMoveShape {
         self.state_entries.len()
     }
 
-    pub(crate) fn applied_state_was_loaded(&self, key: StateKey) -> Option<bool> {
-        self.state_entries.was_loaded(key)
-    }
-
     pub(crate) fn mark_applied_state_ended(&mut self, key: StateKey) -> bool {
         self.state_entries.mark_ended(key)
     }
@@ -2593,8 +2615,24 @@ impl CMoveShape {
         self.state_entries.mark_begun(key, region_id)
     }
 
-    pub(crate) fn applied_state_sufferer_region(&self, key: StateKey) -> Option<i32> {
-        self.state_entries.sufferer_region(key, self.shape.get_region_id())
+    pub(crate) fn applied_state_user(&self, key: StateKey) -> Option<(i32, ShapeIdentity)> {
+        self.state_entries.user(key, self.shape.get_region_id(), self.shape.identity())
+    }
+
+    pub(crate) fn applied_state_sufferer(&self, key: StateKey) -> Option<(i32, ShapeIdentity)> {
+        self.state_entries.sufferer(key, self.shape.get_region_id(), self.shape.identity())
+    }
+
+    pub(crate) fn set_applied_state_user(&mut self, key: StateKey, user: Option<(i32, ShapeIdentity)>) -> bool {
+        self.state_entries.set_user(key, user)
+    }
+
+    pub(crate) fn set_applied_state_sufferer(&mut self, key: StateKey, sufferer: Option<(i32, ShapeIdentity)>) -> bool {
+        self.state_entries.set_sufferer(key, sufferer)
+    }
+
+    pub(crate) fn set_applied_state_user_region(&mut self, key: StateKey, region_id: i32) -> bool {
+        self.state_entries.set_user_region(key, region_id)
     }
 
     pub(crate) fn set_applied_state_sufferer_region(&mut self, key: StateKey, region_id: i32) -> bool {
@@ -2891,13 +2929,6 @@ impl CMoveShape {
     }
 
     pub(crate) fn god_bless_state(&self) -> Option<GodBlessState> { self.state_entries.first::<GodBlessState>().copied() }
-    pub(crate) fn replace_god_bless_state(&mut self, state: GodBlessState) -> Option<GodBlessState> {
-        let previous = self.state_entries.take_first::<GodBlessState>();
-        if let Some(previous) = previous { self.remove_serialized_state_record(previous.skill_id(), GOD_BLESS_STATE_BYTES); }
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
 
     pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<GodBlessState> {
         let position = self.state_entries.iter::<GodBlessState>()
@@ -3107,12 +3138,6 @@ impl CMoveShape {
             .map(StateData::state_id).collect()
     }
 
-    pub(crate) fn replace_poison_fog_state(&mut self, mut state: PoisonFogState, now_ms: u32) -> Option<PoisonFogState> {
-        let previous = self.state_entries.take_first::<PoisonFogState>();
-        let replaced = previous.and_then(PoisonFogState::serialized_span).is_some_and(|(offset, amount)| amount == POISON_FOG_STATE_BYTES && state.write_serialized_at(&mut self.ex_states, offset, now_ms));
-        if !replaced { if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); } let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.wrapping_add(1)); state.append_serialized(&mut self.ex_states, now_ms); }
-        self.state_entries.append(state); previous
-    }
     pub(crate) fn take_expired_poison_fog_state(&mut self, key: StateKey, now_ms: u32) -> Option<PoisonFogState> {
         self.applied_state::<PoisonFogState>(key).filter(|state| state.expired(now_ms))?;
         let state = self.remove_applied_state_record::<PoisonFogState>(key, POISON_FOG_STATE_BYTES)?;
@@ -3290,19 +3315,6 @@ impl CMoveShape {
         self.state_entries.iter::<BattleFairyAttributeState>()
     }
 
-    pub(crate) fn replace_battle_fairy_attribute_state(
-        &mut self,
-        state: BattleFairyAttributeState,
-    ) -> Option<BattleFairyAttributeState> {
-        self.remove_serialized_state_record(state.skill_id(), BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        let position = self
-            .state_entries.iter::<BattleFairyAttributeState>()
-            .position(|candidate| candidate.skill_id() == state.skill_id());
-        let previous = position.and_then(|position| self.state_entries.take_nth::<BattleFairyAttributeState>(position));
-        self.state_entries.append(state);
-        previous
-    }
 
     pub(crate) fn take_expired_battle_fairy_attribute_state(
         &mut self,

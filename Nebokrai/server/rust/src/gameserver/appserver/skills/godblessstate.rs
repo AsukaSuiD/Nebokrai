@@ -16,6 +16,10 @@
 //! visual → ended → GetSufferer → RemoveState; у GodBless2 vtable 0x00660074
 //! ведёт на 0x005D5B80 с тем же хвостом, но БЕЗ visual. Прямой End не читает
 //! часы; AI проверяет срок и вызывает это же завершение точного экземпляра.
+//! God1 вызывает visual только при существующем ресурсе; Update(1)
+//! 0x00601880 учитывает visual.ended и GetSufferer, затем общий visual-tail.
+//! NULL sufferer оставляет завершённый payload для внешнего destructor;
+//! одноимённая форма в другом регионе не владеет этим поколенческим ключом.
 
 //! Restart воспроизводит только Begin(NULL, holder) (0x00601790/0x005EE380):
 //! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
@@ -32,6 +36,12 @@
 //! property visual отправляет BFE03 и завершает ресурс; формула работает далее.
 //! DecodeExStates назначает sufferer до Begin: loaded player получает формулу
 //! даже при отказе Begin(NULL,holder), но отсутствующий visual не подменяется.
+//! Первичный ctor 0x00601370/0x005EE0B0 оставляет timestamp=0, без часов.
+//! Begin God1 требует sufferer, God2 — user; общий CState::Begin 0x005DBD70
+//! читает один clock только при ненулевом user. Первичная установка делает
+//! это после End прежнего экземпляра, до append и property callback.
+//! Silent visual и base user/sufferer metadata переходят общему arena-owner
+//! в той же границе без промежуточного callback; persisted codec не меняется.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual,
@@ -65,6 +75,21 @@ impl GodBlessState {
     pub(crate) const fn new(skill_id: u32, started_at_ms: u32, keep_time_ms: u32, minimum_attack_gain: u32, maximum_attack_gain: u32, element_gain: u32) -> Self {
         debug_assert!(matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID));
         Self { skill_id, started_at_ms, keep_time_ms, minimum_attack_gain, maximum_attack_gain, element_gain }
+    }
+    pub(crate) fn begin_for_install(
+        &mut self,
+        user_exists: bool,
+        sufferer_exists: bool,
+        now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let can_begin = if self.skill_id == GOD_BLESS_STATE_ID { sufferer_exists } else { user_exists };
+        if !can_begin {
+            return false;
+        }
+        if user_exists {
+            self.started_at_ms = now();
+        }
+        true
     }
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
@@ -184,19 +209,15 @@ pub(crate) fn end_god_bless_state(
         .and_then(|shape| shape.applied_state::<GodBlessState>(key)).copied()
         else { return false };
     if state.skill_id() == GOD_BLESS_STATE_ID {
-        let mut message = CMessage::new(0x000b_fe04);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
+        crate::gameserver::appserver::states::state::update_applied_state_end_visual(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer,
+        );
     }
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| {
-            shape.mark_applied_state_ended(key);
-            shape.remove_applied_state_record::<GodBlessState>(key, GOD_BLESS_STATE_BYTES)
-        }).is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
+    shape.mark_applied_state_ended(key);
+    let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+        else { return false };
+    crate::gameserver::appserver::states::state::remove_applied_state_from(
+        game, region_id, holder, key, (target_region, target), GOD_BLESS_STATE_BYTES,
+    )
 }

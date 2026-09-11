@@ -1337,9 +1337,6 @@ use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::{
 use crate::gameserver::appserver::skills::battlefairyattribute::{
     definition as battle_fairy_attribute_definition, execute_battle_fairy_attribute,
 };
-use crate::gameserver::appserver::skills::battlefairyattributestate::{
-    BattleFairyAttributeState,
-};
 use crate::gameserver::appserver::skills::callosity::{
     cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
     CALLOSITY_SKILL_ID,
@@ -40326,37 +40323,6 @@ impl CGame {
         }
     }
 
-    pub(crate) fn replace_battle_fairy_attribute_state(
-        &mut self,
-        region_id: i32,
-        target: ShapeIdentity,
-        state: BattleFairyAttributeState,
-    ) -> Option<(Option<BattleFairyAttributeState>, i32, i32)> {
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self.find_player_mut(target.id)?;
-                if player.server_region_id() != Some(region_id) {
-                    return None;
-                }
-                let tile_x = player.shape().get_tile_x().ok()?;
-                let tile_y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_battle_fairy_attribute_state(state);
-                Some((previous, tile_x, tile_y))
-            }
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
-                    let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
-                    let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let previous = monster.move_shape_mut().replace_battle_fairy_attribute_state(state);
-                    Some((previous, tile_x, tile_y))
-                });
-                self.restore_region_owner(owner);
-                result
-            }
-            _ => None,
-        }
-    }
 
     pub(crate) fn periodic_state_target_name(
         &self,

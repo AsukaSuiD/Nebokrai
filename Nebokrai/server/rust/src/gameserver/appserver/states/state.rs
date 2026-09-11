@@ -46,7 +46,11 @@
 //! не удаляет запись. NULL user не сбрасывает source/timestamp: часы загрузки
 //! читаются конкретным Unserialize. Общий CVisualEffect принадлежит экземпляру;
 //! новый Begin освобождает старый ресурс безопасно, без пакетов из Drop.
-//! Источник базового End различает загруженный NULL и runtime user-holder.
+//! User/Sufferer хранят NULL либо identity/region конкретного Begin; первичная
+//! установка GodBless/Fog/BF больше не подставляет держателя вместо caster.
+//! Для ещё не перенесённых primary owners сохраняется прежняя holder-привязка.
+//! Базовый End разрешает настоящий User; локальный StateKey нельзя применить
+//! к другой арене даже при совпадении его численного представления.
 //! Первичная установка до регистрации и её replacement-callbacks ещё остаются
 //! у достигнутых конкретных владельцев; этот общий вход их не подменяет.
 
@@ -68,13 +72,28 @@ type StateRestart = fn(&mut CGame, i32, ShapeIdentity, StateKey, bool, &mut dyn 
 
 type StateProperty = fn(&mut CGame, i32, ShapeIdentity, StateKey, &mut dyn FnMut() -> u32) -> bool;
 
-fn set_god_bless_sufferer_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
+// 0x005D9BA0 меняет только user-region; все восемь BF vtable
+// (0x0065F5F4..0x0065F8CC), а также Fury/Wangsheng используют этот слот.
+fn set_state_user_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
     if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
-        if shape.applied_state::<skills::godblessstate::GodBlessState>(key)
-            .is_some_and(|state| state.skill_id() == skills::godblessstate2::GOD_BLESS_STATE_2_ID) {
-            shape.set_applied_state_sufferer_region(key, region_id);
-        }
+        shape.set_applied_state_user_region(key, region_id);
     }
+}
+
+// CBlindState с четырьмя наследниками и CPoisonFogState (vtable0x006622D4)
+// используют +0x2C=0x005E3B30: меняется только sufferer-region до Begin.
+// Регион caster у первичного Fog при переходе держателя не перезаписывается.
+fn set_state_sufferer_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_applied_state_sufferer_region(key, region_id);
+    }
+}
+
+// Оба GodBless: vtable0x00661864/0x00660074 +0x2C=0x00601660,
+// записывающий user-region и sufferer-region независимо от варианта Begin.
+fn set_god_bless_regions(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
+    set_state_user_region(game, region_id, holder, key);
+    set_state_sufferer_region(game, region_id, holder, key);
 }
 
 /// CMoveShape::UpdateProperty (0x004CFB60): обнуление 25 LONG, затем
@@ -114,23 +133,21 @@ pub(crate) fn resolve_applied_state_sufferer(
 ) -> Option<(i32, ShapeIdentity)> {
     let shape = resolve_state_move_shape(game, region_id, holder)?;
     shape.applied_state_data(key)?;
-    // В достигнутых property callbacks sufferer — держатель; у Po* иной
-    // caster не подставляется сюда: и формула, и visual Po* читают GetUser.
-    let target = holder;
-    let region = shape.applied_state_sufferer_region(key)?;
+    let (region, target) = shape.applied_state_sufferer(key)?;
     let target_shape = resolve_state_move_shape(game, region, target)?;
     Some((target_shape.shape().get_region_id(), target))
 }
 
-/// Property owners Wang/BattleFairy используют GetUser. Их достигнутые
-/// runtime Begin получают holder; Unserialize сохраняет NULL user и не
-/// заменяет его sufferer, даже если последний уже доступен после login.
+/// GetUser использует сохранённый источник конкретного Begin. Unserialize
+/// сохраняет NULL user и не заменяет его sufferer даже после регистрации.
 pub(crate) fn resolve_applied_state_user(
     game: &CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
 ) -> Option<(i32, ShapeIdentity)> {
     let shape = resolve_state_move_shape(game, region_id, holder)?;
-    if shape.applied_state_was_loaded(key)? { return None; }
-    Some((shape.shape().get_region_id(), holder))
+    shape.applied_state_data(key)?;
+    let (region, target) = shape.applied_state_user(key)?;
+    let target_shape = resolve_state_move_shape(game, region, target)?;
+    Some((target_shape.shape().get_region_id(), target))
 }
 
 /// Общая player-only часть concrete property owners без внешних callbacks
@@ -194,6 +211,36 @@ pub(crate) fn update_property_state_visual<T: AppliedState>(
     true
 }
 
+/// Стандартный visual Update(1), подтверждённый God/Fog (0x00601880/
+/// 0x00608660). Нет ресурса — нет вызова; ended/NULL target подавляют только
+/// пакет, но не base tail. Это не state End и не запись state.ended.
+pub(crate) fn update_applied_state_end_visual(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    target: StatePropertyTarget,
+) -> bool {
+    let Some(ended) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_visual_ended(key))
+    else { return false };
+    if !ended {
+        let target = match target {
+            StatePropertyTarget::User => resolve_applied_state_user(game, region_id, holder, key),
+            StatePropertyTarget::Sufferer => resolve_applied_state_sufferer(game, region_id, holder, key),
+        };
+        if let Some((target_region, target)) = target {
+            if let Some(state_id) = resolve_state_move_shape(game, region_id, holder)
+                .and_then(|shape| shape.applied_state_data(key)).map(StateData::state_id) {
+                let mut message = CMessage::new(0x000b_fe04);
+                message.add_long(target.object_type);
+                message.add_long(target.id);
+                message.add_ulong(state_id);
+                let _ = game.send_move_shape_around(target_region, target, &message);
+            }
+        }
+    }
+    update_applied_state_visual_base(game, region_id, holder, key);
+    true
+}
+
 /// CHBY/CExState GetRemainedTime (0x005DA030), включая самостоятельные
 /// чтения часов и специальное значение 1 после ненулевого срока.
 pub(crate) fn change_body_client_time(start: u32, keep: u32, now: &mut dyn FnMut() -> u32) -> u32 {
@@ -234,8 +281,8 @@ pub(crate) fn update_applied_state_visual_base(game: &mut CGame, region_id: i32,
 /// Begin получает новое чтение той же позиции, а не прежний ключ. Длина
 /// живая, результат Begin игнорируется: отказ не означает удаление состояния.
 /// Простые SetRegion 0x005D9BA0/0x005E3B30/0x00601660 меняют только регион
-/// user/sufferer: у достигнутых payload он разрешается через живого holder,
-/// а отдельный source у периодических состояний здесь не изменяется.
+/// сохранённого User, Sufferer либо обоих, не подменяя их identity держателем.
+/// Отдельный source в payload периодических состояний здесь не изменяется.
 pub(crate) fn start_move_shape_states(
     game: &mut CGame,
     region_id: i32,
@@ -265,12 +312,10 @@ pub(crate) fn start_move_shape_states(
     Some(())
 }
 
-/// Базовый End 0x005DBCE0 для owners, у которых runtime GetUser подтверждён
-/// как holder, а StartAllStates вызывает Begin(null, holder). Sufferer у
-/// отдельных BFAttribute может отличаться и не подставляется вместо user.
-/// Загруженный экземпляр помечается завершённым, но GetUser остаётся null:
-/// его удаляет внешний ClearAllStates, а не выдуманный GetSufferer в base End.
-/// Владельцы с отдельной сохранённой identity источника сюда не направляются.
+/// Базовый End 0x005DBCE0: ended → GetUser → RemoveState(pointer).
+/// Sufferer отдельных BFAttribute отличается и не подставляется вместо user.
+/// При NULL user запись лишь помечается ended; внешнее удаление остатка
+/// принадлежит ClearAllStates либо конкретному replacement caller-у.
 pub(crate) fn end_base_applied_state(
     game: &mut CGame,
     region_id: i32,
@@ -278,15 +323,30 @@ pub(crate) fn end_base_applied_state(
     key: StateKey,
     bytes: usize,
 ) -> bool {
+    if !resolve_state_move_shape_mut(game, region_id, holder)
+        .is_some_and(|shape| shape.mark_applied_state_ended(key)) { return false; }
+    let Some((user_region, user)) = resolve_applied_state_user(game, region_id, holder, key)
+    else { return false };
+    remove_applied_state_from(game, region_id, holder, key, (user_region, user), bytes)
+}
+
+/// CMoveShape::RemoveState(pointer) 0x004CDAB0: поиск того же объекта,
+/// освобождение/NULL-слот и затем UpdateProperty владельца найденной записи.
+/// В Rust уникальный StateKey действует только внутри одной арены.
+pub(crate) fn remove_applied_state_from(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    (target_region, target): (i32, ShapeIdentity), bytes: usize,
+) -> bool {
+    // Ключ локален арене. RemoveState(pointer) другого User не должен удалить
+    // совпавший численно ключ чужого контейнера: такого указателя там нет.
+    let same_holder = resolve_state_move_shape(game, region_id, holder)
+        .zip(resolve_state_move_shape(game, target_region, target))
+        .is_some_and(|(arena, target)| std::ptr::eq(arena, target));
+    if !same_holder { return false; }
     let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
-    let Some(from_save) = shape.applied_state_was_loaded(key) else { return false };
-    shape.mark_applied_state_ended(key);
-    if from_save {
-        return false;
-    }
     let removed = shape.remove_applied_state_data(key, bytes).is_some();
     if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
+        let _ = game.update_move_shape_properties(target_region, target);
     }
     removed
 }
@@ -440,6 +500,8 @@ fn log_state_array_change(
 // Один список задаёт AI/End/Begin/OnUpdateProperties/SetRegion и остаточное
 // состояние visual уже выполненного runtime Begin при регистрации.
 macro_rules! state_callbacks {
+    (@region) => { set_state_user_region };
+    (@region $set_region:path) => { $set_region };
     (@visual) => { |_state: &StateData| Some((1, false)) };
     (@visual $visual:expr) => { $visual };
     ($($pattern:pat => ($ai:expr, $end:path, $restart:path, $property:expr $(, $set_region:path)?) $(; visual = $visual:expr)?),+ $(,)?) => {
@@ -471,9 +533,7 @@ macro_rules! state_callbacks {
         }
 
         fn state_set_region(state: &StateData) -> fn(&mut CGame, i32, ShapeIdentity, StateKey) {
-            match state { $($pattern => |_game, _region, _holder, _key| {
-                $($set_region(_game, _region, _holder, _key);)?
-            }),+ }
+            match state { $($pattern => state_callbacks!(@region $($set_region)?)),+ }
         }
     };
 }
@@ -608,7 +668,8 @@ state_callbacks! {
         },
         skills::blindstate::end_blind_state,
         skills::blindstate::restart_blind_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::Heal(_) => (
         |game, region, target, key, runtime| {
@@ -769,7 +830,7 @@ state_callbacks! {
         skills::godblessstate::end_god_bless_state,
         skills::godblessstate::restart_god_bless_state,
         skills::godblessstate::update_god_bless_state_properties,
-        set_god_bless_sufferer_region
+        set_god_bless_regions
     ); visual = |state| Some((if matches!(state, StateData::GodBless(state) if state.skill_id() == skills::godblessstate2::GOD_BLESS_STATE_2_ID) { 0 } else { 1 }, false)),
     StateData::Roar(_) => (
         |game, region, target, key, runtime| {
@@ -810,7 +871,8 @@ state_callbacks! {
         },
         skills::poisonfogstate::end_poison_fog_state,
         skills::poisonfogstate::restart_poison_fog_state,
-        skills::poisonfogstate::update_poison_fog_state_properties
+        skills::poisonfogstate::update_poison_fog_state_properties,
+        set_state_sufferer_region
     ),
     StateData::BattleFairyAttribute(_) => (
         |game, region, target, key, runtime| {

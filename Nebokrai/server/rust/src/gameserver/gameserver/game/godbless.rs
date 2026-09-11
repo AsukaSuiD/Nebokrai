@@ -1,44 +1,79 @@
-//! Межвладельческая координация `GodBlessState`.
-//! Остаток первичной установки: replacement пока использует прежний typed
-//! replace и ручной End-пакет; полный Begin/End старого экземпляра до append
-//! ещё не сведён с общим exact-key lifecycle. Property-tail ниже уже общий.
+//! Межвладельческая первичная установка `GodBlessState`.
 //!
-//! Формулы, replacement и lifecycle принадлежат skill/state-owner-ам. Здесь
-//! остаются только временное извлечение региона, перерасчёт живого owner-а и
-//! фактическая around-доставка завершения прежнего состояния.
-//! CGodBless::AI 0x005B0911 добавляет состояние, затем 0x005B091B вызывает
-//! virtual UpdateProperty цели; тип монстра не исключён из этого хвоста.
-//! Begin GodBless1/2 создаёт visual без initial Update: BFE03 принадлежит
-//! последующему OnUpdateProperties, а не ручной отправке при установке.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
+//! `appserver/skills/godbless.cpp` и `godbless2.cpp`. GodBless1 сначала
+//! вызывает DelExStateByType(0x12F) (0x005B070E → 0x004CEA30): первый
+//! CExState этого subtype получает End и отдельный внешний UpdateProperty,
+//! без принудительного destructor. У GodBless2 этого шага нет.
+//! Оба AI (0x005B0721/0x00550CA0) выбирают первый ID 0x12F или 0x145
+//! в живом порядке списка, без сравнения уровня, силы и срока. Затем End
+//! (0x005B0810/0x00550D62) → destructor свежего остатка той же позиции →
+//! новый ctor → Begin(user,sufferer) → append только при успешном Begin.
+//! Общий UpdateProperty вызывается и после отказа Begin; старое состояние
+//! не восстанавливается. Нехватка памяти использует стандартную политику
+//! Rust, а не эмуляцию native allocation failure.
+//! Между Begin и append нет callback: общий arena-owner создаёт silent
+//! visual loop=1/0 при передаче payload. Первый BFE03 принадлежит следующему
+//! OnUpdateProperties. Источник, цель и их настоящий AI остаются доступны
+//! во время старого End и каждого property callback; регион не извлекается.
 
 use super::*;
-use crate::gameserver::appserver::skills::godblessstate::{GodBlessState, send_god_bless_state_visual};
+use crate::gameserver::appserver::moveshape::StateData;
+use crate::gameserver::appserver::skills::godblessstate::{GodBlessState, GOD_BLESS_STATE_ID};
+use crate::gameserver::appserver::skills::godblessstate2::GOD_BLESS_STATE_2_ID;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, end_move_shape_state,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
+};
 
 impl CGame {
-    pub(crate) fn install_god_bless_state<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, target: ShapeIdentity, state: GodBlessState, runtime: &mut Runtime) -> bool {
-        let changed = match target.object_type {
-            PLAYER_TYPE => self.find_player_mut(target.id).and_then(|player| {
-                let x = player.shape().get_tile_x().ok()?;
-                let y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_god_bless_state(state);
-                Some((x, y, previous))
-            }),
-            MONSTER_TYPE => if let Some(mut owner) = self.take_region_owner(region_id) {
-                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
-                    let x = monster.move_shape().shape().get_tile_x().ok()?;
-                    let y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let previous = monster.move_shape_mut().replace_god_bless_state(state);
-                    Some((x, y, previous))
-                });
-                self.restore_region_owner(owner);
-                result
-            } else { None },
-            _ => None,
+    #[allow(clippy::too_many_arguments, reason = "граница хранит отдельно variant, actual user, sufferer и отложенный ctor")]
+    pub(crate) fn install_god_bless_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        user: ShapeIdentity,
+        skill_id: u32,
+        create: impl FnOnce() -> GodBlessState,
+        runtime: &mut Runtime,
+    ) -> bool {
+        if skill_id == GOD_BLESS_STATE_ID {
+            let previous = resolve_state_move_shape(self, region_id, target).and_then(|shape| {
+                shape.find_state_position(|state| matches!(state, StateData::Extended(state)
+                    if state.kind == ExtendedStateKind::Original
+                        && u32::from(state.state_type) == GOD_BLESS_STATE_ID))
+            });
+            if let Some((_, key)) = previous {
+                let _ = end_move_shape_state(self, region_id, target, key);
+                let _ = self.update_move_shape_properties(region_id, target);
+            }
+        }
+        let previous = resolve_state_move_shape(self, region_id, target).and_then(|shape| {
+            shape.find_state_position(|state| matches!(state.state_id(),
+                GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID))
+        });
+        if let Some((position, _)) = previous {
+            let _ = end_and_destroy_state_at(self, region_id, target, position);
+        }
+
+        let mut state = create();
+        let source = resolve_state_move_shape(self, region_id, user)
+            .map(|shape| (shape.shape().get_region_id(), user));
+        let sufferer_exists = resolve_state_move_shape(self, region_id, target).is_some();
+        let begun = state.begin_for_install(source.is_some(), sufferer_exists, &mut || runtime.now_milliseconds());
+        let installed = if begun {
+            resolve_state_move_shape_mut(self, region_id, target).is_some_and(|shape| {
+                let record = state.encoded_for_install();
+                let key = shape.append_applied_state_record(state, &record);
+                shape.mark_applied_state_begun(key);
+                shape.set_applied_state_user(key, source);
+                true
+            })
+        } else {
+            false
         };
-        let Some((x, y, previous)) = changed else { return false };
-        if let Some(previous) = previous { send_god_bless_state_visual(self, region_id, target, x, y, previous, false, runtime.now_milliseconds()); }
         let _ = self.update_move_shape_properties(region_id, target);
-        true
+        installed
     }
 
 }

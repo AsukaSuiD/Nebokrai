@@ -1,7 +1,10 @@
 //! Межвладельческая координация ядовитого тумана.
-//! Первичный replacement ещё использует прежний typed replace и ручной
-//! End-пакет; порядок полного End/Remove/Update до нового Begin требует
-//! отдельного подключения общего lifecycle. After-append property-tail общий.
+//! Источник: gameserver.exe + GameServer.pdb, исходный owner
+//! appserver/skills/poisonfogphalanx.cpp, AI0x005FC040. Player OnFirstSkill
+//! (0x005FC2BB/0x005FC2C3) предшествует выбору первого nonnull состояния C9.
+//! Direct End0x005FC2FF выполняется без принудительного destructor; затем
+//! региональный GetShape/RTTI заново разрешает caster (0x005FC327/0x005FC32B).
+//! При его отсутствии продолжается следующая цель: прежний End не отменяется.
 //!
 //! Применение навыка, формулы состояния и жизненный цикл области принадлежат
 //! владельцам навыка. Здесь остаются проверки PK и региона, каноническая
@@ -10,11 +13,19 @@
 //! UpdateProperty 0x005FC3DF; пересчёт выполняется и для живого монстра.
 //! Object Begin0x00608420 только создаёт loop1 visual. Его первый BFE03
 //! отправляет OnUpdateProperties после append, без дополнительного Begin-пакета.
+//! Конструктор0x00607C40 не читает часы; непустой caster даёт одно чтение
+//! в base Begin0x005DBD7F после всех guards. Rust заново разрешает target
+//! перед этими часами вместо сохранения native указателя через End callback.
+//! Успешный Begin представлен payload и существующей metadata/visual арены;
+//! cache-record сохраняет полный keepTime без вызова игрового Serialize.
 
 use super::*;
 use crate::gameserver::appserver::skills::curestate::CURE_STATE_SKILL_ID;
 use crate::gameserver::appserver::skills::poisonfogphalanx::{poison_fog_targets, CPoisonFogPhalanx};
-use crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual;
+use crate::gameserver::appserver::skills::poisonfogstate::POISON_FOG_STATE_ID;
+use crate::gameserver::appserver::states::state::{
+    end_move_shape_state, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
 
 impl CGame {
     pub(crate) fn add_poison_fog_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: CPoisonFogPhalanx, x: i32, y: i32, now_ms: u32, runtime: &mut Runtime) -> Option<Result<i32, RegionMembershipBlock>> { let mut owner = self.take_region_owner(region_id)?; let result = owner.base_mut().add_poison_fog_phalanx(phalanx, x, y, self.area_width, self.area_height, now_ms, runtime); self.restore_region_owner(owner); Some(result) }
@@ -43,23 +54,57 @@ impl CGame {
             _ => false,
         }
     }
-    pub(super) fn apply_poison_fog_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: &CPoisonFogPhalanx, runtime: &mut Runtime) -> usize {
+    pub(super) fn apply_poison_fog_phalanx<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        phalanx: &CPoisonFogPhalanx,
+        runtime: &mut Runtime,
+    ) -> usize {
         let mut applied = 0usize;
         for target in poison_fog_targets(self, region_id, phalanx) {
-            if !self.poison_fog_target_attackable(region_id, phalanx, target) { continue }
-            let now = runtime.now_milliseconds(); let state = phalanx.state(now);
-            match target.object_type {
-                PLAYER_TYPE => {
-                    let _ = self.player_on_first_skill(phalanx.master().master_id, target.id, Some(region_id), runtime);
-                    let replaced = self.find_player_mut(target.id).and_then(|player| { let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let previous = player.replace_poison_fog_state(state, now); Some((x, y, previous)) });
-                    if let Some((x, y, previous)) = replaced { if let Some(previous) = previous { send_poison_fog_state_visual(self, region_id, target, x, y, previous, false, now); } let _ = self.update_move_shape_properties(region_id, target); applied = applied.wrapping_add(1); }
-                }
-                MONSTER_TYPE => {
-                    let replaced = if let Some(mut owner) = self.take_region_owner(region_id) { let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| { let x = monster.move_shape().shape().get_tile_x().ok()?; let y = monster.move_shape().shape().get_tile_y().ok()?; let previous = monster.move_shape_mut().replace_poison_fog_state(state, now); Some((x, y, previous)) }); self.restore_region_owner(owner); result } else { None };
-                    if let Some((x, y, previous)) = replaced { if let Some(previous) = previous { send_poison_fog_state_visual(self, region_id, target, x, y, previous, false, now); } let _ = self.update_move_shape_properties(region_id, target); applied = applied.wrapping_add(1); }
-                }
-                _ => {}
+            if !self.poison_fog_target_attackable(region_id, phalanx, target) {
+                continue;
             }
+            if target.object_type == PLAYER_TYPE {
+                let _ = self.player_on_first_skill(
+                    phalanx.master().master_id, target.id, Some(region_id), runtime,
+                );
+            }
+            let previous = resolve_state_move_shape(self, region_id, target)
+                .and_then(|shape| shape.find_state_position(|state| {
+                    state.state_id() == POISON_FOG_STATE_ID
+                }));
+            if let Some((_, key)) = previous {
+                end_move_shape_state(self, region_id, target, key);
+            }
+
+            let master = phalanx.master();
+            let caster = ShapeIdentity {
+                object_type: master.master_type,
+                id: master.master_id,
+                ex_id: CGuid::GUID_INVALID,
+            };
+            let Some((caster_region, caster_identity)) = self.find_shape_in_region(region_id, caster)
+                .and_then(|shape| resolve_state_move_shape(self, region_id, shape.identity))
+                .map(|shape| (shape.shape().get_region_id(), ShapeIdentity {
+                    ex_id: CGuid::GUID_INVALID,
+                    ..shape.shape().identity()
+                }))
+            else {
+                continue;
+            };
+            let Some(shape) = resolve_state_move_shape_mut(self, region_id, target)
+            else { continue };
+
+            // Непустые caster/sufferer прошли Begin-guards. Единственные часы
+            // базы стоят после прежнего End; конструктор и cache их не читают.
+            let state = phalanx.state(runtime.now_milliseconds());
+            let record = state.encoded_for_install();
+            let key = shape.append_applied_state_record(state, &record);
+            shape.mark_applied_state_begun(key);
+            shape.set_applied_state_user(key, Some((caster_region, caster_identity)));
+            let _ = self.update_move_shape_properties(region_id, target);
+            applied = applied.wrapping_add(1);
         }
         applied
     }

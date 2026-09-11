@@ -5,8 +5,14 @@
 //! допускает NULL user и не читает часы; созданный visual нужен последующему End.
 //! Истечение получает ключ конкретного экземпляра общей арены; проверка
 //! срока и End не подменяют его первым состоянием с тем же ID.
-//! Direct End (vtable 0x006622D4 +0x1C, тело 0x005FD420) отправляет
-//! visual до точного RemoveState и общего virtual UpdateProperty держателя.
+//! Direct End (vtable 0x006622D4 +0x1C, тело 0x005FD420) вызывает Update(1)
+//! только у существующего visual, затем заново получает sufferer и вызывает
+//! RemoveState. Здесь нет записи state.ended и вызова базового End. Loaded
+//! запись без visual не отправляет BFE04; отсутствующий sufferer оставляет
+//! payload. Visual0x00608660 публикует BFE04 для actual sufferer только при
+//! !visual.ended, затем выполняет base tail даже при ended/отсутствующей цели.
+//! RemoveState ищет тот же экземпляр у sufferer: совпавший ключ другой арены
+//! его не заменяет. Только фактическое удаление вызывает UpdateProperty.
 //! Timer и Cure используют ту же опубликованную generic holder границу;
 //! удаление использует фактический serialized_span выбранного экземпляра.
 //!
@@ -28,6 +34,12 @@
 //! NPC/Build/CityGate направлен на чистую константу1 (0x004CFB30).
 //! Visual0x00608660 проверяет собственный ended, не state.ended; отсутствие
 //! цели или ended пропускает пакет, но сохраняет base visual tail.
+//! Primary phalanx replacement вызывает полный direct End до нового Begin;
+//! ручной End-пакет не заменяет его RemoveState/UpdateProperty. Новый Begin
+//! с caster читает один base clock, сохраняет реального user и sufferer region.
+//! encoded_for_install — техническая 36-байтовая запись полного keepTime,
+//! без Serialize/getter и новых часов; последующий save использует текущий
+//! remaining и span общей арены, не предполагая прежний payload offset.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -38,12 +50,9 @@ use crate::gameserver::appserver::states::state::{
     resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const POISON_FOG_STATE_ID: u32 = 0xc9;
 pub(crate) const POISON_FOG_STATE_BYTES: usize = 36;
-const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PoisonFogState {
@@ -122,13 +131,30 @@ impl PoisonFogState {
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> { let mut reader = LegacyReader::at(payload, offset)?; if reader.read_u32()? != POISON_FOG_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); } Ok(Self { skill_level: reader.read_i32()?, started_at_ms: now_ms, keep_time_ms: reader.read_u32()?, defense_loss: reader.read_u32()?, defense_loss_coefficient: reader.read_u32()?, dodge_loss: reader.read_u32()?, element_resistance_loss: reader.read_u32()?, element_resistance_loss_coefficient: reader.read_u32()?, weapon_damage_level: reader.read_u32()?, serialized_offset: Some(offset) }) }
-    fn encoded(self, now_ms: u32) -> Vec<u8> { let mut record = Vec::with_capacity(POISON_FOG_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(POISON_FOG_STATE_ID); writer.write_i32(self.skill_level); writer.write_u32(self.sampled_remaining_time(now_ms)); writer.write_u32(self.defense_loss); writer.write_u32(self.defense_loss_coefficient); writer.write_u32(self.dodge_loss); writer.write_u32(self.element_resistance_loss); writer.write_u32(self.element_resistance_loss_coefficient); writer.write_u32(self.weapon_damage_level); record }
-    pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>, now_ms: u32) { let offset = payload.len(); payload.extend_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); }
-    pub(crate) fn write_serialized_at(&mut self, payload: &mut [u8], offset: usize, now_ms: u32) -> bool { let Some(destination) = payload.get_mut(offset..offset.saturating_add(POISON_FOG_STATE_BYTES)) else { return false }; destination.copy_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); true }
-    pub(crate) fn update_serialized_runtime(self, payload: &mut [u8], now_ms: u32) { if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_u32_at(payload, offset + 8, self.sampled_remaining_time(now_ms)); } }
+    pub(crate) fn encoded(self, now_ms: u32) -> Vec<u8> {
+        self.encode_record(self.sampled_remaining_time(now_ms))
+    }
+
+    pub(crate) fn encoded_for_install(self) -> Vec<u8> {
+        self.encode_record(self.keep_time_ms)
+    }
+
+    fn encode_record(self, remaining_time_ms: u32) -> Vec<u8> {
+        let mut record = Vec::with_capacity(POISON_FOG_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut record);
+        writer.write_u32(POISON_FOG_STATE_ID);
+        writer.write_i32(self.skill_level);
+        writer.write_u32(remaining_time_ms);
+        writer.write_u32(self.defense_loss);
+        writer.write_u32(self.defense_loss_coefficient);
+        writer.write_u32(self.dodge_loss);
+        writer.write_u32(self.element_resistance_loss);
+        writer.write_u32(self.element_resistance_loss_coefficient);
+        writer.write_u32(self.weapon_damage_level);
+        record
+    }
 }
 
-pub(crate) fn send_poison_fog_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: PoisonFogState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(POISON_FOG_STATE_ID as i32); if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }
 
 pub(crate) fn update_poison_fog_state_properties(
     game: &mut CGame,
@@ -240,17 +266,13 @@ pub(crate) fn end_poison_fog_state(
     {
         return false;
     }
-    let mut message = CMessage::new(STATE_END_MESSAGE);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(POISON_FOG_STATE_ID as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<PoisonFogState>(
-            key, POISON_FOG_STATE_BYTES,
-        )).is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    crate::gameserver::appserver::states::state::update_applied_state_end_visual(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer,
+    );
+    let Some((target_region, target)) = resolve_applied_state_sufferer(
+        game, region_id, holder, key,
+    ) else { return false };
+    crate::gameserver::appserver::states::state::remove_applied_state_from(
+        game, region_id, holder, key, (target_region, target), POISON_FOG_STATE_BYTES,
+    )
 }

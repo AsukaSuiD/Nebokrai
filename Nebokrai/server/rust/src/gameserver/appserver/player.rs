@@ -5833,7 +5833,6 @@ impl CPlayer {
         self.move_shape.replace_poison_arrow_state(state)
     }
 
-    pub(crate) fn replace_poison_fog_state(&mut self, state: super::skills::poisonfogstate::PoisonFogState, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.replace_poison_fog_state(state, now_ms) }
     pub(crate) fn take_expired_poison_fog_state(&mut self, key: super::moveshape::StateKey, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_expired_poison_fog_state(key, now_ms) }
     pub(crate) fn take_poison_fog_state(&mut self) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_poison_fog_state() }
     pub(crate) fn meteor_arrow_state(&self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.meteor_arrow_state() }
@@ -5894,7 +5893,6 @@ impl CPlayer {
         self.move_shape.replace_weak_state(state)
     }
 
-    pub(crate) fn replace_god_bless_state(&mut self, state: super::skills::godblessstate::GodBlessState) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.replace_god_bless_state(state) }
     pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_god_bless_state(skill_id) }
 
     pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
@@ -6127,12 +6125,6 @@ impl CPlayer {
     pub(crate) fn take_kerosene_state(&mut self) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.take_kerosene_state() }
 
 
-    pub(crate) fn replace_battle_fairy_attribute_state(
-        &mut self,
-        state: super::skills::battlefairyattributestate::BattleFairyAttributeState,
-    ) -> Option<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
-        self.move_shape.replace_battle_fairy_attribute_state(state)
-    }
 
     pub(crate) fn take_expired_battle_fairy_attribute_state(&mut self, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> Option<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
         self.move_shape.take_expired_battle_fairy_attribute_state(key, now_ms)

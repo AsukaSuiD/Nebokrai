@@ -32,9 +32,15 @@
 //! и RTTI CPlayer условно вызывает SetHealth(maximum). OnChangeStates и
 //! отдельного пакета HP здесь нет. Временная сумма +0x3C сериализатором
 //! не читается и остаётся локальным скаляром; loaded NULL user даёт return0.
+//! Timer End0x005E7310 вызывает Update(1) у существующего visual до base End,
+//! не проверяя User. Visual0x006060E0 требует !visual.ended и GetSufferer для
+//! BFE04; base visual tail выполняется при любом имеющемся ресурсе. Затем
+//! base End ищет фактического User. Прямой +0x1C остаётся без visual-фазы;
+//! происхождение DB-записи не заменяет эти независимые lookup/gates.
 
 use crate::gameserver::appserver::states::state::{
     resolve_applied_state_user, update_property_state_visual, StatePropertyTarget,
+    update_applied_state_end_visual,
 };
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -43,12 +49,9 @@ use crate::gameserver::appserver::states::state::{end_base_applied_state, resolv
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const WANGSHENG_STATE_ID: u32 = 0x221;
 pub(crate) const WANGSHENG_STATE_BYTES: usize = 12;
-const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WangshengState {
@@ -104,27 +107,7 @@ impl WangshengState {
     }
 }
 
-pub(crate) fn send_wangsheng_state_visual(
-    game: &mut CGame,
-    player_id: i32,
-    state: WangshengState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.state_id() as i32);
-    if begin {
-        message.add_long(state.client_time(now_milliseconds) as i32);
-        message.add_long(0);
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
+
 
 pub(crate) fn update_wangsheng_state_properties(
     game: &mut CGame,
@@ -170,18 +153,15 @@ pub(crate) fn update_wangsheng_state(
     key: StateKey,
     now_ms: u32,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+    if !resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<WangshengState>(key))
-        .filter(|state| state.expired(now_ms)).copied()
-        else { return false };
-    if resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state_was_loaded(key)) == Some(false) {
-        let mut message = CMessage::new(0x000b_fe04);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.state_id() as i32);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
+        .is_some_and(|state| state.expired(now_ms))
+    {
+        return false;
     }
+    update_applied_state_end_visual(
+        game, region_id, holder, key, StatePropertyTarget::Sufferer,
+    );
     end_wangsheng_state(game, region_id, holder, key)
 }
 

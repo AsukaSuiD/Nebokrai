@@ -13,6 +13,11 @@
 //! Все direct End (+0x1C) используют CState::End (0x005DBCE0): ended,
 //! затем RemoveState через GetUser, без visual. Timer (0x005E6E20) вызывает
 //! другую перегрузку +0x48 (0x005E7310): visual и затем тот же base End.
+//! AI проверяет только unsigned deadline; User не является внешним guard.
+//! Перегрузка +0x48 вызывает Update(1) только существующего visual, затем
+//! безусловно base End. Visual Po (0x005E8450) разрешает User, Yu
+//! (0x005E6F80) — Sufferer после проверки собственного ended; NULL цель
+//! подавляет пакет, но сохраняет base visual tail. Часы End-пакету не нужны.
 //! Runtime Po* Begin получает (target, caster), Y* — (holder, holder);
 //! GetUser в обоих случаях совпадает с владельцем state-list
 //! (Pojia 0x0052AA6B..0x0052AA87, Yujia 0x00527002..0x0052701A).
@@ -28,6 +33,12 @@
 //! затем проверка живого getter) и Pomo0x005E7870 (Get/SetElementModifier).
 //! Усиления Yu* меняют только игрока. Visual проверяет собственный ended;
 //! ended/отсутствие цели сохраняют base tail, отсутствующий resource — нет.
+//! Первичный object Begin восьми owners проверяет только User: Pojia
+//! 0x005E83B0 и Yujia 0x005E6EE0 вызывают CState::Begin 0x005DBD70,
+//! который при ненулевом User читает один clock и сохраняет обе identity.
+//! По текущим callers User всегда держатель арены; Sufferer у Po — caster,
+//! у Yu — тот же держатель. Silent loop1 visual создаётся общим каталогом
+//! при регистрации успешного Begin; нет отдельной ручной state-публикации.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -35,13 +46,10 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     timed_client_state_time, resolve_state_move_shape, end_base_applied_state,
     resolve_state_move_shape_mut, resolve_applied_state_user,
-    update_property_state_visual, StatePropertyTarget,
+    update_applied_state_end_visual, update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
 
-pub(crate) const ATTRIBUTE_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-pub(crate) const ATTRIBUTE_STATE_END_MESSAGE: i32 = 0x000b_fe04;
 pub(crate) const BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,28 +177,26 @@ const fn add_player_attack(value: u32, amount: i32) -> u32 {
     if next > i32::MAX as u32 { i32::MAX as u32 } else { next }
 }
 
-pub(crate) fn send_battle_fairy_attribute_state_visual(
+pub(crate) fn begin_battle_fairy_attribute_state(
     game: &mut CGame,
     region_id: i32,
-    target: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: BattleFairyAttributeState,
-    begin: bool,
-) {
-    let mut message = CMessage::new(if begin {
-        ATTRIBUTE_STATE_BEGIN_MESSAGE
-    } else {
-        ATTRIBUTE_STATE_END_MESSAGE
-    });
-    message.add_long(target.object_type);
-    message.add_long(target.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.keep_time_ms() as i32);
-        message.add_long(state.started_at_ms() as i32);
-    }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    holder: ShapeIdentity,
+    sufferer: ShapeIdentity,
+    mut state: BattleFairyAttributeState,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(user_region) = resolve_state_move_shape(game, region_id, holder)
+        .map(|shape| shape.shape().get_region_id())
+    else { return false };
+    state.started_at_ms = now();
+    let sufferer = resolve_state_move_shape(game, region_id, sufferer)
+        .map(|shape| (shape.shape().get_region_id(), sufferer));
+    let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
+    let key = shape.append_applied_state_record(state, &state.encoded_for_install());
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, Some((user_region, holder)));
+    shape.set_applied_state_sufferer(key, sufferer);
+    true
 }
 
 pub(crate) fn update_battle_fairy_attribute_state_properties(
@@ -297,19 +303,17 @@ pub(crate) fn update_battle_fairy_attribute_state(
     key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
-    let expired = resolve_state_move_shape(game, region_id, holder)
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<BattleFairyAttributeState>(key))
-        .is_some_and(|state| state.expired(now_ms));
-    if !expired { return false }
-    let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return false };
-    if shape.applied_state_was_loaded(key) == Some(false) {
-        let Some(state) = shape.applied_state::<BattleFairyAttributeState>(key).copied() else { return false };
-        let mut message = CMessage::new(ATTRIBUTE_STATE_END_MESSAGE);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
-    }
+        .copied()
+    else { return false };
+    if !state.expired(now_ms) { return false }
+    let visual_target = if state.kind.targets_self() {
+        StatePropertyTarget::Sufferer
+    } else {
+        StatePropertyTarget::User
+    };
+    update_applied_state_end_visual(game, region_id, holder, key, visual_target);
     end_battle_fairy_attribute_state(game, region_id, holder, key)
 }
 

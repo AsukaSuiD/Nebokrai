@@ -29,8 +29,11 @@
 //! Agility2/Promotion и owners без ресурса; повторный Begin заменяет ресурс.
 //! DecodeExStates 0x004D1B18 записывает sufferer type/id держателя, но оставляет
 //! region=0 из CState ctor 0x005DBCA0. Object Begin устанавливает текущий
-//! sufferer-region. Runtime-установки, ещё не проходящие общую базу, используют
-//! регион держателя; сохранённый ноль не заменяется этим fallback.
+//! sufferer-region. Первичная установка GodBless/Fog/BF записывает фактические
+//! User/Sufferer identity и region, включая допустимый NULL; Begin(NULL,holder)
+//! при повторном входе сохраняет User. Для ещё не перенесённых primary owners
+//! остаётся явная holder-привязка. Отдельный признак from_save больше не
+//! подменяет GetUser; сохранённый нулевой region не заменяется fallback.
 //! Cache-span загруженной записи принадлежит тому же поколенческому ключу.
 //! Это технические границы Serialize-cache, не native input-offset:
 //! Tian читает 10 байт, но пишет 12. Удаление/вставка сдвигает общие spans,
@@ -162,10 +165,36 @@ pub(crate) struct AppliedStateEntries {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+enum StateParticipant {
+    Holder { region_id: Option<i32> },
+    Identity { region_id: i32, identity: ShapeIdentity },
+}
+
+impl StateParticipant {
+    fn resolve(&self, holder_region: i32, holder: ShapeIdentity) -> (i32, ShapeIdentity) {
+        match *self {
+            Self::Holder { region_id } => (region_id.unwrap_or(holder_region), holder),
+            Self::Identity { region_id, identity } => (region_id, identity),
+        }
+    }
+
+    fn set_region(&mut self, region: i32) {
+        match self {
+            Self::Holder { region_id } => *region_id = Some(region),
+            Self::Identity { region_id, .. } => *region_id = region,
+        }
+    }
+
+    fn from_address((region_id, identity): (i32, ShapeIdentity)) -> Self {
+        Self::Identity { region_id, identity }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct AppliedStateInstance {
     payload: Option<StateData>,
-    from_save: bool,
-    sufferer_region: Option<i32>,
+    user: Option<StateParticipant>,
+    sufferer: Option<StateParticipant>,
     ended: Option<bool>,
     visual: Option<CVisualEffect>,
     serialized_span: Option<(usize, usize)>,
@@ -177,8 +206,9 @@ impl AppliedStateInstance {
             .then(|| crate::gameserver::appserver::states::state::registered_runtime_state_visual(&payload))
             .flatten();
         Self {
-            payload: Some(payload), from_save,
-            sufferer_region: from_save.then_some(0),
+            payload: Some(payload),
+            user: (!from_save).then_some(StateParticipant::Holder { region_id: None }),
+            sufferer: Some(StateParticipant::Holder { region_id: from_save.then_some(0) }),
             ended: Some(from_save), visual, serialized_span: None,
         }
     }
@@ -295,10 +325,6 @@ impl AppliedStateEntries {
         self.instances.get_mut(key)?.payload.as_mut()
     }
 
-    pub(crate) fn was_loaded(&self, key: StateKey) -> Option<bool> {
-        Some(self.instances.get(key)?.from_save)
-    }
-
     pub(crate) fn mark_ended(&mut self, key: StateKey) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.ended = Some(true);
@@ -308,17 +334,39 @@ impl AppliedStateEntries {
     pub(crate) fn mark_begun(&mut self, key: StateKey, region_id: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.ended = Some(false);
-        instance.sufferer_region = Some(region_id);
+        instance.sufferer = Some(StateParticipant::Holder { region_id: Some(region_id) });
         true
     }
 
-    pub(crate) fn sufferer_region(&self, key: StateKey, holder_region: i32) -> Option<i32> {
-        Some(self.instances.get(key)?.sufferer_region.unwrap_or(holder_region))
+    pub(crate) fn user(&self, key: StateKey, holder_region: i32, holder: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
+        Some(self.instances.get(key)?.user.as_ref()?.resolve(holder_region, holder))
+    }
+
+    pub(crate) fn sufferer(&self, key: StateKey, holder_region: i32, holder: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
+        Some(self.instances.get(key)?.sufferer.as_ref()?.resolve(holder_region, holder))
+    }
+
+    pub(crate) fn set_user(&mut self, key: StateKey, user: Option<(i32, ShapeIdentity)>) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        instance.user = user.map(StateParticipant::from_address);
+        true
+    }
+
+    pub(crate) fn set_sufferer(&mut self, key: StateKey, sufferer: Option<(i32, ShapeIdentity)>) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        instance.sufferer = sufferer.map(StateParticipant::from_address);
+        true
+    }
+
+    pub(crate) fn set_user_region(&mut self, key: StateKey, region_id: i32) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        if let Some(user) = &mut instance.user { user.set_region(region_id); }
+        true
     }
 
     pub(crate) fn set_sufferer_region(&mut self, key: StateKey, region_id: i32) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
-        instance.sufferer_region = Some(region_id);
+        if let Some(sufferer) = &mut instance.sufferer { sufferer.set_region(region_id); }
         true
     }
 

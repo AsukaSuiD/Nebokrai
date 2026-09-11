@@ -13,6 +13,12 @@
 //! Begin заканчивается возвратом Begun после создания исполнения. Проверки
 //! и эффекты первого AI остаются после этой границы; координатор вызывает AI
 //! в том же Run после постановки Attack, не сдвигая исходное время Begin.
+//! Первичная replacement-граница публикует настоящий AI источника. God1
+//! сначала завершает Extended Original/type0x12F, затем обе версии заменяют
+//! первый GodBless1/2 по runtime-позиции. Новый ctor и Begin выполняются
+//! после старого End; clock начала срока принадлежит Begin, не формуле.
+//! AI завершает skill через End(1) и при отказе нового state Begin
+//! (0x005B0930/0x00550E70); такой отказ не превращается в отмену каста.
 
 use super::baseattack::time_reached;
 use super::godblessstate::GodBlessState;
@@ -153,11 +159,14 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
     let minimum_gain = gains(minimum_base, minimum_coefficient, weapon);
     let maximum_gain = gains(maximum_base, maximum_coefficient, weapon);
     let element_gain = gains(element_base, element_coefficient, weapon);
-    let state = GodBlessState::new(skill_id, runtime.now_milliseconds(), keep_time, minimum_gain, maximum_gain, element_gain);
-    let installed = game.install_god_bless_state(region_id, target.identity, state, runtime);
+    let user = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
+    let _ = game.with_published_player_ai(player_id, player_ai, |game| {
+        game.install_god_bless_state(region_id, target.identity, user, skill_id,
+            || GodBlessState::new(skill_id, 0, keep_time, minimum_gain, maximum_gain, element_gain), runtime)
+    });
     if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_god_bless(game, player_id, player_ai, skill_id, runtime);
-    terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
+    terminal(QueuedSkillExecutionState::Completed)
 }
 
 pub(crate) const fn is_god_bless_skill(dispatch: PlayerSkillDispatch) -> bool {

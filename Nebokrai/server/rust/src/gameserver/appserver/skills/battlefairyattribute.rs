@@ -35,15 +35,22 @@
 //! После Begin и добавления состояния Po вызывает общий UpdateProperty цели
 //! без player-only gate (Pojia 0x0052AA9C, Pobing 0x00529C0C,
 //! Pomo 0x00528D7C, Pofa 0x00527EEC), до собственного End(+0x94).
-//! Первичный replacement ещё содержит прежний typed replace и ручной visual
-//! старого состояния; его прямой base End без visual и Remove/Update до
-//! нового Begin предстоит связать с общим exact-key lifecycle отдельно.
+//! Primary replacement выбирает первый nonnull exact ID 0x212..0x219,
+//! без проверки level/value/срока (Pojia 0x0052A8D0..0x0052A8F4).
+//! Далее direct End(+0x1C), fresh same-index destructor остатка и NULL
+//! (0x0052A9E8..0x0052AA07), только затем ctor и новый Begin/append.
+//! Прямой base End не отправляет visual; RemoveState пересчитывает свойства
+//! до создания нового состояния, а внешний Update следует после Begin.
+//! У Po4 и Yujia внешний Update сохраняется и при отказе Begin; Yu3
+//! (Yubing/Yumo/Yufa: 0x005261A5/0x00525315/0x00524448) его пропускают.
+//! Новый timestamp читается ровно в Begin, после старого End. На время
+//! owning replacement настоящий AI источника опубликован у CPlayer.
 //! Object Begin состояния (Po/Yu 0x005E83B0/0x005E6EE0) создаёт loop1
 //! visual без initial Update. State BFE03 отправляется только последующим
 //! OnUpdateProperties через соответствующий GetUser/GetSufferer.
 
 use super::battlefairyattributestate::{
-    send_battle_fairy_attribute_state_visual, BattleFairyAttributeKind,
+    begin_battle_fairy_attribute_state, BattleFairyAttributeKind,
     BattleFairyAttributeState,
 };
 use super::kernel::{
@@ -52,6 +59,9 @@ use super::kernel::{
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{BattleFairyManaSpendOutcome, BattleFairySkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_state_move_shape,
+};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
     colored_player_notice_message,
@@ -114,7 +124,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: BattleFairySkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let (skill_id, skill_level, requested_target) = dispatch_fields(dispatch);
@@ -236,17 +246,22 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     game.update_player_skill_visual(player_id, skill_id, 1);
-    let state_started_at_ms = runtime.now_milliseconds();
-    let state = BattleFairyAttributeState::new(skill_id, definition.kind, state_started_at_ms, keep_time_ms, value);
-    let Some((previous, tile_x, tile_y)) = game.replace_battle_fairy_attribute_state(region_id, target, state) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if let Some(previous) = previous {
-        send_battle_fairy_attribute_state_visual(
-            game, region_id, target, tile_x, tile_y, previous, false,
+    game.with_published_player_ai(player_id, player_ai, |game| {
+        let previous = resolve_state_move_shape(game, region_id, target)
+            .and_then(|shape| shape.find_state_position(|state| state.state_id() == skill_id));
+        if let Some((index, _)) = previous {
+            let _ = end_and_destroy_state_at(game, region_id, target, index);
+        }
+        let state = BattleFairyAttributeState::new(skill_id, definition.kind, 0, keep_time_ms, value);
+        let begun = begin_battle_fairy_attribute_state(
+            game, region_id, target,
+            if definition.kind.targets_self() { target } else { source_identity },
+            state, &mut || runtime.now_milliseconds(),
         );
-    }
-    let _ = game.update_move_shape_properties(region_id, target);
+        if begun || !definition.kind.targets_self() || skill_id == super::yujia::SKILL_ID {
+            let _ = game.update_move_shape_properties(region_id, target);
+        }
+    });
     if let Some(execution) = game.battle_fairy_execution_mut(player_id, skill_id) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
