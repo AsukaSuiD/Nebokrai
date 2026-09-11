@@ -17,8 +17,13 @@
 //! Единственный enum-каталог объединяет существующие typed payload, не вводя
 //! второго каталога игровых ID. Codec и таймеры повторного приёма предметов
 //! остаются отдельными данными владельца, а не дополнительными состояниями.
-//! Здесь нет игрового End-dispatch: оставшееся подключение точных обработчиков
-//! не подменяется пустым End или общим сбросом payload.
+//! Игровой AI/End-dispatch находится в states/state.rs; это хранилище не
+//! вызывает callbacks при Drop и не подменяет End общим сбросом payload.
+//! Запись арены различает runtime-установку и загрузку: StartAllStates
+//! (0x004CE050) вызывает Begin(nullptr, holder), не превращая пустой GetUser
+//! в текущего держателя. Это существенно для базового End (0x005DBCE0).
+//! Отметка ended фиксирует известный результат End; None не подменяет
+//! ещё не проведённые через общую базу constructor/Begin произвольным bool.
 
 use super::*;
 
@@ -140,8 +145,21 @@ applied_states! {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AppliedStateEntries {
-    instances: SlotMap<StateKey, Option<StateData>>,
+    instances: SlotMap<StateKey, AppliedStateInstance>,
     order: Vec<Option<StateKey>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AppliedStateInstance {
+    payload: Option<StateData>,
+    from_save: bool,
+    ended: Option<bool>,
+}
+
+impl AppliedStateInstance {
+    fn new(payload: StateData, from_save: bool) -> Self {
+        Self { payload: Some(payload), from_save, ended: None }
+    }
 }
 
 impl StateData {
@@ -199,21 +217,35 @@ impl Eq for AppliedStateEntries {}
 
 impl AppliedStateEntries {
     pub(crate) fn append<T: AppliedState>(&mut self, state: T) -> StateKey {
-        self.append_data(state.into_data())
+        self.insert_data(state.into_data(), false)
     }
 
-    pub(crate) fn append_data(&mut self, state: StateData) -> StateKey {
-        let key = self.instances.insert(Some(state));
+    pub(crate) fn append_loaded_data(&mut self, state: StateData) -> StateKey {
+        self.insert_data(state, true)
+    }
+
+    fn insert_data(&mut self, state: StateData, from_save: bool) -> StateKey {
+        let key = self.instances.insert(AppliedStateInstance::new(state, from_save));
         self.order.push(Some(key));
         key
     }
 
     pub(crate) fn get(&self, key: StateKey) -> Option<&StateData> {
-        self.instances.get(key)?.as_ref()
+        self.instances.get(key)?.payload.as_ref()
     }
 
     pub(crate) fn get_mut(&mut self, key: StateKey) -> Option<&mut StateData> {
-        self.instances.get_mut(key)?.as_mut()
+        self.instances.get_mut(key)?.payload.as_mut()
+    }
+
+    pub(crate) fn was_loaded(&self, key: StateKey) -> Option<bool> {
+        Some(self.instances.get(key)?.from_save)
+    }
+
+    pub(crate) fn mark_ended(&mut self, key: StateKey) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        instance.ended = Some(true);
+        true
     }
 
     pub(crate) fn address(&self, index: usize) -> Option<StateKey> {
@@ -232,7 +264,7 @@ impl AppliedStateEntries {
 
     pub(crate) fn remove_at(&mut self, index: usize) -> Option<StateData> {
         let key = self.order.get_mut(index)?.take()?;
-        self.instances.remove(key).flatten()
+        self.instances.remove(key)?.payload
     }
 
     pub(crate) fn first_key<T: AppliedState>(&self) -> Option<StateKey> {
@@ -304,7 +336,7 @@ impl AppliedStateEntries {
             };
             if let Some(state) = self.instances
                 .get_mut(*key)
-                .and_then(Option::as_mut)
+                .and_then(|instance| instance.payload.as_mut())
                 .and_then(T::as_data_mut)
             {
                 update(state);
@@ -336,9 +368,9 @@ impl AppliedStateEntries {
     /// Его End вызывает владелец до замены, а не этот контейнер.
     pub(crate) fn replace_at<T: AppliedState>(&mut self, index: usize, state: T) -> Option<StateData> {
         let address = &mut self.order[index];
-        let key = self.instances.insert(Some(state.into_data()));
+        let key = self.instances.insert(AppliedStateInstance::new(state.into_data(), false));
         match address.replace(key) {
-            Some(previous) => self.instances.remove(previous).flatten(),
+            Some(previous) => self.instances.remove(previous)?.payload,
             None => None,
         }
     }
@@ -350,7 +382,7 @@ impl AppliedStateEntries {
             .map(|key| {
                 self.instances
                     .get_mut(*key)
-                    .and_then(Option::take)
+                    .and_then(|instance| instance.payload.take())
                     .and_then(T::from_data)
                     .expect("выбранный типизированный ключ содержит тот же payload до расчёта")
             })
@@ -360,10 +392,10 @@ impl AppliedStateEntries {
 
     pub(crate) fn restore_batch<T: AppliedState>(&mut self, batch: StateBatch<T>) {
         for (key, value) in batch.keys.into_iter().zip(batch.values) {
-            if let Some(payload) = self.instances.get_mut(key)
-                && payload.is_none()
+            if let Some(instance) = self.instances.get_mut(key)
+                && instance.payload.is_none()
             {
-                *payload = Some(value.into_data());
+                instance.payload = Some(value.into_data());
             }
         }
     }

@@ -6,6 +6,10 @@
 //! отдельный `agilitystate2.rs`; все экземпляры принадлежат общей арене
 //! `CanonicalStateStorage` и сохраняют порядок повторных DB-записей.
 //! Три постоянных варианта используют общую шестибайтную DB-запись `ID + WORD`.
+//! Vtable Agility/Natural/Rapture 0x00660774/0x006606B4/0x00660714:
+//! End +0x1C→0x005FD420 публикует visual phase1, затем GetSufferer и
+//! RemoveState. Он не вызывает базовый End и не пишет IsEnded.
+//! Удаляется достигнутый ключ; UpdateProperty следует за RemoveState.
 
 use super::agility::AGILITY_SKILL_ID;
 use super::natural::NATURAL_SKILL_ID;
@@ -13,6 +17,9 @@ use super::naturalstate::NaturalState;
 use super::rapture::RAPTURE_SKILL_ID;
 use super::rapturestate::RaptureState;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -141,6 +148,29 @@ pub(crate) fn send_agility_family_state_visual(
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn end_persistent_agility_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PersistentAgilityFamilyState>(key)).copied()
+        else { return false };
+    let mut message = CMessage::new(AGILITY_STATE_END_MESSAGE);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<PersistentAgilityFamilyState>(key, PERSISTENT_AGILITY_FAMILY_STATE_BYTES))
+        .is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

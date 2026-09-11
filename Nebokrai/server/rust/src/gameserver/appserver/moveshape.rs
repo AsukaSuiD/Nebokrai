@@ -50,8 +50,10 @@
 //! сохраняет исходную позицию и пустые места после удаления. Общий factory-проход
 //! загружает каждую известную запись, не схлопывая повторные ID. Общий
 //! UpdateAbnormality в states/state.rs вызывает AI текущего экземпляра в порядке
-//! массива, перечитывая его после callback. Общие End и ClearAllStates пока
-//! не завершены; их нельзя заменить пустым End. Активные навыки не дублируются
+//! массива, перечитывая его после callback. Там же единый список virtual AI/End
+//! обслуживает ClearAllStates (0x004CF090) и CastCure: End → перечитать позицию
+//! → удалить оставшийся объект. Death-фильтры, отсутствие уплотнения и отдельные
+//! UpdateProperty сохранены. Активные навыки не дублируются
 //! ссылками в m_vStates: проверка ID 0x198 в CastCure не доказывает AddState.
 //! Exact CSpiderMist наследует CSummonSkill и не регистрирует себя состоянием.
 //! Save кодирует записи одним обходом арены, включая порядок чтения часов,
@@ -91,8 +93,9 @@
 //! Расходуемые и автоматические восстановления HP/MP также входят в общий
 //! DB-кодек. 16-байтные расходуемые записи материализуются при загрузке,
 //! активируются при входе и удаляются из wire вместе с живым состоянием, не
-//! обрывая следующий record. Четыре 12-байтных автоматических записи при
-//! `RestoreHpMp` атомарно заменяются значениями актуальных свойств игрока.
+//! обрывая следующий record. RestoreHpMp (0x004455D0) завершает четыре
+//! автоматических типа и Particular одним обходом исходных позиций, затем
+//! добавляет четыре 12-байтные записи из актуальных свойств игрока.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; доказанные границы записей теперь
 //! предоставляет достигнутый `CStateFactory`, а применение состояний остаётся
@@ -333,7 +336,7 @@ use crate::gameserver::appserver::skills::soulcollectstate::{
     SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
 };
 use crate::gameserver::appserver::states::automaticrestore::{
-    AUTOMATIC_RESTORE_STATE_BYTES, AutomaticRestoreState, is_automatic_restore_state_id,
+    AutomaticRestoreState, is_automatic_restore_state_id,
 };
 use crate::gameserver::appserver::states::state::{
     default_additional_data, default_client_state_time,
@@ -495,7 +498,8 @@ pub(crate) struct UndeadState {
     keep_time_ms: u32,
     started_ms: u32,
     last_item_tick_ms: u32,
-    pub(crate) disappear_after_dead: bool,
+    // ClearAllStates сравнивает сохранённый байт строго с 1, не с нулём.
+    pub(crate) disappear_after_dead: u8,
     pub(crate) percentage: bool,
     pub(crate) maximum_hp: i16,
     pub(crate) maximum_mp: i16,
@@ -558,7 +562,7 @@ impl UndeadState {
             keep_time_ms: p(SKILL_USAGE_STATE_PERSIST_TIME),
             started_ms: now_ms,
             last_item_tick_ms: now_ms,
-            disappear_after_dead: p(80_001) != 0,
+            disappear_after_dead: u8::from(p(80_001) != 0),
             percentage: p(80_002) != 0,
             maximum_hp: p(118) as i16,
             maximum_mp: p(119) as i16,
@@ -602,7 +606,7 @@ impl UndeadState {
                 keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
                 started_ms: now_ms,
                 last_item_tick_ms: now_ms,
-                disappear_after_dead: payload[base + 12] != 0,
+                disappear_after_dead: payload[base + 12],
                 percentage: payload[base + 13] != 0,
                 maximum_hp: read_i16(payload, base + 14).unwrap_or_default(),
                 maximum_mp: read_i16(payload, base + 16).unwrap_or_default(),
@@ -636,7 +640,7 @@ impl UndeadState {
         write_u16(payload, base, self.state_type);
         write_u32(payload, base + 4, self.state_id);
         write_u32(payload, base + 8, self.keep_time_ms);
-        payload[base + 12] = u8::from(self.disappear_after_dead);
+        payload[base + 12] = self.disappear_after_dead;
         payload[base + 13] = u8::from(self.percentage);
         for (position, value) in [
             (14, self.maximum_hp),
@@ -1704,7 +1708,7 @@ impl CMoveShape {
         self.state_entries.clear();
         for offset in known_state_record_offsets(&states) {
             if let Some(state) = decode_state_record(&states, offset, state_owner, skill_factory) {
-                self.state_entries.append_data(state);
+                self.state_entries.append_loaded_data(state);
             }
         }
         self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
@@ -1759,24 +1763,16 @@ impl CMoveShape {
         self.state_entries.first::<RideState>().is_some()
     }
 
-    pub(crate) fn restore_automatic_hp_mp_states(
+    /// Хвост RestoreHpMp (0x00445643..0x00445901): четыре новых экземпляра
+    /// после общего End-обхода. Begin(null, holder) не читает часы; старые
+    /// состояния здесь повторно не удаляются и UpdateProperty не вызывается.
+    pub(crate) fn append_automatic_hp_mp_states(
         &mut self,
         properties: super::player::PlayerCombatProperties,
     ) {
-        while let Some(offset) = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| {
-                read_u32(&self.ex_states, *offset).is_some_and(is_automatic_restore_state_id)
-            })
-        {
-            let _ = self.remove_serialized_state_record_at(offset, AUTOMATIC_RESTORE_STATE_BYTES);
-        }
         let states = AutomaticRestoreState::restored(properties);
         for state in states {
             self.append_serialized_state_record(&state.encoded_for_install());
-        }
-        for key in self.state_entries.keys::<AutomaticRestoreState>() {
-            let _ = self.state_entries.take::<AutomaticRestoreState>(key);
         }
         for state in states {
             self.state_entries.append(state);
@@ -1897,14 +1893,6 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
-        let states = self.state_entries.keys::<ParticularState>().into_iter()
-            .filter_map(|key| self.state_entries.take::<ParticularState>(key)).collect();
-        while self.remove_serialized_state_record(PARTICULAR_STATE_ID, PARTICULAR_STATE_BYTES) {}
-        states
-    }
-
-
     pub(crate) fn remove_particular_state_key(
         &mut self,
         key: StateKey,
@@ -1920,14 +1908,6 @@ impl CMoveShape {
     pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
         self.append_serialized_state_record(&state.encoded_for_install());
         self.state_entries.append(state);
-    }
-
-    pub(crate) fn remove_team_recruitment_state_at(
-        &mut self,
-        index: usize,
-    ) -> Option<CTeamState> {
-        let key = self.state_entries.key_at::<CTeamState>(index)?;
-        self.remove_team_recruitment_state_key(key)
     }
 
     pub(crate) fn remove_team_recruitment_state_key(
@@ -2605,6 +2585,14 @@ impl CMoveShape {
         self.state_entries.len()
     }
 
+    pub(crate) fn applied_state_was_loaded(&self, key: StateKey) -> Option<bool> {
+        self.state_entries.was_loaded(key)
+    }
+
+    pub(crate) fn mark_applied_state_ended(&mut self, key: StateKey) -> bool {
+        self.state_entries.mark_ended(key)
+    }
+
     fn state_id_at(&self, index: usize) -> Option<u32> {
         Some(self.state_entries.get(self.state_entries.address(index)?)?.state_id())
     }
@@ -2631,6 +2619,13 @@ impl CMoveShape {
 
     pub(crate) fn compact_state_slots(&mut self) -> bool {
         self.state_entries.compact()
+    }
+
+    /// Только финальный сброс контейнера после игрового ClearAllStates(false).
+    /// SlotMap сохраняет поколения; это не повторный End оставшихся объектов.
+    pub(crate) fn release_state_slots(&mut self) {
+        self.state_entries.clear();
+        self.ex_states.replace(0u32.to_le_bytes().to_vec());
     }
 
     pub(crate) fn state_at(&self, position: usize) -> Option<(StateKey, &StateData)> {
@@ -2682,20 +2677,59 @@ impl CMoveShape {
         key: StateKey,
         amount: usize,
     ) -> Option<StateData> {
+        self.remove_applied_state_data_inner(key, Some(amount))
+    }
+
+    /// Destructor-only хвост ClearAllStates: wire-размер берётся из того же
+    /// decoder-а, а не из второго каталога типов или выдуманного базового размера.
+    pub(crate) fn remove_applied_state(&mut self, key: StateKey) -> Option<StateData> {
+        self.remove_applied_state_data_inner(key, None)
+    }
+
+    fn remove_applied_state_data_inner(
+        &mut self,
+        key: StateKey,
+        amount: Option<usize>,
+    ) -> Option<StateData> {
         let state_id = self.state_entries.get(key)?.state_id();
         let occurrence = self.state_entries.entries()
             .filter(|(_, state)| state.state_id() == state_id)
             .position(|(candidate, _)| candidate == key)?;
-        let offset = known_state_record_offsets(&self.ex_states).into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
-            .nth(occurrence);
+        let records: Vec<_> = known_state_record_spans(&self.ex_states).into_iter()
+            .filter(|(offset, _)| read_u32(&self.ex_states, *offset) == Some(state_id))
+            .collect();
+        let runtime_count = self.state_entries.entries()
+            .filter(|(_, state)| state.state_id() == state_id).count();
+        // Известная длина ещё не гарантирует успешную материализацию записи.
+        // Как в save, неоднозначный ordinal не разрешает удалять чужие байты.
+        let record = (runtime_count == records.len()).then(|| records[occurrence]);
         let span = match self.state_entries.get(key)? {
             StateData::LeafCut(state) => state.serialized_span(),
             StateData::LeafCut3(state) => state.serialized_span(),
             StateData::Kerosene(state) => state.serialized_span(),
             StateData::PoisonFog(state) => state.serialized_span(),
             StateData::MeteorArrow(state) => state.serialized_span(),
-            _ => offset.map(|offset| (offset, amount)),
+            StateData::Swordship(state) => {
+                // Как в save: Replace оставляет runtime-позицию, но переносит
+                // DB-запись в хвост. Ordinal повторного ID уже не задаёт экземпляр.
+                let encoded = state.encoded();
+                known_state_record_spans(&self.ex_states).into_iter().find(|(offset, size)| {
+                    self.ex_states.get(*offset..*offset + *size) == Some(encoded.as_slice())
+                })
+            }
+            StateData::EnergyHolding(state) => {
+                // Factory может пропустить неизвестный level, сохранив его
+                // wire-запись. Level неизменен; mutable charge для identity
+                // непригоден, потому что DB-проекция обновляется при save.
+                let level = state.skill_level();
+                let same_level = self.state_entries.entries().filter(|(_, entry)| {
+                    matches!(entry, StateData::EnergyHolding(entry) if entry.skill_level() == level)
+                }).position(|(candidate, _)| candidate == key)?;
+                records.into_iter().filter(|(offset, _)| {
+                    read_u32(&self.ex_states, offset + 4) == Some(level)
+                }).nth(same_level)
+            }
+            _ => record.map(|(offset, size)| (offset, amount.unwrap_or(size))),
         };
         let position = self.state_entries.index_of(key)?;
         let state = self.state_entries.remove_at(position)?;
@@ -3543,22 +3577,10 @@ impl CMoveShape {
         )
     }
 
-    pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {
-        let index = self
-            .state_entries.iter::<ScriptMoveState>()
-            .position(|state| state.state_id() == state_id)?;
-        self.remove_script_state_at(index)
-    }
-
     pub(crate) fn script_states(&self) -> impl Iterator<Item = &ScriptMoveState> {
         self.state_entries.iter::<ScriptMoveState>()
     }
 
-
-    pub(crate) fn remove_script_state_at(&mut self, index: usize) -> Option<ScriptMoveState> {
-        let key = self.state_entries.key_at::<ScriptMoveState>(index)?;
-        self.remove_script_state_key(key)
-    }
 
     pub(crate) fn remove_script_state_key(&mut self, key: StateKey) -> Option<ScriptMoveState> {
         let state = self.applied_state::<ScriptMoveState>(key)?;
@@ -5453,18 +5475,9 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::ClearAllStates
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2132
-// RVA: 0x000CF090
-// ADDRESS: 004cf090
-// PROTOTYPE: void __thiscall ClearAllStates(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// CMoveShape::ClearAllStates (0x004CF090, moveshape.cpp:2132)
+// реализован общим states/state.rs::clear_move_shape_states; End и последующий
+// destructor-only проход сохраняют позиции, death-фильтры и UpdateProperty.
 
 // ============================================================================
 // FUNCTION: CMoveShape::CheckSkill
@@ -5792,18 +5805,9 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::prison_check
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3404
-// RVA: 0x000D2360
-// ADDRESS: 004d2360
-// PROTOTYPE: void __thiscall prison_check(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// CMoveShape::prison_check (0x004D2360, moveshape.cpp:3404)
+// реализован CGame::check_move_shape_prison: fresh victim-region, tamed master,
+// PrisonConf::operator[], GS0126 и существующий ChangeRegion после очистки.
 
 // ============================================================================
 // FUNCTION: CMoveShape::AddCHBYState

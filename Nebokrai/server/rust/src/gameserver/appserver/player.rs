@@ -13,6 +13,9 @@
 //! OnChangeSkill (0x00508E6A..0x00508E7E) выбирает GetDefaultAttackSkillID
 //! через обычный SetCurrentSkill. Выбранный ID сохраняется после End;
 //! живое исполнение отдельно принадлежит CPlayerAI, дополнительного idle-ID нет.
+//! Exact-key AutoProtect End (0x005D44E0) снимает auto_protected перед
+//! RemoveState; визуальный эффект и Player/GM gate принадлежат общему CGame
+//! direct-End координатору, а не повторяются в тонком state-wrapper.
 //!
 //! PDB `GameServer/GameServer.pdb` подтверждает base `CMoveShape +0x0` и signed
 //! `m_lTeamID +0xB20`, а также unsigned byte `m_btCountry +0xA5C`. Exact
@@ -3953,19 +3956,6 @@ impl CPlayer {
 
 
 
-    pub(crate) fn remove_team_recruitment_state_at(
-        &mut self,
-        index: usize,
-    ) -> Option<CTeamState> {
-        self.move_shape.remove_team_recruitment_state_at(index)
-    }
-
-    /// `0x8FF08 / disabled` завершает первый найденный state ID, как линейный
-    /// native `m_vStates` lookup, и не удаляет возможные более поздние дубли.
-    pub(crate) fn end_first_team_recruitment_state(&mut self) -> Option<CTeamState> {
-        self.remove_team_recruitment_state_at(0)
-    }
-
     /// Exact `GetQuestState`: отсутствующий ushort ID имеет state `2`,
     /// существующий возвращает persisted byte без дополнительной проверки.
     pub(crate) fn quest_state(&self, quest_id: u16) -> i32 {
@@ -4773,13 +4763,6 @@ impl CPlayer {
         key: super::moveshape::StateKey,
     ) -> super::moveshape::UndeadStateMutation {
         self.move_shape.delete_undead_state_key(key)
-    }
-
-    pub(crate) fn delete_undead_state(
-        &mut self,
-        state_id: u32,
-    ) -> super::moveshape::UndeadStateMutation {
-        self.move_shape.delete_undead_state(state_id)
     }
 
     pub(crate) const fn jjc_pk_state(&self) -> bool {
@@ -6434,11 +6417,10 @@ impl CPlayer {
         &mut self,
         key: super::moveshape::StateKey,
     ) -> Option<super::scriptstate::ScriptMoveState> {
-        let removed = self.move_shape.remove_script_state_key(key)?;
-        if removed.is_auto_protect() {
+        if self.move_shape.applied_state::<super::scriptstate::ScriptMoveState>(key)?.is_auto_protect() {
             self.auto_protected = false;
         }
-        Some(removed)
+        self.move_shape.remove_script_state_key(key)
     }
 
     pub(crate) fn script_move_state_count(&self, state_id: i32) -> u32 {
@@ -6471,38 +6453,6 @@ impl CPlayer {
     }
 
 
-
-    pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {
-        let removed = self
-            .move_shape
-            .take_first_script_state(super::autoprotectstate::AUTO_PROTECT_STATE_ID)?;
-        self.auto_protected = false;
-        Some(removed)
-    }
-
-    /// Exact tail `CPlayer::ChangeRegion`: завершает первый живой skill-state
-    /// `110000`, затем безусловно пытается добавить новый AutoProtect с
-    /// длительностью из `CGlobeSetup`. GM получает только завершение старого
-    /// состояния, потому что factory исходно отклоняет новое.
-    pub(crate) fn refresh_region_auto_protect(
-        &mut self,
-        time_to_keep_ms: u32,
-        sufferer_is_gm: bool,
-        started_at_ms: u32,
-    ) -> (
-        Option<super::scriptstate::ScriptMoveState>,
-        Option<super::scriptstate::ScriptMoveState>,
-    ) {
-        let ended = self.end_auto_protect_state();
-        let begun = self.add_script_move_state(
-            super::autoprotectstate::AUTO_PROTECT_STATE_ID,
-            time_to_keep_ms as i32,
-            0,
-            sufferer_is_gm,
-            started_at_ms,
-        );
-        (ended, begun)
-    }
 
     pub(crate) const fn is_auto_protected(&self) -> bool {
         self.auto_protected
@@ -14169,13 +14119,11 @@ impl CPlayer {
         self.base_properties.mana
     }
 
-    /// Пересоздаёт точные четыре состояния `CPlayer::RestoreHpMp` из уже
-    /// пересчитанных актуальных свойств. Завершение внешнего
-    /// `CParticularState` выполняет вызывающий владелец исполнения до этой
-    /// атомарной замены.
-    pub(crate) fn restore_automatic_hp_mp_states(&mut self) {
+    /// Добавляет четыре состояния из актуальных свойств после общего
+    /// End-обхода Particular и AutomaticRestore у вызывающего владельца.
+    pub(crate) fn append_automatic_hp_mp_states(&mut self) {
         self.move_shape
-            .restore_automatic_hp_mp_states(self.combat_properties);
+            .append_automatic_hp_mp_states(self.combat_properties);
     }
 
     pub(crate) fn begin_consumable_health_restore(
@@ -14242,10 +14190,6 @@ impl CPlayer {
             ConsumableRestoreMutation::Mana(value) => self.set_mana(value),
         }
         Some(mutation)
-    }
-
-    pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
-        self.move_shape.take_particular_states()
     }
 
 

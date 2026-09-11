@@ -9,12 +9,13 @@
 //! attack и signed-коэффициент перемножаются в x87 с `0.01_f32`, затем результат
 //! усекается в `i32`. Визуальные начало и завершение сохраняют `0xBFE03/04`.
 //! DB-запись содержит остаток срока и коэффициент атаки;
-//! `weak_time` после загрузки остаётся нулевым, а `Begin` повторно не вызывается.
+//! `weak_time` после загрузки остаётся нулевым.
 //! AI получает один ключ общей арены; общий CMoveShape задаёт порядок прохода.
 //! Exact AI `0x005E8D50` отдельно читает часы перед слабой и общей границами.
 //! После слабой границы запреты снимаются на каждом AI, без one-shot флага.
 //! End `0x005E8D10` отправляет эффект, удаляет тот же экземпляр и отдельно
 //! снимает оба запрета; окончание срока не подменяет проверку слабой границы.
+//! Прямой End и AI используют один exact-key хвост; только AI читает часы.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 
@@ -59,8 +60,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::~CBossBlueFuryState
 // STATUS: PARTIALLY_IMPLEMENTED
-// Завершение достигнутых путей выполняют `expire_monster_boss_blue_fury_state`
-// и `expire_player_boss_blue_fury_state`.
+// Завершение достигнутых путей выполняет `end_boss_blue_fury_state`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:37
@@ -198,10 +198,9 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 // COMPONENT_VARIANT_END: GameServer
 
 use super::fightdefense::truncate_original;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    send_owned_state_visual, timed_client_state_time,
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -308,98 +307,64 @@ pub(crate) fn send_boss_blue_fury_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-pub(crate) fn end_monster_boss_blue_fury_state_key(
+pub(crate) fn update_boss_blue_fury_state(
     game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) -> bool {
-    let Some(monster) = region.find_monster_by_id(monster_id) else { return false };
-    let Some(state) = monster.move_shape().applied_state::<BossBlueFuryState>(key)
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueFuryState>(key)).copied()
         else { return false };
-    send_owned_state_visual(game, region, monster.move_shape().shape(), state.skill_id(), false, 0, 0);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().remove_applied_state_record::<BossBlueFuryState>(
-            key, BOSS_BLUE_FURY_STATE_BYTES,
-        );
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
+    if state.weak_elapsed(now_milliseconds()) {
+        if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+            shape.set_moveable(true);
+            shape.set_fightable(true);
+        }
+    }
+    if state.expired(now_milliseconds()) {
+        let _ = end_boss_blue_fury_state(game, region_id, holder, key);
     }
     true
 }
 
-pub(crate) fn expire_monster_boss_blue_fury_state(
+pub(crate) fn end_boss_blue_fury_state(
     game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
-    mut now_milliseconds: impl FnMut() -> u32,
 ) -> bool {
-    let Some(state) = region.find_monster_by_id(monster_id)
-        .and_then(|monster| monster.move_shape().applied_state::<BossBlueFuryState>(key)).copied()
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueFuryState>(key)).copied()
         else { return false };
-    if state.weak_elapsed(now_milliseconds()) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
-            monster.move_shape_mut().set_fightable(true);
-        }
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<BossBlueFuryState>(
+            key, BOSS_BLUE_FURY_STATE_BYTES,
+        )).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
     }
-    if state.expired(now_milliseconds()) {
-        let _ = end_monster_boss_blue_fury_state_key(game, region, monster_id, key);
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_moveable(true);
+        shape.set_fightable(true);
     }
-    true
+    removed
 }
 
 pub(crate) fn end_player_boss_blue_fury_state_key(
     game: &mut CGame,
     player_id: i32,
     key: StateKey,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
-    let Some(state) = game.find_player(player_id)
-        .and_then(|player| player.move_shape().applied_state::<BossBlueFuryState>(key)).copied()
+    let Some((region_id, holder)) = game.find_player(player_id)
+        .and_then(|player| Some((player.server_region_id()?, player.shape().identity())))
         else { return false };
-    let context = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.shape().identity(),
-            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    });
-    if let Some((region_id, identity, tile_x, tile_y)) = context {
-        send_boss_blue_fury_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
-        );
-    }
-    let removed = game.find_player_mut(player_id)
-        .and_then(|player| player.move_shape_mut().remove_applied_state_record::<BossBlueFuryState>(
-            key, BOSS_BLUE_FURY_STATE_BYTES,
-        )).is_some();
-    if removed {
-        let _ = game.update_player_properties(player_id);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_skill_fightable(true);
-    }
-    true
-}
-
-pub(crate) fn expire_player_boss_blue_fury_state(
-    game: &mut CGame,
-    player_id: i32,
-    key: StateKey,
-    mut now_milliseconds: impl FnMut() -> u32,
-) -> bool {
-    let Some(state) = game.find_player(player_id)
-        .and_then(|player| player.move_shape().applied_state::<BossBlueFuryState>(key)).copied()
-        else { return false };
-    if state.weak_elapsed(now_milliseconds()) {
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-            player.set_skill_fightable(true);
-        }
-    }
-    let now_ms = now_milliseconds();
-    if state.expired(now_ms) {
-        let _ = end_player_boss_blue_fury_state_key(game, player_id, key, now_ms);
-    }
-    true
+    end_boss_blue_fury_state(game, region_id, holder, key)
 }

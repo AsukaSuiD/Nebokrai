@@ -12,7 +12,7 @@ use crate::gameserver::appserver::session::csessionfactory::{
     TeamMemberSnapshot, TeamSessionSnapshot,
 };
 use crate::gameserver::appserver::teamstate::{
-    CTeamState, team_state_begin_message, team_state_end_message,
+    CTeamState, team_state_begin_message,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameTeamChatResult, GameTeamJoinResult, colored_player_notice_message,
@@ -530,24 +530,22 @@ pub(crate) fn dispatch_game_team_message(
         return Some(Err(GameTeamMessageError::MissingEnabled));
     };
     if enabled == 0 {
-        let state = game
+        let selected = game
             .find_player(player_id)
-            .and_then(|player| player.first_team_recruitment_state())
-            .cloned();
-        let Some(_state) = state else {
+            .and_then(|player| Some((
+                player.shape().get_region_id(), player.shape().identity(),
+                player.move_shape().applied_state_key::<CTeamState>()?,
+            )));
+        let Some((region_id, holder, key)) = selected else {
             trace!(player_id, "Набор в группу уже выключен");
             return Some(Ok(()));
         };
-        let ended = team_state_end_message(player_id);
-        let delivery = game.send_player_shape_around(player_id, None, &ended);
-        let _ended = game
-            .find_player_mut(player_id)
-            .and_then(|player| player.end_first_team_recruitment_state());
+        let removed = game.end_move_shape_team_recruitment_state(region_id, holder, key);
         let state_count = game
             .find_player(player_id)
             .map(|player| player.team_recruitment_state_count())
             .unwrap_or_default();
-        trace!(player_id, ?delivery, state_count, "Набор в группу выключен");
+        trace!(player_id, removed, state_count, "Набор в группу выключен");
         return Some(Ok(()));
     }
 

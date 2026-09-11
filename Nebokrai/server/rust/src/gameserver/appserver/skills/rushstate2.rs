@@ -1,6 +1,10 @@
 //! Каноническое состояние оглушения вторым рывком `CRushState2` (`0x7c`).
 //! Истечение получает ключ конкретного экземпляра общей арены; проверка
 //! срока и End не подменяют его первым состоянием с тем же ID.
+//! Direct End (vtable 0x0066041C +0x1C, тело 0x005EA9A0) сначала
+//! отправляет visual, затем снимает fight-lock и move-lock и удаляет точный ключ.
+//! RemoveState вызывает UpdateProperty игрока; timer и Cure используют
+//! этот же хвост без подмены direct End принудительным истечением.
 //! Vtable 0x0066041c, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
@@ -16,6 +20,7 @@
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -142,28 +147,40 @@ pub(crate) fn replace_monster_rush_2_state(game: &CGame, region: &mut CServerReg
     true
 }
 
-pub(crate) fn expire_player_rush_2_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_expired_rush_2_state(key, now_ms)?;
-        player.set_skill_moveable(true);
-        player.set_skill_fightable(true);
-        Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    });
-    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    let message = state_message(identity, state, false, now_ms);
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
-    true
+pub(crate) fn update_rush_2_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+    now_ms: u32,
+) -> bool {
+    let expired = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<Rush2State>(key))
+        .is_some_and(|state| state.expired(now_ms));
+    expired && end_rush_2_state(game, region_id, holder, key)
 }
 
-pub(crate) fn expire_monster_rush_2_state(game: &CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
-    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_rush_2_state(key, now_ms)?;
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
-        Some((state, monster.move_shape().shape().clone()))
-    });
-    let Some((state, shape)) = finished else { return false };
-    let message = state_message(shape.identity(), state, false, now_ms);
-    let _ = game.send_game_shape_around(region, &shape, None, &message);
-    true
+pub(crate) fn end_rush_2_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<Rush2State>(key)).copied()
+    else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
+    if shape.applied_state::<Rush2State>(key).is_none() { return false }
+    shape.set_fightable(true);
+    shape.set_moveable(true);
+    let removed = shape.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }

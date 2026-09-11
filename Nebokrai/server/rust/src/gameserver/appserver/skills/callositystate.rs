@@ -24,6 +24,7 @@
 //! формул игрока не запрещают жизненный цикл региональных держателей.
 //! После visual владелец перечитывается; UpdateProperty вызывается только
 //! для игрока и только при фактическом удалении этой записи.
+//! Прямой End, замена и AI используют один exact-key хвост без чтения часов.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
@@ -201,7 +202,7 @@ pub(crate) fn end_player_callosity_state(game: &mut CGame, player_id: i32) -> bo
     end_callosity_state_key(game, region_id, holder, key)
 }
 
-fn end_callosity_state_key(
+pub(crate) fn end_callosity_state_key(
     game: &mut CGame,
     region_id: i32,
     holder: ShapeIdentity,
@@ -221,7 +222,7 @@ fn end_callosity_state_key(
     if removed && holder.object_type == 400 {
         let _ = game.update_player_properties(holder.id);
     }
-    true
+    removed
 }
 
 pub(crate) fn update_callosity_state(

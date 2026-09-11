@@ -1,6 +1,10 @@
 //! Каноническое состояние рыцарского удара `CKnightCutState` (`0x67`).
 //! Истечение получает ключ конкретного экземпляра общей арены; проверка
 //! срока и End не подменяют его первым состоянием с тем же ID.
+//! Direct End (vtable 0x00661254 +0x1C, тело 0x005EA9A0) сначала
+//! отправляет visual, затем снимает fight-lock и move-lock и удаляет точный ключ.
+//! RemoveState вызывает UpdateProperty игрока; timer и Cure используют
+//! этот же хвост без подмены direct End принудительным истечением.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/knightcutstate.cpp`. Состояние запрещает движение и бой,
@@ -14,6 +18,7 @@
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
@@ -111,28 +116,48 @@ pub(crate) fn replace_monster_knight_cut_state(game: &mut CGame, region: &mut CS
     send_owned_monster_visual(game, region, &shape, state, true, game_tick_milliseconds); true
 }
 
-pub(crate) fn expire_player_knight_cut_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
-    let expired = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_expired_knight_cut_state(key, now_ms)?; player.set_skill_moveable(true); player.set_skill_fightable(true);
-        Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    });
-    let Some((state, region_id, identity, tile_x, tile_y)) = expired else { return false };
-    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms); true
+pub(crate) fn update_knight_cut_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+    now_ms: u32,
+) -> bool {
+    let expired = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<KnightCutState>(key))
+        .is_some_and(|state| state.expired(now_ms));
+    expired && end_knight_cut_state(game, region_id, holder, key)
 }
 
-pub(crate) fn expire_monster_knight_cut_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
-    let expired = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_knight_cut_state(key, now_ms)?; monster.move_shape_mut().set_moveable(true); monster.move_shape_mut().set_fightable(true);
-        Some((state, monster.move_shape().shape().clone()))
-    });
-    let Some((state, shape)) = expired else { return false }; send_owned_monster_visual(game, region, &shape, state, false, || now_ms); true
+pub(crate) fn end_knight_cut_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<KnightCutState>(key)).copied()
+    else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
+    if shape.applied_state::<KnightCutState>(key).is_none() { return false }
+    shape.set_fightable(true);
+    shape.set_moveable(true);
+    let removed = shape.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }
 
-pub(crate) fn finish_player_knight_cut_state_on_cure(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_knight_cut_state()?; player.set_skill_moveable(true); player.set_skill_fightable(true);
-        Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    });
-    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms); true
+pub(crate) fn finish_player_knight_cut_state_on_cure(game: &mut CGame, player_id: i32, _now_ms: u32) -> bool {
+    let Some(player) = game.find_player(player_id) else { return false };
+    let Some(key) = player.move_shape().applied_state_key::<KnightCutState>() else { return false };
+    let region_id = player.shape().get_region_id();
+    let holder = player.shape().identity();
+    end_knight_cut_state(game, region_id, holder, key)
 }

@@ -15,6 +15,7 @@
 //! Exact vtable 0x006600D4: End 0x005FD420 отправляет visual до RemoveState.
 //! После эффекта holder перечитывается; свойства пересчитываются только
 //! у игрока и только при фактическом удалении точной записи.
+//! Прямой End и AI используют один exact-key хвост без чтения часов.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -129,9 +130,23 @@ pub(crate) fn update_hearten_state(
     key: StateKey,
     now_ms: u32,
 ) -> bool {
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<HeartenState>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
+    }
+    end_hearten_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_hearten_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
     let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<HeartenState>(key))
-        .filter(|state| state.expired(now_ms)).copied()
+        .copied()
         else { return false };
     let mut message = CMessage::new(0x000b_fe04);
     message.add_long(holder.object_type);
@@ -144,7 +159,7 @@ pub(crate) fn update_hearten_state(
     if removed && holder.object_type == 400 {
         let _ = game.update_player_properties(holder.id);
     }
-    true
+    removed
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

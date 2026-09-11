@@ -1,4 +1,4 @@
-//! Достигнутая базовая client-проекция `CState` GameServer.
+//! Базовые контракты и общий virtual AI/End применённых состояний GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходные owners
 //! `appserver/states/state.h/.cpp`. Vtable-аудит exact EXE подтверждает, что
@@ -31,6 +31,12 @@
 //! Прочие варианты перечислены явно: отсутствующий override не становится no-op.
 //! Сейчас общий проход вызывают живые player/monster; property-проекция игрока
 //! пересчитывается через CGame, monster читает модификаторы из живых состояний.
+//! ClearAllStates (0x004CF090) сохраняет три death-прохода, исходные исключения
+//! ID, прямой GetCell и строгий байт Undead==1. End и destructor-only хвост
+//! разделены; по окончании End перечитывается текущая позиция. Общий хвост
+//! использует также CastCure, без второго UpdateProperty и уплотнения.
+//! Данные Begin для базового End различают загруженный null GetUser и
+//! подтверждённого runtime user-holder; полный общий Begin ещё не введён.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::{CMoveShape, StateData, StateKey};
@@ -45,6 +51,126 @@ use crate::public::guid::CGuid;
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 
 type StateAi<Runtime> = fn(&mut CGame, i32, ShapeIdentity, StateKey, &mut Runtime);
+
+/// Базовый End 0x005DBCE0 для owners, у которых runtime GetUser подтверждён
+/// как holder, а StartAllStates вызывает Begin(null, holder). Sufferer у
+/// отдельных BFAttribute может отличаться и не подставляется вместо user.
+/// Загруженный экземпляр помечается завершённым, но GetUser остаётся null:
+/// его удаляет внешний ClearAllStates, а не выдуманный GetSufferer в base End.
+/// Владельцы с отдельной сохранённой identity источника сюда не направляются.
+pub(crate) fn end_base_applied_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    bytes: usize,
+) -> bool {
+    let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
+    let Some(from_save) = shape.applied_state_was_loaded(key) else { return false };
+    shape.mark_applied_state_ended(key);
+    if from_save {
+        return false;
+    }
+    let removed = shape.remove_applied_state_data(key, bytes).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
+}
+
+/// Прямой virtual +0x1C, без искусственного deadline и без удержания payload
+/// на стеке во время callback. bool сообщает удаление, не значение IsEnded.
+pub(crate) fn end_move_shape_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(end) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_data(key)).map(state_end)
+    else { return false };
+    end(game, region_id, holder, key)
+}
+
+/// Общий хвост ClearAllStates/CastCure: вызов выбранного End и затем
+/// destructor оставшегося в этой же позиции объекта. Внешний UpdateProperty
+/// сюда не входит; RemoveState внутри конкретного End выполняет свой сам.
+pub(crate) fn end_and_destroy_state_at(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    index: usize,
+) -> Option<()> {
+    let key = resolve_state_move_shape(game, region_id, holder)?
+        .state_at(index).map(|(key, _)| key);
+    if let Some(key) = key {
+        end_move_shape_state(game, region_id, holder, key);
+        let shape = resolve_state_move_shape_mut(game, region_id, holder)?;
+        if let Some((remaining, _)) = shape.state_at(index) {
+            shape.remove_applied_state(remaining);
+        }
+    }
+    Some(())
+}
+
+/// CMoveShape::ClearAllStates (0x004CF090). Три death-прохода сохраняют
+/// native исключения и самостоятельные UpdateProperty первых двух проходов.
+/// После End перечитывается именно позиция, не прежний ключ: callback мог
+/// удалить или заменить её. Destructor-only хвост не публикует второй End.
+/// Без death-фильтра длина тоже живая; в конце безопасно освобождается массив
+/// вместо оставленных native operator_delete висячих границ vector.
+pub(crate) fn clear_move_shape_states(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    after_death: bool,
+) -> Option<()> {
+    let passes = if after_death { 3 } else { 1 };
+    for pass in 0..passes {
+        let mut index = 0;
+        loop {
+            let shape = resolve_state_move_shape(game, region_id, holder)?;
+            if index >= shape.state_slot_count() { break; }
+            let selected = if let Some((key, state)) = shape.state_at(index) {
+                let should_end = if !after_death {
+                    true
+                } else if pass == 0 {
+                    matches!(state, StateData::ChangeBody(state) if !state.continue_after_death)
+                } else if pass == 1 {
+                    matches!(state, StateData::Undead(state) if state.disappear_after_dead == 1)
+                } else {
+                    match state.state_id() {
+                        100_007..=100_012 | 0x37 | 0x38 => false,
+                        0x32 | 0x33 => {
+                            if let Some(region) = game.find_region(shape.shape().get_region_id()) {
+                                // Невиртуальный CRegion::GetCell, не war GetSecurity.
+                                let x = shape.shape().get_tile_x().ok()?;
+                                let y = shape.shape().get_tile_y().ok()?;
+                                region.base().region.get_cell(x, y).ok()?
+                                    .is_some_and(|cell| cell.security().value() == 0)
+                            } else {
+                                true
+                            }
+                        }
+                        _ => true,
+                    }
+                };
+                should_end.then_some(key)
+            } else { None };
+            if selected.is_some() {
+                end_and_destroy_state_at(game, region_id, holder, index)?;
+                if after_death && pass < 2 && holder.object_type == 400 {
+                    let _ = game.update_player_properties(holder.id);
+                }
+            }
+            index += 1;
+        }
+    }
+    if !after_death {
+        resolve_state_move_shape_mut(game, region_id, holder)?.release_state_slots();
+    }
+    Some(())
+}
 
 /// Исходный массив перечитывается после каждого callback: добавленное состояние
 /// не расширяет границу этого прохода, а удалённое не оживает из снимка ключей.
@@ -98,250 +224,344 @@ fn log_state_array_change(
     crate::public::tools::put_debug_string(&text);
 }
 
-/// Только адаптер краткого заимствования уже существующих regional End.
-/// Отправки, повторно ищущие регион в CGame, выполняются после возврата owner.
-fn with_state_region<R>(
-    game: &mut CGame,
-    region_id: i32,
-    update: impl FnOnce(&mut CGame, &mut CServerRegion) -> R,
-) -> Option<R> {
-    let mut owner = game.take_region_owner(region_id)?;
-    let result = update(game, owner.base_mut());
-    game.restore_region_owner(owner);
-    Some(result)
+// Один список виртуального поведения порождает оба selector-а: End не
+// дублирует каталог AI и не требует фиктивного Runtime/чтения часов.
+macro_rules! state_callbacks {
+    ($($pattern:pat => ($ai:expr, $end:path)),+ $(,)?) => {
+        fn state_ai<Runtime: GameMainLoopRuntime>(state: &StateData) -> StateAi<Runtime> {
+            match state { $($pattern => $ai),+ }
+        }
+
+        fn state_end(state: &StateData) -> fn(&mut CGame, i32, ShapeIdentity, StateKey) -> bool {
+            match state { $($pattern => $end),+ }
+        }
+    };
 }
 
-fn state_ai<Runtime: GameMainLoopRuntime>(state: &StateData) -> StateAi<Runtime> {
-    match state {
-        StateData::PersistentAgility(_) | StateData::TaiJi(_)
-        | StateData::EnlargeFullMiss(_) | StateData::EnlargeMaxHp(_)
-        | StateData::EnlargeMaxMp(_) | StateData::Origin(_)
-        | StateData::MeteorArrow(_) | StateData::EnergyHolding(_)
-        | StateData::SoulCollect(_) | StateData::Swordship(_)
-        | StateData::WuXing(_) => |_, _, _, _, _| {},
-        StateData::Agility2(_) => |game, region, target, key, runtime| {
+state_callbacks! {
+    StateData::PersistentAgility(_) => (
+        |_, _, _, _, _| {},
+        skills::agilitystate::end_persistent_agility_state
+    ),
+    StateData::TaiJi(_) => (
+        |_, _, _, _, _| {},
+        skills::taijistate::end_tai_ji_state
+    ),
+    StateData::EnlargeFullMiss(_) => (
+        |_, _, _, _, _| {},
+        skills::enlargefullmissstate::end_enlarge_full_miss_state
+    ),
+    StateData::EnlargeMaxHp(_) => (
+        |_, _, _, _, _| {},
+        skills::enlargemaxhpstate::end_enlarge_max_hp_state
+    ),
+    StateData::EnlargeMaxMp(_) => (
+        |_, _, _, _, _| {},
+        skills::enlargemaxmpstate::end_enlarge_max_mp_state
+    ),
+    StateData::Origin(_) => (
+        |_, _, _, _, _| {},
+        skills::originstate::end_origin_state
+    ),
+    StateData::MeteorArrow(_) => (
+        |_, _, _, _, _| {},
+        skills::meteorarrowstate::end_meteor_arrow_state
+    ),
+    StateData::EnergyHolding(_) => (
+        |_, _, _, _, _| {},
+        skills::energyholdingstate::end_energy_holding_state
+    ),
+    StateData::SoulCollect(_) => (
+        |_, _, _, _, _| {},
+        skills::soulcollectstate::end_soul_collect_state
+    ),
+    StateData::Swordship(_) => (
+        |_, _, _, _, _| {},
+        skills::swordshipstate::end_swordship_state
+    ),
+    StateData::WuXing(_) => (
+        |_, _, _, _, _| {},
+        skills::wuxingstate::end_wuxing_state
+    ),
+    StateData::Agility2(_) => (
+        |game, region, target, key, runtime| {
             skills::agilitystate2::update_agility_state_2(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Callosity(_) => |game, region, target, key, runtime| {
+        skills::agilitystate2::end_agility_state_2
+    ),
+    StateData::Callosity(_) => (
+        |game, region, target, key, runtime| {
             skills::callositystate::update_callosity_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Hearten(_) => |game, region, target, key, runtime| {
+        skills::callositystate::end_callosity_state_key
+    ),
+    StateData::Hearten(_) => (
+        |game, region, target, key, runtime| {
             skills::heartenstate::update_hearten_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::RageBreak(_) => |game, region, target, key, runtime| {
+        skills::heartenstate::end_hearten_state
+    ),
+    StateData::RageBreak(_) => (
+        |game, region, target, key, runtime| {
             skills::ragebreakstate::update_rage_break_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Pillar(_) => |game, region, target, key, runtime| {
+        skills::ragebreakstate::end_rage_break_state_key
+    ),
+    StateData::Pillar(_) => (
+        |game, region, target, key, runtime| {
             skills::pillarstate::update_pillar_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::TianShenXiaFan(_) => |game, region, target, key, runtime| {
+        skills::pillarstate::end_pillar_state
+    ),
+    StateData::TianShenXiaFan(_) => (
+        |game, region, target, key, runtime| {
             skills::tianshenxiafanstate::update_tian_shen_xia_fan_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Wangsheng(_) => |game, region, target, key, runtime| {
+        skills::tianshenxiafanstate::end_tian_shen_xia_fan_state
+    ),
+    StateData::Wangsheng(_) => (
+        |game, region, target, key, runtime| {
             skills::wangshengstate::update_wangsheng_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Blind(_) | StateData::KnockOut(_) | StateData::SpiderWeb(_)
-        | StateData::Seal(_) | StateData::Strike(_) => |game, region, target, key, runtime| {
+        skills::wangshengstate::end_wangsheng_state
+    ),
+    StateData::Blind(_) | StateData::KnockOut(_) | StateData::SpiderWeb(_)
+    | StateData::Seal(_) | StateData::Strike(_) => (
+        |game, region, target, key, runtime| {
             skills::blindstate::update_blind_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Heal(_) => |game, region, target, key, runtime| {
+        skills::blindstate::end_blind_state
+    ),
+    StateData::Heal(_) => (
+        |game, region, target, key, runtime| {
             skills::healstate::update_stored_heal_state(game, region, target, key, || runtime.now_milliseconds());
         },
-        StateData::PoisonArrow(_) => |game, region, target, key, runtime| {
+        skills::healstate::end_heal_state
+    ),
+    StateData::PoisonArrow(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::poisonarrowstate::update_player_poison_arrow_state(game, target.id, key, runtime); }
                 600 => { skills::poisonarrowstate::update_monster_poison_arrow_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::SpiderPoison(_) => |game, region, target, key, runtime| {
+        skills::poisonarrowstate::end_poison_arrow_state
+    ),
+    StateData::SpiderPoison(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::spiderpoisonstate::update_player_spider_poison_state(game, target.id, key, runtime); }
                 600 => { skills::spiderpoisonstate::update_monster_spider_poison_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::SpriteBurn(_) => |game, region, target, key, runtime| {
+        skills::spiderpoisonstate::end_spider_poison_state
+    ),
+    StateData::SpriteBurn(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::spriteburnstate::update_player_sprite_burn_state(game, target.id, key, runtime); }
                 600 => { skills::spriteburnstate::update_monster_sprite_burn_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::BloodLoss(_) => |game, region, target, key, runtime| {
+        skills::spriteburnstate::end_sprite_burn_state
+    ),
+    StateData::BloodLoss(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::bloodlossstate::update_player_blood_loss_state(game, target.id, key, runtime); }
                 600 => { skills::bloodlossstate::update_monster_blood_loss_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::LeafCut(_) => |game, region, target, key, runtime| {
+        skills::bloodlossstate::end_blood_loss_state
+    ),
+    StateData::LeafCut(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::leafcutstate::update_player_leaf_cut_state(game, target.id, key, runtime); }
                 600 => { skills::leafcutstate::update_monster_leaf_cut_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::LeafCut2(_) => |game, region, target, key, runtime| {
+        skills::leafcutstate::end_leaf_cut_state
+    ),
+    StateData::LeafCut2(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::leafcutstate2::update_player_leaf_cut_2_state(game, target.id, key, runtime); }
                 600 => { skills::leafcutstate2::update_monster_leaf_cut_2_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::LeafCut3(_) => |game, region, target, key, runtime| {
+        skills::leafcutstate2::end_leaf_cut_2_state
+    ),
+    StateData::LeafCut3(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::leafcutstate3::update_player_leaf_cut_3_state(game, target.id, key, runtime); }
                 600 => { skills::leafcutstate3::update_monster_leaf_cut_3_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::Kerosene(_) => |game, region, target, key, runtime| {
+        skills::leafcutstate3::end_leaf_cut_3_state
+    ),
+    StateData::Kerosene(_) => (
+        |game, region, target, key, runtime| {
             match target.object_type {
                 400 => { skills::kerosenestate::update_player_kerosene_state(game, target.id, key, runtime); }
                 600 => { skills::kerosenestate::update_monster_kerosene_state(game, region, target.id, key, runtime); }
                 _ => {}
             }
         },
-        StateData::Cure(_) => |game, region, target, key, runtime| {
+        skills::kerosenestate::end_kerosene_state
+    ),
+    StateData::Cure(_) => (
+        |game, region, target, key, runtime| {
             skills::curestate::update_cure_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::BossBlueQuake(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::bossbluequakestate::expire_player_boss_blue_quake_state(game, target.id, key, now); }
-                600 => { with_state_region(game, region, |game, region| skills::bossbluequakestate::expire_monster_boss_blue_quake_state(game, region, target.id, key, now)); }
-                _ => {}
-            }
+        skills::curestate::end_cure_state_key
+    ),
+    StateData::BossBlueQuake(_) => (
+        |game, region, target, key, runtime| {
+            skills::bossbluequakestate::update_boss_blue_quake_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::BoaLock(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::boalockstate::expire_player_boa_lock_state(game, target.id, key, now); }
-                600 => { with_state_region(game, region, |game, region| skills::boalockstate::expire_monster_boa_lock_state(game, region, target.id, key, now)); }
-                _ => {}
-            }
+        skills::bossbluequakestate::end_boss_blue_quake_state
+    ),
+    StateData::BoaLock(_) => (
+        |game, region, target, key, runtime| {
+            skills::boalockstate::update_boa_lock_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Rush(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::rushstate::expire_player_rush_state(game, target.id, key, now); }
-                600 => { with_state_region(game, region, |game, region| skills::rushstate::expire_monster_rush_state(game, region, target.id, key, now)); }
-                _ => {}
-            }
+        skills::boalockstate::end_boa_lock_state
+    ),
+    StateData::Rush(_) => (
+        |game, region, target, key, runtime| {
+            skills::rushstate::update_rush_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Rush2(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::rushstate2::expire_player_rush_2_state(game, target.id, key, now); }
-                600 => { with_state_region(game, region, |game, region| skills::rushstate2::expire_monster_rush_2_state(game, region, target.id, key, now)); }
-                _ => {}
-            }
+        skills::rushstate::end_rush_state
+    ),
+    StateData::Rush2(_) => (
+        |game, region, target, key, runtime| {
+            skills::rushstate2::update_rush_2_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::KnightCut(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::knightcutstate::expire_player_knight_cut_state(game, target.id, key, now); }
-                600 => { with_state_region(game, region, |game, region| skills::knightcutstate::expire_monster_knight_cut_state(game, region, target.id, key, now)); }
-                _ => {}
-            }
+        skills::rushstate2::end_rush_2_state
+    ),
+    StateData::KnightCut(_) => (
+        |game, region, target, key, runtime| {
+            skills::knightcutstate::update_knight_cut_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::GodBless(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::godblessstate::finish_player_god_bless(game, target.id, key, now, runtime); }
-                600 => { skills::godblessstate::finish_monster_god_bless(game, region, target.id, key, now); }
-                _ => {}
-            }
+        skills::knightcutstate::end_knight_cut_state
+    ),
+    StateData::GodBless(_) => (
+        |game, region, target, key, runtime| {
+            skills::godblessstate::update_god_bless_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Roar(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::roarstate::finish_player_roar(game, target.id, key, now, runtime); }
-                600 => { skills::roarstate::finish_monster_roar(game, region, target.id, key, now); }
-                _ => {}
-            }
+        skills::godblessstate::end_god_bless_state
+    ),
+    StateData::Roar(_) => (
+        |game, region, target, key, runtime| {
+            skills::roarstate::update_roar_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::Weak(_) => |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::weakstate::finish_player_weak_outside(game, target.id, key, runtime); }
-                600 => { skills::weakstate::finish_monster_weak_outside(game, region, target.id, key); }
-                _ => {}
-            }
+        skills::roarstate::end_roar_state
+    ),
+    StateData::Weak(_) => (
+        |game, region, target, key, _runtime| {
+            skills::weakstate::update_weak_state(game, region, target, key);
         },
-        StateData::Fury(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::furystate::expire_player_fury_state(game, target.id, key, now, runtime); }
-                600 => { with_state_region(game, region, |game, region| skills::furystate::expire_monster_fury_state(game, region, target.id, key, now)); }
-                _ => {}
-            }
+        skills::weakstate::end_weak_state
+    ),
+    StateData::Fury(_) => (
+        |game, region, target, key, runtime| {
+            skills::furystate::update_fury_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::BossBlueFury(_) => |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::bossbluefurystate::expire_player_boss_blue_fury_state(game, target.id, key, || runtime.now_milliseconds()); }
-                600 => { with_state_region(game, region, |game, region| skills::bossbluefurystate::expire_monster_boss_blue_fury_state(game, region, target.id, key, || runtime.now_milliseconds())); }
-                _ => {}
-            }
+        skills::furystate::end_fury_state
+    ),
+    StateData::BossBlueFury(_) => (
+        |game, region, target, key, runtime| {
+            skills::bossbluefurystate::update_boss_blue_fury_state(game, region, target, key, || runtime.now_milliseconds());
         },
-        StateData::PoisonFog(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::poisonfogstate::expire_player_poison_fog_state(game, target.id, key, now, runtime); }
-                600 => {
-                    if let Some(Some(end)) = with_state_region(game, region, |_, region| skills::poisonfogstate::take_expired_monster_poison_fog_state(region, target.id, key, now)) {
-                        end.deliver(game, region, now);
-                    }
-                }
-                _ => {}
-            }
+        skills::bossbluefurystate::end_boss_blue_fury_state
+    ),
+    StateData::PoisonFog(_) => (
+        |game, region, target, key, runtime| {
+            skills::poisonfogstate::update_poison_fog_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::BattleFairyAttribute(_) => |game, region, target, key, runtime| {
-            let now = runtime.now_milliseconds();
-            match target.object_type {
-                400 => { skills::battlefairyattributestate::expire_player_battle_fairy_attribute_state(game, target.id, key, now); }
-                600 => {
-                    if let Some(Some(end)) = with_state_region(game, region, |_, region| skills::battlefairyattributestate::take_expired_monster_battle_fairy_attribute_state(region, target.id, key, now)) {
-                        end.deliver(game, region);
-                    }
-                }
-                _ => {}
-            }
+        skills::poisonfogstate::end_poison_fog_state
+    ),
+    StateData::BattleFairyAttribute(_) => (
+        |game, region, target, key, runtime| {
+            skills::battlefairyattributestate::update_battle_fairy_attribute_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::DefenseShield(_) => |game, region, target, key, runtime| {
+        skills::battlefairyattributestate::end_battle_fairy_attribute_state
+    ),
+    StateData::DefenseShield(_) => (
+        |game, region, target, key, runtime| {
             skills::shieldstate::update_defense_shield(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::DaubPoison(_) => |game, region, target, key, runtime| {
+        skills::shieldstate::end_defense_shield
+    ),
+    StateData::DaubPoison(_) => (
+        |game, region, target, key, runtime| {
             skills::daubpoisonstate::update_daub_poison_state(game, region, target, key, runtime.now_milliseconds());
         },
-        StateData::AutomaticRestore(_) => |game, region, target, key, runtime| {
+        skills::daubpoisonstate::end_daub_poison_state
+    ),
+    StateData::AutomaticRestore(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_automatic_restore_state(region, target, key, runtime);
         },
-        StateData::ConsumableRestore(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_automatic_restore_state
+    ),
+    StateData::ConsumableRestore(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_consumable_restore_state(region, target, key, runtime);
         },
-        StateData::Particular(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_consumable_restore_state
+    ),
+    StateData::Particular(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_particular_state(region, target, key, runtime);
         },
-        StateData::Team(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_particular_state
+    ),
+    StateData::Team(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_team_recruitment_state(region, target, key, runtime);
         },
-        StateData::Script(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_team_recruitment_state
+    ),
+    StateData::Script(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_script_move_state(region, target, key, runtime);
         },
-        StateData::ChangeBody(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_script_move_state
+    ),
+    StateData::ChangeBody(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_change_body_state(region, target, key, runtime);
         },
-        StateData::Extended(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_change_body_state
+    ),
+    StateData::Extended(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_extended_state(region, target, key, runtime);
         },
-        StateData::Undead(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_extended_state
+    ),
+    StateData::Undead(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_appellation_state(region, target, key, runtime);
         },
-        StateData::Ride(_) => |game, region, target, key, runtime| {
+        CGame::end_move_shape_appellation_state
+    ),
+    StateData::Ride(_) => (
+        |game, region, target, key, runtime| {
             game.update_move_shape_ride_state(region, target, key, runtime);
         },
-    }
+        CGame::end_move_shape_ride_state
+    ),
 }
 
 

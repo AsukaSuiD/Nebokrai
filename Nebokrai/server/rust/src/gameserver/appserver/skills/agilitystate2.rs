@@ -2,7 +2,7 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `agilitystate2.cpp`. Состояние `0x81` добавляет `full_miss` сложением с
-//! переполнением, завершается только при строгом `started + keep < now` и при
+//! переполнением, AI завершает его только при строгом `started + keep < now` и при
 //! вычислении положительного клиентского остатка второй раз читает часы.
 //! Жизненный цикл принадлежит `CanonicalStateStorage`; DB-запись хранит
 //! остаток срока и WORD-прибавку полного уклонения. Истечение сразу запускает
@@ -16,6 +16,7 @@
 //! End только разрешает sufferer и удаляет запись: визуала и отдельной
 //! публикации HP/MP/RP/YP в этом пути нет.
 //! UpdateProperty вызывается только для игрока при фактическом удалении.
+//! Прямой End и AI используют один exact-key хвост; проверка срока остаётся только в AI.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -106,11 +107,20 @@ pub(crate) fn update_agility_state_2(
         .is_some_and(|state| state.expired(now_ms)) {
         return false;
     }
+    end_agility_state_2(game, region_id, holder, key)
+}
+
+pub(crate) fn end_agility_state_2(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
     let removed = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.remove_applied_state_record::<AgilityState2>(key, AGILITY_STATE_2_BYTES))
         .is_some();
     if removed && holder.object_type == 400 {
         let _ = game.update_player_properties(holder.id);
     }
-    true
+    removed
 }

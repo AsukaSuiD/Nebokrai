@@ -9,7 +9,19 @@
 //! Exact-пара `Serialize/Unserialize` `0x005E23D0/0x00601350` сохраняет
 //! восьмибайтную запись `ID + signed gain`.
 
+//! End +0x1C таблицы 0x006617C4 →0x005ECFC0→CState::End0x005DBCE0:
+//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
+//! Begin +0x08 0x00601050: null user завершает Begin с отказом.
+//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
+//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
+//! от payload и не заменяет отсутствующего user держателем состояния.
+//! Runtime CTaiJi::AI0x005AF770 вызывает state Begin(self,self).
+
 use super::taiji::TAIJI_SKILL_ID;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
@@ -52,6 +64,20 @@ impl TaiJiState {
     pub(crate) const fn apply_to_monster(self, value: u32) -> u32 {
         value.wrapping_add(self.element_resistance_gain as u32)
     }
+}
+
+pub(crate) fn end_tai_ji_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<TaiJiState>(key)).is_none()
+    {
+        return false;
+    }
+    end_base_applied_state(game, region_id, holder, key, TAIJI_STATE_BYTES)
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

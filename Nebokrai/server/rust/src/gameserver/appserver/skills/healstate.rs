@@ -28,6 +28,8 @@
 //! цель завершает состояние до обращения к часам.
 //! Общий CMoveShape::UpdateAbnormality передаёт один ключ; этот owner
 //! не запускает отдельный семейный обход и сохраняет границы своих callbacks.
+//! Прямой End и истечение используют один exact-key хвост без часов;
+//! ключ никогда не ищется в чужой арене при отличающемся effect_target.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 
@@ -276,11 +278,27 @@ pub(crate) fn update_stored_heal_state(
         .and_then(|shape| shape.applied_state::<HealState>(key)) else { return };
     let ended = pass.dead
         || state.started_at_ms.wrapping_add(state.keep_time_ms) < now_milliseconds();
-    if ended && target.object_type == storage.object_type && target.id == storage.id {
-        let removed = resolve_state_move_shape_mut(game, region_id, storage)
-            .and_then(|shape| shape.remove_heal_state_key(key));
-        if removed.is_some() && storage.object_type == 400 {
-            let _ = game.update_player_properties(storage.id);
-        }
+    if ended {
+        let _ = end_heal_state(game, region_id, storage, key);
     }
+}
+
+pub(crate) fn end_heal_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(target) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<HealState>(key))
+        .map(|state| state.effect_target()) else { return false };
+    if target.object_type != holder.object_type || target.id != holder.id {
+        return false;
+    }
+    let removed = resolve_state_move_shape_mut(game, region_id, target)
+        .and_then(|shape| shape.remove_heal_state_key(key)).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }

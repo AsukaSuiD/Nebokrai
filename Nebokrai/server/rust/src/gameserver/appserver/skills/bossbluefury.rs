@@ -11,6 +11,8 @@
 //! elapsed-проверкой. Замена первого собственного состояния вызывает общий
 //! exact-key End владельца: visual, удаление той же записи и снятие обеих
 //! блокировок; одноразовая отметка освобождения не подменяет native End.
+//! Монстровая замена публикует настоящий ServerRegionOwner на время общего
+//! End; после него регион и экземпляр перечитываются, не возвращая старый payload.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{
@@ -37,7 +39,7 @@ use crate::gameserver::appserver::skills::kernel::{
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
 use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -323,7 +325,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
@@ -331,6 +333,7 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false };
     let Some((source, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .map(|monster| {
@@ -411,20 +414,24 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     );
     let previous = region.find_monster_by_id(monster_id)
         .and_then(|monster| monster.move_shape().applied_state_key::<BossBlueFuryState>());
+    let region_id = region.id;
     if let Some(previous) = previous {
-        let _ = super::bossbluefurystate::end_monster_boss_blue_fury_state_key(
-            game, region, monster_id, previous,
-        );
+        let _ = game.with_published_region(owner, |game| {
+            super::bossbluefurystate::end_boss_blue_fury_state(
+                game, region_id, source.identity(), previous,
+            )
+        });
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().set_moveable(false);
-        monster.move_shape_mut().set_fightable(false);
-        monster.move_shape_mut().begin_boss_blue_fury_state(state);
-    }
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return true };
+    monster.move_shape_mut().set_moveable(false);
+    monster.move_shape_mut().set_fightable(false);
+    monster.move_shape_mut().begin_boss_blue_fury_state(state);
+    let state_shape = monster.move_shape().shape().clone();
     send_owned_state_visual(
         game,
         region,
-        &source,
+        &state_shape,
         state.skill_id(),
         true,
         state.client_time(|| now_ms),

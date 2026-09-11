@@ -19,7 +19,7 @@
 //! чистый lifetime-префикс не подставляет вымышленные ресурсы другой форме.
 
 use super::curestate::{
-    end_cure_state_key, end_player_cure_state, send_cure_state_visual,
+    end_cure_state_key,
     send_cure_state_visual_for_holder, CureState,
 };
 use super::fightdefense::truncate_original;
@@ -225,30 +225,6 @@ pub(crate) fn send_life_shield_state_visual(
         message.add_long(state.life());
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-pub(crate) fn finish_life_shield_state(
-    game: &mut CGame,
-    player_id: i32,
-    state: LifeShieldState,
-    now_ms: u32,
-) {
-    if game
-        .skill_base_properties(state.skill_id(), state.skill_level())
-        .map(|properties| properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME))
-        .is_some()
-    {
-        let Some(identity) = game.find_player(player_id).map(|player| player.shape().identity()) else {
-            send_life_shield_state_visual(game, player_id, state, false, || now_ms);
-            return;
-        };
-        let _ = end_player_cure_state(game, player_id);
-        let cure = CureState::new(identity, identity).begin_now();
-        send_cure_state_visual(game, player_id, cure, true);
-        let _ = game.find_player_mut(player_id).map(|player| player.push_cure_state(cure));
-        let _ = game.update_player_properties(player_id);
-    }
-    send_life_shield_state_visual(game, player_id, state, false, || now_ms);
 }
 
 pub(crate) fn finish_life_shield_state_for_holder(

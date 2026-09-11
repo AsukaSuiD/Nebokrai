@@ -15,10 +15,14 @@
 //! Exact vtable 0x0066202C: End 0x006059A0 отправляет visual и вызывает базовый End 0x005DBCE0.
 //! После эффекта holder перечитывается; свойства пересчитываются только
 //! у игрока и только при фактическом удалении точной записи.
+//! Прямой End и AI используют один exact-key хвост без чтения часов.
+//! StartAllStates 0x004CE050 вызывает Begin(0, self); Begin 0x00605B70
+//! создаёт visual, но User остаётся NULL. Для загруженной записи базовый End
+//! лишь отмечает ended; удаление из контейнера User отсутствует.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -161,22 +165,30 @@ pub(crate) fn update_tian_shen_xia_fan_state(
     key: StateKey,
     now_ms: u32,
 ) -> bool {
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<TianShenXiaFanState>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
+    }
+    end_tian_shen_xia_fan_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_tian_shen_xia_fan_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
     let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<TianShenXiaFanState>(key))
-        .filter(|state| state.expired(now_ms)).copied()
+        .copied()
         else { return false };
     let mut message = CMessage::new(0x000b_fe04);
     message.add_long(holder.object_type);
     message.add_long(holder.id);
     message.add_long(state.state_id() as i32);
     let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<TianShenXiaFanState>(key, TIAN_SHEN_XIA_FAN_STATE_BYTES))
-        .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
-    }
-    true
+    end_base_applied_state(game, region_id, holder, key, TIAN_SHEN_XIA_FAN_STATE_BYTES)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

@@ -12,11 +12,38 @@
 //! DWORD-прибавок. Установка навыка и player-login работают с той же записью
 //! `CanonicalStateStorage`, без отдельной raw-модели.
 
+//! End +0x1C таблицы 0x00660D4C/0x006602AC/0x0065FEB4/0x0065FE64 →0x005ECFC0→CState::End0x005DBCE0:
+//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
+//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin.
+//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
+//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
+//! от payload и не заменяет отсутствующего user держателем состояния.
+//! Runtime Begin0x005808BE/0x005588AE/0x0054B99E/0x0054B71E получает self,self.
+
 use super::swordship::is_swordship_skill;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
 pub(crate) const SWORDSHIP_STATE_BYTES: usize = 12;
+
+pub(crate) fn end_swordship_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SwordshipState>(key)).is_none()
+    {
+        return false;
+    }
+    end_base_applied_state(game, region_id, holder, key, SWORDSHIP_STATE_BYTES)
+}
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SwordshipState {

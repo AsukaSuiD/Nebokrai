@@ -10,6 +10,12 @@
 //! DB-запись содержит ID, уровень навыка и число зарядов. Не сохраняемый
 //! процент восстанавливается из `CSkillFactory` usage `20020` того же уровня.
 
+//! Vtable 0x0065FDA4: End +0x1C→0x005E1D20 публикует visual phase2,
+//! пишет IsEnded=1, затем GetSufferer и RemoveState. AI при этом пустой;
+//! это не отменяет прямой End. Payload остаётся живым до доставки visual.
+
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
@@ -17,6 +23,33 @@ use crate::nets::netserver::message::CMessage;
 
 pub(crate) const ENERGY_HOLDING_STATE_ID: u32 = 0x89;
 pub(crate) const ENERGY_HOLDING_STATE_BYTES: usize = 12;
+
+pub(crate) fn end_energy_holding_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<EnergyHoldingState>(key)).is_none()
+    {
+        return false;
+    }
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(ENERGY_HOLDING_STATE_ID as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder).and_then(|shape| {
+        shape.applied_state::<EnergyHoldingState>(key)?;
+        let _ = shape.mark_applied_state_ended(key);
+        shape.remove_applied_state_record::<EnergyHoldingState>(key, ENERGY_HOLDING_STATE_BYTES)
+    }).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EnergyHoldingState {
@@ -31,6 +64,7 @@ impl EnergyHoldingState {
     }
 
     pub(crate) const fn skill_id(self) -> u32 { ENERGY_HOLDING_STATE_ID }
+    pub(crate) const fn skill_level(self) -> u32 { self.skill_level }
     pub(crate) const fn energy_count(self) -> u32 { self.energy_count }
     pub(crate) const fn parameter_percent(self) -> u32 { self.parameter_percent }
 

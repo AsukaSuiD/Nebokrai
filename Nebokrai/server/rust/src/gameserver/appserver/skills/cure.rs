@@ -33,50 +33,24 @@
 //! Поэтому недостигнутый producer записи 0x198 не заменяется выдуманной
 //! регистрацией cast и его отменой. На время owning callbacks извлечённый
 //! AI заклинателя публикуется в CPlayer и затем возвращается тому же владельцу.
+//! CastCure перечитывает живую длину (0x005ADBA0) и выполняет один RNG на
+//! достигнутую подходящую позицию. После общего direct End (0x005ADC58)
+//! перечитывается та же позиция; оставшийся экземпляр удаляется без второго
+//! End (0x005ADC5B..0x005ADC7F). Дополнительного UpdateProperty после
+//! обхода нет. Установка нового Cure также выполняется с опубликованными
+//! player AI и настоящим регионом, сохраняя прежнюю позицию замены.
 
 use super::fightdefense::truncate_original;
-use super::bossbluequakestate::{
-    BOSS_BLUE_QUAKE_STATE_ID, BossBlueQuakeState,
-    finish_player_boss_blue_quake_state_on_cure, send_boss_blue_quake_state_visual,
-};
-use super::boalockstate::{
-    BOA_LOCK_STATE_ID, BoaLockState, send_boa_lock_state_visual,
-};
-use super::curestate::{CureState, send_cure_state_visual};
+use super::curestate::{CureState, end_cure_state_key, send_cure_state_visual_for_holder};
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::stateskill::finish_state_skill;
-use super::knockoutstate::{
-    KNOCK_OUT_STATE_ID, KnockOutState, finish_player_knock_out_state_on_defense,
-    send_knock_out_state_visual,
-};
-use super::knightcutstate::{
-    KNIGHT_CUT_STATE_ID, KnightCutState, finish_player_knight_cut_state_on_cure,
-    send_knight_cut_state_visual,
-};
-use super::spiderpoison::SPIDER_POISON_SKILL_ID;
-use super::spiderpoisonstate::{
-    SpiderPoisonState, finish_player_spider_poison_state_on_cure,
-    send_spider_poison_state_visual,
-};
-use super::spriteburn::SPRITE_BURN_SKILL_ID;
-use super::spriteburnstate::{
-    SpriteBurnState, finish_player_sprite_burn_state_on_cure,
-    send_sprite_burn_state_visual,
-};
-use super::spiderweb::SPIDER_WEB_SKILL_ID;
-use super::spiderwebstate::{
-    SpiderWebState, finish_player_spider_web_state_on_defense,
-    send_spider_web_state_visual,
-};
-use super::sealstate::{SEAL_STATE_ID, SealState, send_seal_state_visual};
-use super::poisonfogstate::{POISON_FOG_STATE_ID, PoisonFogState, send_poison_fog_state_visual};
-use super::rushstate::{RUSH_STATE_ID, RushState, send_rush_state_visual};
-use super::rushstate2::{RUSH_2_STATE_ID, Rush2State, send_rush_2_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     resolve_coordinate_sufferer, resolve_identity_sufferer, resolve_state_user,
+    resolve_state_move_shape, resolve_state_move_shape_mut, end_move_shape_state,
+    end_and_destroy_state_at,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
@@ -229,227 +203,60 @@ fn cure_threshold(element_modify: i32, base_probability: u32, constant: u32, em_
     (scaled as u32).wrapping_mul(constant).wrapping_add(base_probability) as i32
 }
 
-fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec<u32> {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).map(CPlayer::curable_state_ids).unwrap_or_default(),
-        MONSTER_TYPE => game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(target.id)).map(|monster| monster.move_shape().curable_state_ids()).unwrap_or_default(),
-        _ => Vec::new(),
+fn cast_cure_states(game: &mut CGame, region_id: i32, target: ShapeIdentity, threshold: i32) {
+    let mut index = 0;
+    loop {
+        let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return };
+        if index >= shape.state_slot_count() { break }
+        let selected = shape.state_at(index).is_some_and(|(_, state)| state.is_curable());
+        if selected && game.skill_random_below(100) < threshold {
+            let _ = end_and_destroy_state_at(game, region_id, target, index);
+        }
+        index += 1;
     }
 }
 
-enum RemovedMonsterCurableState {
-    BoaLock(BoaLockState),
-    Rush(RushState),
-    Rush2(Rush2State),
-    Seal(SealState),
-    SpiderPoison(SpiderPoisonState),
-    SpriteBurn(SpriteBurnState),
-    SpiderWeb(SpiderWebState),
-    KnockOut(KnockOutState),
-    BossBlueQuake(BossBlueQuakeState),
-    KnightCut(KnightCutState),
-    PoisonFog(PoisonFogState),
-}
-
-fn finish_monster_curable_state(
+pub(crate) fn finish_curable_state(
     game: &mut CGame,
     region_id: i32,
-    monster_id: i32,
+    target: ShapeIdentity,
     state_id: u32,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
-    let Some(mut owner) = game.take_region_owner(region_id) else { return false };
-    let removed = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let removed = match state_id {
-            BOA_LOCK_STATE_ID => {
-                let state = monster.move_shape_mut().take_boa_lock_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                RemovedMonsterCurableState::BoaLock(state)
-            }
-            RUSH_STATE_ID => {
-                let state = monster.move_shape_mut().take_rush_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::Rush(state)
-            }
-            RUSH_2_STATE_ID => {
-                let state = monster.move_shape_mut().take_rush_2_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::Rush2(state)
-            }
-            SEAL_STATE_ID => {
-                let state = monster.move_shape_mut().take_seal_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::Seal(state)
-            }
-            SPIDER_POISON_SKILL_ID => RemovedMonsterCurableState::SpiderPoison(monster.move_shape_mut().take_spider_poison_state()?),
-            SPRITE_BURN_SKILL_ID => RemovedMonsterCurableState::SpriteBurn(monster.move_shape_mut().take_sprite_burn_state()?),
-            SPIDER_WEB_SKILL_ID => {
-                let state = monster.move_shape_mut().take_spider_web_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::SpiderWeb(state)
-            }
-            KNOCK_OUT_STATE_ID => {
-                let state = monster.move_shape_mut().take_knock_out_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::KnockOut(state)
-            }
-            BOSS_BLUE_QUAKE_STATE_ID => {
-                let state = monster.move_shape_mut().take_boss_blue_quake_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::BossBlueQuake(state)
-            }
-            KNIGHT_CUT_STATE_ID => {
-                let state = monster.move_shape_mut().take_knight_cut_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                RemovedMonsterCurableState::KnightCut(state)
-            }
-            POISON_FOG_STATE_ID => RemovedMonsterCurableState::PoisonFog(monster.move_shape_mut().take_poison_fog_state()?),
-            _ => return None,
-        };
-        Some((removed, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?))
+    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return false };
+    let key = (0..shape.state_slot_count()).find_map(|index| {
+        let (key, state) = shape.state_at(index)?;
+        (state.is_curable() && state.state_id() == state_id).then_some(key)
     });
-    game.restore_region_owner(owner);
-    let Some((removed, identity, tile_x, tile_y)) = removed else { return false };
-    match removed {
-        RemovedMonsterCurableState::BoaLock(state) => send_boa_lock_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-        ),
-        RemovedMonsterCurableState::Rush(state) => send_rush_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-        ),
-        RemovedMonsterCurableState::Rush2(state) => send_rush_2_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
-        ),
-        RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-        ),
-        RemovedMonsterCurableState::SpiderPoison(state) => send_spider_poison_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
-        RemovedMonsterCurableState::SpriteBurn(state) => send_sprite_burn_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
-        RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-        ),
-        RemovedMonsterCurableState::KnockOut(state) => send_knock_out_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-        ),
-        RemovedMonsterCurableState::BossBlueQuake(state) => send_boss_blue_quake_state_visual(
-            game,
-            region_id,
-            identity,
-            tile_x,
-            tile_y,
-            state,
-            false,
-            || now_ms,
-        ),
-        RemovedMonsterCurableState::KnightCut(state) => send_knight_cut_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
-        ),
-        RemovedMonsterCurableState::PoisonFog(state) => send_poison_fog_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
-    }
-    true
-}
-
-pub(crate) fn finish_curable_state(game: &mut CGame, region_id: i32, target: ShapeIdentity, state_id: u32, now_ms: u32) -> bool {
-    match (target.object_type, state_id) {
-        (PLAYER_TYPE, BOA_LOCK_STATE_ID) => {
-            let removed = game.find_player_mut(target.id).and_then(|player| {
-                let state = player.take_boa_lock_state()?;
-                player.set_skill_moveable(true);
-                Some((state, player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-            });
-            let Some((state, region, x, y)) = removed else { return false };
-            send_boa_lock_state_visual(game, region, target, x, y, state, false, || now_ms);
-            true
-        }
-        (PLAYER_TYPE, RUSH_STATE_ID) => {
-            let removed = game.find_player_mut(target.id).and_then(|player| {
-                let state = player.take_rush_state()?;
-                player.set_skill_moveable(true);
-                player.set_skill_fightable(true);
-                Some((state, player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-            });
-            let Some((state, region, x, y)) = removed else { return false };
-            send_rush_state_visual(game, region, target, x, y, state, false, || now_ms);
-            true
-        }
-        (PLAYER_TYPE, RUSH_2_STATE_ID) => {
-            let removed = game.find_player_mut(target.id).and_then(|player| {
-                let state = player.take_rush_2_state()?;
-                player.set_skill_moveable(true);
-                player.set_skill_fightable(true);
-                Some((state, player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-            });
-            let Some((state, region, x, y)) = removed else { return false };
-            send_rush_2_state_visual(game, region, target, x, y, state, false, now_ms);
-            true
-        }
-        (PLAYER_TYPE, SPIDER_POISON_SKILL_ID) => finish_player_spider_poison_state_on_cure(game, target.id, now_ms),
-        (PLAYER_TYPE, SPRITE_BURN_SKILL_ID) => finish_player_sprite_burn_state_on_cure(game, target.id, now_ms),
-        (PLAYER_TYPE, SPIDER_WEB_SKILL_ID) => finish_player_spider_web_state_on_defense(game, target.id, now_ms),
-        (PLAYER_TYPE, KNOCK_OUT_STATE_ID) => finish_player_knock_out_state_on_defense(game, target.id, now_ms),
-        (PLAYER_TYPE, BOSS_BLUE_QUAKE_STATE_ID) => finish_player_boss_blue_quake_state_on_cure(game, target.id, now_ms),
-        (PLAYER_TYPE, KNIGHT_CUT_STATE_ID) => finish_player_knight_cut_state_on_cure(game, target.id, now_ms),
-        (PLAYER_TYPE, POISON_FOG_STATE_ID) => { let removed = game.find_player_mut(target.id).and_then(|player| { let region = player.server_region_id()?; let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let state = player.take_poison_fog_state()?; Some((region, x, y, state)) }); let Some((region, x, y, state)) = removed else { return false }; send_poison_fog_state_visual(game, region, target, x, y, state, false, now_ms); true },
-        (MONSTER_TYPE, _) => finish_monster_curable_state(game, region_id, target.id, state_id, now_ms),
-        _ => false,
-    }
+    let Some(key) = key else { return false };
+    end_move_shape_state(game, region_id, target, key)
 }
 
 fn install_cure_state(game: &mut CGame, region_id: i32, target: &CureTarget, state: CureState) -> bool {
-    match target.identity.object_type {
-        PLAYER_TYPE => {
-            let Some(player) = game.find_player(target.identity.id)
-                .filter(|player| player.server_region_id() == Some(region_id)) else { return false };
-            let old = player.move_shape().cure_state_key();
-            send_cure_state_visual(game, target.identity.id, state, true);
-            if let Some(key) = old {
-                let Some(location) = game.find_player(target.identity.id)
-                    .and_then(|player| player.move_shape().cure_state_replacement_location(key))
-                    else { return false };
-                if !super::curestate::end_player_cure_state_key(game, target.identity.id, key) {
-                    return false;
-                }
-                let Some(player) = game.find_player_mut(target.identity.id) else { return false };
-                player.move_shape_mut().insert_replacement_cure_state(state, location);
-            } else if let Some(player) = game.find_player_mut(target.identity.id) {
-                player.push_cure_state(state);
-            } else { return false }
-            true
-        }
-        MONSTER_TYPE => {
-            let Some(mut owner) = game.take_region_owner(region_id) else { return false };
-            let installed = if let Some(monster) = owner.base().find_monster_by_id(target.identity.id) {
-                let old = monster.move_shape().cure_state_key();
-                let shape = monster.move_shape().shape().clone();
-                super::curestate::send_cure_state_visual_in_region(game, owner.base(), &shape, state, true);
-                if let Some(key) = old {
-                    let location = owner.base().find_monster_by_id(target.identity.id)
-                        .and_then(|monster| monster.move_shape().cure_state_replacement_location(key));
-                    if let Some(location) = location {
-                        if super::curestate::end_monster_cure_state_key(game, owner.base_mut(), target.identity.id, key)
-                            && let Some(monster) = owner.base_mut().find_monster_by_id_mut(target.identity.id)
-                        {
-                            monster.move_shape_mut().insert_replacement_cure_state(state, location);
-                            true
-                        } else { false }
-                    } else { false }
-                } else if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target.identity.id) {
-                    monster.move_shape_mut().push_cure_state(state);
-                    true
-                } else { false }
-            } else { false };
-            game.restore_region_owner(owner);
-            installed
-        }
-        _ => false,
+    if !matches!(target.identity.object_type, PLAYER_TYPE | MONSTER_TYPE) {
+        return false;
     }
+    if target.identity.object_type == PLAYER_TYPE
+        && !game.find_player(target.identity.id)
+            .is_some_and(|player| player.server_region_id() == Some(region_id))
+    {
+        return false;
+    }
+    let Some(shape) = resolve_state_move_shape(game, region_id, target.identity) else { return false };
+    let old = shape.cure_state_key();
+    send_cure_state_visual_for_holder(game, region_id, target.identity, state, true);
+    if let Some(key) = old {
+        let Some(location) = resolve_state_move_shape(game, region_id, target.identity)
+            .and_then(|shape| shape.cure_state_replacement_location(key)) else { return false };
+        if !end_cure_state_key(game, region_id, target.identity, key) {
+            return false;
+        }
+        let Some(shape) = resolve_state_move_shape_mut(game, region_id, target.identity) else { return false };
+        shape.insert_replacement_cure_state(state, location);
+    } else if let Some(shape) = resolve_state_move_shape_mut(game, region_id, target.identity) {
+        shape.push_cure_state(state);
+    } else { return false }
+    true
 }
 
 pub(crate) const fn is_cure_target(dispatch: PlayerSkillDispatch) -> bool {
@@ -555,24 +362,15 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     send_cast(game, player_id, &target, level, true);
     let element_modify = game.find_player(player_id).map(|player| player.combat_properties().element_modify).unwrap_or_default();
     let threshold = cure_threshold(element_modify, base_probability, constant, em_modifier);
-    let properties_changed = game.with_published_player_ai(player_id, player_ai, |game| {
-        let mut properties_changed = false;
-        for state_id in curable_state_ids(game, region_id, target.identity) {
-            if game.skill_random_below(100) < threshold {
-                // Пакеты завершения этих состояний не содержат время; дополнительное
-                // чтение часов между вызовами генератора MSVCRT исходный `CastCure` не делал.
-                properties_changed |= finish_curable_state(game, region_id, target.identity, state_id, 0);
-            }
-        }
-        properties_changed
+    let installed = game.with_published_player_ai(player_id, player_ai, |game| {
+        cast_cure_states(game, region_id, target.identity, threshold);
+        install_cure_state(
+            game,
+            region_id,
+            &target,
+            CureState::new(caster_identity(player_id), target.identity).begin_now(),
+        )
     });
-    if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id); }
-    let installed = install_cure_state(
-        game,
-        region_id,
-        &target,
-        CureState::new(caster_identity(player_id), target.identity).begin_now(),
-    );
     if let Some(execution) = game.player_skill_execution_mut(player_id, CURE_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

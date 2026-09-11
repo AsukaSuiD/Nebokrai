@@ -9,12 +9,40 @@
 //! `tagWuXingState`; два байта выравнивания после пяти `short` сохраняются
 //! как часть подтверждённого legacy layout.
 
+//! End +0x1C таблицы 0x0065ED04/0x0065ED54/0x0065EE44/0x0065EDA4/0x0065EDF4 →0x005ECFC0→CState::End0x005DBCE0:
+//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
+//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin.
+//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
+//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
+//! от payload и не заменяет отсутствующего user держателем состояния.
+//! Runtime Begin Earth/Fire/Metal/Water/Wood0x0050FF1A/0x005103CA/
+//! 0x00511467/0x00510877/0x00510FAA получает self,self.
+
 use super::fightdefense::truncate_original;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 
 pub(crate) const WUXING_STATE_BYTES: usize = 96;
+
+pub(crate) fn end_wuxing_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<WuXingState>(key)).is_none()
+    {
+        return false;
+    }
+    end_base_applied_state(game, region_id, holder, key, WUXING_STATE_BYTES)
+}
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WuXingKind {

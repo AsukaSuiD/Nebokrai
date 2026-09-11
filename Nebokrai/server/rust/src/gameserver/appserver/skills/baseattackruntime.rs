@@ -432,7 +432,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                     CGame::append_base_attack_tail(&mut died, &attack);
                     let _ = game.send_player_shape_around(target_id, None, &died);
                     if let Some(region_id) = region_id {
-                        game.record_move_shape_death(region_id, victim, attacker);
+                        game.record_move_shape_death(region_id, victim, attacker, runtime);
                     }
                 });
             } else if attack.full_miss != 0 {
@@ -865,7 +865,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                     died.base_mut().add_char(1);
                     CGame::append_base_attack_tail(&mut died, &attack);
                     let _ = game.send_move_shape_around(region_id, victim, &died);
-                    game.record_move_shape_death(region_id, victim, attacker);
+                    game.record_move_shape_death(region_id, victim, attacker, runtime);
                 });
             } else {
                 let mut hurt = CMessage::new(0x000b_f60a);

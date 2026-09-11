@@ -11,8 +11,8 @@
 //! положительный остаток вычисляется после отдельного второго чтения часов.
 //! Serializer `0x005E7330` и exact `Unserialize` `0x005FD660` задают
 //! 12-байтовую запись `ID + remaining time + attack gain`; несколько записей
-//! сохраняют исходный порядок наложения. Монстровая доставка использует
-//! переданный region owner, пока он вынут из глобальной карты `CGame`.
+//! сохраняют исходный порядок наложения. Begin-доставка монстра использует
+//! переданный region owner; общий End разрешает опубликованного владельца.
 //! Vtable `0x0065FB6C` связывает AI (`0x005EA4C0`) со строгим сроком,
 //! а End (`0x006059A0` → `0x005DBCE0`) — с эффектом перед RemoveState.
 //! Каждый экземпляр удаляется отдельно с собственным пересчётом игрока;
@@ -21,15 +21,20 @@
 //! удаление оставляет пустой слот до общего уплотнения CMoveShape.
 //! Общий CMoveShape::UpdateAbnormality передаёт один ключ; этот owner
 //! не запускает отдельный семейный обход и сохраняет границы своих callbacks.
+//! Прямой End и AI используют один exact-key хвост без чтения часов.
+//! StartAllStates 0x004CE050 вызывает Begin(0, self); Begin 0x005EA500
+//! сразу возвращает при NULL User без visual. Загруженный экземпляр поэтому
+//! только получает отметку ended; для runtime self-cast User совпадает с holder
+//! и базовый End удаляет точную запись.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape, timed_client_state_time};
 use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const FURY_STATE_SKILL_ID: u32 = 0x1a3;
@@ -157,57 +162,42 @@ fn fury_state_message(
     message
 }
 
-pub(crate) fn expire_monster_fury_state(
+pub(crate) fn update_fury_state(
     game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
     now_ms: u32,
-) -> usize {
-    let Some((shape, state)) = region.find_monster_by_id(monster_id).and_then(|monster| {
-        Some((monster.move_shape().shape().clone(),
-            *monster.move_shape().applied_state::<FuryState>(key)?))
-    }) else { return 0; };
-    if !state.expired(now_ms) {
-        return 0;
+) -> bool {
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<FuryState>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
     }
-    send_fury_state_visual_in_region(game, region, &shape, state, false, now_ms);
-    let _ = region.find_monster_by_id_mut(monster_id)
-        .and_then(|monster| monster.move_shape_mut().remove_fury_state_key(key));
-    1
+    end_fury_state(game, region_id, holder, key)
 }
 
-pub(crate) fn expire_player_fury_state<Runtime: GameMainLoopRuntime>(
+pub(crate) fn end_fury_state(
     game: &mut CGame,
-    player_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
-    now_ms: u32,
-    _runtime: &mut Runtime,
-) -> usize {
-    let context = game.find_player(player_id).and_then(|player| {
-        Some((
-            player.server_region_id()?,
-            player.shape().identity(),
-            player.shape().get_tile_x().ok()?,
-            player.shape().get_tile_y().ok()?,
-        ))
-    });
-    let Some(state) = game.find_player(player_id)
-        .and_then(|player| player.move_shape().applied_state::<FuryState>(key)).copied()
-        else { return 0; };
-    if !state.expired(now_ms) {
-        return 0;
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<FuryState>(key)).copied()
+        else { return false };
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_was_loaded(key)) == Some(false) {
+        let mut message = CMessage::new(0x000b_fe04);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
     }
-    if let Some((region_id, identity, tile_x, tile_y)) = context {
-        send_fury_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
-        );
-    }
-    let _ = game.find_player_mut(player_id)
-        .and_then(|player| player.move_shape_mut().remove_fury_state_key(key));
-    let _ = game.update_player_properties(player_id);
-    1
+    end_base_applied_state(game, region_id, holder, key, FURY_STATE_BYTES)
 }
+
+
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

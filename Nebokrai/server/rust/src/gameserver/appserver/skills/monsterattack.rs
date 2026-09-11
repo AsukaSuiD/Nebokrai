@@ -6,8 +6,9 @@
 //! (gameserver.exe + GameServer.pdb, 0x004D38E4) смертельный удар синхронно
 //! публикует настоящий производный регион для StopAllSkills/OnBeenMurdered/
 //! WhenBeenKilled. После BF60B общий CMoveShape хранит убийцу и action 6;
-//! OnDied игрока и монстра допускается только их пассивной AI FIFO. Полный
-//! ClearAllStates(true) и последующий prison_check ещё требуют общего state-owner.
+//! OnDied игрока и монстра допускается только их пассивной AI FIFO. Общий
+//! state-owner выполняет ClearAllStates(true), затем prison_check сразу после
+//! action 6, пока callback видит опубликованный производный регион.
 //! OnBeenHurted (0x004D3BE3) вызывается только после нелетального BF60A:
 //! общий координатор сохраняет Nation → защиту первого атакующего.
 //! Производные hurt-owner-ы вызываются после освобождения mutation-заимствования;
@@ -594,7 +595,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         let region_id = region.id;
         let _ = game.with_published_region(owner, |game| {
             let _ = game.send_move_shape_around(region_id, target, &died);
-            game.record_move_shape_death(region_id, target, killing_attacker);
+            game.record_move_shape_death(region_id, target, killing_attacker, runtime);
         });
     } else if attack.full_miss != 0 {
         let mut missed = CMessage::new(0x000b_f612);

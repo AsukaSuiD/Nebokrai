@@ -16,10 +16,14 @@
 //! из slot +0x48 (0x005E7310): visual → базовый End → GetUser → RemoveState.
 //! Это не прямой slot +0x1C (0x005DBCE0), который сам visual не отправляет.
 //! UpdateProperty вызывается только для игрока при фактическом удалении.
+//! Прямой End не проверяет срок и не вызывает timer End(false).
+//! StartAllStates 0x004CE050 вызывает Begin(0, self); Begin 0x00606040
+//! сразу возвращает при NULL User, не создавая visual. Для загруженной записи
+//! User остаётся NULL: оба End лишь отмечают ended, не удаляя payload.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
@@ -121,16 +125,26 @@ pub(crate) fn update_wangsheng_state(
         .and_then(|shape| shape.applied_state::<WangshengState>(key))
         .filter(|state| state.expired(now_ms)).copied()
         else { return false };
-    let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(state.state_id() as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<WangshengState>(key, WANGSHENG_STATE_BYTES))
-        .is_some();
-    if removed && holder.object_type == 400 {
-        let _ = game.update_player_properties(holder.id);
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_was_loaded(key)) == Some(false) {
+        let mut message = CMessage::new(0x000b_fe04);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.state_id() as i32);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
     }
-    true
+    end_wangsheng_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_wangsheng_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<WangshengState>(key)).is_none() {
+        return false;
+    }
+    end_base_applied_state(game, region_id, holder, key, WANGSHENG_STATE_BYTES)
 }

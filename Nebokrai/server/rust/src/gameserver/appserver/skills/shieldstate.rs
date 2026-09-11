@@ -23,10 +23,14 @@
 //! и настоящий End, но MP/war soul не выдумываются: семантика последующего
 //! unchecked player-layout вне достигнутых creators остаётся неизвестной.
 //! Promotion имеет только собственный срок, без life/dead/resource gates.
+//! Direct End получает тот же живой ключ без проверок AI. Life выполняет
+//! AddCure с вложенным End прежнего Cure до своего visual и удаления;
+//! Machine/Mana выполняют visual→Remove, Promotion не создаёт End-пакет.
+//! Player-wrapper и generic AI входят в один End с опубликованным holder.
 
-use super::lifeshieldstate::{finish_life_shield_state, finish_life_shield_state_for_holder, LifeShieldState};
-use super::machineshieldstate::{send_machine_shield_state_visual, MachineShieldState};
-use super::manashieldstate::{send_mana_shield_state_visual, ManaShieldState};
+use super::lifeshieldstate::{finish_life_shield_state_for_holder, LifeShieldState};
+use super::machineshieldstate::MachineShieldState;
+use super::manashieldstate::ManaShieldState;
 use super::promotionstate::PromotionState;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -131,6 +135,17 @@ pub(crate) fn update_defense_shield(
     if !expired {
         return false;
     }
+    end_defense_shield(game, region_id, holder, key)
+}
+
+pub(crate) fn end_defense_shield(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.defense_shield(key)).copied() else { return false };
     match state {
         DefenseShieldState::Life(state) => {
             finish_life_shield_state_for_holder(game, region_id, holder, state);
@@ -144,8 +159,12 @@ pub(crate) fn update_defense_shield(
         }
         DefenseShieldState::Promotion(_) => {}
     }
-    resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_defense_shield_key(key)).is_some()
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_defense_shield_key(key)).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }
 
 pub(crate) fn expire_player_defense_shield(
@@ -183,30 +202,10 @@ pub(crate) fn end_player_defense_shield_key(
     game: &mut CGame,
     player_id: i32,
     key: StateKey,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
-    let state = game.find_player(player_id)
-        .and_then(|player| player.defense_shield(key).copied());
-    let Some(state) = state else {
-        return false;
-    };
-    match state {
-        DefenseShieldState::Life(state) => {
-            finish_life_shield_state(game, player_id, state, now_ms);
-        }
-        DefenseShieldState::Machine(state) => {
-            send_machine_shield_state_visual(game, player_id, state, false, || now_ms);
-        }
-        DefenseShieldState::Mana(state) => {
-            send_mana_shield_state_visual(game, player_id, state, false, || now_ms);
-        }
-        DefenseShieldState::Promotion(_) => {}
-    }
-    let removed = game.find_player_mut(player_id)
-        .and_then(|player| player.remove_defense_shield_key(key))
-        .is_some();
-    if removed {
-        let _ = game.update_player_properties(player_id);
-    }
-    removed
+    let Some(player) = game.find_player(player_id) else { return false };
+    let region_id = player.shape().get_region_id();
+    let holder = player.shape().identity();
+    end_defense_shield(game, region_id, holder, key)
 }

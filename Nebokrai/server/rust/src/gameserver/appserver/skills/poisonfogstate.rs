@@ -1,6 +1,10 @@
 //! Каноническое ослабление ядовитого тумана `CPoisonFogState` (`0xC9`).
 //! Истечение получает ключ конкретного экземпляра общей арены; проверка
 //! срока и End не подменяют его первым состоянием с тем же ID.
+//! Direct End (vtable 0x006622D4 +0x1C, тело 0x005FD420) отправляет
+//! visual до точного RemoveState и последующего UpdateProperty игрока.
+//! Timer и Cure используют ту же опубликованную generic holder границу;
+//! удаление использует фактический serialized_span выбранного экземпляра.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/poisonfogstate.cpp`. Сохранены 36-байтовая DB-запись,
@@ -19,13 +23,13 @@
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::fightdefense::truncate_original;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::appserver::states::state::{
+    timed_client_state_time, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
 
 pub(crate) const POISON_FOG_STATE_ID: u32 = 0xc9;
 pub(crate) const POISON_FOG_STATE_BYTES: usize = 36;
@@ -124,83 +128,42 @@ impl PoisonFogState {
 
 pub(crate) fn send_poison_fog_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: PoisonFogState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(POISON_FOG_STATE_ID as i32); if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }
 
-pub(crate) fn expire_player_poison_fog_state<Runtime: GameMainLoopRuntime>(
+pub(crate) fn update_poison_fog_state(
     game: &mut CGame,
-    player_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
-    _runtime: &mut Runtime,
 ) -> bool {
-    let removed = game.find_player_mut(player_id).and_then(|player| {
-        let region_id = player.server_region_id()?;
-        let tile_x = player.shape().get_tile_x().ok()?;
-        let tile_y = player.shape().get_tile_y().ok()?;
-        let state = player.take_expired_poison_fog_state(key, now_ms)?;
-        Some((region_id, tile_x, tile_y, state))
-    });
-    let Some((region_id, tile_x, tile_y, state)) = removed else {
-        return false;
-    };
-    send_poison_fog_state_visual(
-        game,
-        region_id,
-        ShapeIdentity {
-            object_type: 400,
-            id: player_id,
-            ex_id: CGuid::GUID_INVALID,
-        },
-        tile_x,
-        tile_y,
-        state,
-        false,
-        now_ms,
-    );
-    let _ = game.update_player_properties(player_id);
-    true
+    let expired = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PoisonFogState>(key))
+        .is_some_and(|state| state.expired(now_ms));
+    if !expired { return false }
+    end_poison_fog_state(game, region_id, holder, key)
 }
 
-pub(crate) struct PoisonFogStateExpiration {
-    identity: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: PoisonFogState,
-}
-
-impl PoisonFogStateExpiration {
-    /// Доставка выполняется после возвращения region-owner-а в `CGame`, как в
-    /// достигнутом общем такте состояний монстра.
-    pub(crate) fn deliver(self, game: &mut CGame, region_id: i32, now_ms: u32) {
-        send_poison_fog_state_visual(
-            game,
-            region_id,
-            self.identity,
-            self.tile_x,
-            self.tile_y,
-            self.state,
-            false,
-            now_ms,
-        );
-    }
-}
-
-pub(crate) fn take_expired_monster_poison_fog_state(
-    region: &mut CServerRegion,
-    monster_id: i32,
+pub(crate) fn end_poison_fog_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: crate::gameserver::appserver::moveshape::StateKey,
-    now_ms: u32,
-) -> Option<PoisonFogStateExpiration> {
-    region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
-        let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
-        let identity = monster.move_shape().shape().identity();
-        let state = monster
-            .move_shape_mut()
-            .take_expired_poison_fog_state(key, now_ms)?;
-        Some(PoisonFogStateExpiration {
-            identity,
-            tile_x,
-            tile_y,
-            state,
-        })
-    })
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PoisonFogState>(key)).is_none()
+    {
+        return false;
+    }
+    let mut message = CMessage::new(STATE_END_MESSAGE);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(POISON_FOG_STATE_ID as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<PoisonFogState>(
+            key, POISON_FOG_STATE_BYTES,
+        )).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }

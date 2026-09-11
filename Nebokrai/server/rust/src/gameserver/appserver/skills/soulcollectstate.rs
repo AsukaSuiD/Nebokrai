@@ -9,13 +9,46 @@
 //! канонического состояния. Exact persisted-запись содержит ID, skill level
 //! и число душ, но теряет `variable_percent`; после загрузки он нулевой.
 
+//! Vtable 0x0065EFE4: End +0x1C→0x005E1D20 публикует visual phase2,
+//! пишет IsEnded=1, затем GetSufferer и RemoveState. AI при этом пустой;
+//! это не отменяет прямой End. Payload остаётся живым до доставки visual.
+
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const SOUL_COLLECT_STATE_ID: u32 = 0x13b;
 pub(crate) const SOUL_COLLECT_STATE_BYTES: usize = 12;
+
+pub(crate) fn end_soul_collect_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SoulCollectState>(key)).is_none()
+    {
+        return false;
+    }
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(SOUL_COLLECT_STATE_ID as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder).and_then(|shape| {
+        shape.applied_state::<SoulCollectState>(key)?;
+        let _ = shape.mark_applied_state_ended(key);
+        shape.remove_applied_state_record::<SoulCollectState>(key, SOUL_COLLECT_STATE_BYTES)
+    }).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SoulCollectState {

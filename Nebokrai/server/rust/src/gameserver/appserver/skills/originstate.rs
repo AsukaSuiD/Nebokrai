@@ -8,10 +8,37 @@
 //! Constructor RVA `0x00201210` задаёт ID `0x130` и нулевой gain.
 //! Exact persisted-запись общей пары `0x005E23D0/0x00601350` — `ID + i32 gain`.
 
+//! End +0x1C таблицы 0x00661814 →0x005ECFC0→CState::End0x005DBCE0:
+//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
+//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin.
+//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
+//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
+//! от payload и не заменяет отсутствующего user держателем состояния.
+//! Runtime COrigin::AI0x005AFA70 вызывает state Begin(self,self).
+
 use super::origin::ORIGIN_SKILL_ID;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 
 pub(crate) const ORIGIN_STATE_BYTES: usize = 8;
+
+pub(crate) fn end_origin_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<OriginState>(key)).is_none()
+    {
+        return false;
+    }
+    end_base_applied_state(game, region_id, holder, key, ORIGIN_STATE_BYTES)
+}
+
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct OriginState {

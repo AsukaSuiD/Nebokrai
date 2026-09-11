@@ -113,6 +113,20 @@ pub(crate) fn update_daub_poison_state(
     {
         return false;
     }
+    end_daub_poison_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_daub_poison_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<DaubPoisonState>(key)).is_none()
+    {
+        return false;
+    }
     let mut message = CMessage::new(STATE_END_MESSAGE);
     message.add_long(holder.object_type);
     message.add_long(holder.id);

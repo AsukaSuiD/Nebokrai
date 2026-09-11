@@ -18,6 +18,7 @@
 //! для игрока и только при фактическом удалении этой записи.
 //! Exact End 0x005FB800: visual → GetSufferer → SetMoveable(true) → RemoveState.
 //! Загрузка добавляет вложенный запрет движения для каждого экземпляра.
+//! Прямой End и AI используют один exact-key хвост без чтения часов.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
@@ -95,9 +96,23 @@ pub(crate) fn update_pillar_state(
     key: StateKey,
     now_ms: u32,
 ) -> bool {
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PillarState>(key))
+        .is_some_and(|state| state.expired(now_ms)) {
+        return false;
+    }
+    end_pillar_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_pillar_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
     let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<PillarState>(key))
-        .filter(|state| state.expired(now_ms)).copied()
+        .copied()
         else { return false };
     let mut message = CMessage::new(0x000b_fe04);
     message.add_long(holder.object_type);
@@ -105,11 +120,12 @@ pub(crate) fn update_pillar_state(
     message.add_long(state.skill_id() as i32);
     let _ = game.send_move_shape_around(region_id, holder, &message);
     let removed = resolve_state_move_shape_mut(game, region_id, holder).and_then(|shape| {
+        shape.applied_state::<PillarState>(key)?;
         shape.set_moveable(true);
         shape.remove_applied_state_record::<PillarState>(key, PILLAR_STATE_BYTES)
     }).is_some();
     if removed && holder.object_type == 400 {
         let _ = game.update_player_properties(holder.id);
     }
-    true
+    removed
 }

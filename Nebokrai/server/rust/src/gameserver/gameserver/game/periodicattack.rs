@@ -12,8 +12,8 @@
 //! OnDied остаётся у пассивной AI FIFO, а не вызывается синхронно из удара.
 //! OnBeenHurted вызывается только после нелетального BF60A: общий координатор
 //! выполняет Nation-уведомление, затем регистрацию первого атакующего.
-//! Полный ClearAllStates(true) и prison_check ещё требуют общего state-owner;
-//! частичная Cure-очистка не подменяет этот отсутствующий хвост.
+//! Общий синхронный хвост после action 6 выполняет ClearAllStates(true) и
+//! prison_check; частичная Cure-очистка не заменяет эту границу смерти.
 
 use super::*;
 
@@ -415,7 +415,7 @@ impl CGame {
             died.base_mut().add_char(1);
             Self::append_base_attack_tail(&mut died, &attack);
             let _ = self.send_player_shape_around(target_id, None, &died);
-            self.record_move_shape_death(region_id, victim, attacker);
+            self.record_move_shape_death(region_id, victim, attacker, runtime);
         } else if attack.full_miss != 0 {
             let mut missed = CMessage::new(0x000b_f612);
             missed.add_byte(attack.full_miss);
@@ -837,7 +837,7 @@ impl CGame {
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_move_shape_around(region_id, victim, &died);
-        self.record_move_shape_death(region_id, victim, attacker);
+        self.record_move_shape_death(region_id, victim, attacker, runtime);
         self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }
 

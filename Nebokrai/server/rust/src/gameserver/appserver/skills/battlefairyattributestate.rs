@@ -10,15 +10,24 @@
 //! `CFuryState::GetRemainedTime` по `0x00605E10` с двумя чтениями часов.
 //! Те же vtable используют `Serialize` `0x005E7330` и `Unserialize`
 //! `0x005FD660`: DB-запись состоит из ID, остатка срока и signed value.
+//! Все direct End (+0x1C) используют CState::End (0x005DBCE0): ended,
+//! затем RemoveState через GetUser, без visual. Timer (0x005E6E20) вызывает
+//! другую перегрузку +0x48 (0x005E7310): visual и затем тот же base End.
+//! Runtime Po* Begin получает (target, caster), Y* — (holder, holder);
+//! GetUser в обоих случаях совпадает с владельцем state-list
+//! (Pojia 0x0052AA6B..0x0052AA87, Yujia 0x00527002..0x0052701A).
+//! Загруженный Begin(null, holder) возвращает до создания visual
+//! (0x005E83B0, 0x005E6EE0), поэтому base End лишь отмечает такой ключ:
+//! общий Clear удаляет остаток отдельно, таймер не выдумывает End-пакет.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    timed_client_state_time, resolve_state_move_shape, end_base_applied_state,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
 
 pub(crate) const ATTRIBUTE_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const ATTRIBUTE_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -189,54 +198,39 @@ pub(crate) fn send_battle_fairy_attribute_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-pub(crate) fn expire_player_battle_fairy_attribute_state(
+pub(crate) fn update_battle_fairy_attribute_state(
     game: &mut CGame,
-    player_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
-    let Some(state) = game.find_player_mut(player_id)
-        .and_then(|player| player.take_expired_battle_fairy_attribute_state(key, now_ms))
-    else { return false };
-    let context = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.shape().identity(),
-            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    });
-    let Some((region_id, target, tile_x, tile_y)) = context else { return true };
-    send_battle_fairy_attribute_state_visual(game, region_id, target, tile_x, tile_y, state, false);
-    let _ = game.update_player_properties(player_id);
-    true
-}
-
-pub(crate) struct BattleFairyAttributeExpiration {
-    target: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: BattleFairyAttributeState,
-}
-
-impl BattleFairyAttributeExpiration {
-    pub(crate) fn deliver(self, game: &mut CGame, region_id: i32) {
-        send_battle_fairy_attribute_state_visual(
-            game, region_id, self.target, self.tile_x, self.tile_y, self.state, false,
-        );
+    let expired = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BattleFairyAttributeState>(key))
+        .is_some_and(|state| state.expired(now_ms));
+    if !expired { return false }
+    let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return false };
+    if shape.applied_state_was_loaded(key) == Some(false) {
+        let Some(state) = shape.applied_state::<BattleFairyAttributeState>(key).copied() else { return false };
+        let mut message = CMessage::new(ATTRIBUTE_STATE_END_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
     }
+    end_battle_fairy_attribute_state(game, region_id, holder, key)
 }
 
-pub(crate) fn take_expired_monster_battle_fairy_attribute_state(
-    region: &mut CServerRegion,
-    monster_id: i32,
+pub(crate) fn end_battle_fairy_attribute_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: crate::gameserver::appserver::moveshape::StateKey,
-    now_ms: u32,
-) -> Option<BattleFairyAttributeExpiration> {
-    let monster = region.find_monster_by_id_mut(monster_id)?;
-    let tile_x = monster.move_shape().shape().get_tile_x().unwrap_or_default();
-    let tile_y = monster.move_shape().shape().get_tile_y().unwrap_or_default();
-    let state = monster.move_shape_mut().take_expired_battle_fairy_attribute_state(key, now_ms)?;
-    Some(BattleFairyAttributeExpiration {
-        target: ShapeIdentity { object_type: 600, id: monster_id, ex_id: CGuid::GUID_INVALID },
-        tile_x,
-        tile_y,
-        state,
-    })
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BattleFairyAttributeState>(key)).is_none()
+    {
+        return false;
+    }
+    end_base_applied_state(game, region_id, holder, key, BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES)
 }

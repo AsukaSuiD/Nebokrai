@@ -1,7 +1,16 @@
 //! Каноническое периодическое состояние потери крови `CBloodLossState`.
 //! Периодический AI изменяет payload по поколенческому ключу общей арены.
 //! Чистый tick завершается до межвладельческого удара; состояние не вынимается
-//! и остаётся доступным вложенному End/Clear. Снимок нужен только пакету End.
+//! и остаётся доступным вложенному End/Clear. Удар использует независимый снимок.
+//! Прямой End: vtable 0x0065F2AC, слот +0x1C → 0x005FD420: visual
+//! с фазой 1 → GetSufferer (+0x18, 0x005DBFD0) → RemoveState (0x004CDAB0).
+//! Это не CState::End: записи IsEnded и проверок времени/HP в нём нет.
+//! Runtime Begin и StartAllStates связывают sufferer с holder; MasterInfo
+//! остаётся источником атаки, а не владельцем удаляемого ключа. End работает
+//! с опубликованной формой и точным ключом; ошибка доставки не отменяет удаление.
+//! После RemoveState перенесённый player UpdateProperty вызывается явно;
+//! monster читает изменения состояния в живых getters. Остальные property
+//! overrides не подменяются выдуманным callback.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/bloodlossstate.cpp`. Состояние хранит снимок владельца,
@@ -16,8 +25,8 @@
 //! усечения. Первый результат берётся как младший DWORD усечённого `i64`,
 //! тогда как critical сохраняет отдельную overflow-семантику `FISTP dword`;
 //! оба пути моделируются через `f64` без промежуточного округления Rust `f32`.
-//! Этот же владелец извлекает каноническое состояние на такте ИИ, возвращает
-//! его до применения удара и передаёт рассчитанную атаку координатору `CGame`.
+//! Этот же владелец меняет живое состояние по ключу на такте ИИ и передаёт
+//! рассчитанную атаку координатору `CGame` после освобождения заимствования.
 //! DB-запись буквально сохраняет десять DWORD `MasterInfo`, остаток срока,
 //! частоту, биты двух `float` и границы атаки. Координатные перегрузки `Begin`
 //! остаются ниже как RAW без параллельного изменяемого представления.
@@ -27,11 +36,14 @@
 use super::bloodloss::BLOOD_LOSS_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+};
 use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -271,19 +283,49 @@ pub(crate) fn send_blood_loss_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
+pub(crate) fn end_blood_loss_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(state_id) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BloodLossState>(key))
+        .map(|state| state.skill_id())
+    else {
+        return false;
+    };
+    let mut message = CMessage::new(STATE_END_MESSAGE);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state_id as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_applied_state_record::<BloodLossState>(key, BLOOD_LOSS_STATE_BYTES))
+        .is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
+}
+
 pub(crate) fn update_player_blood_loss_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
+    key: StateKey,
     runtime: &mut Runtime,
 ) -> bool {
     let target = game.find_player(player_id).and_then(|player| {
         player.move_shape().applied_state::<BloodLossState>(key)?;
         let shape = player.move_shape().shape();
-        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
-            player.server_region_id()?, player.is_dead(), player.combat_properties().cch))
+        Some((
+            shape.identity(),
+            player.server_region_id()?,
+            player.is_dead(),
+            player.combat_properties().cch,
+        ))
     });
-    let Some((identity, x, y, region_id, dead, critical_chance)) = target else { return false };
+    let Some((identity, region_id, dead, critical_chance)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
     let frequency_now_ms = runtime.now_milliseconds();
     let critical_rate = game.globe_setup().critical_rate();
@@ -299,11 +341,7 @@ pub(crate) fn update_player_blood_loss_state<Runtime: GameMainLoopRuntime>(
             game.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime);
         }
         BloodLossStateTick::Ended => {
-            if let Some(player) = game.find_player_mut(player_id) {
-                let move_shape = player.move_shape_mut();
-                let _ = move_shape.remove_applied_state_record::<BloodLossState>(key, BLOOD_LOSS_STATE_BYTES);
-            }
-            send_blood_loss_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
+            let _ = end_blood_loss_state(game, region_id, identity, key);
             let _ = game.publish_player_states(player_id);
         }
     }
@@ -314,18 +352,17 @@ pub(crate) fn update_monster_blood_loss_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region_id: i32,
     monster_id: i32,
-    key: crate::gameserver::appserver::moveshape::StateKey,
+    key: StateKey,
     runtime: &mut Runtime,
 ) -> bool {
     let Some(owner) = game.take_region_owner(region_id) else { return false };
     let target = owner.base().find_monster_by_id(monster_id).and_then(|monster| {
         monster.move_shape().applied_state::<BloodLossState>(key)?;
         let shape = monster.move_shape().shape();
-        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
-            monster.hit_points() == 0))
+        Some((shape.identity(), monster.hit_points() == 0))
     });
     game.restore_region_owner(owner);
-    let Some((identity, x, y, dead)) = target else { return false };
+    let Some((identity, dead)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
     let frequency_now_ms = runtime.now_milliseconds();
     let critical_rate = game.globe_setup().critical_rate();
@@ -344,14 +381,7 @@ pub(crate) fn update_monster_blood_loss_state<Runtime: GameMainLoopRuntime>(
             game.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime);
         }
         BloodLossStateTick::Ended => {
-            if let Some(mut owner) = game.take_region_owner(region_id) {
-                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    let move_shape = monster.move_shape_mut();
-                    let _ = move_shape.remove_applied_state_record::<BloodLossState>(key, BLOOD_LOSS_STATE_BYTES);
-                }
-                game.restore_region_owner(owner);
-            }
-            send_blood_loss_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
+            let _ = end_blood_loss_state(game, region_id, identity, key);
         }
     }
     true

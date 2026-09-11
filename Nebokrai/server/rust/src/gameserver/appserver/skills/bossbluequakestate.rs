@@ -14,13 +14,16 @@
 //! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
 //! Любое удаление адресует тот же экземпляр, а не первый дубль.
 //! Загрузка добавляет обе вложенные блокировки для каждого экземпляра.
+//! Exact vtable 0x0065F934: End 0x005EA9A0 выполняет visual →
+//! GetSufferer → SetFightable(true) → SetMoveable(true) → RemoveState.
+//! Прямой End, очищение и AI используют этот exact-key хвост без чтения часов.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    send_owned_state_visual, timed_client_state_time,
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -107,62 +110,56 @@ pub(crate) fn send_boss_blue_quake_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-pub(crate) fn expire_player_boss_blue_quake_state(
+pub(crate) fn update_boss_blue_quake_state(
     game: &mut CGame,
-    player_id: i32,
+    region_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
     now_ms: u32,
 ) -> bool {
-    if !game.find_player(player_id)
-        .and_then(|player| player.move_shape().applied_state::<BossBlueQuakeState>(key))
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueQuakeState>(key))
         .is_some_and(|state| state.expired(now_ms)) {
         return false;
     }
-    let Some((region_id, identity, tile_x, tile_y, state)) = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.move_shape_mut().remove_applied_state_record::<BossBlueQuakeState>(key, BOSS_BLUE_QUAKE_STATE_BYTES)?;
-        Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, state))
-    }) else { return false; };
-    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_skill_fightable(true);
+    end_boss_blue_quake_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_boss_blue_quake_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueQuakeState>(key)).copied()
+        else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| {
+            shape.applied_state::<BossBlueQuakeState>(key)?;
+            shape.set_fightable(true);
+            shape.set_moveable(true);
+            shape.remove_applied_state_record::<BossBlueQuakeState>(key, BOSS_BLUE_QUAKE_STATE_BYTES)
+        }).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
     }
-    true
+    removed
 }
 
 pub(crate) fn finish_player_boss_blue_quake_state_on_cure(
     game: &mut CGame,
     player_id: i32,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
-    let Some((region_id, identity, tile_x, tile_y, state)) = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_boss_blue_quake_state()?;
-        Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, state))
+    let Some((region_id, holder, key)) = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.shape().identity(),
+            player.move_shape().applied_state_key::<BossBlueQuakeState>()?))
     }) else { return false };
-    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_skill_fightable(true);
-    }
-    true
-}
-
-pub(crate) fn expire_monster_boss_blue_quake_state(
-    game: &mut CGame,
-    region: &mut crate::gameserver::appserver::serverregion::CServerRegion,
-    monster_id: i32,
-    key: StateKey,
-    now_ms: u32,
-) -> bool {
-    let Some((shape, state)) = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        monster.move_shape().applied_state::<BossBlueQuakeState>(key).filter(|state| state.expired(now_ms))?;
-        let state = monster.move_shape_mut().remove_applied_state_record::<BossBlueQuakeState>(key, BOSS_BLUE_QUAKE_STATE_BYTES)?;
-        Some((monster.move_shape().shape().clone(), state))
-    }) else { return false; };
-    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
-    }
-    true
+    end_boss_blue_quake_state(game, region_id, holder, key)
 }

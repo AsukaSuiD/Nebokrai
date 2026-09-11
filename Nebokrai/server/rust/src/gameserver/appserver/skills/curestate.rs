@@ -12,8 +12,8 @@
 //! входе и удаляется вместе с каноническим однотиковым состоянием. Vtable
 //! exact EXE направляет `GetRemainedTime` на `CBlindState` (`0x005F2CD0`),
 //! а нулевая длительность задаётся конструктором самого `CCureState`.
-//! Монстровая доставка использует текущий region owner, а не повторный lookup
-//! в `CGame` во время owner-side AI-прохода.
+//! AI и замена монстрового Cure используют опубликованный настоящий region;
+//! direct End заново разрешает holder после visual, не извлекает payload заранее.
 //! Fury может накопить несколько Cure: общая арена CMoveShape сохраняет
 //! идентичность каждого экземпляра, отдельный список — порядок и пустые места.
 //! AI фиксирует начальную длину и перечитывает позиции; End удаляет ключ после visual,
@@ -104,15 +104,10 @@ pub(crate) fn end_player_cure_state(game: &mut CGame, player_id: i32) -> bool {
 }
 
 pub(crate) fn end_player_cure_state_key(game: &mut CGame, player_id: i32, key: StateKey) -> bool {
-    let Some(state) = game.find_player(player_id)
-        .and_then(|player| player.move_shape().cure_state_by_key(key)) else {
-        return false;
-    };
-    send_cure_state_visual(game, player_id, state, false);
-    let _ = game.find_player_mut(player_id)
-        .and_then(|player| player.move_shape_mut().remove_cure_state_by_key(key));
-    let _ = game.update_player_properties(player_id);
-    true
+    let Some(player) = game.find_player(player_id) else { return false };
+    let region_id = player.shape().get_region_id();
+    let holder = player.shape().identity();
+    end_cure_state_key(game, region_id, holder, key)
 }
 
 
@@ -135,14 +130,15 @@ pub(crate) fn end_cure_state_key(
     holder: ShapeIdentity,
     key: StateKey,
 ) -> bool {
-    if holder.object_type == 400 {
-        return end_player_cure_state_key(game, holder.id, key);
-    }
     let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.cure_state_by_key(key)) else { return false };
     send_cure_state_visual_for_holder(game, region_id, holder, state, false);
-    resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_cure_state_by_key(key)).is_some()
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.remove_cure_state_by_key(key)).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }
 
 pub(crate) fn send_cure_state_visual_for_holder(
@@ -212,20 +208,6 @@ fn cure_state_message(identity: ShapeIdentity, state: CureState, begin: bool) ->
 }
 
 
-pub(crate) fn end_monster_cure_state_key(
-    game: &CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    key: StateKey,
-) -> bool {
-    let Some((state, shape)) = region.find_monster_by_id(monster_id).and_then(|monster| {
-        Some((monster.move_shape().cure_state_by_key(key)?, monster.move_shape().shape().clone()))
-    }) else { return false };
-    send_cure_state_visual_in_region(game, region, &shape, state, false);
-    let _ = region.find_monster_by_id_mut(monster_id)
-        .and_then(|monster| monster.move_shape_mut().remove_cure_state_by_key(key));
-    true
-}
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2

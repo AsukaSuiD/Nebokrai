@@ -6,11 +6,41 @@
 //! успешном пополнении публикует обновление `0xBFE03`. Удаление всего запаса
 //! публикует `0xBFE04`. Сырой `ex_states` остаётся только кодеком вокруг этого
 //! единственного типизированного владельца.
+//! Vtable 0x00660AC4: End +0x1C→0x005F6AD0 сначала публикует visual
+//! phase2 (0x005F6BA0, BF E04 на GetSufferer), затем вызывает CState::End
+//! 0x005DBCE0: mark ended и RemoveState у GetUser, не у sufferer.
+//! Runtime Begin в MeteorArrowMass0x00588628 получает self,self; загрузочный
+//! StartAllStates0x004CE050 передаёт null user. Общая metadata сохраняет
+//! различие: отсутствие user не подменяется удалением из holder.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const METEOR_ARROW_MASS_SKILL_ID: u32 = 0xcc;
 pub(crate) const METEOR_ARROW_STATE_BYTES: usize = 12;
+
+pub(crate) fn end_meteor_arrow_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<MeteorArrowState>(key)).is_none()
+    {
+        return false;
+    }
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(METEOR_ARROW_MASS_SKILL_ID as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    end_base_applied_state(game, region_id, holder, key, METEOR_ARROW_STATE_BYTES)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MeteorArrowState {

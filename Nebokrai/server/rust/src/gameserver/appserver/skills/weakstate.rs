@@ -12,15 +12,18 @@
 //! Достигнутый AI получает один поколенческий ключ общей арены;
 //! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
 //! Любое удаление адресует тот же экземпляр, а не первый дубль.
+//! Exact vtable 0x006621B4: End 0x005FD420 выполняет visual →
+//! GetSufferer → RemoveState. Прямой End не проверяет выход из области;
+//! AI проверяет координаты и вызывает тот же exact-key хвост без часов.
 
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
 
 pub(crate) const WEAK_STATE_ID: u32 = 0x12e;
 pub(crate) const WEAK_STATE_BYTES: usize = 16;
@@ -97,77 +100,43 @@ pub(crate) fn send_weak_state_visual(game: &mut CGame, region_id: i32, identity:
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-pub(crate) fn finish_player_weak_outside<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    key: StateKey,
-    _runtime: &mut Runtime,
-) -> bool {
-    let ended = game.find_player_mut(player_id).and_then(|player| {
-        let region_id = player.server_region_id()?;
-        let x = player.shape().get_tile_x().ok()?;
-        let y = player.shape().get_tile_y().ok()?;
-        player.move_shape().applied_state::<WeakState>(key).filter(|state| !state.contains(x, y))?;
-        let state = player.move_shape_mut().remove_applied_state_record::<WeakState>(key, WEAK_STATE_BYTES)?;
-        Some((region_id, x, y, state))
-    });
-    let Some((region_id, x, y, state)) = ended else {
-        return false;
-    };
-    send_weak_state_visual(
-        game,
-        region_id,
-        ShapeIdentity {
-            object_type: 400,
-            id: player_id,
-            ex_id: CGuid::GUID_INVALID,
-        },
-        x,
-        y,
-        state,
-        false,
-    );
-    let _ = game.update_player_properties(player_id);
-    true
-}
-
-pub(crate) fn finish_monster_weak_outside(
+pub(crate) fn update_weak_state(
     game: &mut CGame,
     region_id: i32,
-    monster_id: i32,
+    holder: ShapeIdentity,
     key: StateKey,
 ) -> bool {
-    let ended = if let Some(mut owner) = game.take_region_owner(region_id) {
-        let result = owner
-            .base_mut()
-            .find_monster_by_id_mut(monster_id)
-            .and_then(|monster| {
-                let x = monster.move_shape().shape().get_tile_x().ok()?;
-                let y = monster.move_shape().shape().get_tile_y().ok()?;
-                monster.move_shape().applied_state::<WeakState>(key).filter(|state| !state.contains(x, y))?;
-                let state = monster.move_shape_mut().remove_applied_state_record::<WeakState>(key, WEAK_STATE_BYTES)?;
-                Some((x, y, state))
-            });
-        game.restore_region_owner(owner);
-        result
-    } else {
-        None
-    };
-    let Some((x, y, state)) = ended else {
+    let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return false };
+    let Some(state) = shape.applied_state::<WeakState>(key) else { return false };
+    let (Ok(x), Ok(y)) = (shape.shape().get_tile_x(), shape.shape().get_tile_y()) else {
         return false;
     };
-    send_weak_state_visual(
-        game,
-        region_id,
-        ShapeIdentity {
-            object_type: 600,
-            id: monster_id,
-            ex_id: CGuid::GUID_INVALID,
-        },
-        x,
-        y,
-        state,
-        false,
-    );
-    true
+    if state.contains(x, y) {
+        return false;
+    }
+    end_weak_state(game, region_id, holder, key)
+}
+
+pub(crate) fn end_weak_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<WeakState>(key)).copied()
+        else { return false };
+    let mut message = CMessage::new(0x000b_fe04);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state.skill_id() as i32);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let removed = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| {
+            shape.remove_applied_state_record::<WeakState>(key, WEAK_STATE_BYTES)
+        }).is_some();
+    if removed && holder.object_type == 400 {
+        let _ = game.update_player_properties(holder.id);
+    }
+    removed
 }
