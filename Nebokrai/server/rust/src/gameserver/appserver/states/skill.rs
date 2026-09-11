@@ -332,9 +332,8 @@ impl CGame {
             target.set_moveable(true);
         }
         if policy.release_curable_registration {
-            let skill_id = self.registered_skill(address)?.id();
             resolve_state_move_shape_mut(self, address.holder.0, address.holder.1)?
-                .finish_curable_skill_state(skill_id);
+                .finish_curable_skill_slot(address.slot);
         }
         if policy.path_order == SkillEndPathOrder::AfterMovement {
             self.registered_skill_mut(address)?.clear_end_paths();

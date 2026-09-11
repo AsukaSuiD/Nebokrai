@@ -16,7 +16,9 @@
 //! Vtable `0x0065FB6C` связывает AI (`0x005EA4C0`) со строгим сроком,
 //! а End (`0x006059A0` → `0x005DBCE0`) — с эффектом перед RemoveState.
 //! Каждый экземпляр удаляется отдельно с собственным пересчётом игрока;
-//! индекс экземпляра сохраняет соответствие повторных DB-записей.
+//! захваченный поколенческий ключ не подменяется после внешнего эффекта.
+//! Порядок живых ключей сохраняет соответствие повторных DB-записей,
+//! удаление оставляет пустой слот до общего уплотнения CMoveShape.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -158,17 +160,19 @@ pub(crate) fn expire_monster_fury_states(
     now_ms: u32,
 ) -> usize {
     let mut count = 0;
-    let mut position = 0;
-    while let Some((shape, state)) = region.find_monster_by_id(monster_id).and_then(|monster| {
-        Some((monster.move_shape().shape().clone(), *monster.move_shape().fury_states().get(position)?))
-    }) {
+    let keys = region.find_monster_by_id(monster_id)
+        .map(|monster| monster.move_shape().fury_state_keys()).unwrap_or_default();
+    for key in keys {
+        let Some((shape, state)) = region.find_monster_by_id(monster_id).and_then(|monster| {
+            Some((monster.move_shape().shape().clone(),
+                *monster.move_shape().applied_state::<FuryState>(key)?))
+        }) else { continue };
         if !state.expired(now_ms) {
-            position += 1;
             continue;
         }
         send_fury_state_visual_in_region(game, region, &shape, state, false, now_ms);
         let _ = region.find_monster_by_id_mut(monster_id)
-            .and_then(|monster| monster.move_shape_mut().remove_fury_state(position));
+            .and_then(|monster| monster.move_shape_mut().remove_fury_state_key(key));
         count += 1;
     }
     count
@@ -189,12 +193,13 @@ pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
         ))
     });
     let mut count = 0;
-    let mut position = 0;
-    while let Some(state) = game.find_player(player_id)
-        .and_then(|player| player.fury_states().get(position).copied())
-    {
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().fury_state_keys()).unwrap_or_default();
+    for key in keys {
+        let Some(state) = game.find_player(player_id)
+            .and_then(|player| player.move_shape().applied_state::<FuryState>(key)).copied()
+            else { continue };
         if !state.expired(now_ms) {
-            position += 1;
             continue;
         }
         if let Some((region_id, identity, tile_x, tile_y)) = context {
@@ -202,7 +207,8 @@ pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
                 game, region_id, identity, tile_x, tile_y, state, false, now_ms,
             );
         }
-        let _ = game.find_player_mut(player_id).and_then(|player| player.remove_fury_state(position));
+        let _ = game.find_player_mut(player_id)
+            .and_then(|player| player.move_shape_mut().remove_fury_state_key(key));
         let _ = game.update_player_properties(player_id);
         count += 1;
     }

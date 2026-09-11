@@ -1,11 +1,14 @@
 //! Каноническое периодическое состояние горючей смеси `CKeroseneState` (`0xF1`).
+//! Периодический AI изменяет payload по поколенческому ключу общей арены.
+//! Чистый tick завершается до межвладельческого удара; состояние не вынимается
+//! и остаётся доступным вложенному End/Clear. Снимок нужен только пакету End.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/kerosenestate.cpp`. Состояние хранит снимок владельца,
 //! использует строгие границы срока и частоты и наносит один фиксированный
 //! урон типа `Poison` без RNG. DB-запись длиной 56 байт принадлежит этому типу;
-//! `CanonicalStateStorage` атомарно поддерживает её смещение и жизненный цикл,
-//! включая извлечение и возврат перед межвладельческим применением удара.
+//! `CanonicalStateStorage` поддерживает её смещение и жизненный цикл;
+//! межвладельческий удар не извлекает payload из общей арены.
 //! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
 //! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
 //! Клиентский срок разделяет точное тело `0x00606320` с остальными
@@ -67,25 +70,85 @@ impl KeroseneState {
 
 pub(crate) fn send_kerosene_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KeroseneState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(KEROSENE_STATE_ID as i32); if begin { message.add_ulong(state.client_state_time(|| now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }
 
-pub(crate) fn update_player_kerosene_state<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) -> bool {
-    let target = game.find_player_mut(player_id).and_then(|player| { let identity = player.shape().identity(); let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let region_id = player.server_region_id()?; let dead = player.is_dead(); let state = player.take_kerosene_state_for_ai()?; Some((state, identity, x, y, region_id, dead)) });
-    let Some((mut state, identity, x, y, region_id, dead)) = target else { return false }; let lifetime_now = runtime.now_milliseconds();
-    let tick = if state.ended(lifetime_now, dead) { KeroseneStateTick::Ended } else { state.tick(runtime.now_milliseconds()) };
+pub(crate) fn update_player_kerosene_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+    runtime: &mut Runtime,
+) -> bool {
+    let target = game.find_player(player_id).and_then(|player| {
+        player.move_shape().applied_state::<KeroseneState>(key)?;
+        let shape = player.move_shape().shape();
+        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
+            player.server_region_id()?, player.is_dead()))
+    });
+    let Some((identity, x, y, region_id, dead)) = target else { return false };
+    let lifetime_now_ms = runtime.now_milliseconds();
+    let prepared = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.move_shape_mut().applied_state_mut::<KeroseneState>(key)?;
+        let tick = if state.ended(lifetime_now_ms, dead) { KeroseneStateTick::Ended } else { state.tick(runtime.now_milliseconds()) };
+        Some((tick, *state))
+    });
+    let Some((tick, state)) = prepared else { return false };
     match tick {
-        KeroseneStateTick::Pending => if let Some(player) = game.find_player_mut(player_id) { player.restore_kerosene_state_after_ai(state); },
-        KeroseneStateTick::Attack(attack) => { let master = state.master(); if let Some(player) = game.find_player_mut(player_id) { player.restore_kerosene_state_after_ai(state); } game.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime); }
-        KeroseneStateTick::Ended => { if let Some(player) = game.find_player_mut(player_id) { player.finish_kerosene_state(state); } send_kerosene_state_visual(game, region_id, identity, x, y, state, false, lifetime_now); let _ = game.publish_player_states(player_id); }
+        KeroseneStateTick::Pending => {}
+        KeroseneStateTick::Attack(attack) => {
+            let master = state.master();
+            game.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime);
+        }
+        KeroseneStateTick::Ended => {
+            if let Some(player) = game.find_player_mut(player_id) {
+                let move_shape = player.move_shape_mut();
+                let _ = move_shape.remove_applied_state_record::<KeroseneState>(key, KEROSENE_STATE_BYTES);
+            }
+            send_kerosene_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
+            let _ = game.publish_player_states(player_id);
+        }
     }
     true
 }
 
-pub(crate) fn update_monster_kerosene_state<Runtime: GameMainLoopRuntime>(game: &mut CGame, region_id: i32, monster_id: i32, runtime: &mut Runtime) -> bool {
-    let Some(mut owner) = game.take_region_owner(region_id) else { return false }; let target = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| { let identity = monster.move_shape().shape().identity(); let x = monster.move_shape().shape().get_tile_x().ok()?; let y = monster.move_shape().shape().get_tile_y().ok()?; let dead = monster.hit_points() == 0; let state = monster.move_shape_mut().take_kerosene_state_for_ai()?; Some((state, identity, x, y, dead)) }); game.restore_region_owner(owner);
-    let Some((mut state, identity, x, y, dead)) = target else { return false }; let lifetime_now = runtime.now_milliseconds(); let tick = if state.ended(lifetime_now, dead) { KeroseneStateTick::Ended } else { state.tick(runtime.now_milliseconds()) };
+pub(crate) fn update_monster_kerosene_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region_id: i32,
+    monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(owner) = game.take_region_owner(region_id) else { return false };
+    let target = owner.base().find_monster_by_id(monster_id).and_then(|monster| {
+        monster.move_shape().applied_state::<KeroseneState>(key)?;
+        let shape = monster.move_shape().shape();
+        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
+            monster.hit_points() == 0))
+    });
+    game.restore_region_owner(owner);
+    let Some((identity, x, y, dead)) = target else { return false };
+    let lifetime_now_ms = runtime.now_milliseconds();
+    let Some(mut owner) = game.take_region_owner(region_id) else { return false };
+    let prepared = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().applied_state_mut::<KeroseneState>(key)?;
+        let tick = if state.ended(lifetime_now_ms, dead) { KeroseneStateTick::Ended } else { state.tick(runtime.now_milliseconds()) };
+        Some((tick, *state))
+    });
+    game.restore_region_owner(owner);
+    let Some((tick, state)) = prepared else { return false };
     match tick {
-        KeroseneStateTick::Pending => if let Some(mut owner) = game.take_region_owner(region_id) { if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().restore_kerosene_state_after_ai(state); } game.restore_region_owner(owner); },
-        KeroseneStateTick::Attack(attack) => { let master = state.master(); if let Some(mut owner) = game.take_region_owner(region_id) { if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().restore_kerosene_state_after_ai(state); } game.restore_region_owner(owner); } game.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime); }
-        KeroseneStateTick::Ended => { if let Some(mut owner) = game.take_region_owner(region_id) { if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().finish_kerosene_state(state); } game.restore_region_owner(owner); } send_kerosene_state_visual(game, region_id, identity, x, y, state, false, lifetime_now); }
+        KeroseneStateTick::Pending => {}
+        KeroseneStateTick::Attack(attack) => {
+            let master = state.master();
+            game.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime);
+        }
+        KeroseneStateTick::Ended => {
+            if let Some(mut owner) = game.take_region_owner(region_id) {
+                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                    let move_shape = monster.move_shape_mut();
+                    let _ = move_shape.remove_applied_state_record::<KeroseneState>(key, KEROSENE_STATE_BYTES);
+                }
+                game.restore_region_owner(owner);
+            }
+            send_kerosene_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
+        }
     }
     true
 }

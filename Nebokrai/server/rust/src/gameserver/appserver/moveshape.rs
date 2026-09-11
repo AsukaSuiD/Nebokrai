@@ -37,8 +37,7 @@
 //! модификаторы и флаги, пока не имеющие перенесённых потребителей, остаются
 //! в RAW ниже. Ни конкретная форма, ни отложенный удар не дублируют эту запись.
 //!
-//! Известные состояния смены тела, расширенные состояния, бессмертие,
-//! сценарные состояния и езда принадлежат одному `CanonicalStateStorage`.
+//! Все достигнутые применённые состояния принадлежат одному `CanonicalStateStorage`.
 //! Сырой `ex_states` скрыт внутри `LegacyStateCodec` и служит только для
 //! сохранения точного порядка, неизвестных записей и обратного двоичного кодека;
 //! игровое поведение читает типизированные состояния. Пересчёт свойств игрока
@@ -46,10 +45,20 @@
 //! повторные экземпляры одного ID. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
-//! Cure, защитные щиты и расходуемое восстановление используют общую арену
+//! Типизированные экземпляры используют общую арену
 //! `AppliedStateEntries`: поколенческий ключ задаёт экземпляр, отдельный список
-//! сохраняет исходную позицию и пустые места после удаления. Остальные семейства
-//! ниже пока ожидают переноса; полный ClearAllStates ещё не подключён.
+//! сохраняет исходную позицию и пустые места после удаления. Общий factory-проход
+//! загружает каждую известную запись, не схлопывая повторные ID. Полный
+//! межсемейный AI/End и ClearAllStates ещё не подключены; существующие точные
+//! обработчики не заменяются пустым End. Принадлежащий навыку CStateSkill
+//! представлен ссылкой на SkillSlot, а не вторым payload. Реестр навыков при
+//! удалении экземпляра освобождает и эту ссылку без дополнительного End.
+//! Save кодирует записи одним обходом арены, включая порядок чтения часов,
+//! и выдаёт runtime-порядок только при полном сопоставлении с DB-кодеком.
+//! Неизвестный хвост, нематериализованная запись или неоднозначное соответствие
+//! сохраняют исходную раскладку вне подтверждённых обновлений. Padding не
+//! восстанавливается из потерявшего его typed-поля. Клиентский snapshot пока
+//! сохраняет wire-порядок и исходные offsets; Serialize CStateSkill не достигнут.
 //! Замена Cure сохраняет runtime-позицию и отдельный offset DB-записи:
 //! между End и установкой нового экземпляра runtime-слот остаётся пустым.
 //! Уплотнение выполняется в начале UpdateAbnormality и mutable GameSave,
@@ -59,9 +68,9 @@
 //! соседей без их повторной загрузки и без сброса runtime-таймеров.
 //! У повторных защитных щитов удаление, DB-сериализация и клиентский life
 //! выбирают экземпляр по порядковому номеру среди того же ID, а не первый ID.
-//! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
-//! паутина и оглушение дополнительно сохраняют общий порядок вставки для
-//! завершения через унаследованное защитное действие `CBlindState`.
+//! Сбор душ хранится здесь без таймера; его DB-запись кодирует тот же payload. Порядок
+//! очищаемых, ослепляющих и периодических состояний проецируется из общей
+//! арены, без отдельных ID-наборов, теряющих повторные экземпляры.
 //! `CStrikeState` хранится типизированно в общей 8-байтной DB-записи,
 //! участвует в запретах движения и боя и удаляется при строгом истечении.
 //! Рыцарский удар хранит здесь единственную каноническую блокировку движения
@@ -168,7 +177,6 @@ pub(crate) use state_storage::{AppliedState, AppliedStateEntries, StateAddress, 
 
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
-use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
 use super::ai::baseai::CBaseAI;
@@ -209,21 +217,17 @@ use crate::gameserver::appserver::skills::wuxingmetal::WUXING_METAL_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwater::WUXING_WATER_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
-use crate::gameserver::appserver::skills::callosity::{
-    CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::callositystate::{
     CALLOSITY_STATE_BYTES, CallosityFamilyState,
 };
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
-use crate::gameserver::appserver::skills::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};
+use crate::gameserver::appserver::skills::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DaubPoisonState};
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
 use crate::gameserver::appserver::skills::enlargemaxhpstate::{ENLARGE_MAX_HP_STATE_BYTES, EnlargeMaxHpState};
 use crate::gameserver::appserver::skills::enlargemaxmpstate::{ENLARGE_MAX_MP_STATE_BYTES, EnlargeMaxMpState};
 use crate::gameserver::appserver::skills::heartenstate::{
     HeartenState, HEARTEN_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::heal::is_heal_skill;
 use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
 };
@@ -231,16 +235,16 @@ use crate::gameserver::appserver::skills::furystate::{
     FURY_STATE_BYTES, FURY_STATE_SKILL_ID, FuryState,
 };
 use crate::gameserver::appserver::skills::ragebreakstate::{
-    RAGE_BREAK_STATE_BYTES, RAGE_BREAK_STATE_ID, RageBreakState,
+    RAGE_BREAK_STATE_BYTES, RageBreakState,
 };
 use crate::gameserver::appserver::skills::rushstate::{
-    RUSH_STATE_BYTES, RUSH_STATE_ID, RushState,
+    RUSH_STATE_BYTES, RushState,
 };
 use crate::gameserver::appserver::skills::rushstate2::{
-    RUSH_2_STATE_BYTES, RUSH_2_STATE_ID, Rush2State,
+    RUSH_2_STATE_BYTES, Rush2State,
 };
 use crate::gameserver::appserver::skills::roarstate::{
-    ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState,
+    ROAR_STATE_BYTES, RoarState,
 };
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID,
@@ -258,27 +262,27 @@ use crate::gameserver::appserver::skills::promotionstate::{
     PromotionState, PROMOTION_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::knockoutstate::{
-    KNOCK_OUT_STATE_BYTES, KNOCK_OUT_STATE_ID, KnockOutState,
+    KNOCK_OUT_STATE_BYTES, KnockOutState,
 };
 use crate::gameserver::appserver::skills::boalockstate::{
-    BOA_LOCK_STATE_BYTES, BOA_LOCK_STATE_ID, BoaLockState,
+    BOA_LOCK_STATE_BYTES, BoaLockState,
 };
 use crate::gameserver::appserver::skills::blindstate::{
-    BLIND_STATE_BYTES, BLIND_STATE_ID, BlindState,
+    BLIND_STATE_BYTES, BlindState,
 };
 use crate::gameserver::appserver::skills::knightcutstate::{
-    KNIGHT_CUT_STATE_BYTES, KNIGHT_CUT_STATE_ID, KnightCutState,
+    KNIGHT_CUT_STATE_BYTES, KnightCutState,
 };
-use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
+use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES};
 use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
 use crate::gameserver::appserver::skills::pillarstate::{
-    PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState,
+    PILLAR_STATE_BYTES, PillarState,
 };
 use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, POISON_ARROW_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
-use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID};
+use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::{SPIDER_POISON_STATE_BYTES, SpiderPoisonState};
 use crate::gameserver::appserver::skills::spriteburnstate::{
     SPRITE_BURN_STATE_BYTES, SpriteBurnState,
@@ -287,7 +291,7 @@ use crate::gameserver::appserver::skills::spiderwebstate::{
     SPIDER_WEB_STATE_BYTES, SpiderWebState,
 };
 use crate::gameserver::appserver::skills::sealstate::{
-    SEAL_STATE_BYTES, SEAL_STATE_ID, SealState,
+    SEAL_STATE_BYTES, SealState,
 };
 use crate::gameserver::appserver::skills::swordshipstate::{
     SWORDSHIP_STATE_BYTES, SwordshipState,
@@ -304,29 +308,27 @@ use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CU
 use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BossBlueFuryTick, BOSS_BLUE_FURY_STATE_BYTES,
-    BOSS_BLUE_FURY_STATE_ID,
 };
 use crate::gameserver::appserver::skills::bossbluequakestate::{
-    BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID,
+    BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory, SkillOwner};
-use crate::gameserver::appserver::skills::statefactory::{decode_state_record, known_state_record_offsets};
+use crate::gameserver::appserver::skills::statefactory::{decode_state_record, known_state_record_offsets, known_state_record_spans};
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
-    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanState,
+    TianShenXiaFanState,
 };
 use crate::gameserver::appserver::skills::weakstate::{
     WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState,
 };
 use crate::gameserver::appserver::skills::wangshengstate::{
-    WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID, WangshengState,
+    WangshengState,
 };
 use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
 use crate::gameserver::appserver::skills::godblessstate::{
-    GOD_BLESS_STATE_BYTES, GOD_BLESS_STATE_ID, GodBlessState,
+    GOD_BLESS_STATE_BYTES, GodBlessState,
 };
-use crate::gameserver::appserver::skills::godblessstate2::GOD_BLESS_STATE_2_ID;
 use crate::gameserver::appserver::skills::soulcollectstate::{
     SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
 };
@@ -584,21 +586,17 @@ impl UndeadState {
         })
     }
 
-    fn decode_all(payload: &[u8], now_ms: u32) -> Vec<Self> {
-        let mut states = Vec::new();
-        for offset in 4..payload.len().saturating_sub(3) {
-            if read_u32(payload, offset) != Some(UNDEAD_STATE_ID) {
-                continue;
-            }
-            let base = offset + 4;
-            if base + UNDEAD_STATE_PARAMETER_BYTES > payload.len() {
-                continue;
-            }
-            let state_id = read_u32(payload, base + 4).unwrap_or_default();
-            if state_id == 0 {
-                continue;
-            }
-            states.push(Self {
+    pub(crate) fn decode_at(payload: &[u8], offset: usize, now_ms: u32) -> Option<Self> {
+        if read_u32(payload, offset) != Some(UNDEAD_STATE_ID) {
+            return None;
+        }
+        let base = offset.checked_add(4)?;
+        let _ = payload.get(base..base.checked_add(UNDEAD_STATE_PARAMETER_BYTES)?)?;
+        let state_id = read_u32(payload, base + 4)?;
+        if state_id == 0 {
+            return None;
+        }
+        Some(Self {
                 state_id,
                 state_type: read_u16(payload, base).unwrap_or_default(),
                 keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
@@ -629,9 +627,7 @@ impl UndeadState {
                 item_amount: read_u32(payload, base + 64).unwrap_or_default(),
                 frequency_ms: read_u32(payload, base + 68).unwrap_or_default(),
                 serialized_offset: Some(offset),
-            });
-        }
-        states
+        })
     }
 
     fn write_serialized(&mut self, payload: &mut [u8], offset: usize) {
@@ -973,64 +969,8 @@ impl DerefMut for LegacyStateCodec {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CanonicalStateStorage {
     state_entries: AppliedStateEntries,
-    persistent_agility_family_state: Option<PersistentAgilityFamilyState>,
-    agility_state_2: Option<AgilityState2>,
-    callosity_state: Option<CallosityFamilyState>,
-    taiji_state: Option<TaiJiState>,
-    enlarge_full_miss_state: Option<EnlargeFullMissState>,
-    enlarge_max_hp_state: Option<EnlargeMaxHpState>,
-    enlarge_max_mp_state: Option<EnlargeMaxMpState>,
-    origin_state: Option<OriginState>,
-    hearten_state: Option<HeartenState>,
-    heal_states: Vec<HealState>,
-    fury_states: Vec<FuryState>,
-    rage_break_state: Option<RageBreakState>,
-    boss_blue_fury_state: Option<BossBlueFuryState>,
-    boss_blue_quake_state: Option<BossBlueQuakeState>,
-    daub_poison_state: Option<DaubPoisonState>,
-    seal_state: Option<SealState>,
-    curable_state_order: IndexSet<u32>,
-    poison_arrow_state: Option<PoisonArrowState>,
-    poison_fog_state: Option<PoisonFogState>,
-    meteor_arrow_state: Option<MeteorArrowState>,
-    spider_poison_state: Option<SpiderPoisonState>,
-    sprite_burn_state: Option<SpriteBurnState>,
-    spider_web_state: Option<SpiderWebState>,
-    weak_state: Option<WeakState>,
-    god_bless_state: Option<GodBlessState>,
-    soul_collect_state: Option<SoulCollectState>,
-    knock_out_state: Option<KnockOutState>,
-    blind_state: Option<BlindState>,
-    boa_lock_state: Option<BoaLockState>,
-    rush_state: Option<RushState>,
-    rush_2_state: Option<Rush2State>,
-    roar_state: Option<RoarState>,
-    energy_holding_state: Option<EnergyHoldingState>,
-    pillar_state: Option<PillarState>,
-    knight_cut_state: Option<KnightCutState>,
-    blind_state_order: IndexSet<u32>,
-    blood_loss_state: Option<BloodLossState>,
-    leaf_cut_state: Option<LeafCutState>,
-    leaf_cut_2_state: Option<LeafCutState2>,
-    leaf_cut_3_state: Option<LeafCutState3>,
-    kerosene_state: Option<KeroseneState>,
-    swordship_states: Vec<SwordshipState>,
-    strike_states: Vec<StrikeState>,
-    wuxing_states: Vec<WuXingState>,
-    automatic_restore_states: Vec<AutomaticRestoreState>,
     consumable_restore_intervals: ConsumableRestoreIntervals,
-    particular_states: Vec<ParticularState>,
-    team_recruitment_states: Vec<CTeamState>,
-    battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
-    tian_shen_xia_fan_state: Option<TianShenXiaFanState>,
-    wangsheng_state: Option<WangshengState>,
-    periodic_attack_order: IndexSet<u32>,
     ex_states: LegacyStateCodec,
-    change_body_states: Vec<ChangeBodyState>,
-    extended_states: Vec<ExtendedState>,
-    undead_states: Vec<UndeadState>,
-    script_states: Vec<ScriptMoveState>,
-    ride_state: Option<RideState>,
 }
 
 impl Deref for CMoveShape {
@@ -1049,7 +989,7 @@ impl DerefMut for CMoveShape {
 
 /// Типизированные состояния, влияющие на `CPlayer::UpdateProperty`.
 /// Значения копируются из канонического хранилища в порядке соответствующих
-/// записей `m_vStates`; сырой payload остаётся только владельцем порядка.
+/// записей `m_vStates`; сырой payload не задаёт runtime-порядок.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerPropertyState {
     PersistentAgility(PersistentAgilityFamilyState),
@@ -1093,37 +1033,7 @@ pub(crate) enum MonsterPropertyState {
     BossBlueFury(BossBlueFuryState),
 }
 
-fn next_ordered_cloned_state<T: Clone>(
-    states: &[T],
-    state_id: u32,
-    occurrences: &mut BTreeMap<u32, usize>,
-    id: impl Fn(&T) -> u32,
-) -> Option<T> {
-    let occurrence = occurrences.entry(state_id).or_default();
-    let state = states
-        .iter()
-        .filter(|state| id(state) == state_id)
-        .nth(*occurrence)?
-        .clone();
-    *occurrence = occurrence.wrapping_add(1);
-    Some(state)
-}
 
-fn next_ordered_state<T: Copy>(
-    states: &[T],
-    state_id: u32,
-    occurrences: &mut BTreeMap<u32, usize>,
-    id: impl Fn(T) -> u32,
-) -> Option<T> {
-    let occurrence = occurrences.entry(state_id).or_default();
-    let state = states
-        .iter()
-        .copied()
-        .filter(|state| id(*state) == state_id)
-        .nth(*occurrence)?;
-    *occurrence = occurrence.wrapping_add(1);
-    Some(state)
-}
 
 impl Default for CMoveShape {
     fn default() -> Self {
@@ -1337,7 +1247,7 @@ impl CMoveShape {
                 continue;
             }
             if state_id == PARTICULAR_STATE_ID as i32 {
-                let state = self.particular_states.get(particular_index)?;
+                let state = self.state_entries.nth::<ParticularState>(particular_index)?;
                 if read_u32(&states, offset + 4) != Some(state.additional_data()) {
                     return None;
                 }
@@ -1348,7 +1258,7 @@ impl CMoveShape {
                 continue;
             }
             if state_id == TEAM_STATE_ID {
-                let state = self.team_recruitment_states.get(team_index)?;
+                let state = self.state_entries.nth::<CTeamState>(team_index)?;
                 team_index += 1;
                 writer.write_i32(state_id);
                 writer.write_i32(state.client_state_time());
@@ -1362,6 +1272,7 @@ impl CMoveShape {
                 offset,
                 state_id as u32,
                 now_ms,
+                occurrence,
                 &mut timed_state_now_milliseconds,
             )?);
             writer.write_u32(self.client_state_additional_data(state_id as u32, occurrence));
@@ -1369,8 +1280,8 @@ impl CMoveShape {
         if restore_index != self.state_entries.iter::<ConsumableRestoreState>().count() {
             return None;
         }
-        if particular_index != self.particular_states.len()
-            || team_index != self.team_recruitment_states.len()
+        if particular_index != self.state_entries.iter::<ParticularState>().count()
+            || team_index != self.state_entries.iter::<CTeamState>().count()
         {
             return None;
         }
@@ -1388,6 +1299,7 @@ impl CMoveShape {
         offset: usize,
         state_id: u32,
         now_ms: u32,
+        occurrence: usize,
         mut now_milliseconds: impl FnMut() -> u32,
     ) -> Option<i32> {
         let permanent = matches!(
@@ -1418,47 +1330,39 @@ impl CMoveShape {
         }
         match state_id {
             SOUL_COLLECT_STATE_ID => Some(
-                self.soul_collect_state
+                self.state_entries.iter::<SoulCollectState>().nth(occurrence).copied()
                     .map_or(default_client_state_time(), |state| state.variable_percent() as i32),
             ),
             CHANGE_BODY_STATE_ID => self
-                .change_body_states
-                .iter()
+                .state_entries.iter::<ChangeBodyState>()
                 .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
                 .map(|state| state.remaining_time_ms(now_ms) as i32),
             EX_STATE_ID | EX_STATE_NEW_ID => self
-                .extended_states
-                .iter()
+                .state_entries.iter::<ExtendedState>()
                 .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
                 .map(|state| state.remaining_time_ms(now_ms) as i32),
             UNDEAD_STATE_ID => self
-                .undead_states
-                .iter()
+                .state_entries.iter::<UndeadState>()
                 .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
                 .map(|state| state.remaining_time_ms(now_ms) as i32),
-            LEAF_CUT_STATE_ID => self
-                .leaf_cut_state
+            LEAF_CUT_STATE_ID => self.state_entries.iter::<LeafCutState>()
+                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            LEAF_CUT_2_STATE_ID => self
-                .leaf_cut_2_state
+            LEAF_CUT_2_STATE_ID => self.state_entries.iter::<LeafCutState2>().nth(occurrence).copied()
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            LEAF_CUT_3_STATE_ID => self
-                .leaf_cut_3_state
+            LEAF_CUT_3_STATE_ID => self.state_entries.iter::<LeafCutState3>()
+                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            POISON_FOG_STATE_ID => self
-                .poison_fog_state
+            POISON_FOG_STATE_ID => self.state_entries.iter::<PoisonFogState>()
+                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
                 .map(|state| state.client_time(&mut now_milliseconds)),
-            id if id == super::skills::spriteburn::SPRITE_BURN_SKILL_ID => self
-                .sprite_burn_state
+            id if id == super::skills::spriteburn::SPRITE_BURN_SKILL_ID => self.state_entries.iter::<SpriteBurnState>().nth(occurrence).copied()
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            id if id == super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => self
-                .spider_poison_state
+            id if id == super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => self.state_entries.iter::<SpiderPoisonState>().nth(occurrence).copied()
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            id if id == super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => self
-                .blood_loss_state
+            id if id == super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => self.state_entries.iter::<BloodLossState>().nth(occurrence).copied()
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            id if id == super::skills::poisonarrow::POISON_ARROW_SKILL_ID => self
-                .poison_arrow_state
+            id if id == super::skills::poisonarrow::POISON_ARROW_SKILL_ID => self.state_entries.iter::<PoisonArrowState>().nth(occurrence).copied()
                 .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
             _ => read_i32(states, offset + 4),
         }
@@ -1470,20 +1374,18 @@ impl CMoveShape {
     fn client_state_additional_data(&self, state_id: u32, occurrence: usize) -> u32 {
         match state_id {
             WEAK_STATE_ID => self
-                .weak_state
+                .state_entries.iter::<WeakState>().nth(occurrence).copied()
                 .map_or(default_additional_data(), WeakState::attack_loss),
             SOUL_COLLECT_STATE_ID => self
-                .soul_collect_state
+                .state_entries.iter::<SoulCollectState>().nth(occurrence).copied()
                 .map_or(default_additional_data(), |state| state.souls() as u32),
             ENERGY_HOLDING_STATE_ID => self
-                .energy_holding_state
+                .state_entries.iter::<EnergyHoldingState>().nth(occurrence).copied()
                 .map_or(default_additional_data(), EnergyHoldingState::parameter_percent),
-            METEOR_ARROW_MASS_SKILL_ID => self
-                .meteor_arrow_state
+            METEOR_ARROW_MASS_SKILL_ID => self.state_entries.iter::<MeteorArrowState>().nth(occurrence).copied()
                 .map_or(default_additional_data(), |state| state.additional_data() as u32),
             RIDE_STATE_ID => self
-                .ride_state
-                .as_ref()
+                .state_entries.nth::<RideState>(occurrence)
                 .map_or(default_additional_data(), RideState::additional_data),
             id if matches!(
                 id,
@@ -1581,8 +1483,8 @@ impl CMoveShape {
         }
     }
 
-    pub(crate) fn undead_states(&self) -> &[UndeadState] {
-        &self.undead_states
+    pub(crate) fn undead_states(&self) -> impl Iterator<Item = &UndeadState> {
+        self.state_entries.iter::<UndeadState>()
     }
 
     pub(crate) fn serialize_ex_states_for_save(
@@ -1591,630 +1493,226 @@ impl CMoveShape {
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
         let _ = self.compact_state_slots();
-        let payload = self.serialized_ex_states(now_ms, timed_state_now_milliseconds);
-        for state in &mut self.extended_states {
+        let payload = self.serialize_state_records(now_ms, timed_state_now_milliseconds, true);
+        self.state_entries.for_each_mut::<ExtendedState>(|state| {
             state.commit_saved_time(now_ms);
-        }
-        for state in &mut self.change_body_states {
+        });
+        self.state_entries.for_each_mut::<ChangeBodyState>(|state| {
             state.commit_saved_time(now_ms);
-        }
-        for state in &mut self.undead_states {
+        });
+        self.state_entries.for_each_mut::<UndeadState>(|state| {
             state.keep_time_ms = state.remaining_time_ms(now_ms);
-        }
+        });
         payload
     }
 
     pub(crate) fn serialized_ex_states(
         &self,
         now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Vec<u8> {
+        self.serialize_state_records(now_ms, timed_state_now_milliseconds, false)
+    }
+
+    fn serialize_state_records(
+        &self,
+        now_ms: u32,
         mut timed_state_now_milliseconds: impl FnMut() -> u32,
+        canonical_order: bool,
     ) -> Vec<u8> {
         let mut payload = self.ex_states.to_vec();
-        for state in &self.change_body_states {
-            state.update_serialized_runtime(&mut payload, now_ms);
-        }
-        for state in &self.extended_states {
-            state.update_serialized_runtime(&mut payload, now_ms);
-        }
-        for state in &self.undead_states {
-            state.update_serialized_runtime(&mut payload, now_ms);
-        }
-        let mut script_occurrences = BTreeMap::<i32, usize>::new();
-        for state in &self.script_states {
-            let state_id = state.state_id();
-            let occurrence = script_occurrences.entry(state_id).or_default();
-            let offset = known_state_record_offsets(&payload)
-                .into_iter()
-                .filter(|offset| read_u32(&payload, *offset) == Some(state_id as u32))
-                .nth(*occurrence);
-            *occurrence += 1;
-            let record = state.encoded(&mut timed_state_now_milliseconds);
-            if let Some(offset) = offset
-                && let Some(destination) = payload.get_mut(offset..offset + record.len())
-            {
-                destination.copy_from_slice(&record);
-            }
-        }
-        let mut restore_occurrences = BTreeMap::<i32, usize>::new();
-        for state in self.state_entries.iter::<ConsumableRestoreState>() {
-            let state_id = state.state_id();
-            let occurrence = restore_occurrences.entry(state_id).or_default();
-            let offset = known_state_record_offsets(&payload)
-                .into_iter()
-                .filter(|offset| read_i32(&payload, *offset) == Some(state_id))
-                .nth(*occurrence);
-            *occurrence += 1;
-            let record = state.encoded(&mut timed_state_now_milliseconds);
-            if let Some(offset) = offset
-                && let Some(destination) = payload.get_mut(offset..offset + record.len())
-            {
-                destination.copy_from_slice(&record);
-            }
-        }
-        if let Some(state) = self.leaf_cut_state {
-            state.update_serialized_runtime(&mut payload, now_ms);
-        }
-        if let Some(state) = self.leaf_cut_2_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        if let Some(state) = self.leaf_cut_3_state {
-            state.update_serialized_runtime(&mut payload, now_ms);
-        }
-        if let Some(state) = self.kerosene_state { state.update_serialized_runtime(&mut payload, now_ms); }
-        if let Some(state) = self.poison_fog_state { state.update_serialized_runtime(&mut payload, now_ms); }
-        if let Some(state) = self.meteor_arrow_state { state.update_serialized(&mut payload); }
-        if let Some(state) = self.blind_state {
-            if let Some(offset) = known_state_record_offsets(&payload)
-                .into_iter()
-                .find(|offset| read_u32(&payload, *offset) == Some(BLIND_STATE_ID))
-            {
-                write_u32(
-                    &mut payload,
-                    offset + 4,
-                    state.client_state_time(&mut timed_state_now_milliseconds),
-                );
-            }
-        }
-        if let Some(state) = self.seal_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &[
-                    state.skill_id().to_le_bytes(),
-                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
-                ]
-                .concat(),
-            );
-        }
-        let strike_offsets: Vec<_> = known_state_record_offsets(&payload)
-            .into_iter()
-            .filter(|offset| read_u32(&payload, *offset) == Some(STRIKE_STATE_ID))
-            .collect();
-        for (state, offset) in self.strike_states.iter().zip(strike_offsets) {
-            write_u32(
-                &mut payload,
-                offset + 4,
-                state.client_time(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.knock_out_state {
-            if let Some(offset) = known_state_record_offsets(&payload)
-                .into_iter()
-                .find(|offset| read_u32(&payload, *offset) == Some(KNOCK_OUT_STATE_ID))
-            {
-                write_u32(
-                    &mut payload,
-                    offset + 4,
-                    state.client_time(&mut timed_state_now_milliseconds) as u32,
-                );
-            }
-        }
-        if let Some(state) = self.spider_web_state {
-            if let Some(offset) = known_state_record_offsets(&payload)
-                .into_iter()
-                .find(|offset| read_u32(&payload, *offset) == Some(state.skill_id()))
-            {
-                write_u32(
-                    &mut payload,
-                    offset + 4,
-                    state.client_time(&mut timed_state_now_milliseconds) as u32,
-                );
-            }
-        }
-        if let Some(state) = self.god_bless_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.soul_collect_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
-        }
-        if let Some(state) = self.sprite_burn_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds));
-        }
-        if let Some(state) = self.spider_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
-        if let Some(state) = self.daub_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
-        if let Some(state) = self.boss_blue_quake_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.knight_cut_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.boa_lock_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.rush_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.rush_2_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        if let Some(state) = self.roar_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.pillar_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.rage_break_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        if let Some(state) = self.hearten_state {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        for state in &self.heal_states {
-            update_known_state_record(
-                &mut payload,
-                state.skill_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        let fury_offsets: Vec<_> = known_state_record_offsets(&payload)
-            .into_iter()
-            .filter(|offset| read_u32(&payload, *offset) == Some(FURY_STATE_SKILL_ID))
-            .collect();
-        for (state, offset) in self.fury_states.iter().zip(fury_offsets) {
-            let record = state.encoded(&mut timed_state_now_milliseconds);
-            if let Some(destination) = payload.get_mut(offset..offset + FURY_STATE_BYTES) {
-                destination.copy_from_slice(&record);
-            }
-        }
-        if let Some(state) = self.agility_state_2 {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        if let Some(state) = self.blood_loss_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        if let Some(state) = self.energy_holding_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
-        }
-        if let Some(state) = self.callosity_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        if let Some(state) = self.boss_blue_fury_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        if let Some(state) = self.poison_arrow_state {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
-        }
-        let mut shield_occurrences = BTreeMap::<u32, usize>::new();
-        for state in self.state_entries.iter::<DefenseShieldState>() {
-            let state_id = state.skill_id();
-            let occurrence = shield_occurrences.entry(state_id).or_default();
-            let offset = known_state_record_offsets(&payload)
-                .into_iter()
-                .filter(|offset| read_u32(&payload, *offset) == Some(state_id))
-                .nth(*occurrence);
-            *occurrence += 1;
-            let mut update_record = |record: &[u8]| {
-                if let Some(offset) = offset
-                    && let Some(destination) = payload.get_mut(offset..offset + record.len())
-                {
-                    destination.copy_from_slice(record);
-                }
+        let spans = known_state_record_spans(&payload);
+        let declared_count = read_u32(&payload, 0).map(|count| count as usize);
+        let parsed_end = spans.last().map_or(4, |(offset, amount)| offset + amount);
+        let mut complete = declared_count == Some(spans.len()) && parsed_end == payload.len();
+        let mut used = vec![false; spans.len()];
+        let mut ordered_records = Vec::with_capacity(spans.len());
+
+        for index in 0..self.state_entries.len() {
+            let Some(address) = self.state_entries.address(index) else { continue };
+            let StateAddress::Applied(key) = address else {
+                // Serialize зарегистрированного CStateSkill ещё не восстановлен.
+                complete = false;
+                continue;
             };
-            match state {
-                DefenseShieldState::Mana(state) => {
-                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
+            let Some(state) = self.state_entries.get(key) else {
+                complete = false;
+                continue;
+            };
+            let state_id = state.state_id();
+            let exact_span = match state {
+                StateData::ChangeBody(state) => Some(state.serialized_span()),
+                StateData::Extended(state) => Some(state.serialized_span()),
+                StateData::Undead(state) => Some(state.serialized_span()),
+                StateData::LeafCut(state) => Some(state.serialized_span()),
+                StateData::LeafCut3(state) => Some(state.serialized_span()),
+                StateData::Kerosene(state) => Some(state.serialized_span()),
+                StateData::PoisonFog(state) => Some(state.serialized_span()),
+                StateData::MeteorArrow(state) => Some(state.serialized_span()),
+                StateData::Ride(state) => Some(state.serialized_span()),
+                _ => None,
+            };
+            let record_index = if let Some(span) = exact_span {
+                span.and_then(|span| spans.iter().enumerate().position(|(index, candidate)| {
+                    !used[index] && *candidate == span
+                        && read_u32(&payload, candidate.0) == Some(state_id)
+                }))
+            } else if let StateData::Swordship(state) = state {
+                // Replace сохраняет runtime-позицию, но DB remove+append может
+                // поменять порядок повторных ID. Все поля этой записи известны.
+                let record = state.encoded();
+                spans.iter().enumerate().position(|(index, (offset, amount))| {
+                    !used[index] && payload.get(*offset..offset + amount) == Some(record.as_slice())
+                })
+            } else {
+                let runtime_count = self.state_entries.iter_data()
+                    .filter(|state| state.state_id() == state_id).count();
+                let wire_count = spans.iter()
+                    .filter(|(offset, _)| read_u32(&payload, *offset) == Some(state_id)).count();
+                (runtime_count == wire_count).then(|| {
+                    spans.iter().enumerate().position(|(index, (offset, _))| {
+                        !used[index] && read_u32(&payload, *offset) == Some(state_id)
+                    })
+                }).flatten()
+            };
+            if let Some(record_index) = record_index {
+                used[record_index] = true;
+            } else {
+                complete = false;
+            }
+
+            // Часы вызываются здесь, в едином порядке m_vStates. Отсутствие
+            // однозначной DB-пары запрещает запись, но не добавляет type-pass.
+            let encoded = match state {
+                StateData::ChangeBody(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
                 }
-                DefenseShieldState::Machine(state) => {
-                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
+                StateData::Extended(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
                 }
-                DefenseShieldState::Life(state) => {
-                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
+                StateData::Undead(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
                 }
-                DefenseShieldState::Promotion(state) => {
-                    update_record(&state.encoded(&mut timed_state_now_milliseconds));
+                StateData::LeafCut(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
                 }
+                StateData::LeafCut3(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
+                }
+                StateData::Kerosene(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
+                }
+                StateData::PoisonFog(state) => {
+                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    None
+                }
+                StateData::MeteorArrow(state) => {
+                    if record_index.is_some() { state.update_serialized(&mut payload); }
+                    None
+                }
+                StateData::Script(state) => Some(state.encoded(&mut timed_state_now_milliseconds)),
+                StateData::ConsumableRestore(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Blind(state) => Some([
+                    state_id.to_le_bytes(),
+                    state.client_state_time(&mut timed_state_now_milliseconds).to_le_bytes(),
+                ].concat()),
+                StateData::Seal(state) => Some([
+                    state_id.to_le_bytes(),
+                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
+                ].concat()),
+                StateData::Strike(state) => Some([
+                    state_id.to_le_bytes(),
+                    state.client_time(&mut timed_state_now_milliseconds).to_le_bytes(),
+                ].concat()),
+                StateData::KnockOut(state) => Some([
+                    state_id.to_le_bytes(),
+                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
+                ].concat()),
+                StateData::SpiderWeb(state) => Some([
+                    state_id.to_le_bytes(),
+                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
+                ].concat()),
+                StateData::GodBless(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::SoulCollect(state) => Some(state.encoded().to_vec()),
+                StateData::SpriteBurn(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::SpiderPoison(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::DaubPoison(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::BossBlueQuake(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::KnightCut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::BoaLock(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Rush(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Roar(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Pillar(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::RageBreak(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Hearten(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Heal(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Fury(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::TianShenXiaFan(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::Wangsheng(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::DefenseShield(state) => Some(match state {
+                    DefenseShieldState::Mana(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
+                    DefenseShieldState::Machine(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
+                    DefenseShieldState::Life(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
+                    DefenseShieldState::Promotion(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
+                }),
+                StateData::LeafCut2(state) => Some(state.encoded(now_ms)),
+                StateData::Rush2(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::Agility2(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::BloodLoss(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
+                StateData::Callosity(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::BossBlueFury(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::PoisonArrow(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::BattleFairyAttribute(state) => Some(state.encoded(now_ms).to_vec()),
+                // Эти неизменяемые записи уже синхронизированы при установке.
+                // В частности, не обнуляем сохранённый padding tagWuXingState.
+                StateData::PersistentAgility(_) | StateData::TaiJi(_)
+                | StateData::EnlargeFullMiss(_) | StateData::EnlargeMaxHp(_)
+                | StateData::EnlargeMaxMp(_) | StateData::Origin(_) | StateData::Cure(_)
+                | StateData::Weak(_) | StateData::Swordship(_) | StateData::WuXing(_)
+                | StateData::AutomaticRestore(_) | StateData::Particular(_)
+                | StateData::Team(_) | StateData::Ride(_) => None,
+            };
+            if let Some(record_index) = record_index {
+                let (offset, amount) = spans[record_index];
+                if let Some(record) = encoded {
+                    if record.len() == amount {
+                        payload[offset..offset + amount].copy_from_slice(&record);
+                    } else {
+                        complete = false;
+                    }
+                }
+                ordered_records.push(record_index);
             }
         }
-        for state in &self.battle_fairy_attribute_states {
-            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+
+        if !canonical_order || !complete || used.iter().any(|used| !used) {
+            return payload;
         }
-        if let Some(state) = self.tian_shen_xia_fan_state {
-            update_known_state_record(
-                &mut payload,
-                state.state_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
+        let mut ordered = Vec::with_capacity(payload.len());
+        ordered.extend_from_slice(&payload[..4]);
+        for record_index in ordered_records {
+            let (offset, amount) = spans[record_index];
+            ordered.extend_from_slice(&payload[offset..offset + amount]);
         }
-        if let Some(state) = self.wangsheng_state {
-            update_known_state_record(
-                &mut payload,
-                state.state_id(),
-                &state.encoded(&mut timed_state_now_milliseconds),
-            );
-        }
-        payload
+        ordered
     }
 
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory) {
-        let known_offsets = known_state_record_offsets(&states);
         let state_owner = self.shape.identity();
         self.state_entries.clear();
-        for state in known_offsets.iter().copied()
-            .filter_map(|offset| decode_state_record(&states, offset))
-        {
-            self.state_entries.append_data(state);
+        for offset in known_state_record_offsets(&states) {
+            if let Some(state) = decode_state_record(&states, offset, state_owner, skill_factory) {
+                self.state_entries.append_data(state);
+            }
         }
         self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
-        self.automatic_restore_states = known_offsets
-            .iter()
-            .copied()
-            .filter_map(|offset| AutomaticRestoreState::decode(&states, offset))
-            .collect();
-        self.particular_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| read_u32(&states, *offset) == Some(PARTICULAR_STATE_ID))
-            .filter_map(|offset| ParticularState::decode(&states, offset).ok())
-            .collect();
-        self.team_recruitment_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| read_i32(&states, *offset) == Some(TEAM_STATE_ID))
-            .filter_map(|offset| CTeamState::decode(&states, offset).ok())
-            .collect();
-        self.change_body_states = ChangeBodyState::decode_all(&states, 0);
-        self.change_body_states.retain(|state| {
-            state
-                .serialized_span()
-                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
-        });
-        self.extended_states = ExtendedState::decode_all(&states, 0);
-        self.extended_states.retain(|state| {
-            state
-                .serialized_span()
-                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
-        });
-        self.undead_states = UndeadState::decode_all(&states, 0);
-        self.undead_states.retain(|state| {
-            state
-                .serialized_span()
-                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
-        });
-        self.ride_state = RideState::decode(&states).filter(|state| {
-            state
-                .serialized_span()
-                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
-        });
-        self.script_states = known_offsets
-            .iter()
-            .copied()
-            .filter_map(|offset| ScriptMoveState::decode(&states, offset).ok())
-            .collect();
-        self.periodic_attack_order.shift_remove(&LEAF_CUT_STATE_ID);
-        self.leaf_cut_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(LEAF_CUT_STATE_ID))
-            .and_then(|offset| LeafCutState::decode(&states, offset, 0).ok());
-        if let Some(state) = self.leaf_cut_state {
-            self.periodic_attack_order.insert(state.skill_id());
-        }
-        self.periodic_attack_order.shift_remove(&LEAF_CUT_2_STATE_ID);
-        self.leaf_cut_2_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(LEAF_CUT_2_STATE_ID))
-            .and_then(|offset| LeafCutState2::decode(&states, offset, 0).ok());
-        if self.leaf_cut_2_state.is_some() { self.periodic_attack_order.insert(LEAF_CUT_2_STATE_ID); }
-        self.periodic_attack_order.shift_remove(&LEAF_CUT_3_STATE_ID);
-        self.leaf_cut_3_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(LEAF_CUT_3_STATE_ID))
-            .and_then(|offset| LeafCutState3::decode(&states, offset, 0).ok());
-        if let Some(state) = self.leaf_cut_3_state {
-            self.periodic_attack_order.insert(state.skill_id());
-        }
-        self.periodic_attack_order.shift_remove(&KEROSENE_STATE_ID);
-        self.kerosene_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(KEROSENE_STATE_ID)).and_then(|offset| KeroseneState::decode(&states, offset, 0).ok());
-        if let Some(state) = self.kerosene_state { self.periodic_attack_order.insert(state.skill_id()); }
-        self.curable_state_order.shift_remove(&POISON_FOG_STATE_ID);
-        self.poison_fog_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(POISON_FOG_STATE_ID)).and_then(|offset| PoisonFogState::decode(&states, offset, 0).ok());
-        if let Some(state) = self.poison_fog_state { self.curable_state_order.insert(state.skill_id()); }
-        self.meteor_arrow_state = known_offsets.iter().copied()
-            .find(|offset| read_u32(&states, *offset) == Some(METEOR_ARROW_MASS_SKILL_ID))
-            .and_then(|offset| MeteorArrowState::decode(&states, offset).ok());
-        self.blind_state_order.shift_remove(&BLIND_STATE_ID);
-        self.blind_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(BLIND_STATE_ID))
-            .and_then(|offset| BlindState::decode(&states, offset).ok());
-        if let Some(state) = self.blind_state {
-            self.blind_state_order.insert(state.skill_id());
-        }
-        self.blind_state_order.shift_remove(&KNOCK_OUT_STATE_ID);
-        self.curable_state_order.shift_remove(&KNOCK_OUT_STATE_ID);
-        self.knock_out_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(KNOCK_OUT_STATE_ID))
-            .and_then(|offset| KnockOutState::decode(&states, offset).ok());
-        if let Some(state) = self.knock_out_state {
-            self.blind_state_order.insert(state.skill_id());
-            self.curable_state_order.insert(state.skill_id());
-        }
-        self.blind_state_order.shift_remove(&super::skills::spiderweb::SPIDER_WEB_SKILL_ID);
-        self.curable_state_order.shift_remove(&super::skills::spiderweb::SPIDER_WEB_SKILL_ID);
-        self.spider_web_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderweb::SPIDER_WEB_SKILL_ID))
-            .and_then(|offset| SpiderWebState::decode(&states, offset).ok());
-        if let Some(state) = self.spider_web_state {
-            self.blind_state_order.insert(state.skill_id());
-            self.curable_state_order.insert(state.skill_id());
-        }
-        self.blind_state_order.shift_remove(&SEAL_STATE_ID);
-        self.curable_state_order.shift_remove(&SEAL_STATE_ID);
-        self.seal_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(SEAL_STATE_ID))
-            .and_then(|offset| SealState::decode(&states, offset).ok());
-        if let Some(state) = self.seal_state {
-            self.blind_state_order.insert(state.skill_id());
-            self.curable_state_order.insert(state.skill_id());
-        }
-        self.god_bless_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset).is_some_and(|id| matches!(id, GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID)))
-            .and_then(|offset| GodBlessState::decode(&states, offset).ok());
-        self.weak_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(WEAK_STATE_ID))
-            .and_then(|offset| WeakState::decode(&states, offset).ok());
-        self.soul_collect_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(SOUL_COLLECT_STATE_ID))
-            .and_then(|offset| SoulCollectState::decode(&states, offset).ok());
-        self.periodic_attack_order.shift_remove(&super::skills::spriteburn::SPRITE_BURN_SKILL_ID);
-        self.curable_state_order.shift_remove(&super::skills::spriteburn::SPRITE_BURN_SKILL_ID);
-        self.sprite_burn_state = known_offsets.iter().copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::spriteburn::SPRITE_BURN_SKILL_ID))
-            .and_then(|offset| SpriteBurnState::decode(&states, offset, 0).ok());
-        if let Some(state) = self.sprite_burn_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
-        self.periodic_attack_order.shift_remove(&super::skills::spiderpoison::SPIDER_POISON_SKILL_ID); self.curable_state_order.shift_remove(&super::skills::spiderpoison::SPIDER_POISON_SKILL_ID);
-        self.spider_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID)).and_then(|offset| SpiderPoisonState::decode(&states, offset, 0).ok());
-        if let Some(state) = self.spider_poison_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
-        self.daub_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(DAUB_POISON_STATE_ID)).and_then(|offset| DaubPoisonState::decode(&states, offset).ok());
-        self.curable_state_order.shift_remove(&BOSS_BLUE_QUAKE_STATE_ID);
-        self.boss_blue_quake_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(BOSS_BLUE_QUAKE_STATE_ID))
-            .and_then(|offset| BossBlueQuakeState::decode(&states, offset).ok());
-        if self.boss_blue_quake_state.is_some() {
-            self.curable_state_order.insert(BOSS_BLUE_QUAKE_STATE_ID);
-        }
-        self.curable_state_order.shift_remove(&KNIGHT_CUT_STATE_ID);
-        self.knight_cut_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(KNIGHT_CUT_STATE_ID))
-            .and_then(|offset| KnightCutState::decode(&states, offset).ok());
-        if self.knight_cut_state.is_some() {
-            self.curable_state_order.insert(KNIGHT_CUT_STATE_ID);
-        }
-        self.curable_state_order.shift_remove(&BOA_LOCK_STATE_ID);
-        self.boa_lock_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(BOA_LOCK_STATE_ID))
-            .and_then(|offset| BoaLockState::decode(&states, offset).ok());
-        if self.boa_lock_state.is_some() {
-            self.curable_state_order.insert(BOA_LOCK_STATE_ID);
-        }
-        self.curable_state_order.shift_remove(&RUSH_STATE_ID);
-        self.rush_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(RUSH_STATE_ID))
-            .and_then(|offset| RushState::decode(&states, offset).ok());
-        if self.rush_state.is_some() {
-            self.curable_state_order.insert(RUSH_STATE_ID);
-        }
-        self.curable_state_order.shift_remove(&RUSH_2_STATE_ID);
-        self.rush_2_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(RUSH_2_STATE_ID))
-            .and_then(|offset| Rush2State::decode(&states, offset).ok());
-        if self.rush_2_state.is_some() {
-            self.curable_state_order.insert(RUSH_2_STATE_ID);
-        }
-        self.roar_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(ROAR_STATE_ID))
-            .and_then(|offset| RoarState::decode(&states, offset).ok());
-        self.pillar_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(PILLAR_STATE_ID))
-            .and_then(|offset| PillarState::decode(&states, offset).ok());
-        self.rage_break_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(RAGE_BREAK_STATE_ID))
-            .and_then(|offset| RageBreakState::decode(&states, offset).ok());
-        self.swordship_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| {
-                read_u32(&states, *offset).is_some_and(super::skills::swordship::is_swordship_skill)
-            })
-            .filter_map(|offset| SwordshipState::decode(&states, offset).ok())
-            .collect();
-        self.blind_state_order.shift_remove(&STRIKE_STATE_ID);
-        self.strike_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| read_u32(&states, *offset) == Some(STRIKE_STATE_ID))
-            .filter_map(|offset| StrikeState::decode(&states, offset).ok())
-            .collect();
-        if !self.strike_states.is_empty() {
-            self.blind_state_order.insert(STRIKE_STATE_ID);
-        }
-        self.wuxing_states = known_offsets
-            .iter()
-            .copied()
-            .filter_map(|offset| WuXingState::decode(&states, offset).ok())
-            .collect();
-        self.heal_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| read_u32(&states, *offset).is_some_and(is_heal_skill))
-            .filter_map(|offset| HealState::decode(&states, offset, state_owner).ok())
-            .collect();
-        self.fury_states = known_offsets
-            .iter()
-            .copied()
-            .filter(|offset| read_u32(&states, *offset) == Some(FURY_STATE_SKILL_ID))
-            .filter_map(|offset| FuryState::decode(&states, offset).ok())
-            .collect();
-        self.enlarge_full_miss_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID))
-            .and_then(|offset| EnlargeFullMissState::decode(&states, offset).ok());
-        self.taiji_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(TAIJI_SKILL_ID)).and_then(|offset| TaiJiState::decode(&states, offset).ok());
-        self.enlarge_max_hp_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(ENLARGE_MAX_HP_SKILL_ID)).and_then(|offset| EnlargeMaxHpState::decode(&states, offset).ok());
-        self.enlarge_max_mp_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(ENLARGE_MAX_MP_SKILL_ID)).and_then(|offset| EnlargeMaxMpState::decode(&states, offset).ok());
-        self.origin_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(ORIGIN_SKILL_ID)).and_then(|offset| OriginState::decode(&states, offset).ok());
-        self.hearten_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::hearten::HEARTEN_SKILL_ID))
-            .and_then(|offset| HeartenState::decode(&states, offset, 0).ok());
-        self.persistent_agility_family_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset).is_some_and(PersistentAgilityFamilyState::is_known_skill))
-            .and_then(|offset| PersistentAgilityFamilyState::decode(&states, offset).ok());
-        self.agility_state_2 = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::agility2::AGILITY_2_SKILL_ID))
-            .and_then(|offset| AgilityState2::decode(&states, offset, 0).ok());
-        self.periodic_attack_order
-            .shift_remove(&super::skills::bloodloss::BLOOD_LOSS_SKILL_ID);
-        self.blood_loss_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::bloodloss::BLOOD_LOSS_SKILL_ID))
-            .and_then(|offset| BloodLossState::decode(&states, offset, 0).ok());
-        if self.blood_loss_state.is_some() {
-            self.periodic_attack_order.insert(super::skills::bloodloss::BLOOD_LOSS_SKILL_ID);
-        }
-        self.energy_holding_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(ENERGY_HOLDING_STATE_ID))
-            .and_then(|offset| {
-                let level = read_u32(&states, offset + 4)?;
-                let parameter_percent = skill_factory
-                    .query_skill_base_properties(ENERGY_HOLDING_STATE_ID, level as i32)?
-                    .query_property(super::skills::energyholding::PARAMETER_PERCENT);
-                EnergyHoldingState::decode(&states, offset, parameter_percent).ok()
-            });
-        self.callosity_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| {
-                read_u32(&states, *offset)
-                    .is_some_and(|id| matches!(id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID))
-            })
-            .and_then(|offset| CallosityFamilyState::decode(&states, offset).ok());
-        self.boss_blue_fury_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(BOSS_BLUE_FURY_STATE_ID))
-            .and_then(|offset| BossBlueFuryState::decode(&states, offset, 0).ok());
-        self.periodic_attack_order
-            .shift_remove(&super::skills::poisonarrow::POISON_ARROW_SKILL_ID);
-        self.poison_arrow_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(super::skills::poisonarrow::POISON_ARROW_SKILL_ID))
-            .and_then(|offset| PoisonArrowState::decode(&states, offset, 0).ok());
-        if self.poison_arrow_state.is_some() {
-            self.periodic_attack_order.insert(super::skills::poisonarrow::POISON_ARROW_SKILL_ID);
-        }
-        self.battle_fairy_attribute_states = known_offsets
-            .iter()
-            .copied()
-            .filter_map(|offset| BattleFairyAttributeState::decode(&states, offset).ok())
-            .collect();
-        self.tian_shen_xia_fan_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(TIAN_SHEN_XIA_FAN_STATE_ID))
-            .and_then(|offset| TianShenXiaFanState::decode(&states, offset).ok());
-        self.wangsheng_state = known_offsets
-            .iter()
-            .copied()
-            .find(|offset| read_u32(&states, *offset) == Some(WANGSHENG_STATE_ID))
-            .and_then(|offset| WangshengState::decode(&states, offset).ok());
         self.ex_states.replace(states);
     }
 
@@ -2223,73 +1721,18 @@ impl CMoveShape {
         self.current_skill_id = None;
         self.item_skill_ids.clear();
         self.ex_states.clear();
-        self.persistent_agility_family_state = None;
-        self.agility_state_2 = None;
-        self.callosity_state = None;
-        self.taiji_state = None;
-        self.enlarge_full_miss_state = None;
-        self.enlarge_max_hp_state = None;
-        self.enlarge_max_mp_state = None;
-        self.origin_state = None;
-        self.meteor_arrow_state = None;
-        self.hearten_state = None;
-        self.heal_states.clear();
-        self.fury_states.clear();
-        self.rage_break_state = None;
-        self.boss_blue_fury_state = None;
-        self.boss_blue_quake_state = None;
         self.state_entries.clear();
-        self.seal_state = None;
-        self.curable_state_order.clear();
-        self.poison_arrow_state = None;
-        self.poison_fog_state = None;
-        self.spider_poison_state = None;
-        self.sprite_burn_state = None;
-        self.spider_web_state = None;
-        self.weak_state = None;
-        self.god_bless_state = None;
-        self.soul_collect_state = None;
-        self.knock_out_state = None;
-        self.blind_state = None;
-        self.boa_lock_state = None;
-        self.rush_state = None;
-        self.rush_2_state = None;
-        self.roar_state = None;
-        self.energy_holding_state = None;
-        self.pillar_state = None;
-        self.knight_cut_state = None;
-        self.blind_state_order.clear();
-        self.blood_loss_state = None;
-        self.leaf_cut_state = None;
-        self.leaf_cut_2_state = None;
-        self.leaf_cut_3_state = None;
-        self.kerosene_state = None;
-        self.swordship_states.clear();
-        self.strike_states.clear();
-        self.wuxing_states.clear();
-        self.automatic_restore_states.clear();
-        self.particular_states.clear();
-        self.team_recruitment_states.clear();
         self.consumable_restore_intervals = ConsumableRestoreIntervals::default();
-        self.battle_fairy_attribute_states.clear();
-        self.tian_shen_xia_fan_state = None;
-        self.wangsheng_state = None;
-        self.periodic_attack_order.clear();
-        self.change_body_states.clear();
-        self.extended_states.clear();
-        self.undead_states.clear();
-        self.script_states.clear();
-        self.ride_state = None;
         self.can_fight_count = 0;
         self.can_fight = true;
     }
 
-    pub(crate) const fn ride_state(&self) -> Option<&RideState> {
-        self.state_storage.ride_state.as_ref()
+    pub(crate) fn ride_state(&self) -> Option<&RideState> {
+        self.state_entries.first::<RideState>()
     }
 
-    pub(crate) const fn ride_state_mut(&mut self) -> Option<&mut RideState> {
-        self.state_storage.ride_state.as_mut()
+    pub(crate) fn ride_state_mut(&mut self) -> Option<&mut RideState> {
+        self.state_entries.first_mut::<RideState>()
     }
 
     /// Начальный scalar-prefix `CMoveShape::OnEnterRegion` и итог повторного
@@ -2317,55 +1760,12 @@ impl CMoveShape {
         self.can_fight = self.can_fight_count < 1;
     }
 
-    pub(crate) const fn has_ride_state(&self) -> bool {
-        self.state_storage.ride_state.is_some()
+    pub(crate) fn has_ride_state(&self) -> bool {
+        self.state_entries.first::<RideState>().is_some()
     }
 
     pub(crate) fn has_materialized_abnormality(&self) -> bool {
-        self.state_storage.agility_state_2.is_some()
-            || self.state_storage.hearten_state.is_some()
-            || !self.state_storage.heal_states.is_empty()
-            || !self.state_storage.fury_states.is_empty()
-            || self.state_storage.rage_break_state.is_some()
-            || self.state_storage.boss_blue_fury_state.is_some()
-            || self.state_storage.boss_blue_quake_state.is_some()
-            || self.state_storage.state_entries.first::<CureState>().is_some()
-            || self.state_storage.daub_poison_state.is_some()
-            || self.state_storage.seal_state.is_some()
-            || self.state_storage.poison_arrow_state.is_some()
-            || self.state_storage.poison_fog_state.is_some()
-            || self.state_storage.spider_poison_state.is_some()
-            || self.state_storage.sprite_burn_state.is_some()
-            || self.state_storage.spider_web_state.is_some()
-            || self.state_storage.weak_state.is_some()
-            || self.state_storage.god_bless_state.is_some()
-            || self.state_storage.soul_collect_state.is_some()
-            || self.state_storage.knock_out_state.is_some()
-            || self.state_storage.blind_state.is_some()
-            || self.state_storage.boa_lock_state.is_some()
-            || self.state_storage.rush_state.is_some()
-            || self.state_storage.rush_2_state.is_some()
-            || self.state_storage.roar_state.is_some()
-            || self.state_storage.pillar_state.is_some()
-            || self.state_storage.knight_cut_state.is_some()
-            || self.state_storage.tian_shen_xia_fan_state.is_some()
-            || self.state_storage.wangsheng_state.is_some()
-            || self.state_storage.blood_loss_state.is_some()
-            || self.state_storage.kerosene_state.is_some()
-            || self.state_storage.leaf_cut_state.is_some()
-            || self.state_storage.leaf_cut_2_state.is_some()
-            || self.state_storage.leaf_cut_3_state.is_some()
-            || !self.state_storage.strike_states.is_empty()
-            || !self.state_storage.battle_fairy_attribute_states.is_empty()
-            || !self.state_storage.particular_states.is_empty()
-            || self.state_storage.state_entries.iter::<ConsumableRestoreState>().next().is_some()
-            || !self.state_storage.team_recruitment_states.is_empty()
-            || self.state_storage.state_entries.first::<DefenseShieldState>().is_some()
-            || !self.state_storage.change_body_states.is_empty()
-            || !self.state_storage.extended_states.is_empty()
-            || !self.state_storage.undead_states.is_empty()
-            || self.state_storage.ride_state.is_some()
-            || !self.state_storage.script_states.is_empty()
+        self.state_entries.iter_data().any(StateData::has_materialized_ai)
     }
 
     pub(crate) fn restore_automatic_hp_mp_states(
@@ -2384,14 +1784,19 @@ impl CMoveShape {
         for state in states {
             self.append_serialized_state_record(&state.encoded_for_install());
         }
-        self.automatic_restore_states = states.into();
+        for key in self.state_entries.keys::<AutomaticRestoreState>() {
+            let _ = self.state_entries.take::<AutomaticRestoreState>(key);
+        }
+        for state in states {
+            self.state_entries.append(state);
+        }
     }
 
     pub(crate) fn activate_loaded_automatic_restore_states(&mut self, now_ms: u32) -> usize {
-        for state in &mut self.automatic_restore_states {
+        self.state_entries.for_each_mut::<AutomaticRestoreState>(|state| {
             *state = state.activate_loaded(now_ms);
-        }
-        self.automatic_restore_states.len()
+        });
+        self.state_entries.iter::<AutomaticRestoreState>().count()
     }
 
     pub(crate) fn begin_consumable_health_restore(
@@ -2511,8 +1916,8 @@ impl CMoveShape {
         true
     }
 
-    pub(crate) fn particular_states(&self) -> &[ParticularState] {
-        &self.particular_states
+    pub(crate) fn particular_states(&self) -> impl Iterator<Item = &ParticularState> {
+        self.state_entries.iter::<ParticularState>()
     }
 
     pub(crate) fn add_particular_state(
@@ -2520,19 +1925,19 @@ impl CMoveShape {
         state: ParticularState,
     ) -> Option<ParticularState> {
         if self
-            .particular_states
-            .iter()
+            .state_entries.iter::<ParticularState>()
             .any(|stored| stored.additional_data() == state.additional_data())
         {
             return None;
         }
         self.append_serialized_state_record(&state.encoded());
-        self.particular_states.push(state);
+        self.state_entries.append(state);
         Some(state)
     }
 
     pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
-        let states = std::mem::take(&mut self.particular_states);
+        let states = self.state_entries.keys::<ParticularState>().into_iter()
+            .filter_map(|key| self.state_entries.take::<ParticularState>(key)).collect();
         while self.remove_serialized_state_record(PARTICULAR_STATE_ID, PARTICULAR_STATE_BYTES) {}
         states
     }
@@ -2541,8 +1946,8 @@ impl CMoveShape {
         &mut self,
         index: usize,
     ) -> Option<ParticularState> {
-        let state = (index < self.particular_states.len())
-            .then(|| self.particular_states.remove(index))?;
+        let key = self.state_entries.key_at::<ParticularState>(index)?;
+        let state = self.state_entries.take::<ParticularState>(key)?;
         let offset = known_state_record_offsets(&self.ex_states)
             .into_iter()
             .filter(|offset| read_u32(&self.ex_states, *offset) == Some(PARTICULAR_STATE_ID))
@@ -2553,28 +1958,28 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn team_recruitment_states(&self) -> &[CTeamState] {
-        &self.team_recruitment_states
+    pub(crate) fn team_recruitment_states(&self) -> impl Iterator<Item = &CTeamState> {
+        self.state_entries.iter::<CTeamState>()
     }
 
     pub(crate) fn team_recruitment_state_mut(
         &mut self,
         index: usize,
     ) -> Option<&mut CTeamState> {
-        self.team_recruitment_states.get_mut(index)
+        self.state_entries.nth_mut::<CTeamState>(index)
     }
 
     pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.team_recruitment_states.push(state);
+        self.state_entries.append(state);
     }
 
     pub(crate) fn remove_team_recruitment_state_at(
         &mut self,
         index: usize,
     ) -> Option<CTeamState> {
-        let state = (index < self.team_recruitment_states.len())
-            .then(|| self.team_recruitment_states.remove(index))?;
+        let key = self.state_entries.key_at::<CTeamState>(index)?;
+        let state = self.state_entries.take::<CTeamState>(key)?;
         let offset = known_state_record_offsets(&self.ex_states)
             .into_iter()
             .filter(|offset| read_i32(&self.ex_states, *offset) == Some(TEAM_STATE_ID))
@@ -2588,18 +1993,18 @@ impl CMoveShape {
     }
 
     pub(crate) fn automatic_restore_state(&self, index: usize) -> Option<AutomaticRestoreState> {
-        self.automatic_restore_states.get(index).copied()
+        self.state_entries.nth::<AutomaticRestoreState>(index).copied()
     }
 
     pub(crate) fn automatic_restore_state_mut(
         &mut self,
         index: usize,
     ) -> Option<&mut AutomaticRestoreState> {
-        self.automatic_restore_states.get_mut(index)
+        self.state_entries.nth_mut::<AutomaticRestoreState>(index)
     }
 
-    pub(crate) const fn automatic_restore_state_count(&self) -> usize {
-        self.state_storage.automatic_restore_states.len()
+    pub(crate) fn automatic_restore_state_count(&self) -> usize {
+        self.state_storage.state_entries.iter::<AutomaticRestoreState>().count()
     }
 
     /// Точный фабричный диапазон `CMoveShape::AddState`: остальные ID не
@@ -2621,453 +2026,47 @@ impl CMoveShape {
             started_at_ms,
         )?;
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.script_states.push(state);
+        self.state_entries.append(state);
         Some(state)
     }
 
     /// Точный `GetStateNumByStateID`: считает все живые экземпляры с данным
     /// базовым `CState::m_lID`, независимо от concrete owner-а состояния.
     pub(crate) fn state_count_by_state_id(&self, state_id: i32) -> u32 {
-        let scripted = self
-            .script_states
-            .iter()
-            .filter(|state| state.state_id() == state_id)
-            .count();
-        let consumable_restore = self.state_entries.iter::<ConsumableRestoreState>()
-            .filter(|state| state.state_id() == state_id)
-            .count();
-        let change_body = (state_id == 0x37)
-            .then_some(self.change_body_states.len())
-            .unwrap_or(0);
-        let extended = self
-            .extended_states
-            .iter()
-            .filter(|state| state.kind.state_id() as i32 == state_id)
-            .count();
-        let undead = (state_id == UNDEAD_STATE_ID as i32)
-            .then_some(self.undead_states.len())
-            .unwrap_or(0);
-        let ride = usize::from(state_id == RIDE_STATE_ID as i32 && self.ride_state.is_some());
-        let automatic_restore = self
-            .automatic_restore_states
-            .iter()
-            .filter(|state| state.state_id() as i32 == state_id)
-            .count();
-        let particular = (state_id == PARTICULAR_STATE_ID as i32)
-            .then_some(self.particular_states.len())
-            .unwrap_or(0);
-        let team_recruitment = (state_id == TEAM_STATE_ID)
-            .then_some(self.team_recruitment_states.len())
-            .unwrap_or(0);
-        let callosity = usize::from(
-            self.callosity_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let agility = usize::from(
-            self.persistent_agility_family_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        ) + usize::from(
-            self.agility_state_2
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let taiji = usize::from(
-            self.taiji_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let enlarge_full_miss = usize::from(
-            self.enlarge_full_miss_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let enlarge_max_hp = usize::from(
-            self.enlarge_max_hp_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let enlarge_max_mp = usize::from(
-            self.enlarge_max_mp_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let origin = usize::from(
-            self.origin_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let hearten = usize::from(
-            self.hearten_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let heal = self
-            .heal_states
-            .iter()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        let fury = self
-            .fury_states
-            .iter()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        let rage_break = usize::from(
-            self.rage_break_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let boss_blue_fury = usize::from(
-            self.boss_blue_fury_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let boss_blue_quake = usize::from(
-            self.boss_blue_quake_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let cure = self.state_entries.iter::<CureState>()
-            .filter(|state| state.skill_id() as i32 == state_id).count();
-        let daub_poison = usize::from(
-            self.daub_poison_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let seal = usize::from(
-            self.seal_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let poison_arrow = usize::from(
-            self.poison_arrow_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let poison_fog = usize::from(self.poison_fog_state.is_some_and(|state| state.skill_id() as i32 == state_id));
-        let meteor_arrow = usize::from(self.meteor_arrow_state.is_some_and(|state| state.skill_id() as i32 == state_id));
-        let spider_poison = usize::from(
-            self.spider_poison_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let sprite_burn = usize::from(
-            self.sprite_burn_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let spider_web = usize::from(
-            self.spider_web_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let weak = usize::from(
-            self.weak_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let god_bless = usize::from(self.god_bless_state.is_some_and(|state| state.skill_id() as i32 == state_id));
-        let soul_collect = usize::from(self.soul_collect_state.is_some_and(|state| state.skill_id() as i32 == state_id));
-        let knock_out = usize::from(
-            self.knock_out_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let blind = usize::from(
-            self.blind_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let boa_lock = usize::from(self.boa_lock_state.is_some_and(|state| state.skill_id() as i32 == state_id));
-        let rush = usize::from(
-            self.rush_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let rush_2 = usize::from(
-            self.rush_2_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let roar = usize::from(
-            self.roar_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let energy_holding = usize::from(
-            self.energy_holding_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let pillar = usize::from(
-            self.pillar_state.is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let knight_cut = usize::from(
-            self.knight_cut_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let blood_loss = usize::from(
-            self.blood_loss_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let leaf_cut = usize::from(
-            self.leaf_cut_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let leaf_cut_2 = usize::from(
-            self.leaf_cut_2_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let leaf_cut_3 = usize::from(
-            self.leaf_cut_3_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let kerosene = usize::from(
-            self.kerosene_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
-        let strike = self
-            .strike_states
-            .iter()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        let swordship = self
-            .swordship_states
-            .iter()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        let wuxing = self
-            .wuxing_states
-            .iter()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        let battle_fairy_attributes = self
-            .battle_fairy_attribute_states
-            .iter()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        let tian_shen_xia_fan = usize::from(
-            self.tian_shen_xia_fan_state
-                .is_some_and(|state| state.state_id() as i32 == state_id),
-        );
-        let wangsheng = usize::from(
-            self.wangsheng_state
-                .is_some_and(|state| state.state_id() as i32 == state_id),
-        );
-        let shields = self
-            .state_entries
-            .iter::<DefenseShieldState>()
-            .filter(|state| state.skill_id() as i32 == state_id)
-            .count();
-        scripted
-            .saturating_add(consumable_restore)
-            .saturating_add(agility)
-            .saturating_add(callosity)
-            .saturating_add(taiji)
-            .saturating_add(enlarge_full_miss)
-            .saturating_add(enlarge_max_hp)
-            .saturating_add(enlarge_max_mp)
-            .saturating_add(origin)
-            .saturating_add(hearten)
-            .saturating_add(heal)
-            .saturating_add(fury)
-            .saturating_add(rage_break)
-            .saturating_add(boss_blue_fury)
-            .saturating_add(boss_blue_quake)
-            .saturating_add(cure)
-            .saturating_add(daub_poison)
-            .saturating_add(seal)
-            .saturating_add(poison_arrow)
-            .saturating_add(poison_fog)
-            .saturating_add(meteor_arrow)
-            .saturating_add(spider_poison)
-            .saturating_add(sprite_burn)
-            .saturating_add(spider_web)
-            .saturating_add(weak)
-            .saturating_add(god_bless)
-            .saturating_add(soul_collect)
-            .saturating_add(knock_out)
-            .saturating_add(blind)
-            .saturating_add(boa_lock)
-            .saturating_add(rush)
-            .saturating_add(rush_2)
-            .saturating_add(roar)
-            .saturating_add(energy_holding)
-            .saturating_add(pillar)
-            .saturating_add(knight_cut)
-            .saturating_add(blood_loss)
-            .saturating_add(leaf_cut)
-            .saturating_add(leaf_cut_2)
-            .saturating_add(leaf_cut_3)
-            .saturating_add(kerosene)
-            .saturating_add(strike)
-            .saturating_add(swordship)
-            .saturating_add(wuxing)
-            .saturating_add(battle_fairy_attributes)
-            .saturating_add(tian_shen_xia_fan)
-            .saturating_add(wangsheng)
-            .saturating_add(shields)
-            .saturating_add(automatic_restore)
-            .saturating_add(particular)
-            .saturating_add(team_recruitment)
-            .saturating_add(change_body)
-            .saturating_add(extended)
-            .saturating_add(undead)
-            .saturating_add(ride)
-            .min(u32::MAX as usize) as u32
+        (0..self.state_entries.len())
+            .filter(|index| self.state_id_at(*index) == Some(state_id as u32))
+            .count().min(u32::MAX as usize) as u32
     }
 
     /// `GetStateBySkillID` просматривает канонические типизированные состояния
     /// по фактическому идентификатору навыка, а не по классу сетевой записи.
     pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
-        self.persistent_agility_family_state
-            .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .agility_state_2
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .callosity_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .taiji_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .enlarge_full_miss_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .enlarge_max_hp_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .enlarge_max_mp_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .origin_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .hearten_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .heal_states
-                .iter()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .fury_states
-                .iter()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .rage_break_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .boss_blue_fury_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .boss_blue_quake_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .state_entries.iter::<CureState>()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .daub_poison_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .seal_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .poison_arrow_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self.poison_fog_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.meteor_arrow_state.is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .spider_poison_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .sprite_burn_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .spider_web_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .weak_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self.god_bless_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.soul_collect_state.is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .knock_out_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self.blind_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.boa_lock_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.rush_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.rush_2_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.roar_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.energy_holding_state.is_some_and(|state| state.skill_id() == state_id)
-            || self.pillar_state.is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .knight_cut_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .blood_loss_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .leaf_cut_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .leaf_cut_2_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .leaf_cut_3_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .kerosene_state
-                .is_some_and(|state| state.skill_id() == state_id)
-            || self
-                .swordship_states
-                .iter()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .strike_states
-                .iter()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .wuxing_states
-                .iter()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .battle_fairy_attribute_states
-                .iter()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .tian_shen_xia_fan_state
-                .is_some_and(|state| state.state_id() == state_id)
-            || self
-                .wangsheng_state
-                .is_some_and(|state| state.state_id() == state_id)
-            || self
-                .state_entries
-                .iter::<DefenseShieldState>()
-                .any(|state| state.skill_id() == state_id)
-            || self
-                .script_states
-                .iter()
-                .any(|state| state.state_id() as u32 == state_id)
-            || self
-                .automatic_restore_states
-                .iter()
-                .any(|state| state.state_id() == state_id)
-            || (state_id == PARTICULAR_STATE_ID && !self.particular_states.is_empty())
-            || (state_id == TEAM_STATE_ID as u32 && !self.team_recruitment_states.is_empty())
-            || self.state_entries.iter::<ConsumableRestoreState>()
-                .any(|state| state.state_id() as u32 == state_id)
-            || (state_id == CHANGE_BODY_STATE_ID && !self.change_body_states.is_empty())
-            || self
-                .extended_states
-                .iter()
-                .any(|state| state.kind.state_id() == state_id)
-            || self
-                .undead_states
-                .iter()
-                .any(|state| state.state_id() == state_id)
-            || (state_id == RIDE_STATE_ID && self.ride_state.is_some())
+        (0..self.state_entries.len()).any(|index| self.state_id_at(index) == Some(state_id))
     }
 
     pub(crate) fn callosity_state(&self) -> Option<CallosityFamilyState> {
-        self.state_storage.callosity_state
+        self.state_entries.first::<CallosityFamilyState>().copied()
     }
 
     pub(crate) fn take_callosity_state(&mut self, skill_id: u32) -> Option<CallosityFamilyState> {
-        let state = self.callosity_state.filter(|state| state.skill_id() == skill_id)?;
-        self.callosity_state = None;
+        let position = self.state_entries.iter::<CallosityFamilyState>()
+            .position(|state| state.skill_id() == skill_id)?;
+        let state = self.state_entries.take_nth::<CallosityFamilyState>(position)?;
         self.remove_serialized_state_record(skill_id, CALLOSITY_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn begin_callosity_state(&mut self, state: CallosityFamilyState) {
-        debug_assert!(self.callosity_state.is_none());
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.callosity_state = Some(state);
+        self.state_entries.append(state);
     }
 
     pub(crate) fn activate_loaded_callosity_state(&mut self, now_ms: u32) {
-        self.callosity_state = self.callosity_state.map(|state| state.activate_loaded(now_ms));
+        self.state_entries.for_each_mut::<CallosityFamilyState>(|state| *state = state.activate_loaded(now_ms));
     }
 
-    pub(crate) fn swordship_states(&self) -> &[SwordshipState] {
-        &self.swordship_states
+    pub(crate) fn swordship_states(&self) -> impl Iterator<Item = &SwordshipState> {
+        self.state_entries.iter::<SwordshipState>()
     }
 
     /// Заменяет состояние в прежней позиции семейного списка, а новый ID
@@ -3078,14 +2077,14 @@ impl CMoveShape {
     ) -> Option<SwordshipState> {
         self.remove_serialized_state_record(state.skill_id(), SWORDSHIP_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        if let Some(slot) = self
-            .swordship_states
-            .iter_mut()
-            .find(|current| current.skill_id() == state.skill_id())
-        {
-            return Some(std::mem::replace(slot, state));
+        let previous = self.state_entries.keys::<SwordshipState>().into_iter().find(|key| {
+            self.state_entries.get(*key).and_then(SwordshipState::as_data_ref)
+                .is_some_and(|current| current.skill_id() == state.skill_id())
+        });
+        if let Some(position) = previous.and_then(|key| self.state_entries.index_of(key)) {
+            return self.state_entries.replace_at(position, state).and_then(SwordshipState::from_data);
         }
-        self.swordship_states.push(state);
+        self.state_entries.append(state);
         None
     }
 
@@ -3112,29 +2111,33 @@ impl CMoveShape {
             write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
             self.ex_states.extend_from_slice(&state.encoded());
         }
-        if let Some(slot) = self
-            .wuxing_states
-            .iter_mut()
-            .find(|current| current.skill_id() == state.skill_id())
-        {
-            return Some(std::mem::replace(slot, state));
+        let previous = self.state_entries.keys::<WuXingState>().into_iter().find(|key| {
+            self.state_entries.get(*key).and_then(WuXingState::as_data_ref)
+                .is_some_and(|current| current.skill_id() == state.skill_id())
+        });
+        if let Some(position) = previous.and_then(|key| self.state_entries.index_of(key)) {
+            return self.state_entries.replace_at(position, state).and_then(WuXingState::from_data);
         }
-        self.wuxing_states.push(state);
+        self.state_entries.append(state);
         None
     }
 
-    pub(crate) fn wuxing_states(&self) -> &[WuXingState] {
-        &self.wuxing_states
+    pub(crate) fn wuxing_states(&self) -> impl Iterator<Item = &WuXingState> {
+        self.state_entries.iter::<WuXingState>()
     }
 
-    pub(crate) const fn taiji_state(&self) -> Option<TaiJiState> {
-        self.state_storage.taiji_state
+    pub(crate) fn taiji_state(&self) -> Option<TaiJiState> {
+        self.state_entries.first::<TaiJiState>().copied()
     }
 
     pub(crate) fn replace_taiji_state(&mut self, state: TaiJiState) -> Option<TaiJiState> {
         self.remove_serialized_state_record(state.skill_id(), TAIJI_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.taiji_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<TaiJiState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
     pub(crate) fn replace_enlarge_max_hp_state(
@@ -3143,35 +2146,26 @@ impl CMoveShape {
     ) -> Option<EnlargeMaxHpState> {
         self.remove_serialized_state_record(state.skill_id(), ENLARGE_MAX_HP_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.enlarge_max_hp_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<EnlargeMaxHpState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
     pub(crate) fn replace_enlarge_full_miss_state(
         &mut self,
         state: EnlargeFullMissState,
     ) -> Option<EnlargeFullMissState> {
-        let state_id = state.skill_id();
-        let offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state_id));
-        if let Some(offset) = offset {
-            if let Some(destination) = self.ex_states.get_mut(offset..offset + ENLARGE_FULL_MISS_STATE_BYTES) {
-                destination.copy_from_slice(&state.encoded());
-            }
-        } else {
-            if self.ex_states.len() < 4 {
-                self.ex_states.clear();
-                LegacyWriter::new(&mut self.ex_states).write_u32(0);
-            }
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-            self.ex_states.extend_from_slice(&state.encoded());
-        }
-        self.enlarge_full_miss_state.replace(state)
+        let previous = self.state_entries.take_first::<EnlargeFullMissState>();
+        self.remove_serialized_state_record(state.skill_id(), ENLARGE_FULL_MISS_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) const fn enlarge_full_miss_state(&self) -> Option<EnlargeFullMissState> {
-        self.state_storage.enlarge_full_miss_state
+    pub(crate) fn enlarge_full_miss_state(&self) -> Option<EnlargeFullMissState> {
+        self.state_entries.first::<EnlargeFullMissState>().copied()
     }
 
     pub(crate) fn replace_enlarge_max_mp_state(
@@ -3180,50 +2174,51 @@ impl CMoveShape {
     ) -> Option<EnlargeMaxMpState> {
         self.remove_serialized_state_record(state.skill_id(), ENLARGE_MAX_MP_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.enlarge_max_mp_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<EnlargeMaxMpState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
-    pub(crate) const fn enlarge_max_hp_state(&self) -> Option<EnlargeMaxHpState> {
-        self.state_storage.enlarge_max_hp_state
+    pub(crate) fn enlarge_max_hp_state(&self) -> Option<EnlargeMaxHpState> {
+        self.state_entries.first::<EnlargeMaxHpState>().copied()
     }
 
-    pub(crate) const fn enlarge_max_mp_state(&self) -> Option<EnlargeMaxMpState> {
-        self.state_storage.enlarge_max_mp_state
+    pub(crate) fn enlarge_max_mp_state(&self) -> Option<EnlargeMaxMpState> {
+        self.state_entries.first::<EnlargeMaxMpState>().copied()
     }
 
     pub(crate) fn replace_origin_state(&mut self, state: OriginState) -> Option<OriginState> {
         self.remove_serialized_state_record(state.skill_id(), ORIGIN_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.origin_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<OriginState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
-    pub(crate) const fn origin_state(&self) -> Option<OriginState> {
-        self.state_storage.origin_state
+    pub(crate) fn origin_state(&self) -> Option<OriginState> {
+        self.state_entries.first::<OriginState>().copied()
     }
 
     pub(crate) fn replace_hearten_state(&mut self, state: HeartenState) -> Option<HeartenState> {
-        let previous = self.hearten_state.take();
+        let previous = self.state_entries.take_first::<HeartenState>();
         self.remove_serialized_state_record(state.skill_id(), HEARTEN_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.hearten_state = Some(state);
+        self.state_entries.append(state);
         previous
     }
 
-    pub(crate) const fn hearten_state(&self) -> Option<HeartenState> {
-        self.state_storage.hearten_state
+    pub(crate) fn hearten_state(&self) -> Option<HeartenState> {
+        self.state_entries.first::<HeartenState>().copied()
     }
 
-    pub(crate) fn take_expired_hearten_state(&mut self, now_ms: u32) -> Option<HeartenState> {
-        self.hearten_state.filter(|state| state.expired(now_ms))?;
-        let state = self.hearten_state.take()?;
-        self.remove_serialized_state_record(state.skill_id(), HEARTEN_STATE_BYTES);
-        Some(state)
-    }
+
 
     pub(crate) fn activate_loaded_hearten_state(&mut self, now_ms: u32) {
-        if let Some(state) = &mut self.hearten_state {
-            state.activate_loaded(now_ms);
-        }
+        self.state_entries.for_each_mut::<HeartenState>(|state| state.activate_loaded(now_ms));
     }
 
     pub(crate) fn replace_heal_state(
@@ -3231,14 +2226,14 @@ impl CMoveShape {
         removed_skill_id: u32,
         state: HealState,
     ) -> Option<HealState> {
+        let key = self.state_entries.keys::<HealState>().into_iter().find(|key| {
+            self.state_entries.get(*key).and_then(HealState::as_data_ref)
+                .is_some_and(|current| current.skill_id() == removed_skill_id)
+        });
+        let previous = key.and_then(|key| self.state_entries.take::<HealState>(key));
         self.remove_serialized_state_record(removed_skill_id, HEAL_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        let previous = self
-            .heal_states
-            .iter()
-            .position(|candidate| candidate.skill_id() == removed_skill_id)
-            .map(|position| self.heal_states.remove(position));
-        self.heal_states.push(state);
+        self.state_entries.append(state);
         previous
     }
 
@@ -3258,113 +2253,123 @@ impl CMoveShape {
     }
 
     pub(crate) fn activate_loaded_heal_states(&mut self, now_ms: u32) -> Vec<HealState> {
-        for state in &mut self.heal_states {
-            state.activate_loaded(now_ms);
-        }
-        self.heal_states.clone()
+        self.state_entries.for_each_mut::<HealState>(|state| state.activate_loaded(now_ms));
+        self.state_entries.iter::<HealState>().copied().collect()
     }
 
-    pub(crate) fn take_heal_states(&mut self) -> Vec<HealState> {
-        std::mem::take(&mut self.heal_states)
+    pub(crate) fn heal_state_keys(&self) -> Vec<StateKey> {
+        self.state_entries.keys::<HealState>()
     }
 
-    pub(crate) fn restore_heal_states(&mut self, states: Vec<HealState>) {
-        debug_assert!(self.heal_states.is_empty());
-        self.heal_states = states;
+    pub(crate) fn remove_heal_state_key(&mut self, key: StateKey) -> Option<HealState> {
+        let state = HealState::as_data_ref(self.state_entries.get(key)?)?;
+        let skill_id = state.skill_id();
+        let occurrence = self.state_entries.keys::<HealState>().into_iter()
+            .take_while(|current| *current != key)
+            .filter(|current| self.state_entries.get(*current).and_then(HealState::as_data_ref)
+                .is_some_and(|state| state.skill_id() == skill_id))
+            .count();
+        let state = self.state_entries.take::<HealState>(key)?;
+        self.remove_serialized_heal_state(skill_id, occurrence);
+        Some(state)
     }
+
 
     pub(crate) fn push_fury_state(&mut self, state: FuryState) {
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.fury_states.push(state);
+        self.state_entries.append(state);
     }
 
     pub(crate) fn activate_loaded_fury_states(&mut self, now_ms: u32) -> Vec<FuryState> {
-        for state in &mut self.fury_states {
-            *state = state.activate_loaded(now_ms);
-        }
-        self.fury_states.clone()
+        self.state_entries.for_each_mut::<FuryState>(|state| *state = state.activate_loaded(now_ms));
+        self.state_entries.iter::<FuryState>().copied().collect()
     }
 
-    pub(crate) fn fury_states(&self) -> &[FuryState] {
-        &self.fury_states
+    pub(crate) fn fury_states(&self) -> impl Iterator<Item = &FuryState> {
+        self.state_entries.iter::<FuryState>()
     }
 
     pub(crate) fn remove_fury_state(&mut self, position: usize) -> Option<FuryState> {
-        self.fury_states.get(position)?;
-        let serialized_offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
+        let key = self.state_entries.key_at::<FuryState>(position)?;
+        self.remove_fury_state_key(key)
+    }
+
+    pub(crate) fn fury_state_keys(&self) -> Vec<StateKey> {
+        self.state_entries.keys::<FuryState>()
+    }
+
+    pub(crate) fn remove_fury_state_key(&mut self, key: StateKey) -> Option<FuryState> {
+        let position = self.state_entries.keys::<FuryState>().iter().position(|current| *current == key)?;
+        let serialized_offset = known_state_record_offsets(&self.ex_states).into_iter()
             .filter(|offset| read_u32(&self.ex_states, *offset) == Some(FURY_STATE_SKILL_ID))
             .nth(position);
-        let state = self.fury_states.remove(position);
+        let state = self.state_entries.take::<FuryState>(key)?;
         if let Some(offset) = serialized_offset {
             self.remove_serialized_state_record_at(offset, FURY_STATE_BYTES);
         }
         Some(state)
     }
 
-    pub(crate) const fn rage_break_state(&self) -> Option<RageBreakState> {
-        self.state_storage.rage_break_state
+    pub(crate) fn rage_break_state(&self) -> Option<RageBreakState> {
+        self.state_entries.first::<RageBreakState>().copied()
     }
 
     pub(crate) fn replace_rage_break_state(&mut self, state: RageBreakState) -> Option<RageBreakState> {
         self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.rage_break_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<RageBreakState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
-    pub(crate) fn activate_loaded_rage_break_state(&mut self, now_ms: u32) -> Option<RageBreakState> {
-        let state = self.rage_break_state?.activate_loaded(now_ms);
-        self.rage_break_state = Some(state);
-        Some(state)
+    pub(crate) fn activate_loaded_rage_break_state(&mut self, now_ms: u32) -> Vec<RageBreakState> {
+        self.state_entries.for_each_mut::<RageBreakState>(|state| *state = state.activate_loaded(now_ms));
+        self.state_entries.iter::<RageBreakState>().copied().collect()
     }
 
     pub(crate) fn take_rage_break_state(&mut self) -> Option<RageBreakState> {
-        let state = self.rage_break_state.take()?;
+        let state = self.state_entries.take_first::<RageBreakState>()?;
         self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn restart_rage_break_state(&mut self, now_ms: u32) -> bool {
-        let Some(state) = self.rage_break_state.as_mut() else {
+        let Some(state) = self.state_entries.first_mut::<RageBreakState>() else {
             return false;
         };
         *state = state.activate_loaded(now_ms);
         true
     }
 
-    pub(crate) fn take_expired_rage_break_state(&mut self, now_ms: u32) -> Option<RageBreakState> {
-        self.rage_break_state.filter(|state| state.expired(now_ms))?;
-        let state = self.rage_break_state.take()?;
-        self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
-        Some(state)
-    }
+
 
     pub(crate) fn take_boss_blue_fury_state(&mut self) -> Option<BossBlueFuryState> {
-        let state = self.boss_blue_fury_state.take()?;
+        let state = self.state_entries.take_first::<BossBlueFuryState>()?;
         self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_FURY_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn begin_boss_blue_fury_state(&mut self, state: BossBlueFuryState) {
-        debug_assert!(self.boss_blue_fury_state.is_none());
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.boss_blue_fury_state = Some(state);
+        self.state_entries.append(state);
     }
 
     pub(crate) fn boss_blue_fury_state(&self) -> Option<BossBlueFuryState> {
-        self.boss_blue_fury_state
+        self.state_entries.first::<BossBlueFuryState>().copied()
     }
 
     pub(crate) fn tick_boss_blue_fury_state(
         &mut self,
+        key: StateKey,
         now_ms: u32,
     ) -> Option<(BossBlueFuryState, BossBlueFuryTick)> {
-        let state = self.boss_blue_fury_state.as_mut()?;
+        let state = self.applied_state_mut::<BossBlueFuryState>(key)?;
         let tick = state.tick(now_ms);
         let snapshot = *state;
         if tick.expired {
-            self.boss_blue_fury_state = None;
-            self.remove_serialized_state_record(snapshot.skill_id(), BOSS_BLUE_FURY_STATE_BYTES);
+            self.remove_applied_state_record::<BossBlueFuryState>(key, BOSS_BLUE_FURY_STATE_BYTES);
         }
         Some((snapshot, tick))
     }
@@ -3372,11 +2377,9 @@ impl CMoveShape {
     pub(crate) fn activate_loaded_boss_blue_fury_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<BossBlueFuryState> {
-        let mut state = self.boss_blue_fury_state?;
-        state.activate_loaded(now_ms);
-        self.boss_blue_fury_state = Some(state);
-        Some(state)
+    ) -> Vec<BossBlueFuryState> {
+        self.state_entries.for_each_mut::<BossBlueFuryState>(|state| state.activate_loaded(now_ms));
+        self.state_entries.iter::<BossBlueFuryState>().copied().collect()
     }
 
     pub(crate) fn replace_boss_blue_quake_state(
@@ -3385,35 +2388,29 @@ impl CMoveShape {
     ) -> Option<BossBlueQuakeState> {
         self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.curable_state_order.insert(state.skill_id());
-        self.boss_blue_quake_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<BossBlueQuakeState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
     pub(crate) fn activate_loaded_boss_blue_quake_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<BossBlueQuakeState> {
-        let state = self.boss_blue_quake_state?.activate_loaded(now_ms);
-        self.boss_blue_quake_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
-        Some(state)
+    ) -> Vec<BossBlueQuakeState> {
+        self.state_entries.for_each_mut::<BossBlueQuakeState>(|state| *state = state.activate_loaded(now_ms));
+        for _ in 0..self.state_entries.iter::<BossBlueQuakeState>().count() {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        self.state_entries.iter::<BossBlueQuakeState>().copied().collect()
     }
 
-    pub(crate) fn take_expired_boss_blue_quake_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<BossBlueQuakeState> {
-        self.boss_blue_quake_state.filter(|state| state.expired(now_ms))?;
-        let state = self.boss_blue_quake_state.take()?;
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
-        Some(state)
-    }
+
 
     pub(crate) fn take_boss_blue_quake_state(&mut self) -> Option<BossBlueQuakeState> {
-        let state = self.boss_blue_quake_state.take()?;
-        self.curable_state_order.shift_remove(&state.skill_id());
+        let state = self.state_entries.take_first::<BossBlueQuakeState>()?;
         self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
         Some(state)
     }
@@ -3622,16 +2619,20 @@ impl CMoveShape {
         self.ex_states.drain(offset..end);
         let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
         write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
-        for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); }
-        for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
-        for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.kerosene_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
+        self.shift_serialized_state_offsets_after(offset, amount);
         true
+    }
+
+    fn shift_serialized_state_offsets_after(&mut self, offset: usize, amount: usize) {
+        self.state_entries.for_each_mut::<ExtendedState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<ChangeBodyState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<UndeadState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<LeafCutState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<LeafCutState3>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<KeroseneState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<PoisonFogState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<MeteorArrowState>(|state| state.shift_serialized_offset_after(offset, amount));
+        self.state_entries.for_each_mut::<RideState>(|state| state.shift_serialized_offset_after(offset, amount));
     }
 
     pub(crate) fn take_defense_shields(&mut self) -> StateBatch<DefenseShieldState> {
@@ -3662,15 +2663,15 @@ impl CMoveShape {
         self.ex_states.splice(offset..offset, state.encoded());
         let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
         write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        for known in &mut self.extended_states { known.shift_serialized_offset_for_insert(offset, amount); }
-        for known in &mut self.change_body_states { known.shift_serialized_offset_for_insert(offset, amount); }
-        for known in &mut self.undead_states { known.shift_serialized_offset_for_insert(offset, amount); }
-        if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_for_insert(offset, amount); }
-        if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_for_insert(offset, amount); }
-        if let Some(known) = &mut self.kerosene_state { known.shift_serialized_offset_for_insert(offset, amount); }
-        if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_for_insert(offset, amount); }
-        if let Some(known) = &mut self.meteor_arrow_state { known.shift_serialized_offset_for_insert(offset, amount); }
-        if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        self.state_entries.for_each_mut::<ExtendedState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
+        self.state_entries.for_each_mut::<ChangeBodyState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
+        self.state_entries.for_each_mut::<UndeadState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
+        self.state_entries.for_each_mut::<LeafCutState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
+        self.state_entries.for_each_mut::<LeafCutState3>(|known| known.shift_serialized_offset_for_insert(offset, amount));
+        self.state_entries.for_each_mut::<KeroseneState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
+        self.state_entries.for_each_mut::<PoisonFogState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
+        self.state_entries.for_each_mut::<MeteorArrowState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
+        self.state_entries.for_each_mut::<RideState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         let _ = self.state_entries.replace_at(position, state);
     }
 
@@ -3681,6 +2682,29 @@ impl CMoveShape {
 
     pub(crate) fn state_slot_count(&self) -> usize {
         self.state_entries.len()
+    }
+
+    fn state_id_at(&self, index: usize) -> Option<u32> {
+        match self.state_entries.address(index)? {
+            StateAddress::Applied(key) => Some(self.state_entries.get(key)?.state_id()),
+            StateAddress::Skill(slot) => Some(self.skill_at(slot)?.id),
+        }
+    }
+
+    pub(crate) fn applied_state_key<T: AppliedState>(&self) -> Option<StateKey> {
+        self.state_entries.first_key::<T>()
+    }
+
+    pub(crate) fn applied_state_keys<T: AppliedState>(&self) -> Vec<StateKey> {
+        self.state_entries.keys::<T>()
+    }
+
+    pub(crate) fn applied_state<T: AppliedState>(&self, key: StateKey) -> Option<&T> {
+        T::as_data_ref(self.state_entries.get(key)?)
+    }
+
+    pub(crate) fn applied_state_mut<T: AppliedState>(&mut self, key: StateKey) -> Option<&mut T> {
+        T::as_data_mut(self.state_entries.get_mut(key)?)
     }
 
     pub(crate) fn compact_state_slots(&mut self) -> bool {
@@ -3720,57 +2744,86 @@ impl CMoveShape {
         self.state_entries.take::<CureState>(key)
     }
 
+    pub(crate) fn remove_applied_state_record<T: AppliedState>(
+        &mut self,
+        key: StateKey,
+        amount: usize,
+    ) -> Option<T> {
+        let state_id = self.state_entries.get(key)?.state_id();
+        let occurrence = self.state_entries.keys::<T>().into_iter()
+            .filter(|candidate| self.state_entries.get(*candidate).is_some_and(|state| state.state_id() == state_id))
+            .position(|candidate| candidate == key)?;
+        let offset = known_state_record_offsets(&self.ex_states).into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
+            .nth(occurrence);
+        let span = match self.state_entries.get(key)? {
+            StateData::LeafCut(state) => state.serialized_span(),
+            StateData::LeafCut3(state) => state.serialized_span(),
+            StateData::Kerosene(state) => state.serialized_span(),
+            StateData::PoisonFog(state) => state.serialized_span(),
+            StateData::MeteorArrow(state) => state.serialized_span(),
+            _ => offset.map(|offset| (offset, amount)),
+        };
+        let state = self.state_entries.take::<T>(key)?;
+        if let Some((offset, amount)) = span {
+            self.remove_serialized_state_record_at(offset, amount);
+        }
+        Some(state)
+    }
+
     pub(crate) fn replace_daub_poison_state(
         &mut self,
         state: DaubPoisonState,
     ) -> Option<DaubPoisonState> {
-        self.remove_serialized_state_record(state.skill_id(), DAUB_POISON_STATE_BYTES);
+        let previous = self.state_entries.first_key::<DaubPoisonState>()
+            .and_then(|key| self.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.daub_poison_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
-    pub(crate) fn activate_loaded_daub_poison_state(&mut self, now_ms: u32) -> Option<DaubPoisonState> { let state = self.daub_poison_state?.activate_loaded(now_ms); self.daub_poison_state = Some(state); Some(state) }
+    pub(crate) fn activate_loaded_daub_poison_state(&mut self, now_ms: u32) -> Vec<DaubPoisonState> {
+        self.state_entries.for_each_mut::<DaubPoisonState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<DaubPoisonState>().copied().collect();
+        states
+    }
 
     pub(crate) fn take_expired_daub_poison_state(
         &mut self,
+        key: StateKey,
         now_ms: u32,
     ) -> Option<DaubPoisonState> {
-        self.daub_poison_state
-            .filter(|state| state.expired(now_ms))?;
-        let state = self.daub_poison_state.take()?;
-        self.remove_serialized_state_record(state.skill_id(), DAUB_POISON_STATE_BYTES);
+        self.applied_state::<DaubPoisonState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<DaubPoisonState>(key, DAUB_POISON_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
-        self.remove_serialized_state_record(state.skill_id(), SEAL_STATE_BYTES);
+        let previous = self.state_entries.first_key::<SealState>()
+            .and_then(|key| self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.blind_state_order.insert(state.skill_id());
-        self.curable_state_order.insert(state.skill_id());
-        self.seal_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_seal_state(&mut self, now_ms: u32) -> Option<SealState> {
-        let state = self.seal_state?.activate_loaded(now_ms);
-        self.seal_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
-        Some(state)
+    pub(crate) fn activate_loaded_seal_state(&mut self, now_ms: u32) -> Vec<SealState> {
+        self.state_entries.for_each_mut::<SealState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<SealState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
     }
 
-    pub(crate) fn take_expired_seal_state(&mut self, now_ms: u32) -> Option<SealState> {
-        let state = self.seal_state.filter(|state| state.expired(now_ms))?;
-        self.seal_state = None;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), SEAL_STATE_BYTES);
+    pub(crate) fn take_expired_seal_state(&mut self, key: StateKey, now_ms: u32) -> Option<SealState> {
+        self.applied_state::<SealState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn take_seal_state(&mut self) -> Option<SealState> {
-        let state = self.seal_state.take()?;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), SEAL_STATE_BYTES);
+        let key = self.state_entries.first_key::<SealState>()?;
+        let state = self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES)?;
         Some(state)
     }
 
@@ -3778,57 +2831,46 @@ impl CMoveShape {
         &mut self,
         state: PoisonArrowState,
     ) -> Option<PoisonArrowState> {
-        self.periodic_attack_order.insert(state.skill_id());
-        let previous = self.poison_arrow_state.replace(state);
-        let serialized_exists = known_state_record_offsets(&self.ex_states)
-            .into_iter().any(|offset| read_u32(&self.ex_states, offset) == Some(state.skill_id()));
-        if previous.is_some() && serialized_exists {
-            update_known_state_record(&mut self.ex_states, state.skill_id(), &state.encoded_for_install());
-        } else if !serialized_exists {
-            self.append_serialized_state_record(&state.encoded_for_install());
-        }
+        let previous = self.state_entries.first_key::<PoisonArrowState>()
+            .and_then(|key| self.remove_applied_state_record::<PoisonArrowState>(key, POISON_ARROW_STATE_BYTES));
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.state_entries.append(state);
         previous
     }
 
-    pub(crate) fn take_poison_arrow_state_for_ai(&mut self) -> Option<PoisonArrowState> {
-        self.poison_arrow_state.take()
-    }
 
-    pub(crate) fn finish_poison_arrow_state(&mut self, state: PoisonArrowState) {
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), POISON_ARROW_STATE_BYTES);
-    }
 
-    pub(crate) fn activate_loaded_poison_arrow_state(&mut self, now_ms: u32) -> Option<PoisonArrowState> {
-        let mut state = self.poison_arrow_state?;
-        state.activate_loaded(now_ms);
-        self.poison_arrow_state = Some(state);
-        Some(state)
+
+
+    pub(crate) fn activate_loaded_poison_arrow_state(&mut self, now_ms: u32) -> Vec<PoisonArrowState> {
+        self.state_entries.for_each_mut::<PoisonArrowState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<PoisonArrowState>().copied().collect();
+        states
     }
 
     pub(crate) fn replace_spider_poison_state(
         &mut self,
         state: SpiderPoisonState,
     ) -> Option<SpiderPoisonState> {
-        let exists = known_state_record_offsets(&self.ex_states).into_iter().any(|offset| read_u32(&self.ex_states, offset) == Some(state.skill_id()));
-        if exists { update_known_state_record(&mut self.ex_states, state.skill_id(), &state.encoded_for_install()); } else { self.append_serialized_state_record(&state.encoded_for_install()); }
-        self.periodic_attack_order.insert(state.skill_id());
-        self.curable_state_order.insert(state.skill_id());
-        self.spider_poison_state.replace(state)
+        let previous = self.state_entries.first_key::<SpiderPoisonState>()
+            .and_then(|key| self.remove_applied_state_record::<SpiderPoisonState>(key, SPIDER_POISON_STATE_BYTES));
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.state_entries.append(state);
+        previous
     }
-    pub(crate) fn activate_loaded_spider_poison_state(&mut self, now_ms: u32) -> Option<SpiderPoisonState> { let mut state = self.spider_poison_state?; state.activate_loaded(now_ms); self.spider_poison_state = Some(state); Some(state) }
+    pub(crate) fn activate_loaded_spider_poison_state(&mut self, now_ms: u32) -> Vec<SpiderPoisonState> {
+        self.state_entries.for_each_mut::<SpiderPoisonState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<SpiderPoisonState>().copied().collect();
+        states
+    }
 
-    pub(crate) fn take_spider_poison_state_for_ai(&mut self) -> Option<SpiderPoisonState> {
-        self.spider_poison_state.take()
-    }
-    pub(crate) fn restore_spider_poison_state_after_ai(&mut self, state: SpiderPoisonState) { debug_assert!(self.spider_poison_state.is_none()); self.spider_poison_state = Some(state); }
-    pub(crate) fn finish_spider_poison_state_after_ai(&mut self) { self.remove_serialized_state_record(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID, SPIDER_POISON_STATE_BYTES); self.finish_periodic_attack_state(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID); }
+
+
+
 
     pub(crate) fn take_spider_poison_state(&mut self) -> Option<SpiderPoisonState> {
-        let state = self.spider_poison_state.take()?;
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), SPIDER_POISON_STATE_BYTES);
+        let key = self.state_entries.first_key::<SpiderPoisonState>()?;
+        let state = self.remove_applied_state_record::<SpiderPoisonState>(key, SPIDER_POISON_STATE_BYTES)?;
         Some(state)
     }
 
@@ -3836,35 +2878,28 @@ impl CMoveShape {
         &mut self,
         state: SpriteBurnState,
     ) -> Option<SpriteBurnState> {
-        let exists = known_state_record_offsets(&self.ex_states).into_iter()
-            .any(|offset| read_u32(&self.ex_states, offset) == Some(state.skill_id()));
-        if exists { update_known_state_record(&mut self.ex_states, state.skill_id(), &state.encoded_for_install()); }
-        else { self.append_serialized_state_record(&state.encoded_for_install()); }
-        self.periodic_attack_order.insert(state.skill_id());
-        self.curable_state_order.insert(state.skill_id());
-        self.sprite_burn_state.replace(state)
+        let previous = self.state_entries.first_key::<SpriteBurnState>()
+            .and_then(|key| self.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES));
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_sprite_burn_state(&mut self, now_ms: u32) -> Option<SpriteBurnState> {
-        let mut state = self.sprite_burn_state?; state.activate_loaded(now_ms); self.sprite_burn_state = Some(state); Some(state)
+    pub(crate) fn activate_loaded_sprite_burn_state(&mut self, now_ms: u32) -> Vec<SpriteBurnState> {
+        self.state_entries.for_each_mut::<SpriteBurnState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<SpriteBurnState>().copied().collect();
+        states
     }
 
-    pub(crate) fn take_sprite_burn_state_for_ai(&mut self) -> Option<SpriteBurnState> {
-        self.sprite_burn_state.take()
-    }
 
-    pub(crate) fn restore_sprite_burn_state_after_ai(&mut self, state: SpriteBurnState) { debug_assert!(self.sprite_burn_state.is_none()); self.sprite_burn_state = Some(state); }
 
-    pub(crate) fn finish_sprite_burn_state_after_ai(&mut self) {
-        self.remove_serialized_state_record(super::skills::spriteburn::SPRITE_BURN_SKILL_ID, SPRITE_BURN_STATE_BYTES);
-        self.finish_periodic_attack_state(super::skills::spriteburn::SPRITE_BURN_SKILL_ID);
-    }
+
+
+
 
     pub(crate) fn take_sprite_burn_state(&mut self) -> Option<SpriteBurnState> {
-        let state = self.sprite_burn_state.take()?;
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), SPRITE_BURN_STATE_BYTES);
+        let key = self.state_entries.first_key::<SpriteBurnState>()?;
+        let state = self.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES)?;
         Some(state)
     }
 
@@ -3872,675 +2907,463 @@ impl CMoveShape {
         &mut self,
         state: SpiderWebState,
     ) -> Option<SpiderWebState> {
-        self.remove_serialized_state_record(state.skill_id(), SPIDER_WEB_STATE_BYTES);
+        let previous = self.state_entries.first_key::<SpiderWebState>()
+            .and_then(|key| self.remove_applied_state_record::<SpiderWebState>(key, SPIDER_WEB_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.blind_state_order.insert(state.skill_id());
-        self.curable_state_order.insert(state.skill_id());
-        self.spider_web_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_spider_web_state(&mut self, now_ms: u32) -> Option<SpiderWebState> {
-        let state = self.spider_web_state?.activate_loaded(now_ms);
-        self.spider_web_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
-        Some(state)
+    pub(crate) fn activate_loaded_spider_web_state(&mut self, now_ms: u32) -> Vec<SpiderWebState> {
+        self.state_entries.for_each_mut::<SpiderWebState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<SpiderWebState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
     }
 
-    pub(crate) const fn weak_state(&self) -> Option<WeakState> {
-        self.state_storage.weak_state
+    pub(crate) fn weak_state(&self) -> Option<WeakState> {
+        self.state_entries.first::<WeakState>().copied()
     }
 
     pub(crate) fn replace_weak_state(&mut self, state: WeakState) -> Option<WeakState> {
         self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.weak_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<WeakState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
-    pub(crate) fn activate_loaded_weak_state(&self) -> Option<WeakState> { self.weak_state }
+    pub(crate) fn activate_loaded_weak_state(&self) -> Vec<WeakState> { self.state_entries.iter::<WeakState>().copied().collect() }
 
     pub(crate) fn take_weak_state(&mut self) -> Option<WeakState> {
-        let state = self.weak_state.take()?;
+        let state = self.state_entries.take_first::<WeakState>()?;
         self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn take_weak_state_outside(&mut self, tile_x: i32, tile_y: i32) -> Option<WeakState> {
-        let state = self.weak_state.filter(|state| !state.contains(tile_x, tile_y))?;
-        self.weak_state = None;
-        self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
-        Some(state)
+        let key = self.state_entries.keys::<WeakState>().into_iter()
+            .find(|key| self.applied_state::<WeakState>(*key).is_some_and(|state| !state.contains(tile_x, tile_y)))?;
+        self.remove_applied_state_record::<WeakState>(key, WEAK_STATE_BYTES)
     }
 
-    pub(crate) const fn god_bless_state(&self) -> Option<GodBlessState> { self.state_storage.god_bless_state }
+    pub(crate) fn god_bless_state(&self) -> Option<GodBlessState> { self.state_entries.first::<GodBlessState>().copied() }
     pub(crate) fn replace_god_bless_state(&mut self, state: GodBlessState) -> Option<GodBlessState> {
-        let previous = self.god_bless_state.take();
+        let previous = self.state_entries.take_first::<GodBlessState>();
         if let Some(previous) = previous { self.remove_serialized_state_record(previous.skill_id(), GOD_BLESS_STATE_BYTES); }
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.god_bless_state = Some(state);
+        self.state_entries.append(state);
         previous
     }
-    pub(crate) fn activate_loaded_god_bless_state(&mut self, now_ms: u32) -> Option<GodBlessState> {
-        let state = self.god_bless_state?.activate_loaded(now_ms);
-        self.god_bless_state = Some(state);
-        Some(state)
+    pub(crate) fn activate_loaded_god_bless_state(&mut self, now_ms: u32) -> Vec<GodBlessState> {
+        self.state_entries.for_each_mut::<GodBlessState>(|state| *state = state.activate_loaded(now_ms));
+        self.state_entries.iter::<GodBlessState>().copied().collect()
     }
     pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<GodBlessState> {
-        let state = self
-            .god_bless_state
-            .filter(|state| state.skill_id() == skill_id)?;
-        self.god_bless_state = None;
-        self.remove_serialized_state_record(state.skill_id(), GOD_BLESS_STATE_BYTES);
+        let position = self.state_entries.iter::<GodBlessState>()
+            .position(|state| state.skill_id() == skill_id)?;
+        let state = self.state_entries.take_nth::<GodBlessState>(position)?;
+        self.remove_serialized_state_record(skill_id, GOD_BLESS_STATE_BYTES);
         Some(state)
     }
-    pub(crate) const fn roar_state(&self) -> Option<RoarState> { self.state_storage.roar_state }
+    pub(crate) fn roar_state(&self) -> Option<RoarState> { self.state_entries.first::<RoarState>().copied() }
     pub(crate) fn replace_roar_state(&mut self, state: RoarState) -> Option<RoarState> {
         self.remove_serialized_state_record(state.skill_id(), ROAR_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.roar_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<RoarState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
-    pub(crate) fn activate_loaded_roar_state(&mut self, now_ms: u32) -> Option<RoarState> {
-        let state = self.roar_state?.activate_loaded(now_ms);
-        self.roar_state = Some(state);
-        Some(state)
+    pub(crate) fn activate_loaded_roar_state(&mut self, now_ms: u32) -> Vec<RoarState> {
+        self.state_entries.for_each_mut::<RoarState>(|state| *state = state.activate_loaded(now_ms));
+        self.state_entries.iter::<RoarState>().copied().collect()
     }
-    pub(crate) fn take_expired_roar_state(&mut self, now_ms: u32) -> Option<RoarState> {
-        let state = self.roar_state.filter(|state| state.expired(now_ms))?;
-        self.roar_state = None;
-        self.remove_serialized_state_record(state.skill_id(), ROAR_STATE_BYTES);
-        Some(state)
+
+    pub(crate) fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_entries.first::<EnergyHoldingState>().copied() }
+
+    pub(crate) fn energy_holding_states(&self) -> impl Iterator<Item = &EnergyHoldingState> {
+        self.state_entries.iter::<EnergyHoldingState>()
     }
-    pub(crate) const fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state }
-    pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut EnergyHoldingState> { self.state_storage.energy_holding_state.as_mut() }
+    pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut EnergyHoldingState> { self.state_entries.first_mut::<EnergyHoldingState>() }
     pub(crate) fn begin_energy_holding_state(&mut self, state: EnergyHoldingState) {
         self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.state_storage.energy_holding_state = Some(state);
+        let _ = self.state_entries.take_first::<EnergyHoldingState>();
+        self.state_entries.append(state);
     }
     pub(crate) fn take_energy_holding_state(&mut self) -> Option<EnergyHoldingState> {
-        let state = self.state_storage.energy_holding_state.take()?;
+        let state = self.state_entries.take_first::<EnergyHoldingState>()?;
         self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
         Some(state)
     }
-    /// Восстанавливает относительный порядок уже типизированных property-state
-    /// по byte-exact записям исходного `m_vStates`. Повторные экземпляры одного
-    /// ID выбираются последовательно, поэтому два одинаковых состояния не
-    /// схлопываются в одно при пересчёте свойств.
+    /// Проекция живых property-state в порядке `m_vStates`. Последняя смена
+    /// тела определяет текущую форму; остальные семейства сохраняют все дубли.
     pub(crate) fn ordered_player_property_states(&self) -> Vec<PlayerPropertyState> {
-        let mut ordered = Vec::new();
-        let mut swordship_occurrences = BTreeMap::new();
-        let mut wuxing_occurrences = BTreeMap::new();
-        let mut battle_fairy_occurrences = BTreeMap::new();
-        let mut script_occurrences = BTreeMap::new();
-        let mut undead_occurrences = BTreeMap::new();
-        let mut extended_occurrences = BTreeMap::new();
-        let mut fury_occurrences = BTreeMap::new();
-
-        for offset in known_state_record_offsets(&self.ex_states) {
-            let Some(state_id) = read_u32(&self.ex_states, offset) else {
-                continue;
-            };
-            let state = self
-                .persistent_agility_family_state
-                .filter(|state| state.skill_id() == state_id)
-                .map(PlayerPropertyState::PersistentAgility)
-                .or_else(|| {
-                    self.agility_state_2
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::Agility2)
-                })
-                .or_else(|| {
-                    self.taiji_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::TaiJi)
-                })
-                .or_else(|| {
-                    self.enlarge_max_hp_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::EnlargeMaxHp)
-                })
-                .or_else(|| {
-                    self.enlarge_max_mp_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::EnlargeMaxMp)
-                })
-                .or_else(|| {
-                    self.enlarge_full_miss_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::EnlargeFullMiss)
-                })
-                .or_else(|| {
-                    self.origin_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::Origin)
-                })
-                .or_else(|| {
-                    self.hearten_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::Hearten)
-                })
-                .or_else(|| {
-                    self.callosity_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::Callosity)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.swordship_states,
-                        state_id,
-                        &mut swordship_occurrences,
-                        SwordshipState::skill_id,
-                    )
-                    .map(PlayerPropertyState::Swordship)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.wuxing_states,
-                        state_id,
-                        &mut wuxing_occurrences,
-                        WuXingState::skill_id,
-                    )
-                    .map(PlayerPropertyState::WuXing)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.battle_fairy_attribute_states,
-                        state_id,
-                        &mut battle_fairy_occurrences,
-                        BattleFairyAttributeState::skill_id,
-                    )
-                    .map(PlayerPropertyState::BattleFairyAttribute)
-                })
-                .or_else(|| {
-                    self.tian_shen_xia_fan_state
-                        .filter(|state| state.state_id() == state_id)
-                        .map(PlayerPropertyState::TianShenXiaFan)
-                })
-                .or_else(|| {
-                    self.weak_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::Weak)
-                })
-                .or_else(|| {
-                    self.poison_fog_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::PoisonFog)
-                })
-                .or_else(|| {
-                    self.god_bless_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::GodBless)
-                })
-                .or_else(|| {
-                    self.roar_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::Roar)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.script_states,
-                        state_id,
-                        &mut script_occurrences,
-                        |state| state.state_id() as u32,
-                    )
-                    .map(PlayerPropertyState::Script)
-                })
-                .or_else(|| {
-                    next_ordered_cloned_state(
-                        &self.undead_states,
-                        state_id,
-                        &mut undead_occurrences,
-                        |_| UNDEAD_STATE_ID,
-                    )
-                    .map(PlayerPropertyState::Undead)
-                })
-                .or_else(|| {
-                    next_ordered_cloned_state(
-                        &self.extended_states,
-                        state_id,
-                        &mut extended_occurrences,
-                        |state| state.kind.state_id(),
-                    )
-                    .map(PlayerPropertyState::Extended)
-                })
-                .or_else(|| {
-                    self.active_change_body_state()
-                        .filter(|state| {
-                            state.serialized_span().map(|(state_offset, _)| state_offset)
-                                == Some(offset)
-                        })
-                        .cloned()
-                        .map(PlayerPropertyState::ChangeBody)
-                })
-                .or_else(|| {
-                    self.ride_state
-                        .as_ref()
-                        .filter(|state| {
-                            state.serialized_span().map(|(state_offset, _)| state_offset)
-                                == Some(offset)
-                        })
-                        .cloned()
-                        .map(PlayerPropertyState::Ride)
-                })
-                .or_else(|| {
-                    self.rage_break_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerPropertyState::RageBreak)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.fury_states,
-                        state_id,
-                        &mut fury_occurrences,
-                        FuryState::skill_id,
-                    )
-                    .map(PlayerPropertyState::Fury)
-                })
-                .or_else(|| {
-                    self.wangsheng_state
-                        .filter(|state| state.state_id() == state_id)
-                        .map(PlayerPropertyState::Wangsheng)
-                });
-            if let Some(state) = state {
-                ordered.push(state);
-            }
-        }
-        ordered
+        let active_body = self.state_entries.entries().rev()
+            .find_map(|(key, state)| matches!(state, StateData::ChangeBody(_)).then_some(key));
+        self.state_entries.entries().filter_map(|(key, state)| {
+            Some(match state {
+                StateData::PersistentAgility(state) => PlayerPropertyState::PersistentAgility(*state),
+                StateData::Agility2(state) => PlayerPropertyState::Agility2(*state),
+                StateData::TaiJi(state) => PlayerPropertyState::TaiJi(*state),
+                StateData::EnlargeMaxHp(state) => PlayerPropertyState::EnlargeMaxHp(*state),
+                StateData::EnlargeMaxMp(state) => PlayerPropertyState::EnlargeMaxMp(*state),
+                StateData::EnlargeFullMiss(state) => PlayerPropertyState::EnlargeFullMiss(*state),
+                StateData::Origin(state) => PlayerPropertyState::Origin(*state),
+                StateData::Hearten(state) => PlayerPropertyState::Hearten(*state),
+                StateData::Callosity(state) => PlayerPropertyState::Callosity(*state),
+                StateData::Swordship(state) => PlayerPropertyState::Swordship(*state),
+                StateData::WuXing(state) => PlayerPropertyState::WuXing(*state),
+                StateData::BattleFairyAttribute(state) => PlayerPropertyState::BattleFairyAttribute(*state),
+                StateData::TianShenXiaFan(state) => PlayerPropertyState::TianShenXiaFan(*state),
+                StateData::Weak(state) => PlayerPropertyState::Weak(*state),
+                StateData::PoisonFog(state) => PlayerPropertyState::PoisonFog(*state),
+                StateData::GodBless(state) => PlayerPropertyState::GodBless(*state),
+                StateData::Roar(state) => PlayerPropertyState::Roar(*state),
+                StateData::Script(state) => PlayerPropertyState::Script(*state),
+                StateData::Undead(state) => PlayerPropertyState::Undead(state.clone()),
+                StateData::Extended(state) => PlayerPropertyState::Extended(state.clone()),
+                StateData::ChangeBody(state) if active_body == Some(key) => PlayerPropertyState::ChangeBody(state.clone()),
+                StateData::Ride(state) => PlayerPropertyState::Ride(state.clone()),
+                StateData::RageBreak(state) => PlayerPropertyState::RageBreak(*state),
+                StateData::Fury(state) => PlayerPropertyState::Fury(*state),
+                StateData::Wangsheng(state) => PlayerPropertyState::Wangsheng(*state),
+                _ => return None,
+            })
+        }).collect()
     }
 
     /// Проецирует monster-варианты `OnUpdateProperties` из того же общего
     /// `m_vStates`. Это сохраняет некоммутативный порядок процентных,
     /// аддитивных и заменяющих формул атаки и стихийного модификатора.
     pub(crate) fn ordered_monster_property_states(&self) -> Vec<MonsterPropertyState> {
-        let mut ordered = Vec::new();
-        let mut swordship_occurrences = BTreeMap::new();
-        let mut battle_fairy_occurrences = BTreeMap::new();
-        let mut fury_occurrences = BTreeMap::new();
+        self.state_entries.iter_data().filter_map(|state| {
+            Some(match state {
+                StateData::TaiJi(state) => MonsterPropertyState::TaiJi(*state),
+                StateData::Origin(state) => MonsterPropertyState::Origin(*state),
+                StateData::Swordship(state) => MonsterPropertyState::Swordship(*state),
+                StateData::BattleFairyAttribute(state) => MonsterPropertyState::BattleFairyAttribute(*state),
+                StateData::Fury(state) => MonsterPropertyState::Fury(*state),
+                StateData::Weak(state) => MonsterPropertyState::Weak(*state),
+                StateData::PoisonFog(state) => MonsterPropertyState::PoisonFog(*state),
+                StateData::GodBless(state) => MonsterPropertyState::GodBless(*state),
+                StateData::Roar(state) => MonsterPropertyState::Roar(*state),
+                StateData::BossBlueFury(state) => MonsterPropertyState::BossBlueFury(*state),
+                _ => return None,
+            })
+        }).collect()
+    }
 
-        for offset in known_state_record_offsets(&self.ex_states) {
-            let Some(state_id) = read_u32(&self.ex_states, offset) else {
-                continue;
-            };
-            let state = self
-                .taiji_state
-                .filter(|state| state.skill_id() == state_id)
-                .map(MonsterPropertyState::TaiJi)
-                .or_else(|| {
-                    self.origin_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(MonsterPropertyState::Origin)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.swordship_states,
-                        state_id,
-                        &mut swordship_occurrences,
-                        SwordshipState::skill_id,
-                    )
-                    .map(MonsterPropertyState::Swordship)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.battle_fairy_attribute_states,
-                        state_id,
-                        &mut battle_fairy_occurrences,
-                        BattleFairyAttributeState::skill_id,
-                    )
-                    .map(MonsterPropertyState::BattleFairyAttribute)
-                })
-                .or_else(|| {
-                    next_ordered_state(
-                        &self.fury_states,
-                        state_id,
-                        &mut fury_occurrences,
-                        FuryState::skill_id,
-                    )
-                    .map(MonsterPropertyState::Fury)
-                })
-                .or_else(|| {
-                    self.weak_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(MonsterPropertyState::Weak)
-                })
-                .or_else(|| {
-                    self.poison_fog_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(MonsterPropertyState::PoisonFog)
-                })
-                .or_else(|| {
-                    self.god_bless_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(MonsterPropertyState::GodBless)
-                })
-                .or_else(|| {
-                    self.roar_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(MonsterPropertyState::Roar)
-                })
-                .or_else(|| {
-                    self.boss_blue_fury_state
-                        .filter(|state| state.skill_id() == state_id)
-                        .map(MonsterPropertyState::BossBlueFury)
-                });
-            if let Some(state) = state {
-                ordered.push(state);
-            }
-        }
-        ordered
-    }
-    pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<GodBlessState> {
-        let state = self.god_bless_state.filter(|state| state.expired(now_ms))?;
-        self.god_bless_state = None;
-        self.remove_serialized_state_record(state.skill_id(), GOD_BLESS_STATE_BYTES);
-        Some(state)
-    }
-    pub(crate) const fn soul_collect_state(&self) -> Option<SoulCollectState> {
-        self.state_storage.soul_collect_state
+    pub(crate) fn soul_collect_state(&self) -> Option<SoulCollectState> {
+        self.state_entries.first::<SoulCollectState>().copied()
     }
 
     pub(crate) fn begin_soul_collect_state(&mut self, state: SoulCollectState) {
-        debug_assert!(self.soul_collect_state.is_none());
+        debug_assert!(self.state_entries.first::<SoulCollectState>().copied().is_none());
         self.remove_serialized_state_record(state.skill_id(), SOUL_COLLECT_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded());
-        self.soul_collect_state = Some(state);
+        self.state_entries.append(state);
     }
 
-    pub(crate) fn activate_loaded_soul_collect_state(&self) -> Option<SoulCollectState> { self.soul_collect_state }
+    pub(crate) fn activate_loaded_soul_collect_state(&self) -> Vec<SoulCollectState> { self.state_entries.iter::<SoulCollectState>().copied().collect() }
 
     pub(crate) fn soul_collect_state_mut(&mut self) -> Option<&mut SoulCollectState> {
-        self.soul_collect_state.as_mut()
+        self.state_entries.first_mut::<SoulCollectState>()
     }
 
     pub(crate) fn take_soul_collect_state(&mut self) -> Option<SoulCollectState> {
-        let state = self.soul_collect_state.take()?;
+        let state = self.state_entries.take_first::<SoulCollectState>()?;
         self.remove_serialized_state_record(state.skill_id(), SOUL_COLLECT_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn take_expired_spider_web_state(
         &mut self,
+        key: StateKey,
         now_ms: u32,
     ) -> Option<SpiderWebState> {
-        let state = self.spider_web_state.filter(|state| state.expired(now_ms))?;
-        self.spider_web_state = None;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), SPIDER_WEB_STATE_BYTES);
+        self.applied_state::<SpiderWebState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<SpiderWebState>(key, SPIDER_WEB_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
-        let state = self.spider_web_state.take()?;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), SPIDER_WEB_STATE_BYTES);
+        let key = self.state_entries.first_key::<SpiderWebState>()?;
+        let state = self.remove_applied_state_record::<SpiderWebState>(key, SPIDER_WEB_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn replace_knock_out_state(&mut self, state: KnockOutState) -> Option<KnockOutState> {
-        self.remove_serialized_state_record(state.skill_id(), KNOCK_OUT_STATE_BYTES);
+        let previous = self.state_entries.first_key::<KnockOutState>()
+            .and_then(|key| self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.blind_state_order.insert(state.skill_id());
-        self.curable_state_order.insert(state.skill_id());
-        self.knock_out_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_knock_out_state(&mut self, now_ms: u32) -> Option<KnockOutState> {
-        let state = self.knock_out_state?.activate_loaded(now_ms);
-        self.knock_out_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
+    pub(crate) fn activate_loaded_knock_out_state(&mut self, now_ms: u32) -> Vec<KnockOutState> {
+        self.state_entries.for_each_mut::<KnockOutState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<KnockOutState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
+    }
+
+    pub(crate) fn activate_loaded_blind_state(&mut self, now_ms: u32) -> Vec<BlindState> {
+        self.state_entries.for_each_mut::<BlindState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<BlindState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
+    }
+
+    pub(crate) fn take_expired_blind_state(&mut self, key: StateKey, now_ms: u32) -> Option<BlindState> {
+        self.applied_state::<BlindState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<BlindState>(key, BLIND_STATE_BYTES)?;
         Some(state)
-    }
-
-    pub(crate) fn activate_loaded_blind_state(&mut self, now_ms: u32) -> Option<BlindState> {
-        let state = self.blind_state?.activate_loaded(now_ms);
-        self.blind_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
-        Some(state)
-    }
-
-    pub(crate) fn take_expired_blind_state(&mut self, now_ms: u32) -> Option<BlindState> {
-        self.blind_state.filter(|state| state.expired(now_ms))?;
-        self.take_blind_state()
     }
 
     pub(crate) fn take_blind_state(&mut self) -> Option<BlindState> {
-        let state = self.blind_state.take()?;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.remove_blind_state_serialized();
+        let key = self.state_entries.first_key::<BlindState>()?;
+        let state = self.remove_applied_state_record::<BlindState>(key, BLIND_STATE_BYTES)?;
         Some(state)
     }
 
-    fn remove_blind_state_serialized(&mut self) {
-        let Some(offset) = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(BLIND_STATE_ID))
-        else {
-            return;
-        };
-        let end = offset.saturating_add(BLIND_STATE_BYTES);
-        if end > self.ex_states.len() {
-            return;
-        }
-        self.ex_states.drain(offset..end);
-        if self.ex_states.len() >= 4 {
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
-        }
-        for state in &mut self.extended_states {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        for state in &mut self.change_body_states {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        for state in &mut self.undead_states {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        if let Some(state) = &mut self.leaf_cut_state {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        if let Some(state) = &mut self.leaf_cut_3_state {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        if let Some(state) = &mut self.kerosene_state {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        if let Some(state) = &mut self.poison_fog_state {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        if let Some(state) = &mut self.meteor_arrow_state {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-        if let Some(state) = &mut self.ride_state {
-            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
-        }
-    }
+
 
     pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> {
-        self.remove_serialized_state_record(state.skill_id(), BOA_LOCK_STATE_BYTES);
+        let previous = self.state_entries.first_key::<BoaLockState>()
+            .and_then(|key| self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.curable_state_order.insert(state.skill_id());
-        self.boa_lock_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> {
-        let state = self.boa_lock_state?.activate_loaded(now_ms);
-        self.boa_lock_state = Some(state);
-        self.set_moveable(false);
+    pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Vec<BoaLockState> {
+        self.state_entries.for_each_mut::<BoaLockState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<BoaLockState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+        }
+        states
+    }
+
+    pub(crate) fn take_expired_boa_lock_state(&mut self, key: StateKey, now_ms: u32) -> Option<BoaLockState> {
+        self.applied_state::<BoaLockState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES)?;
         Some(state)
-    }
-
-    pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> {
-        self.boa_lock_state.filter(|state| state.expired(now_ms))?;
-        self.take_boa_lock_state()
     }
 
     pub(crate) fn take_boa_lock_state(&mut self) -> Option<BoaLockState> {
-        let state = self.boa_lock_state.take()?;
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), BOA_LOCK_STATE_BYTES);
+        let key = self.state_entries.first_key::<BoaLockState>()?;
+        let state = self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES)?;
         Some(state)
     }
 
-    pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.pillar_state }
+    pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.state_entries.first::<PillarState>().copied() }
 
     pub(crate) fn replace_rush_state(&mut self, state: RushState) -> Option<RushState> {
-        self.remove_serialized_state_record(state.skill_id(), RUSH_STATE_BYTES);
+        let previous = self.state_entries.first_key::<RushState>()
+            .and_then(|key| self.remove_applied_state_record::<RushState>(key, RUSH_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.curable_state_order.insert(state.skill_id());
-        self.rush_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_rush_state(&mut self, now_ms: u32) -> Option<RushState> {
-        let state = self.rush_state?.activate_loaded(now_ms);
-        self.rush_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
+    pub(crate) fn activate_loaded_rush_state(&mut self, now_ms: u32) -> Vec<RushState> {
+        self.state_entries.for_each_mut::<RushState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<RushState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
+    }
+
+    pub(crate) fn take_expired_rush_state(&mut self, key: StateKey, now_ms: u32) -> Option<RushState> {
+        self.applied_state::<RushState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<RushState>(key, RUSH_STATE_BYTES)?;
         Some(state)
-    }
-
-    pub(crate) fn take_expired_rush_state(&mut self, now_ms: u32) -> Option<RushState> {
-        self.rush_state.filter(|state| state.expired(now_ms))?;
-        self.take_rush_state()
     }
 
     pub(crate) fn take_rush_state(&mut self) -> Option<RushState> {
-        let state = self.rush_state.take()?;
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), RUSH_STATE_BYTES);
+        let key = self.state_entries.first_key::<RushState>()?;
+        let state = self.remove_applied_state_record::<RushState>(key, RUSH_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn replace_rush_2_state(&mut self, state: Rush2State) -> Option<Rush2State> {
-        self.remove_serialized_state_record(state.skill_id(), RUSH_2_STATE_BYTES);
+        let previous = self.state_entries.first_key::<Rush2State>()
+            .and_then(|key| self.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.curable_state_order.insert(state.skill_id());
-        self.rush_2_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_rush_2_state(&mut self, now_ms: u32) -> Option<Rush2State> {
-        let state = self.rush_2_state?.activate_loaded(now_ms);
-        self.rush_2_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
+    pub(crate) fn activate_loaded_rush_2_state(&mut self, now_ms: u32) -> Vec<Rush2State> {
+        self.state_entries.for_each_mut::<Rush2State>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<Rush2State>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
+    }
+
+    pub(crate) fn take_expired_rush_2_state(&mut self, key: StateKey, now_ms: u32) -> Option<Rush2State> {
+        self.applied_state::<Rush2State>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES)?;
         Some(state)
     }
 
-    pub(crate) fn take_expired_rush_2_state(&mut self, now_ms: u32) -> Option<Rush2State> {
-        self.rush_2_state.filter(|state| state.expired(now_ms))?;
-        self.take_rush_2_state()
-    }
-
     pub(crate) fn take_rush_2_state(&mut self) -> Option<Rush2State> {
-        let state = self.rush_2_state.take()?;
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), RUSH_2_STATE_BYTES);
+        let key = self.state_entries.first_key::<Rush2State>()?;
+        let state = self.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn replace_pillar_state(&mut self, state: PillarState) -> Option<PillarState> {
         self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.pillar_state.replace(state)
+        {
+            let previous = self.state_entries.take_first::<PillarState>();
+            self.state_entries.append(state);
+            previous
+        }
     }
 
-    pub(crate) fn activate_loaded_pillar_state(&mut self, now_ms: u32) -> Option<PillarState> {
-        let state = self.pillar_state?.activate_loaded(now_ms);
-        self.pillar_state = Some(state);
-        self.set_moveable(false);
-        Some(state)
+    pub(crate) fn activate_loaded_pillar_state(&mut self, now_ms: u32) -> Vec<PillarState> {
+        self.state_entries.for_each_mut::<PillarState>(|state| *state = state.activate_loaded(now_ms));
+        for _ in 0..self.state_entries.iter::<PillarState>().count() {
+            self.set_moveable(false);
+        }
+        self.state_entries.iter::<PillarState>().copied().collect()
     }
-    pub(crate) fn take_expired_pillar_state(&mut self, now_ms: u32) -> Option<PillarState> {
-        self.pillar_state.filter(|state| state.expired(now_ms))?;
-        let state = self.pillar_state.take()?;
-        self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
-        Some(state)
-    }
+
     pub(crate) fn take_pillar_state(&mut self) -> Option<PillarState> {
-        let state = self.pillar_state.take()?;
+        let state = self.state_entries.take_first::<PillarState>()?;
         self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
         Some(state)
     }
 
-    pub(crate) fn take_expired_knock_out_state(&mut self, now_ms: u32) -> Option<KnockOutState> {
-        let state = self.knock_out_state.filter(|state| state.expired(now_ms))?;
-        self.knock_out_state = None;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), KNOCK_OUT_STATE_BYTES);
+    pub(crate) fn take_expired_knock_out_state(&mut self, key: StateKey, now_ms: u32) -> Option<KnockOutState> {
+        self.applied_state::<KnockOutState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
-        let state = self.knock_out_state.take()?;
-        self.blind_state_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), KNOCK_OUT_STATE_BYTES);
+        let key = self.state_entries.first_key::<KnockOutState>()?;
+        let state = self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn replace_knight_cut_state(&mut self, state: KnightCutState) -> Option<KnightCutState> {
-        self.remove_serialized_state_record(state.skill_id(), KNIGHT_CUT_STATE_BYTES);
+        let previous = self.state_entries.first_key::<KnightCutState>()
+            .and_then(|key| self.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES));
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.curable_state_order.insert(state.skill_id());
-        self.knight_cut_state.replace(state)
+        self.state_entries.append(state);
+        previous
     }
 
-    pub(crate) fn activate_loaded_knight_cut_state(&mut self, now_ms: u32) -> Option<KnightCutState> {
-        let state = self.knight_cut_state?.activate_loaded(now_ms);
-        self.knight_cut_state = Some(state);
-        self.set_moveable(false);
-        self.set_fightable(false);
-        Some(state)
+    pub(crate) fn activate_loaded_knight_cut_state(&mut self, now_ms: u32) -> Vec<KnightCutState> {
+        self.state_entries.for_each_mut::<KnightCutState>(|state| *state = state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<KnightCutState>().copied().collect();
+        for _ in &states {
+            self.set_moveable(false);
+            self.set_fightable(false);
+        }
+        states
     }
 
-    pub(crate) fn take_expired_knight_cut_state(&mut self, now_ms: u32) -> Option<KnightCutState> {
-        let state = self.knight_cut_state.filter(|state| state.expired(now_ms))?;
-        self.knight_cut_state = None;
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), KNIGHT_CUT_STATE_BYTES);
+    pub(crate) fn take_expired_knight_cut_state(&mut self, key: StateKey, now_ms: u32) -> Option<KnightCutState> {
+        self.applied_state::<KnightCutState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn take_knight_cut_state(&mut self) -> Option<KnightCutState> {
-        let state = self.knight_cut_state.take()?;
-        self.curable_state_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), KNIGHT_CUT_STATE_BYTES);
+        let key = self.state_entries.first_key::<KnightCutState>()?;
+        let state = self.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
-        self.curable_state_order.iter().copied().collect()
+        (0..self.state_entries.len()).filter_map(|index| {
+            match self.state_entries.address(index)? {
+                StateAddress::Applied(key) => {
+                    let state = self.state_entries.get(key)?;
+                    state.is_curable().then_some(state.state_id())
+                }
+                StateAddress::Skill(slot) => Some(self.skill_at(slot)?.id),
+            }
+        }).collect()
     }
 
-    pub(crate) fn register_curable_skill_state(&mut self, skill_id: u32) {
-        self.curable_state_order.shift_remove(&skill_id);
-        self.curable_state_order.insert(skill_id);
+    pub(crate) fn register_curable_skill_state(&mut self, slot: SkillSlot) {
+        self.state_entries.detach_skill(slot);
+        self.state_entries.append_skill(slot);
     }
 
     pub(crate) fn finish_curable_skill_state(&mut self, skill_id: u32) {
-        self.curable_state_order.shift_remove(&skill_id);
+        for index in 0..self.state_entries.len() {
+            if let Some(StateAddress::Skill(slot)) = self.state_entries.address(index)
+                && self.skill_at(slot).is_some_and(|skill| skill.id == skill_id)
+            {
+                self.finish_curable_skill_slot(slot);
+                break;
+            }
+        }
+    }
+
+    pub(crate) fn finish_curable_skill_slot(&mut self, slot: SkillSlot) {
+        self.state_entries.detach_skill(slot);
     }
 
     pub(crate) fn replace_poison_fog_state(&mut self, mut state: PoisonFogState, now_ms: u32) -> Option<PoisonFogState> {
-        let previous = self.poison_fog_state.take();
+        let previous = self.state_entries.take_first::<PoisonFogState>();
         let replaced = previous.and_then(PoisonFogState::serialized_span).is_some_and(|(offset, amount)| amount == POISON_FOG_STATE_BYTES && state.write_serialized_at(&mut self.ex_states, offset, now_ms));
         if !replaced { if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); } let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.wrapping_add(1)); state.append_serialized(&mut self.ex_states, now_ms); }
-        self.curable_state_order.shift_remove(&state.skill_id()); self.curable_state_order.insert(state.skill_id()); self.poison_fog_state = Some(state); previous
+        self.state_entries.append(state); previous
     }
-    pub(crate) fn take_expired_poison_fog_state(&mut self, now_ms: u32) -> Option<PoisonFogState> { let state = self.poison_fog_state.filter(|state| state.expired(now_ms))?; self.finish_poison_fog_state(state); Some(state) }
-    pub(crate) fn take_poison_fog_state(&mut self) -> Option<PoisonFogState> { let state = self.poison_fog_state?; self.finish_poison_fog_state(state); Some(state) }
-    fn finish_poison_fog_state(&mut self, state: PoisonFogState) { self.poison_fog_state = None; self.curable_state_order.shift_remove(&state.skill_id()); let Some((offset, amount)) = state.serialized_span() else { return }; if offset.saturating_add(amount) > self.ex_states.len() { return } self.ex_states.drain(offset..offset + amount); if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); } for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.kerosene_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); } }
-    pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Option<PoisonFogState> { let mut state = self.poison_fog_state?; state.activate_loaded(now_ms); state.update_serialized_runtime(&mut self.ex_states, now_ms); self.poison_fog_state = Some(state); Some(state) }
+    pub(crate) fn take_expired_poison_fog_state(&mut self, key: StateKey, now_ms: u32) -> Option<PoisonFogState> {
+        self.applied_state::<PoisonFogState>(key).filter(|state| state.expired(now_ms))?;
+        let state = self.remove_applied_state_record::<PoisonFogState>(key, POISON_FOG_STATE_BYTES)?;
+        Some(state)
+    }
+    pub(crate) fn take_poison_fog_state(&mut self) -> Option<PoisonFogState> {
+        let key = self.state_entries.first_key::<PoisonFogState>()?;
+        let state = self.remove_applied_state_record::<PoisonFogState>(key, POISON_FOG_STATE_BYTES)?;
+        Some(state)
+    }
 
-    pub(crate) fn meteor_arrow_state(&self) -> Option<MeteorArrowState> { self.meteor_arrow_state }
+    pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Vec<PoisonFogState> {
+        self.state_entries.for_each_mut::<PoisonFogState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<PoisonFogState>().copied().collect();
+        for state in &states {
+            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+        }
+        states
+    }
+
+    pub(crate) fn meteor_arrow_state(&self) -> Option<MeteorArrowState> { self.state_entries.first::<MeteorArrowState>().copied() }
     pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<MeteorArrowState> {
-        if let Some(mut state) = self.meteor_arrow_state {
+        if let Some(key) = self.state_entries.first_key::<MeteorArrowState>() {
+            let state = self.applied_state_mut::<MeteorArrowState>(key)?;
             if !state.add_arrows(amount) { return None }
+            let state = *state;
             state.update_serialized(&mut self.ex_states);
-            self.meteor_arrow_state = Some(state);
             return Some(state);
         }
         let mut state = MeteorArrowState::new(maximum);
@@ -4548,66 +3371,48 @@ impl CMoveShape {
         let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
         write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
         state.append_serialized(&mut self.ex_states);
-        self.meteor_arrow_state = Some(state);
+        let key = self.state_entries.append(state);
+        let state = self.applied_state_mut::<MeteorArrowState>(key)?;
         if !state.add_arrows(amount) { return None }
+        let state = *state;
         state.update_serialized(&mut self.ex_states);
-        self.meteor_arrow_state = Some(state);
         Some(state)
     }
     pub(crate) fn take_meteor_arrow_state(&mut self) -> Option<MeteorArrowState> {
-        let state = self.meteor_arrow_state.take()?;
-        let Some((offset, amount)) = state.serialized_span() else { return Some(state) };
-        if offset.saturating_add(amount) > self.ex_states.len() { return Some(state) }
-        self.ex_states.drain(offset..offset + amount);
-        if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); }
-        for known in &mut self.extended_states { known.shift_serialized_offset_after(offset, amount); }
-        for known in &mut self.change_body_states { known.shift_serialized_offset_after(offset, amount); }
-        for known in &mut self.undead_states { known.shift_serialized_offset_after(offset, amount); }
-        if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_after(offset, amount); }
-        if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_after(offset, amount); }
-        if let Some(known) = &mut self.kerosene_state { known.shift_serialized_offset_after(offset, amount); }
-        if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_after(offset, amount); }
-        if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_after(offset, amount); }
+        let key = self.state_entries.first_key::<MeteorArrowState>()?;
+        let state = self.remove_applied_state_record::<MeteorArrowState>(key, METEOR_ARROW_STATE_BYTES)?;
         Some(state)
     }
 
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {
-        self.blind_state_order.iter().copied().collect()
+        self.state_entries.iter_data().filter(|state| state.is_blind())
+            .map(StateData::state_id).collect()
+    }
+
+    pub(crate) fn blind_state_instances(&self) -> Vec<(StateKey, u32)> {
+        self.state_entries.entries().filter(|(_, state)| state.is_blind())
+            .map(|(key, state)| (key, state.state_id())).collect()
     }
 
     pub(crate) fn replace_blood_loss_state(
         &mut self,
         state: BloodLossState,
     ) -> Option<BloodLossState> {
-        self.periodic_attack_order.insert(state.skill_id());
-        let previous = self.blood_loss_state.replace(state);
-        let serialized_exists = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state.skill_id()))
-            .is_some();
-        if previous.is_some() && serialized_exists {
-            update_known_state_record(
-                &mut self.ex_states,
-                state.skill_id(),
-                &state.encoded_for_install(),
-            );
-        } else if !serialized_exists {
-            self.append_serialized_state_record(&state.encoded_for_install());
-        }
+        let previous = self.state_entries.first_key::<BloodLossState>()
+            .and_then(|key| self.remove_applied_state_record::<BloodLossState>(key, BLOOD_LOSS_STATE_BYTES));
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.state_entries.append(state);
         previous
     }
 
-    pub(crate) fn finish_blood_loss_state(&mut self, state: BloodLossState) {
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        self.remove_serialized_state_record(state.skill_id(), BLOOD_LOSS_STATE_BYTES);
-    }
+
 
     pub(crate) fn replace_leaf_cut_state(
         &mut self,
         mut state: LeafCutState,
         now_ms: u32,
     ) -> Option<LeafCutState> {
-        let previous = self.leaf_cut_state.take();
+        let previous = self.state_entries.take_first::<LeafCutState>();
         let replaced_in_place = previous
             .and_then(LeafCutState::serialized_span)
             .is_some_and(|(offset, amount)| {
@@ -4623,90 +3428,51 @@ impl CMoveShape {
             write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
             state.append_serialized(&mut self.ex_states, now_ms);
         }
-        self.periodic_attack_order.insert(state.skill_id());
-        self.leaf_cut_state = Some(state);
+        self.state_entries.append(state);
         previous
     }
 
-    pub(crate) fn take_leaf_cut_state_for_ai(&mut self) -> Option<LeafCutState> {
-        self.leaf_cut_state.take()
-    }
 
-    pub(crate) fn restore_leaf_cut_state_after_ai(&mut self, state: LeafCutState) {
-        debug_assert!(self.leaf_cut_state.is_none());
-        self.leaf_cut_state = Some(state);
-    }
 
-    pub(crate) fn finish_leaf_cut_state(&mut self, state: LeafCutState) {
-        self.remove_leaf_cut_state_serialized(state);
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-    }
 
-    fn remove_leaf_cut_state_serialized(&mut self, state: LeafCutState) {
-        let Some((offset, amount)) = state.serialized_span() else { return };
-        if offset.saturating_add(amount) > self.ex_states.len() { return }
-        self.ex_states.drain(offset..offset + amount);
-        if self.ex_states.len() >= 4 {
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+
+
+
+
+
+    pub(crate) fn activate_loaded_leaf_cut_state(&mut self, now_ms: u32) -> Vec<LeafCutState> {
+        self.state_entries.for_each_mut::<LeafCutState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<LeafCutState>().copied().collect();
+        for state in &states {
+            state.update_serialized_runtime(&mut self.ex_states, now_ms);
         }
-        for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); }
-        for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
-        for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.kerosene_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
-    }
-
-    pub(crate) fn activate_loaded_leaf_cut_state(&mut self, now_ms: u32) -> Option<LeafCutState> {
-        let mut state = self.leaf_cut_state?;
-        state.activate_loaded(now_ms);
-        state.update_serialized_runtime(&mut self.ex_states, now_ms);
-        self.leaf_cut_state = Some(state);
-        Some(state)
+        states
     }
 
     pub(crate) fn replace_leaf_cut_2_state(
         &mut self,
         state: LeafCutState2,
     ) -> Option<LeafCutState2> {
-        let serialized_exists = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .any(|offset| read_u32(&self.ex_states, offset) == Some(LEAF_CUT_2_STATE_ID));
-        if serialized_exists {
-            update_known_state_record(&mut self.ex_states, LEAF_CUT_2_STATE_ID, &state.encoded_for_install());
-        } else {
-            self.append_serialized_state_record(&state.encoded_for_install());
+        let previous = self.state_entries.first_key::<LeafCutState2>()
+            .and_then(|key| self.remove_applied_state_record::<LeafCutState2>(key, LEAF_CUT_2_STATE_BYTES));
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.state_entries.append(state);
+        previous
+    }
+
+
+
+
+
+
+
+    pub(crate) fn activate_loaded_leaf_cut_2_state(&mut self, now_ms: u32) -> Vec<LeafCutState2> {
+        self.state_entries.for_each_mut::<LeafCutState2>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<LeafCutState2>().copied().collect();
+        for (occurrence, state) in states.iter().enumerate() {
+            update_nth_known_state_record(&mut self.ex_states, LEAF_CUT_2_STATE_ID, occurrence, &state.encoded(now_ms));
         }
-        self.periodic_attack_order.insert(LEAF_CUT_2_STATE_ID);
-        self.leaf_cut_2_state.replace(state)
-    }
-
-    pub(crate) fn take_leaf_cut_2_state_for_ai(&mut self) -> Option<LeafCutState2> {
-        self.leaf_cut_2_state.take()
-    }
-
-    pub(crate) fn restore_leaf_cut_2_state_after_ai(&mut self, state: LeafCutState2) {
-        debug_assert!(self.leaf_cut_2_state.is_none());
-        self.leaf_cut_2_state = Some(state);
-    }
-
-    pub(crate) fn finish_leaf_cut_2_state(&mut self) {
-        self.leaf_cut_2_state = None;
-        self.periodic_attack_order.shift_remove(&LEAF_CUT_2_STATE_ID);
-        self.curable_state_order.shift_remove(&LEAF_CUT_2_STATE_ID);
-        self.remove_serialized_state_record(LEAF_CUT_2_STATE_ID, LEAF_CUT_2_STATE_BYTES);
-    }
-
-    pub(crate) fn activate_loaded_leaf_cut_2_state(&mut self, now_ms: u32) -> Option<LeafCutState2> {
-        let mut state = self.leaf_cut_2_state?;
-        state.activate_loaded(now_ms);
-        update_known_state_record(&mut self.ex_states, LEAF_CUT_2_STATE_ID, &state.encoded(now_ms));
-        self.leaf_cut_2_state = Some(state);
-        Some(state)
+        states
     }
 
     pub(crate) fn replace_leaf_cut_3_state(
@@ -4714,7 +3480,7 @@ impl CMoveShape {
         mut state: LeafCutState3,
         now_ms: u32,
     ) -> Option<LeafCutState3> {
-        let previous = self.leaf_cut_3_state.take();
+        let previous = self.state_entries.take_first::<LeafCutState3>();
         let replaced_in_place = previous
             .and_then(LeafCutState3::serialized_span)
             .is_some_and(|(offset, amount)| {
@@ -4730,76 +3496,50 @@ impl CMoveShape {
             write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
             state.append_serialized(&mut self.ex_states, now_ms);
         }
-        self.periodic_attack_order.insert(state.skill_id());
-        self.leaf_cut_3_state = Some(state);
+        self.state_entries.append(state);
         previous
     }
 
-    pub(crate) fn take_leaf_cut_3_state_for_ai(&mut self) -> Option<LeafCutState3> {
-        self.leaf_cut_3_state.take()
-    }
 
-    pub(crate) fn restore_leaf_cut_3_state_after_ai(&mut self, state: LeafCutState3) {
-        debug_assert!(self.leaf_cut_3_state.is_none());
-        self.leaf_cut_3_state = Some(state);
-    }
 
-    pub(crate) fn finish_leaf_cut_3_state(&mut self, state: LeafCutState3) {
-        self.remove_leaf_cut_3_state_serialized(state);
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        self.curable_state_order.shift_remove(&state.skill_id());
-    }
 
-    fn remove_leaf_cut_3_state_serialized(&mut self, state: LeafCutState3) {
-        let Some((offset, amount)) = state.serialized_span() else { return };
-        if offset.saturating_add(amount) > self.ex_states.len() { return }
-        self.ex_states.drain(offset..offset + amount);
-        if self.ex_states.len() >= 4 {
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+
+
+
+
+
+    pub(crate) fn activate_loaded_leaf_cut_3_state(&mut self, now_ms: u32) -> Vec<LeafCutState3> {
+        self.state_entries.for_each_mut::<LeafCutState3>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<LeafCutState3>().copied().collect();
+        for state in &states {
+            state.update_serialized_runtime(&mut self.ex_states, now_ms);
         }
-        for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); }
-        for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
-        for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.kerosene_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
-    }
-
-    pub(crate) fn activate_loaded_leaf_cut_3_state(&mut self, now_ms: u32) -> Option<LeafCutState3> {
-        let mut state = self.leaf_cut_3_state?;
-        state.activate_loaded(now_ms);
-        state.update_serialized_runtime(&mut self.ex_states, now_ms);
-        self.leaf_cut_3_state = Some(state);
-        Some(state)
+        states
     }
 
     pub(crate) fn activate_loaded_strike_states(&mut self, now_ms: u32) -> Vec<StrikeState> {
-        for state in &mut self.strike_states { *state = state.activate_loaded(now_ms); }
-        for _ in 0..self.strike_states.len() { self.set_moveable(false); self.set_fightable(false); }
-        self.strike_states.clone()
+        self.state_entries.for_each_mut::<StrikeState>(|state| { *state = state.activate_loaded(now_ms); });
+        for _ in 0..self.state_entries.iter::<StrikeState>().count() { self.set_moveable(false); self.set_fightable(false); }
+        self.state_entries.iter::<StrikeState>().cloned().collect()
     }
 
     pub(crate) fn take_expired_strike_states(&mut self, now_ms: u32) -> Vec<StrikeState> {
         let mut ended = Vec::new();
         let mut position = 0usize;
-        while position < self.strike_states.len() {
-            if !self.strike_states[position].expired(now_ms) { position += 1; continue; }
-            let state = self.strike_states.remove(position);
+        while position < self.state_entries.iter::<StrikeState>().count() {
+            if !self.state_entries.nth::<StrikeState>(position).expect("семейная позиция проверена до изменения списка").expired(now_ms) { position += 1; continue; }
+            let state = self.state_entries.take_nth::<StrikeState>(position).expect("семейная позиция проверена до удаления");
             if let Some(offset) = known_state_record_offsets(&self.ex_states).into_iter().filter(|offset| read_u32(&self.ex_states, *offset) == Some(STRIKE_STATE_ID)).nth(position) {
                 self.remove_serialized_state_record_at(offset, STRIKE_STATE_BYTES);
             }
             self.set_moveable(true); self.set_fightable(true); ended.push(state);
         }
-        if self.strike_states.is_empty() { self.blind_state_order.shift_remove(&STRIKE_STATE_ID); }
         ended
     }
 
     pub(crate) fn take_strike_states(&mut self) -> Vec<StrikeState> {
-        let ended = std::mem::take(&mut self.strike_states);
-        self.blind_state_order.shift_remove(&STRIKE_STATE_ID);
+        let ended: Vec<_> = self.state_entries.keys::<StrikeState>().into_iter()
+            .filter_map(|key| self.state_entries.take::<StrikeState>(key)).collect();
         for _ in 0..ended.len() {
             self.remove_serialized_state_record(STRIKE_STATE_ID, STRIKE_STATE_BYTES);
             self.set_moveable(true);
@@ -4808,26 +3548,32 @@ impl CMoveShape {
         ended
     }
 
-    pub(crate) fn kerosene_state(&self) -> Option<KeroseneState> { self.kerosene_state }
+    pub(crate) fn kerosene_state(&self) -> Option<KeroseneState> { self.state_entries.first::<KeroseneState>().copied() }
     pub(crate) fn replace_kerosene_state(&mut self, mut state: KeroseneState, now_ms: u32) -> Option<KeroseneState> {
-        let previous = self.kerosene_state.take();
+        let previous = self.state_entries.take_first::<KeroseneState>();
         let replaced = previous.and_then(KeroseneState::serialized_span).is_some_and(|(offset, amount)| amount == KEROSENE_STATE_BYTES && state.write_serialized_at(&mut self.ex_states, offset, now_ms));
         if !replaced { if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); } let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.wrapping_add(1)); state.append_serialized(&mut self.ex_states, now_ms); }
-        self.periodic_attack_order.insert(state.skill_id()); self.kerosene_state = Some(state); previous
+        self.state_entries.append(state); previous
     }
-    pub(crate) fn take_kerosene_state_for_ai(&mut self) -> Option<KeroseneState> { self.kerosene_state.take() }
-    pub(crate) fn restore_kerosene_state_after_ai(&mut self, state: KeroseneState) { debug_assert!(self.kerosene_state.is_none()); self.kerosene_state = Some(state); }
-    pub(crate) fn take_kerosene_state(&mut self) -> Option<KeroseneState> { let state = self.kerosene_state.take()?; self.finish_kerosene_state(state); Some(state) }
-    pub(crate) fn finish_kerosene_state(&mut self, state: KeroseneState) {
-        self.periodic_attack_order.shift_remove(&state.skill_id());
-        let Some((offset, amount)) = state.serialized_span() else { return }; if offset.saturating_add(amount) > self.ex_states.len() { return }
-        self.ex_states.drain(offset..offset + amount); if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); }
-        for known in &mut self.extended_states { known.shift_serialized_offset_after(offset, amount); } for known in &mut self.change_body_states { known.shift_serialized_offset_after(offset, amount); } for known in &mut self.undead_states { known.shift_serialized_offset_after(offset, amount); } if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_after(offset, amount); } if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_after(offset, amount); } if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_after(offset, amount); } if let Some(known) = &mut self.meteor_arrow_state { known.shift_serialized_offset_after(offset, amount); } if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_after(offset, amount); }
-    }
-    pub(crate) fn activate_loaded_kerosene_state(&mut self, now_ms: u32) -> Option<KeroseneState> { let mut state = self.kerosene_state?; state.activate_loaded(now_ms); state.update_serialized_runtime(&mut self.ex_states, now_ms); self.kerosene_state = Some(state); Some(state) }
 
-    pub(crate) fn battle_fairy_attribute_states(&self) -> &[BattleFairyAttributeState] {
-        &self.battle_fairy_attribute_states
+
+    pub(crate) fn take_kerosene_state(&mut self) -> Option<KeroseneState> {
+        let key = self.state_entries.first_key::<KeroseneState>()?;
+        let state = self.remove_applied_state_record::<KeroseneState>(key, KEROSENE_STATE_BYTES)?;
+        Some(state)
+    }
+
+    pub(crate) fn activate_loaded_kerosene_state(&mut self, now_ms: u32) -> Vec<KeroseneState> {
+        self.state_entries.for_each_mut::<KeroseneState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<KeroseneState>().copied().collect();
+        for state in &states {
+            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+        }
+        states
+    }
+
+    pub(crate) fn battle_fairy_attribute_states(&self) -> impl Iterator<Item = &BattleFairyAttributeState> {
+        self.state_entries.iter::<BattleFairyAttributeState>()
     }
 
     pub(crate) fn replace_battle_fairy_attribute_state(
@@ -4836,12 +3582,11 @@ impl CMoveShape {
     ) -> Option<BattleFairyAttributeState> {
         self.remove_serialized_state_record(state.skill_id(), BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
-        let previous = self
-            .battle_fairy_attribute_states
-            .iter()
-            .position(|candidate| candidate.skill_id() == state.skill_id())
-            .map(|position| self.battle_fairy_attribute_states.remove(position));
-        self.battle_fairy_attribute_states.push(state);
+        let position = self
+            .state_entries.iter::<BattleFairyAttributeState>()
+            .position(|candidate| candidate.skill_id() == state.skill_id());
+        let previous = position.and_then(|position| self.state_entries.take_nth::<BattleFairyAttributeState>(position));
+        self.state_entries.append(state);
         previous
     }
 
@@ -4851,100 +3596,94 @@ impl CMoveShape {
     ) -> Vec<BattleFairyAttributeState> {
         let mut expired = Vec::new();
         let mut position = 0;
-        while position < self.battle_fairy_attribute_states.len() {
-            if self.battle_fairy_attribute_states[position].expired(now_ms) {
-                let state = self.battle_fairy_attribute_states.remove(position);
-                self.remove_serialized_state_record(state.skill_id(), BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
-                expired.push(state);
-            } else {
+        while let Some(state) = self.state_entries.nth::<BattleFairyAttributeState>(position).copied() {
+            if !state.expired(now_ms) {
                 position += 1;
+                continue;
             }
+            let occurrence = self.state_entries.iter::<BattleFairyAttributeState>()
+                .take(position).filter(|candidate| candidate.skill_id() == state.skill_id()).count();
+            let offset = known_state_record_offsets(&self.ex_states).into_iter()
+                .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state.skill_id()))
+                .nth(occurrence);
+            let state = self.state_entries.take_nth::<BattleFairyAttributeState>(position)
+                .expect("семейная позиция проверена до удаления");
+            if let Some(offset) = offset {
+                self.remove_serialized_state_record_at(offset, BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
+            }
+            expired.push(state);
         }
         expired
     }
 
     pub(crate) fn activate_loaded_battle_fairy_attribute_states(&mut self, now_ms: u32) -> Vec<BattleFairyAttributeState> {
-        for state in &mut self.battle_fairy_attribute_states { *state = state.activate_loaded(now_ms); }
-        self.battle_fairy_attribute_states.clone()
+        self.state_entries.for_each_mut::<BattleFairyAttributeState>(|state| { *state = state.activate_loaded(now_ms); });
+        self.state_entries.iter::<BattleFairyAttributeState>().cloned().collect()
     }
 
-    pub(crate) fn take_blood_loss_state_for_ai(&mut self) -> Option<BloodLossState> {
-        self.blood_loss_state.take()
+
+
+    pub(crate) fn activate_loaded_blood_loss_state(&mut self, now_ms: u32) -> Vec<BloodLossState> {
+        self.state_entries.for_each_mut::<BloodLossState>(|state| state.activate_loaded(now_ms));
+        let states: Vec<_> = self.state_entries.iter::<BloodLossState>().copied().collect();
+        states
     }
 
-    pub(crate) fn activate_loaded_blood_loss_state(&mut self, now_ms: u32) -> Option<BloodLossState> {
-        let mut state = self.blood_loss_state?;
-        state.activate_loaded(now_ms);
-        self.blood_loss_state = Some(state);
-        Some(state)
-    }
-
-    pub(crate) fn periodic_attack_state_ids(&self) -> Vec<u32> {
-        self.periodic_attack_order.iter().copied().collect()
-    }
-
-    pub(crate) fn finish_periodic_attack_state(&mut self, skill_id: u32) {
-        self.periodic_attack_order.shift_remove(&skill_id);
-        self.curable_state_order.shift_remove(&skill_id);
+    pub(crate) fn periodic_attack_states(&self) -> Vec<(StateKey, u32)> {
+        self.state_entries.entries()
+            .filter(|(_, state)| state.is_periodic_attack())
+            .map(|(key, state)| (key, state.state_id())).collect()
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {
-        match self.persistent_agility_family_state {
-            Some(PersistentAgilityFamilyState::Agility(state)) if state.skill_id() == skill_id => {
-                Some(state)
-            }
+        self.state_entries.iter::<PersistentAgilityFamilyState>().find_map(|state| match state {
+            PersistentAgilityFamilyState::Agility(state) if state.skill_id() == skill_id => Some(*state),
             _ => None,
-        }
+        })
     }
 
     pub(crate) fn take_agility_state(&mut self, skill_id: u32) -> Option<AgilityState> {
-        match self.persistent_agility_family_state {
-            Some(PersistentAgilityFamilyState::Agility(state)) if state.skill_id() == skill_id => {
-                self.persistent_agility_family_state.take();
-                self.remove_serialized_state_record(skill_id, PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
-                Some(state)
-            }
-            _ => None,
-        }
+        let position = self.state_entries.iter::<PersistentAgilityFamilyState>()
+            .position(|state| matches!(state, PersistentAgilityFamilyState::Agility(state)
+                if state.skill_id() == skill_id))?;
+        let PersistentAgilityFamilyState::Agility(state) =
+            self.state_entries.take_nth::<PersistentAgilityFamilyState>(position)? else { return None };
+        self.remove_serialized_state_record(skill_id, PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn begin_agility_state(&mut self, state: AgilityState) {
-        debug_assert_eq!(
-            state.skill_id(),
-            crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID
-        );
-        debug_assert!(self.persistent_agility_family_state.is_none());
-        self.append_serialized_state_record(&PersistentAgilityFamilyState::Agility(state).encoded());
-        self.persistent_agility_family_state =
-            Some(PersistentAgilityFamilyState::Agility(state));
+        debug_assert_eq!(state.skill_id(), crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID);
+        let state = PersistentAgilityFamilyState::Agility(state);
+        self.append_serialized_state_record(&state.encoded());
+        self.state_entries.append(state);
     }
 
     pub(crate) fn agility_state_2(&self) -> Option<AgilityState2> {
-        self.agility_state_2
+        self.state_entries.first::<AgilityState2>().copied()
     }
 
     pub(crate) fn take_agility_state_2(&mut self) -> Option<AgilityState2> {
-        let state = self.agility_state_2.take()?;
+        let state = self.state_entries.take_first::<AgilityState2>()?;
         self.remove_serialized_state_record(state.skill_id(), AGILITY_STATE_2_BYTES);
         Some(state)
     }
 
     pub(crate) fn begin_agility_state_2(&mut self, state: AgilityState2) {
-        debug_assert!(self.agility_state_2.is_none());
         self.append_serialized_state_record(&state.encoded_for_install());
-        self.agility_state_2 = Some(state);
+        self.state_entries.append(state);
     }
 
     pub(crate) fn persistent_agility_family_state(
         &self,
     ) -> Option<PersistentAgilityFamilyState> {
-        self.persistent_agility_family_state
+        self.state_entries.first::<PersistentAgilityFamilyState>().copied()
     }
 
     pub(crate) fn take_persistent_agility_family_state(
         &mut self,
     ) -> Option<PersistentAgilityFamilyState> {
-        let state = self.persistent_agility_family_state.take()?;
+        let state = self.state_entries.take_first::<PersistentAgilityFamilyState>()?;
         self.remove_serialized_state_record(state.skill_id(), PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
         Some(state)
     }
@@ -4956,53 +3695,49 @@ impl CMoveShape {
         debug_assert!(PersistentAgilityFamilyState::is_known_skill(
             state.skill_id()
         ));
-        debug_assert!(self.persistent_agility_family_state.is_none());
         self.append_serialized_state_record(&state.encoded());
-        self.persistent_agility_family_state = Some(state);
+        self.state_entries.append(state);
     }
 
-    pub(crate) fn take_expired_agility_state_2(&mut self, now_ms: u32) -> Option<AgilityState2> {
-        self.agility_state_2.filter(|state| state.expired(now_ms))?;
-        self.take_agility_state_2()
-    }
+
 
     pub(crate) fn activate_loaded_agility_states(
         &mut self,
         now_ms: u32,
-    ) -> (Option<PersistentAgilityFamilyState>, Option<AgilityState2>) {
-        if let Some(state) = &mut self.agility_state_2 {
-            state.activate_loaded(now_ms);
-        }
-        (self.persistent_agility_family_state, self.agility_state_2)
+    ) -> (Vec<PersistentAgilityFamilyState>, Vec<AgilityState2>) {
+        self.state_entries.for_each_mut::<AgilityState2>(|state| state.activate_loaded(now_ms));
+        (
+            self.state_entries.iter::<PersistentAgilityFamilyState>().copied().collect(),
+            self.state_entries.iter::<AgilityState2>().copied().collect(),
+        )
     }
 
     pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {
         let index = self
-            .script_states
-            .iter()
+            .state_entries.iter::<ScriptMoveState>()
             .position(|state| state.state_id() == state_id)?;
         self.remove_script_state_at(index)
     }
 
-    pub(crate) fn script_states(&self) -> &[ScriptMoveState] {
-        &self.script_states
+    pub(crate) fn script_states(&self) -> impl Iterator<Item = &ScriptMoveState> {
+        self.state_entries.iter::<ScriptMoveState>()
     }
 
     pub(crate) fn script_state(&self, index: usize) -> Option<ScriptMoveState> {
-        self.script_states.get(index).copied()
+        self.state_entries.nth::<ScriptMoveState>(index).copied()
     }
 
     pub(crate) fn remove_script_state_at(&mut self, index: usize) -> Option<ScriptMoveState> {
-        let state = self.script_states.get(index).copied()?;
-        let occurrence = self.script_states[..index]
-            .iter()
+        let state = self.state_entries.nth::<ScriptMoveState>(index).copied()?;
+        let occurrence = self.state_entries.iter::<ScriptMoveState>().take(index)
             .filter(|candidate| candidate.state_id() == state.state_id())
             .count();
         let offset = known_state_record_offsets(&self.ex_states)
             .into_iter()
             .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state.state_id() as u32))
             .nth(occurrence);
-        let removed = self.script_states.remove(index);
+        let key = self.state_entries.key_at::<ScriptMoveState>(index)?;
+        let removed = self.state_entries.take::<ScriptMoveState>(key)?;
         if let Some(offset) = offset
             && let Some(size) = ScriptMoveState::serialized_size(state.state_id())
         {
@@ -5012,67 +3747,52 @@ impl CMoveShape {
     }
 
     pub(crate) fn activate_loaded_script_states(&mut self, now_ms: u32) -> Vec<ScriptMoveState> {
-        for state in &mut self.script_states {
+        self.state_entries.for_each_mut::<ScriptMoveState>(|state| {
             state.activate_loaded(now_ms);
-        }
-        self.script_states.clone()
+        });
+        self.state_entries.iter::<ScriptMoveState>().cloned().collect()
     }
 
     pub(crate) fn take_pending_script_state_visuals(&mut self) -> Vec<ScriptMoveState> {
         let mut pending = Vec::new();
-        for state in &mut self.script_states {
+        self.state_entries.for_each_mut::<ScriptMoveState>(|state| {
             if state.take_pending_visual() {
                 pending.push(*state);
             }
-        }
+        });
         pending
     }
 
-    pub(crate) const fn tian_shen_xia_fan_state(&self) -> Option<TianShenXiaFanState> {
-        self.state_storage.tian_shen_xia_fan_state
+    pub(crate) fn tian_shen_xia_fan_state(&self) -> Option<TianShenXiaFanState> {
+        self.state_entries.first::<TianShenXiaFanState>().copied()
     }
 
     pub(crate) fn activate_loaded_tian_shen_xia_fan_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<TianShenXiaFanState> {
-        let state = self.tian_shen_xia_fan_state?.activate_loaded(now_ms);
-        self.tian_shen_xia_fan_state = Some(state);
-        Some(state)
+    ) -> Vec<TianShenXiaFanState> {
+        self.state_entries.for_each_mut::<TianShenXiaFanState>(|state| *state = state.activate_loaded(now_ms));
+        self.state_entries.iter::<TianShenXiaFanState>().copied().collect()
     }
 
-    pub(crate) fn take_expired_tian_shen_xia_fan_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<TianShenXiaFanState> {
-        let state = self.tian_shen_xia_fan_state.filter(|state| state.expired(now_ms))?;
-        self.tian_shen_xia_fan_state = None;
-        self.remove_serialized_state_record(state.state_id(), TIAN_SHEN_XIA_FAN_STATE_BYTES);
-        Some(state)
-    }
 
-    pub(crate) const fn wangsheng_state(&self) -> Option<WangshengState> {
-        self.state_storage.wangsheng_state
+
+    pub(crate) fn wangsheng_state(&self) -> Option<WangshengState> {
+        self.state_entries.first::<WangshengState>().copied()
     }
 
     pub(crate) fn activate_loaded_wangsheng_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<WangshengState> {
-        let state = self.wangsheng_state?.activate_loaded(now_ms);
-        self.wangsheng_state = Some(state);
-        Some(state)
+    ) -> Vec<WangshengState> {
+        self.state_entries.for_each_mut::<WangshengState>(|state| *state = state.activate_loaded(now_ms));
+        self.state_entries.iter::<WangshengState>().copied().collect()
     }
 
-    pub(crate) fn take_expired_wangsheng_state(&mut self, now_ms: u32) -> Option<WangshengState> {
-        let state = self.wangsheng_state.filter(|state| state.expired(now_ms))?;
-        self.wangsheng_state = None;
-        self.remove_serialized_state_record(state.state_id(), WANGSHENG_STATE_BYTES);
-        Some(state)
-    }
+
 
     pub(crate) fn begin_ride_state(&mut self, mut state: RideState) -> Option<RideState> {
-        if self.ride_state.is_some() {
+        if self.state_entries.first::<RideState>().is_some() {
             return None;
         }
         if self.ex_states.len() < 4 {
@@ -5083,12 +3803,12 @@ impl CMoveShape {
         write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
         state.append_serialized(&mut self.ex_states);
         self.set_fightable(false);
-        self.ride_state = Some(state.clone());
+        self.state_entries.append(state.clone());
         Some(state)
     }
 
     pub(crate) fn end_ride_state(&mut self) -> Option<RideState> {
-        let state = self.ride_state.take()?;
+        let state = self.state_entries.take_first::<RideState>()?;
         if let Some((offset, amount)) = state.serialized_span()
             && offset + amount <= self.ex_states.len()
         {
@@ -5097,35 +3817,18 @@ impl CMoveShape {
                 let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
                 write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
             }
-            for state in &mut self.extended_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            for state in &mut self.change_body_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            for state in &mut self.undead_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.leaf_cut_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.leaf_cut_3_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.kerosene_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-            if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
+            self.shift_serialized_state_offsets_after(offset, amount);
         }
         self.set_fightable(true);
         Some(state)
     }
 
-    pub(crate) fn activate_loaded_ride_state(&mut self) -> Option<RideState> {
-        self.ride_state.as_ref()?;
-        self.set_fightable(false);
-        self.ride_state.clone()
+    pub(crate) fn activate_loaded_ride_state(&mut self) -> Vec<RideState> {
+        let count = self.state_entries.iter::<RideState>().count();
+        for _ in 0..count {
+            self.set_fightable(false);
+        }
+        self.state_entries.iter::<RideState>().cloned().collect()
     }
 
     /// Exact `AddUndeadState`: registry key `(56, stateID)`, затем удаление
@@ -5152,11 +3855,11 @@ impl CMoveShape {
         let state_type = state.state_type;
         let mut removed = Vec::new();
         let mut index = 0;
-        while index < self.undead_states.len() {
-            if self.undead_states[index].state_type == state_type
-                || self.undead_states[index].state_id == state_id
+        while index < self.state_entries.iter::<UndeadState>().count() {
+            if self.state_entries.nth::<UndeadState>(index).expect("семейная позиция проверена до изменения списка").state_type == state_type
+                || self.state_entries.nth::<UndeadState>(index).expect("семейная позиция проверена до изменения списка").state_id == state_id
             {
-                let removed_state = self.undead_states.remove(index);
+                let removed_state = self.state_entries.take_nth::<UndeadState>(index).expect("семейная позиция проверена до удаления");
                 self.remove_undead_state_serialized(&removed_state);
                 removed.push(removed_state);
             } else {
@@ -5181,7 +3884,7 @@ impl CMoveShape {
         self.ex_states
             .resize(offset + 4 + UNDEAD_STATE_PARAMETER_BYTES, 0);
         state.write_serialized(&mut self.ex_states, offset);
-        self.undead_states.push(state.clone());
+        self.state_entries.append(state.clone());
         UndeadStateMutation {
             removed,
             added: Some(state),
@@ -5192,12 +3895,14 @@ impl CMoveShape {
 
     /// Exact first-match `DelUndeadState`; native `End` удаляет найденный
     /// state и возвращает его ID, отсутствующий state возвращает ноль.
-    pub(crate) fn delete_undead_state(&mut self, state_id: u32) -> UndeadStateMutation {
-        let Some(index) = self
-            .undead_states
-            .iter()
+    pub(crate) fn delete_undead_state(
+        &mut self,
+        state_id: u32,
+    ) -> UndeadStateMutation {
+        let key = self.state_entries.iter::<UndeadState>()
             .position(|state| state.state_id == state_id)
-        else {
+            .and_then(|index| self.state_entries.key_at::<UndeadState>(index));
+        let Some(key) = key else {
             return UndeadStateMutation {
                 removed: Vec::new(),
                 added: None,
@@ -5205,19 +3910,30 @@ impl CMoveShape {
                 state_list_changed: false,
             };
         };
-        let removed = self.undead_states.remove(index);
+        self.delete_undead_state_key(key)
+    }
+
+    pub(crate) fn delete_undead_state_key(&mut self, key: StateKey) -> UndeadStateMutation {
+        let Some(removed) = self.state_entries.take::<UndeadState>(key) else {
+            return UndeadStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+                state_list_changed: false,
+            };
+        };
+        let legacy_return = removed.state_id;
         self.remove_undead_state_serialized(&removed);
         UndeadStateMutation {
             removed: vec![removed],
             added: None,
-            legacy_return: state_id,
+            legacy_return,
             state_list_changed: true,
         }
     }
 
     pub(crate) fn get_undead_state(&self, state_id: u32) -> u32 {
-        self.undead_states
-            .iter()
+        self.state_entries.iter::<UndeadState>()
             .any(|state| state.state_id == state_id)
             .then_some(state_id)
             .unwrap_or(0)
@@ -5235,56 +3951,37 @@ impl CMoveShape {
             let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
             write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
         }
-        for state in &mut self.extended_states {
-            state.shift_serialized_offset_after(offset, amount);
-        }
-        for state in &mut self.change_body_states {
-            state.shift_serialized_offset_after(offset, amount);
-        }
-        for state in &mut self.undead_states {
-            state.shift_serialized_offset_after(offset, amount);
-        }
-        if let Some(state) = &mut self.leaf_cut_state {
-            state.shift_serialized_offset_after(offset, amount);
-        }
-        if let Some(state) = &mut self.leaf_cut_3_state {
-            state.shift_serialized_offset_after(offset, amount);
-        }
-        if let Some(state) = &mut self.kerosene_state {
-            state.shift_serialized_offset_after(offset, amount);
-        }
-        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
-        if let Some(state) = &mut self.ride_state {
-            state.shift_serialized_offset_after(offset, amount);
-        }
+        self.shift_serialized_state_offsets_after(offset, amount);
     }
 
     pub(crate) fn activate_loaded_undead_states(&mut self, now_ms: u32) -> Vec<UndeadState> {
         let storage = &mut self.state_storage;
-        for state in &mut storage.undead_states {
+        storage.state_entries.for_each_mut::<UndeadState>(|state| {
             state.started_ms = now_ms;
             state.last_item_tick_ms = now_ms;
             state.update_serialized_runtime(&mut storage.ex_states, now_ms);
-        }
-        storage.undead_states.clone()
+        });
+        storage.state_entries.iter::<UndeadState>().cloned().collect()
     }
 
     pub(crate) fn undead_state_tick(
         &mut self,
         now_ms: u32,
         dead: bool,
-    ) -> (Vec<u32>, Vec<(u32, u32, u32)>) {
+    ) -> (Vec<StateKey>, Vec<(StateKey, u32, u32)>) {
         let mut ended = Vec::new();
         let mut item_due = Vec::new();
-        for state in &mut self.undead_states {
+        for key in self.state_entries.keys::<UndeadState>() {
+            let Some(state) = self.state_entries.get_mut(key).and_then(UndeadState::as_data_mut) else {
+                continue;
+            };
             if state.expired(now_ms) || (dead && state.disappear_after_dead) {
-                ended.push(state.state_id);
+                ended.push(key);
                 continue;
             }
             if state.item_due(now_ms) {
                 state.last_item_tick_ms = now_ms;
-                item_due.push((state.state_id, state.item_index, state.item_amount));
+                item_due.push((key, state.item_index, state.item_amount));
             }
         }
         (ended, item_due)
@@ -5306,12 +4003,12 @@ impl CMoveShape {
         };
         let mut removed = Vec::new();
         let mut index = 0;
-        while index < self.extended_states.len() {
-            if self.extended_states[index].kind == kind
-                && (self.extended_states[index].state_type == added.state_type
-                    || self.extended_states[index].level == state_id)
+        while index < self.state_entries.iter::<ExtendedState>().count() {
+            if self.state_entries.nth::<ExtendedState>(index).expect("семейная позиция проверена до изменения списка").kind == kind
+                && (self.state_entries.nth::<ExtendedState>(index).expect("семейная позиция проверена до изменения списка").state_type == added.state_type
+                    || self.state_entries.nth::<ExtendedState>(index).expect("семейная позиция проверена до изменения списка").level == state_id)
             {
-                let state = self.extended_states.remove(index);
+                let state = self.state_entries.take_nth::<ExtendedState>(index).expect("семейная позиция проверена до удаления");
                 self.remove_extended_state_serialized(&state);
                 removed.push(state);
             } else {
@@ -5331,7 +4028,7 @@ impl CMoveShape {
         };
         self.ex_states.resize(offset + size, 0);
         added.write_serialized(&mut self.ex_states, offset);
-        self.extended_states.push(added.clone());
+        self.state_entries.append(added.clone());
         ExtendedStateMutation {
             removed,
             added: Some(added),
@@ -5344,23 +4041,33 @@ impl CMoveShape {
         kind: ExtendedStateKind,
         state_id: u32,
     ) -> ExtendedStateMutation {
-        let Some(index) = self
-            .extended_states
-            .iter()
+        let key = self.state_entries.iter::<ExtendedState>()
             .position(|state| state.kind == kind && state.level == state_id)
-        else {
+            .and_then(|index| self.state_entries.key_at::<ExtendedState>(index));
+        let Some(key) = key else {
             return ExtendedStateMutation {
                 removed: Vec::new(),
                 added: None,
                 legacy_return: 0,
             };
         };
-        let removed = self.extended_states.remove(index);
+        self.delete_extended_state_key(key)
+    }
+
+    pub(crate) fn delete_extended_state_key(&mut self, key: StateKey) -> ExtendedStateMutation {
+        let Some(removed) = self.state_entries.take::<ExtendedState>(key) else {
+            return ExtendedStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        let legacy_return = removed.level;
         self.remove_extended_state_serialized(&removed);
         ExtendedStateMutation {
             removed: vec![removed],
             added: None,
-            legacy_return: state_id,
+            legacy_return,
         }
     }
 
@@ -5368,7 +4075,7 @@ impl CMoveShape {
         &mut self,
         state_type: u16,
     ) -> ExtendedStateMutation {
-        let Some(index) = self.extended_states.iter().position(|state| {
+        let Some(index) = self.state_entries.iter::<ExtendedState>().position(|state| {
             state.kind == ExtendedStateKind::Original && state.state_type == state_type
         }) else {
             return ExtendedStateMutation {
@@ -5377,7 +4084,7 @@ impl CMoveShape {
                 legacy_return: 0,
             };
         };
-        let removed = self.extended_states.remove(index);
+        let removed = self.state_entries.take_nth::<ExtendedState>(index).expect("семейная позиция проверена до удаления");
         let legacy_return = removed.level;
         self.remove_extended_state_serialized(&removed);
         ExtendedStateMutation {
@@ -5391,70 +4098,47 @@ impl CMoveShape {
         let span = state.serialized_span();
         state.remove_serialized(&mut self.ex_states);
         if let Some((offset, amount)) = span {
-            for state in &mut self.extended_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            for state in &mut self.change_body_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            for state in &mut self.undead_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.leaf_cut_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.leaf_cut_3_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.kerosene_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-            if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
-            if let Some(state) = &mut self.ride_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
+            self.shift_serialized_state_offsets_after(offset, amount);
         }
     }
 
     pub(crate) fn get_extended_state(&self, kind: ExtendedStateKind, state_id: u32) -> u32 {
-        self.extended_states
-            .iter()
+        self.state_entries.iter::<ExtendedState>()
             .any(|state| state.kind == kind && state.level == state_id)
             .then_some(state_id)
             .unwrap_or(0)
     }
 
-    pub(crate) fn extended_states(&self) -> &[ExtendedState] {
-        &self.extended_states
+    pub(crate) fn extended_states(&self) -> impl Iterator<Item = &ExtendedState> {
+        self.state_entries.iter::<ExtendedState>()
     }
 
     pub(crate) fn activate_loaded_extended_states(&mut self, now_ms: u32) -> Vec<ExtendedState> {
         let storage = &mut self.state_storage;
-        for state in &mut storage.extended_states {
+        storage.state_entries.for_each_mut::<ExtendedState>(|state| {
             state.activate_loaded(now_ms);
             state.update_serialized_runtime(&mut storage.ex_states, now_ms);
-        }
-        storage.extended_states.clone()
+        });
+        storage.state_entries.iter::<ExtendedState>().cloned().collect()
     }
 
     pub(crate) fn extended_state_tick(
         &mut self,
         now_ms: u32,
-    ) -> (
-        Vec<(ExtendedStateKind, u32)>,
-        Vec<(ExtendedStateKind, u32, u32, u32)>,
-    ) {
+    ) -> (Vec<StateKey>, Vec<(StateKey, u32, u32)>) {
         let mut expired = Vec::new();
         let mut item_due = Vec::new();
-        for state in &mut self.extended_states {
+        for key in self.state_entries.keys::<ExtendedState>() {
+            let Some(state) = self.state_entries.get_mut(key).and_then(ExtendedState::as_data_mut) else {
+                continue;
+            };
             if state.expired(now_ms) {
-                expired.push((state.kind, state.level));
+                expired.push(key);
                 continue;
             }
             if state.item_due(now_ms) {
                 state.restart_item_clock(now_ms);
-                item_due.push((state.kind, state.level, state.item_index, state.item_amount));
+                item_due.push((key, state.item_index, state.item_amount));
             }
         }
         (expired, item_due)
@@ -5475,12 +4159,11 @@ impl CMoveShape {
             };
         };
         added.old_hotkeys = old_hotkeys;
-        let removed = self
-            .change_body_states
-            .iter()
-            .position(|state| state.level == state_id)
-            .map(|index| {
-                let removed = self.change_body_states.remove(index);
+        let previous_position = self
+            .state_entries.iter::<ChangeBodyState>()
+            .position(|state| state.level == state_id);
+        let removed = previous_position.map(|index| {
+                let removed = self.state_entries.take_nth::<ChangeBodyState>(index).expect("семейная позиция проверена до удаления");
                 self.remove_change_body_state_serialized(&removed);
                 removed
             });
@@ -5494,7 +4177,7 @@ impl CMoveShape {
         LegacyWriter::new(&mut self.ex_states).write_u32(super::chbystate::CHANGE_BODY_STATE_ID);
         self.ex_states.resize(offset + 124, 0);
         added.write_serialized(&mut self.ex_states, offset);
-        self.change_body_states.push(added.clone());
+        self.state_entries.append(added.clone());
         ChangeBodyMutation {
             removed,
             added: Some(added),
@@ -5502,30 +4185,42 @@ impl CMoveShape {
         }
     }
 
-    pub(crate) fn delete_change_body_state(&mut self, state_id: u32) -> ChangeBodyMutation {
-        let Some(index) = self
-            .change_body_states
-            .iter()
+    pub(crate) fn delete_change_body_state(
+        &mut self,
+        state_id: u32,
+    ) -> ChangeBodyMutation {
+        let key = self.state_entries.iter::<ChangeBodyState>()
             .position(|state| state.level == state_id)
-        else {
+            .and_then(|index| self.state_entries.key_at::<ChangeBodyState>(index));
+        let Some(key) = key else {
             return ChangeBodyMutation {
                 removed: None,
                 added: None,
                 legacy_return: 0,
             };
         };
-        let removed = self.change_body_states.remove(index);
+        self.delete_change_body_state_key(key)
+    }
+
+    pub(crate) fn delete_change_body_state_key(&mut self, key: StateKey) -> ChangeBodyMutation {
+        let Some(removed) = self.state_entries.take::<ChangeBodyState>(key) else {
+            return ChangeBodyMutation {
+                removed: None,
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        let legacy_return = removed.level;
         self.remove_change_body_state_serialized(&removed);
         ChangeBodyMutation {
             removed: Some(removed),
             added: None,
-            legacy_return: state_id,
+            legacy_return,
         }
     }
 
     pub(crate) fn get_change_body_state(&self, state_id: u32) -> u32 {
-        self.change_body_states
-            .iter()
+        self.state_entries.iter::<ChangeBodyState>()
             .any(|state| state.level == state_id)
             .then_some(state_id)
             .unwrap_or_default()
@@ -5535,38 +4230,16 @@ impl CMoveShape {
         let span = state.serialized_span();
         state.remove_serialized(&mut self.ex_states);
         if let Some((offset, amount)) = span {
-            for state in &mut self.extended_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            for state in &mut self.change_body_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            for state in &mut self.undead_states {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.leaf_cut_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.leaf_cut_3_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.kerosene_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
-            if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
-            if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
-            if let Some(state) = &mut self.ride_state {
-                state.shift_serialized_offset_after(offset, amount);
-            }
+            self.shift_serialized_state_offsets_after(offset, amount);
         }
     }
 
     pub(crate) fn active_change_body_state(&self) -> Option<&ChangeBodyState> {
-        self.change_body_states.last()
+        self.state_entries.iter::<ChangeBodyState>().last()
     }
 
     pub(crate) fn first_change_body_state_id(&self) -> Option<u32> {
-        self.change_body_states.first().map(|state| state.level)
+        self.state_entries.first::<ChangeBodyState>().map(|state| state.level)
     }
 
     pub(crate) fn activate_loaded_change_body_states(
@@ -5574,27 +4247,29 @@ impl CMoveShape {
         now_ms: u32,
     ) -> Vec<ChangeBodyState> {
         let storage = &mut self.state_storage;
-        for state in &mut storage.change_body_states {
+        storage.state_entries.for_each_mut::<ChangeBodyState>(|state| {
             state.activate_loaded(now_ms);
             state.update_serialized_runtime(&mut storage.ex_states, now_ms);
-        }
-        storage.change_body_states.clone()
+        });
+        storage.state_entries.iter::<ChangeBodyState>().cloned().collect()
     }
 
-    pub(crate) fn expired_change_body_state_ids(&self, now_ms: u32) -> Vec<u32> {
-        self.change_body_states
-            .iter()
-            .filter(|state| state.expired(now_ms))
-            .map(|state| state.level)
+    pub(crate) fn expired_change_body_state_keys(&self, now_ms: u32) -> Vec<StateKey> {
+        self.state_entries.keys::<ChangeBodyState>().into_iter()
+            .filter(|key| self.state_entries.get(*key).and_then(ChangeBodyState::as_data_ref)
+                .is_some_and(|state| state.expired(now_ms)))
             .collect()
     }
 
-    pub(crate) fn change_body_region_transition_end_ids(&mut self) -> Vec<u32> {
+    pub(crate) fn change_body_region_transition_end_keys(&mut self) -> Vec<StateKey> {
         let mut ended = Vec::new();
         let storage = &mut self.state_storage;
-        for state in &mut storage.change_body_states {
+        for key in storage.state_entries.keys::<ChangeBodyState>() {
+            let Some(state) = storage.state_entries.get_mut(key).and_then(ChangeBodyState::as_data_mut) else {
+                continue;
+            };
             if state.on_change_region() {
-                ended.push(state.level);
+                ended.push(key);
             } else {
                 state.update_serialized_runtime(&mut storage.ex_states, state.started_ms);
             }
@@ -5602,12 +4277,15 @@ impl CMoveShape {
         ended
     }
 
-    pub(crate) fn change_body_player_lost_end_ids(&mut self) -> Vec<u32> {
+    pub(crate) fn change_body_player_lost_end_keys(&mut self) -> Vec<StateKey> {
         let mut ended = Vec::new();
         let storage = &mut self.state_storage;
-        for state in &mut storage.change_body_states {
+        for key in storage.state_entries.keys::<ChangeBodyState>() {
+            let Some(state) = storage.state_entries.get_mut(key).and_then(ChangeBodyState::as_data_mut) else {
+                continue;
+            };
             if state.on_player_lost() {
-                ended.push(state.level);
+                ended.push(key);
             } else {
                 state.update_serialized_runtime(&mut storage.ex_states, state.started_ms);
             }
@@ -5615,11 +4293,10 @@ impl CMoveShape {
         ended
     }
 
-    pub(crate) fn change_body_death_end_ids(&self) -> Vec<u32> {
-        self.change_body_states
-            .iter()
-            .filter(|state| !state.continue_after_death)
-            .map(|state| state.level)
+    pub(crate) fn change_body_death_end_keys(&self) -> Vec<StateKey> {
+        self.state_entries.keys::<ChangeBodyState>().into_iter()
+            .filter(|key| self.state_entries.get(*key).and_then(ChangeBodyState::as_data_ref)
+                .is_some_and(|state| !state.continue_after_death))
             .collect()
     }
 
@@ -5845,6 +4522,11 @@ impl CMoveShape {
             self.current_skill_id = None;
         }
         for category in [SkillCategory::Attack, SkillCategory::Defense, SkillCategory::Summon, SkillCategory::State] {
+            let slots: Vec<_> = self.skills[category as usize].order.iter()
+                .map(|&entity| SkillSlot { category, entity }).collect();
+            for slot in slots {
+                self.state_entries.detach_skill(slot);
+            }
             self.skills[category as usize].clear();
         }
     }
@@ -5980,10 +4662,12 @@ impl CMoveShape {
     }
 
     pub(crate) fn delete_skill_in_category(&mut self, skill_id: u32, category: SkillCategory) {
-        let skills = &mut self.skills[category as usize];
+        let skills = &self.skills[category as usize];
         let index = skills.iter().position(|skill| skill.id == skill_id);
         if let Some(index) = index {
-            skills.remove(index);
+            let slot = SkillSlot { category, entity: skills.order[index] };
+            self.state_entries.detach_skill(slot);
+            self.skills[category as usize].remove(index);
         }
     }
 
@@ -6314,9 +4998,14 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 }
 
 fn update_known_state_record(payload: &mut [u8], state_id: u32, record: &[u8]) {
+    update_nth_known_state_record(payload, state_id, 0, record);
+}
+
+fn update_nth_known_state_record(payload: &mut [u8], state_id: u32, occurrence: usize, record: &[u8]) {
     if let Some(offset) = known_state_record_offsets(payload)
         .into_iter()
-        .find(|offset| read_u32(payload, *offset) == Some(state_id))
+        .filter(|offset| read_u32(payload, *offset) == Some(state_id))
+        .nth(occurrence)
         && let Some(destination) = payload.get_mut(offset..offset + record.len())
     {
         destination.copy_from_slice(record);

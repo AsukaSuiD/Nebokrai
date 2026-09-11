@@ -1985,8 +1985,10 @@ impl CMonster {
         }, factory) {
             return;
         }
-        if skill_id == SPIDER_MIST_SKILL_ID {
-            self.move_shape.register_curable_skill_state(skill_id);
+        if skill_id == SPIDER_MIST_SKILL_ID
+            && let Some(slot) = self.move_shape.skill_slot(skill_id, factory)
+        {
+            self.move_shape.register_curable_skill_state(slot);
         }
         if let Some(ai) = self.selected_base_ai_mut() {
             ai.add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);

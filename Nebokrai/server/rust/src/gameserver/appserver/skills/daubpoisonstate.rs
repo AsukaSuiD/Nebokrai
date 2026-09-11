@@ -1,4 +1,6 @@
 //! Каноническое состояние смазки оружия ядом `CDaubPoisonState` (`0xDF`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x0066047c, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
@@ -94,11 +96,12 @@ pub(crate) fn replace_player_daub_poison_state(
 pub(crate) fn expire_player_daub_poison_state(
     game: &mut CGame,
     player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
     let state = game
         .find_player_mut(player_id)
-        .and_then(|player| player.take_expired_daub_poison_state(now_ms));
+        .and_then(|player| player.take_expired_daub_poison_state(key, now_ms));
     let Some(state) = state else { return false };
     send_daub_poison_state_visual(game, player_id, state, false, || now_ms);
     true

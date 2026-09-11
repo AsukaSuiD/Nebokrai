@@ -3,7 +3,8 @@
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
 //! `agilitystate.cpp`. Состояние `0xda` публикует начало/завершение и добавляет
 //! `full_miss` сложением с переполнением. Временным состоянием `0x81` владеет
-//! отдельный `agilitystate2.rs`; оба slot-а принадлежат `CanonicalStateStorage`.
+//! отдельный `agilitystate2.rs`; все экземпляры принадлежат общей арене
+//! `CanonicalStateStorage` и сохраняют порядок повторных DB-записей.
 //! Три постоянных варианта используют общую шестибайтную DB-запись `ID + WORD`.
 
 use super::agility::AGILITY_SKILL_ID;

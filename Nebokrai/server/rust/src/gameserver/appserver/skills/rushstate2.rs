@@ -1,4 +1,6 @@
 //! Каноническое состояние оглушения вторым рывком `CRushState2` (`0x7c`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x0066041c, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
@@ -140,9 +142,9 @@ pub(crate) fn replace_monster_rush_2_state(game: &CGame, region: &mut CServerReg
     true
 }
 
-pub(crate) fn expire_player_rush_2_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+pub(crate) fn expire_player_rush_2_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
     let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_expired_rush_2_state(now_ms)?;
+        let state = player.take_expired_rush_2_state(key, now_ms)?;
         player.set_skill_moveable(true);
         player.set_skill_fightable(true);
         Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
@@ -153,9 +155,9 @@ pub(crate) fn expire_player_rush_2_state(game: &mut CGame, player_id: i32, now_m
     true
 }
 
-pub(crate) fn expire_monster_rush_2_state(game: &CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
+pub(crate) fn expire_monster_rush_2_state(game: &CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
     let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_rush_2_state(now_ms)?;
+        let state = monster.move_shape_mut().take_expired_rush_2_state(key, now_ms)?;
         monster.move_shape_mut().set_moveable(true);
         monster.move_shape_mut().set_fightable(true);
         Some((state, monster.move_shape().shape().clone()))

@@ -1,4 +1,6 @@
 //! Каноническое состояние паутины `CSpiderWebState` (`0x199`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x0065fbcc, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
 //! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
@@ -97,11 +99,11 @@ fn finish_player_state(
     game: &mut CGame,
     player_id: i32,
     now_ms: u32,
-    only_expired: bool,
+    expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>,
 ) -> bool {
     let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = if only_expired {
-            player.take_expired_spider_web_state(now_ms)?
+        let state = if let Some(key) = expired_key {
+            player.take_expired_spider_web_state(key, now_ms)?
         } else {
             player.take_spider_web_state()?
         };
@@ -129,13 +131,13 @@ fn finish_monster_state(
     region: &mut CServerRegion,
     monster_id: i32,
     now_ms: u32,
-    only_expired: bool,
+    expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>,
 ) -> bool {
     let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = if only_expired {
+        let state = if let Some(key) = expired_key {
             monster
                 .move_shape_mut()
-                .take_expired_spider_web_state(now_ms)?
+                .take_expired_spider_web_state(key, now_ms)?
         } else {
             monster.move_shape_mut().take_spider_web_state()?
         };
@@ -156,9 +158,10 @@ fn finish_monster_state(
 pub(crate) fn expire_player_spider_web_state(
     game: &mut CGame,
     player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
-    finish_player_state(game, player_id, now_ms, true)
+    finish_player_state(game, player_id, now_ms, Some(key))
 }
 
 pub(crate) fn finish_player_spider_web_state_on_defense(
@@ -166,16 +169,17 @@ pub(crate) fn finish_player_spider_web_state_on_defense(
     player_id: i32,
     now_ms: u32,
 ) -> bool {
-    finish_player_state(game, player_id, now_ms, false)
+    finish_player_state(game, player_id, now_ms, None)
 }
 
 pub(crate) fn expire_monster_spider_web_state(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
-    finish_monster_state(game, region, monster_id, now_ms, true)
+    finish_monster_state(game, region, monster_id, now_ms, Some(key))
 }
 
 /// `CMoveShape::OnAction(ACTION_DEFENSE)` вызывает `CBlindState::OnAction`
@@ -188,8 +192,8 @@ pub(crate) fn finish_spider_web_state_on_defense(
     now_ms: u32,
 ) -> bool {
     match target.object_type {
-        400 => finish_player_state(game, target.id, now_ms, false),
-        600 => finish_monster_state(game, region, target.id, now_ms, false),
+        400 => finish_player_state(game, target.id, now_ms, None),
+        600 => finish_monster_state(game, region, target.id, now_ms, None),
         _ => false,
     }
 }

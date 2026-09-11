@@ -7,6 +7,9 @@
 //! хранит остаток срока и знаковую прибавку максимального HP. Установка и
 //! истечение немедленно пересчитывают canonical maximum HP. Vtable exact EXE
 //! направляет `GetRemainedTime` на общее тело `CBlindState` по `0x005F2CD0`.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
 
 use super::hearten::HEARTEN_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -115,16 +118,27 @@ pub(crate) fn expire_player_hearten_state(
     player_id: i32,
     now_ms: u32,
 ) -> bool {
-    let Some(state) = game
-        .find_player_mut(player_id)
-        .and_then(|player| player.take_expired_hearten_state(now_ms))
-    else {
-        return false;
-    };
-    send_hearten_state_visual(game, player_id, state, false, || now_ms);
-    let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id);
-    true
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<HeartenState>()).unwrap_or_default();
+    let mut ended_any = false;
+    for key in keys {
+        if !game.find_player(player_id)
+            .and_then(|player| player.move_shape().applied_state::<HeartenState>(key))
+            .is_some_and(|state| state.expired(now_ms)) {
+            continue;
+        }
+        let Some(state) = game
+            .find_player_mut(player_id)
+            .and_then(|player| player.move_shape_mut().remove_applied_state_record::<HeartenState>(key, HEARTEN_STATE_BYTES))
+        else {
+            continue;
+        };
+        send_hearten_state_visual(game, player_id, state, false, || now_ms);
+        let _ = game.publish_player_states(player_id);
+        let _ = game.update_player_properties(player_id);
+        ended_any = true;
+    }
+    ended_any
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

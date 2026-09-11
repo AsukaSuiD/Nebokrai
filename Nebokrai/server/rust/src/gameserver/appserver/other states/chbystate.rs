@@ -10,6 +10,8 @@
 //! `Serialize` записывает остаток обратно в keeptime без перезапуска clock;
 //! клиентский снимок этого не делает. `AI` (0x005daaa0) завершает состояние
 //! только после абсолютного wrapping deadline, а не на его границе.
+//! Payload принадлежит общей арене CMoveShape; decode_at читает одну
+//! фабрично подтверждённую запись и сохраняет её точный offset, без byte-scan.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
@@ -92,68 +94,60 @@ impl ChangeBodyState {
         })
     }
 
-    pub(crate) fn decode_all(payload: &[u8], started_ms: u32) -> Vec<Self> {
-        if payload.len() < 4 {
-            return Vec::new();
+    pub(crate) fn decode_at(payload: &[u8], offset: usize, started_ms: u32) -> Option<Self> {
+        offset.checked_add(4 + CHANGE_BODY_PARAMETER_BYTES)
+            .filter(|end| *end <= payload.len())?;
+        if read_u32(payload, offset) != Some(CHANGE_BODY_STATE_ID) {
+            return None;
         }
-        let mut states = Vec::new();
-        for offset in 4..=payload
-            .len()
-            .saturating_sub(4 + CHANGE_BODY_PARAMETER_BYTES)
+        let base = offset + 4;
+        let Some(level) = read_u32(payload, base + 4) else {
+            return None;
+        };
+        if level == 0
+            || payload[base] > 1
+            || payload[base + 16] > 1
+            || payload[base + 17] > 1
+            || payload[base + 18] > 1
+            || payload[base + 19] > 1
         {
-            if read_u32(payload, offset) != Some(CHANGE_BODY_STATE_ID) {
-                continue;
-            }
-            let base = offset + 4;
-            let Some(level) = read_u32(payload, base + 4) else {
-                continue;
-            };
-            if level == 0
-                || payload[base] > 1
-                || payload[base + 16] > 1
-                || payload[base + 17] > 1
-                || payload[base + 18] > 1
-                || payload[base + 19] > 1
-            {
-                continue;
-            }
-            let mut skills = [(0, 0); 5];
-            for (index, skill) in skills.iter_mut().enumerate() {
-                *skill = (
-                    read_u16(payload, base + 50 + index * 4).unwrap_or_default(),
-                    read_u16(payload, base + 52 + index * 4).unwrap_or_default(),
-                );
-            }
-            let mut old_hotkeys = [0; 12];
-            for (index, hotkey) in old_hotkeys.iter_mut().enumerate() {
-                *hotkey = read_u32(payload, base + 72 + index * 4).unwrap_or_default();
-            }
-            states.push(Self {
-                has_changed_region: payload[base] != 0,
-                visual_effect: read_u16(payload, base + 2).unwrap_or_default(),
-                level,
-                keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
-                mode: read_u32(payload, base + 12).unwrap_or_default(),
-                change_region: payload[base + 16] != 0,
-                restore_online: payload[base + 17] != 0,
-                continue_after_death: payload[base + 18] != 0,
-                online: payload[base + 19] != 0,
-                maximum_hp: read_u32(payload, base + 20).unwrap_or_default(),
-                maximum_mp: read_u32(payload, base + 24).unwrap_or_default(),
-                minimum_attack: read_u32(payload, base + 28).unwrap_or_default(),
-                maximum_attack: read_u32(payload, base + 32).unwrap_or_default(),
-                defense: read_u32(payload, base + 36).unwrap_or_default(),
-                element_resistance: read_u32(payload, base + 40).unwrap_or_default(),
-                cch: read_u16(payload, base + 44).unwrap_or_default(),
-                blast_attack: read_u16(payload, base + 46).unwrap_or_default(),
-                blast_element_attack: read_u16(payload, base + 48).unwrap_or_default(),
-                skills,
-                old_hotkeys,
-                started_ms,
-                serialized_offset: Some(offset),
-            });
+            return None;
         }
-        states
+        let mut skills = [(0, 0); 5];
+        for (index, skill) in skills.iter_mut().enumerate() {
+            *skill = (
+                read_u16(payload, base + 50 + index * 4).unwrap_or_default(),
+                read_u16(payload, base + 52 + index * 4).unwrap_or_default(),
+            );
+        }
+        let mut old_hotkeys = [0; 12];
+        for (index, hotkey) in old_hotkeys.iter_mut().enumerate() {
+            *hotkey = read_u32(payload, base + 72 + index * 4).unwrap_or_default();
+        }
+        Some(Self {
+            has_changed_region: payload[base] != 0,
+            visual_effect: read_u16(payload, base + 2).unwrap_or_default(),
+            level,
+            keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
+            mode: read_u32(payload, base + 12).unwrap_or_default(),
+            change_region: payload[base + 16] != 0,
+            restore_online: payload[base + 17] != 0,
+            continue_after_death: payload[base + 18] != 0,
+            online: payload[base + 19] != 0,
+            maximum_hp: read_u32(payload, base + 20).unwrap_or_default(),
+            maximum_mp: read_u32(payload, base + 24).unwrap_or_default(),
+            minimum_attack: read_u32(payload, base + 28).unwrap_or_default(),
+            maximum_attack: read_u32(payload, base + 32).unwrap_or_default(),
+            defense: read_u32(payload, base + 36).unwrap_or_default(),
+            element_resistance: read_u32(payload, base + 40).unwrap_or_default(),
+            cch: read_u16(payload, base + 44).unwrap_or_default(),
+            blast_attack: read_u16(payload, base + 46).unwrap_or_default(),
+            blast_element_attack: read_u16(payload, base + 48).unwrap_or_default(),
+            skills,
+            old_hotkeys,
+            started_ms,
+            serialized_offset: Some(offset),
+        })
     }
 
     pub(crate) fn remove_serialized(&self, payload: &mut Vec<u8>) {

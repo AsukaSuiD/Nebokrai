@@ -1,4 +1,7 @@
 //! Каноническое периодическое состояние `CPoisonArrowState`.
+//! Периодический AI изменяет payload по поколенческому ключу общей арены.
+//! Чистый tick завершается до межвладельческого удара; состояние не вынимается
+//! и остаётся доступным вложенному End/Clear. Снимок нужен только пакету End.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/poisonarrowstate.cpp`. Состояние хранит снимок владельца,
@@ -18,7 +21,6 @@
 use super::poisonarrow::POISON_ARROW_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -195,61 +197,36 @@ pub(crate) fn send_poison_arrow_state_visual(
 pub(crate) fn update_player_poison_arrow_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(mut state) = game
-        .find_player_mut(player_id)
-        .and_then(CPlayer::take_poison_arrow_state_for_ai)
-    else {
-        return false;
-    };
     let target = game.find_player(player_id).and_then(|player| {
-        Some((
-            player.shape().identity(),
-            player.shape().get_tile_x().ok()?,
-            player.shape().get_tile_y().ok()?,
-            player.server_region_id()?,
-            player.is_dead(),
-        ))
+        player.move_shape().applied_state::<PoisonArrowState>(key)?;
+        let shape = player.move_shape().shape();
+        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
+            player.server_region_id()?, player.is_dead()))
     });
-    let Some((identity, x, y, region_id, dead)) = target else {
-        return false;
-    };
+    let Some((identity, x, y, region_id, dead)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
     let frequency_now_ms = runtime.now_milliseconds();
-    match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
-        PoisonArrowStateTick::Pending => {
-            if let Some(player) = game.find_player_mut(player_id) {
-                let _ = player.replace_poison_arrow_state(state);
-            }
-        }
+    let prepared = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.move_shape_mut().applied_state_mut::<PoisonArrowState>(key)?;
+        let tick = state.tick(lifetime_now_ms, frequency_now_ms, dead);
+        Some((tick, *state))
+    });
+    let Some((tick, state)) = prepared else { return false };
+    match tick {
+        PoisonArrowStateTick::Pending => {}
         PoisonArrowStateTick::Attack(attack) => {
             let master = state.master();
-            if let Some(player) = game.find_player_mut(player_id) {
-                let _ = player.replace_poison_arrow_state(state);
-            }
-            game.apply_owned_skill_attack_to_player(
-                master,
-                player_id,
-                region_id,
-                attack,
-                runtime,
-            );
+            game.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime);
         }
         PoisonArrowStateTick::Ended => {
             if let Some(player) = game.find_player_mut(player_id) {
-                player.finish_poison_arrow_state(state);
+                let move_shape = player.move_shape_mut();
+                let _ = move_shape.remove_applied_state_record::<PoisonArrowState>(key, POISON_ARROW_STATE_BYTES);
             }
-            send_poison_arrow_state_visual(
-                game,
-                region_id,
-                identity,
-                x,
-                y,
-                state,
-                false,
-                lifetime_now_ms,
-            );
+            send_poison_arrow_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
             let _ = game.publish_player_states(player_id);
         }
     }
@@ -260,79 +237,43 @@ pub(crate) fn update_monster_poison_arrow_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region_id: i32,
     monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(mut owner) = game.take_region_owner(region_id) else {
-        return false;
-    };
-    let state_and_target = owner
-        .base_mut()
-        .find_monster_by_id_mut(monster_id)
-        .and_then(|monster| {
-            let state = monster
-                .move_shape_mut()
-                .take_poison_arrow_state_for_ai()?;
-            let shape = monster.move_shape().shape();
-            Some((
-                state,
-                shape.identity(),
-                shape.get_tile_x().ok()?,
-                shape.get_tile_y().ok()?,
-                monster.hit_points() == 0,
-            ))
-        });
+    let Some(owner) = game.take_region_owner(region_id) else { return false };
+    let target = owner.base().find_monster_by_id(monster_id).and_then(|monster| {
+        monster.move_shape().applied_state::<PoisonArrowState>(key)?;
+        let shape = monster.move_shape().shape();
+        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
+            monster.hit_points() == 0))
+    });
     game.restore_region_owner(owner);
-    let Some((mut state, identity, x, y, dead)) = state_and_target else {
-        return false;
-    };
+    let Some((identity, x, y, dead)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
     let frequency_now_ms = runtime.now_milliseconds();
-    match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
-        PoisonArrowStateTick::Pending => {
-            if let Some(mut owner) = game.take_region_owner(region_id) {
-                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    let _ = monster
-                        .move_shape_mut()
-                        .replace_poison_arrow_state(state);
-                }
-                game.restore_region_owner(owner);
-            }
-        }
+    let Some(mut owner) = game.take_region_owner(region_id) else { return false };
+    let prepared = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().applied_state_mut::<PoisonArrowState>(key)?;
+        let tick = state.tick(lifetime_now_ms, frequency_now_ms, dead);
+        Some((tick, *state))
+    });
+    game.restore_region_owner(owner);
+    let Some((tick, state)) = prepared else { return false };
+    match tick {
+        PoisonArrowStateTick::Pending => {}
         PoisonArrowStateTick::Attack(attack) => {
             let master = state.master();
-            if let Some(mut owner) = game.take_region_owner(region_id) {
-                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    let _ = monster
-                        .move_shape_mut()
-                        .replace_poison_arrow_state(state);
-                }
-                game.restore_region_owner(owner);
-            }
-            game.apply_owned_skill_attack_to_monster(
-                master,
-                monster_id,
-                region_id,
-                attack,
-                runtime,
-            );
+            game.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime);
         }
         PoisonArrowStateTick::Ended => {
             if let Some(mut owner) = game.take_region_owner(region_id) {
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().finish_poison_arrow_state(state);
+                    let move_shape = monster.move_shape_mut();
+                    let _ = move_shape.remove_applied_state_record::<PoisonArrowState>(key, POISON_ARROW_STATE_BYTES);
                 }
                 game.restore_region_owner(owner);
             }
-            send_poison_arrow_state_visual(
-                game,
-                region_id,
-                identity,
-                x,
-                y,
-                state,
-                false,
-                lifetime_now_ms,
-            );
+            send_poison_arrow_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
         }
     }
     true

@@ -1,4 +1,6 @@
 //! Каноническое состояние оглушения рывком `CRushState` (`0x73`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x00662274, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
@@ -173,9 +175,9 @@ pub(crate) fn replace_monster_rush_state(
     true
 }
 
-pub(crate) fn expire_player_rush_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+pub(crate) fn expire_player_rush_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
     let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_expired_rush_state(now_ms)?;
+        let state = player.take_expired_rush_state(key, now_ms)?;
         player.set_skill_moveable(true);
         player.set_skill_fightable(true);
         Some((
@@ -196,10 +198,11 @@ pub(crate) fn expire_monster_rush_state(
     game: &CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
     let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_rush_state(now_ms)?;
+        let state = monster.move_shape_mut().take_expired_rush_state(key, now_ms)?;
         monster.move_shape_mut().set_moveable(true);
         monster.move_shape_mut().set_fightable(true);
         Some((state, monster.move_shape().shape().clone()))

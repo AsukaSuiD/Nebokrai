@@ -2,8 +2,9 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
 //! `appserver/skills/callositystate.cpp` и `callositystate2.cpp`. Конкретное
-//! второе состояние реализовано в `callositystate2.rs`; enum семейства не даёт
-//! двум взаимно исключающим состояниям образовать параллельные источники истины.
+//! второе состояние реализовано в `callositystate2.rs`; enum семейства задаёт
+//! конкретный вариант каждого экземпляра общей арены. Обычное наложение
+//! заменяет первый найденный экземпляр, загруженные дубли не схлопываются.
 //! Vtable первой/второй закалки `0x006607d4/0x006603bc`, слот +0x0c,
 //! направляет AI на `0x005d60b0`: строгий абсолютный wrapping deadline.
 //! Общий End `0x005fd420` отправляет `0xBFE04` до RemoveState, который
@@ -16,6 +17,9 @@
 //! Коэффициент `CCH` применяется только при общем `UpdateProperty`; каждый
 //! такой проход повторно публикует начальный визуальный эффект, как
 //! `OnUpdateProperties`.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
 
 use super::callosity::CALLOSITY_SKILL_ID;
 use super::callosity2::CALLOSITY_2_SKILL_ID;
@@ -182,8 +186,16 @@ impl CallosityFamilyState {
 }
 
 pub(crate) fn end_player_callosity_state(game: &mut CGame, player_id: i32) -> bool {
+    let Some(key) = game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state_key::<CallosityFamilyState>()) else {
+        return false;
+    };
+    end_player_callosity_state_key(game, player_id, key)
+}
+
+fn end_player_callosity_state_key(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey) -> bool {
     let Some((state, identity)) = game.find_player(player_id).and_then(|player| {
-        Some((player.callosity_state()?, player.shape().identity()))
+        Some((*player.move_shape().applied_state::<CallosityFamilyState>(key)?, player.shape().identity()))
     }) else { return false };
     let mut message = CMessage::new(0x000b_fe04);
     message.add_long(identity.object_type);
@@ -191,18 +203,24 @@ pub(crate) fn end_player_callosity_state(game: &mut CGame, player_id: i32) -> bo
     message.add_long(state.skill_id() as i32);
     let _ = game.send_player_shape_around(player_id, None, &message);
     if let Some(player) = game.find_player_mut(player_id) {
-        player.take_callosity_state(state.skill_id());
+        player.move_shape_mut().remove_applied_state_record::<CallosityFamilyState>(key, CALLOSITY_STATE_BYTES);
     }
     let _ = game.update_player_properties(player_id);
     true
 }
 
 pub(crate) fn expire_player_callosity_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    if !game.find_player(player_id).and_then(|player| player.callosity_state())
-        .is_some_and(|state| state.expired(now_ms)) {
-        return false;
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<CallosityFamilyState>()).unwrap_or_default();
+    let mut ended = false;
+    for key in keys {
+        if game.find_player(player_id)
+            .and_then(|player| player.move_shape().applied_state::<CallosityFamilyState>(key))
+            .is_some_and(|state| state.expired(now_ms)) {
+            ended |= end_player_callosity_state_key(game, player_id, key);
+        }
     }
-    end_player_callosity_state(game, player_id)
+    ended
 }
 
 pub(crate) fn send_callosity_state_begin(

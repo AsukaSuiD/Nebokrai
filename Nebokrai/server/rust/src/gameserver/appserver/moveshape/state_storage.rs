@@ -16,8 +16,8 @@
 //! Единственный enum-каталог объединяет существующие typed payload, не вводя
 //! второго каталога игровых ID. Codec и таймеры повторного приёма предметов
 //! остаются отдельными данными владельца, а не дополнительными состояниями.
-//! Здесь нет игрового End-dispatch: перенос оставшихся владельцев и их точных
-//! обработчиков не подменяется пустым End или общим сбросом payload.
+//! Здесь нет игрового End-dispatch: оставшееся подключение точных обработчиков
+//! не подменяется пустым End или общим сбросом payload.
 
 use super::*;
 
@@ -39,10 +39,18 @@ pub(crate) trait AppliedState: Sized + 'static {
 }
 
 macro_rules! applied_states {
-    ($($variant:ident($payload:ty)),+ $(,)?) => {
+    ($($variant:ident($payload:ty) => |$state:ident| $id:expr),+ $(,)?) => {
         #[derive(Clone, Debug, Eq, PartialEq)]
         pub(crate) enum StateData {
             $($variant($payload)),+
+        }
+
+        impl StateData {
+            pub(crate) fn state_id(&self) -> u32 {
+                match self {
+                    $(Self::$variant($state) => $id as u32),+
+                }
+            }
         }
 
         $(
@@ -77,68 +85,95 @@ macro_rules! applied_states {
 }
 
 applied_states! {
-    PersistentAgility(PersistentAgilityFamilyState),
-    Agility2(AgilityState2),
-    Callosity(CallosityFamilyState),
-    TaiJi(TaiJiState),
-    EnlargeFullMiss(EnlargeFullMissState),
-    EnlargeMaxHp(EnlargeMaxHpState),
-    EnlargeMaxMp(EnlargeMaxMpState),
-    Origin(OriginState),
-    Hearten(HeartenState),
-    Heal(HealState),
-    Fury(FuryState),
-    RageBreak(RageBreakState),
-    BossBlueFury(BossBlueFuryState),
-    BossBlueQuake(BossBlueQuakeState),
-    Cure(CureState),
-    DaubPoison(DaubPoisonState),
-    Seal(SealState),
-    PoisonArrow(PoisonArrowState),
-    PoisonFog(PoisonFogState),
-    MeteorArrow(MeteorArrowState),
-    SpiderPoison(SpiderPoisonState),
-    SpriteBurn(SpriteBurnState),
-    SpiderWeb(SpiderWebState),
-    Weak(WeakState),
-    GodBless(GodBlessState),
-    SoulCollect(SoulCollectState),
-    KnockOut(KnockOutState),
-    Blind(BlindState),
-    BoaLock(BoaLockState),
-    Rush(RushState),
-    Rush2(Rush2State),
-    Roar(RoarState),
-    EnergyHolding(EnergyHoldingState),
-    Pillar(PillarState),
-    KnightCut(KnightCutState),
-    BloodLoss(BloodLossState),
-    LeafCut(LeafCutState),
-    LeafCut2(LeafCutState2),
-    LeafCut3(LeafCutState3),
-    Kerosene(KeroseneState),
-    Swordship(SwordshipState),
-    Strike(StrikeState),
-    WuXing(WuXingState),
-    AutomaticRestore(AutomaticRestoreState),
-    ConsumableRestore(ConsumableRestoreState),
-    Particular(ParticularState),
-    Team(CTeamState),
-    BattleFairyAttribute(BattleFairyAttributeState),
-    TianShenXiaFan(TianShenXiaFanState),
-    Wangsheng(WangshengState),
-    DefenseShield(DefenseShieldState),
-    ChangeBody(ChangeBodyState),
-    Extended(ExtendedState),
-    Undead(UndeadState),
-    Script(ScriptMoveState),
-    Ride(RideState),
+    PersistentAgility(PersistentAgilityFamilyState) => |state| state.skill_id(),
+    Agility2(AgilityState2) => |state| state.skill_id(),
+    Callosity(CallosityFamilyState) => |state| state.skill_id(),
+    TaiJi(TaiJiState) => |state| state.skill_id(),
+    EnlargeFullMiss(EnlargeFullMissState) => |state| state.skill_id(),
+    EnlargeMaxHp(EnlargeMaxHpState) => |state| state.skill_id(),
+    EnlargeMaxMp(EnlargeMaxMpState) => |state| state.skill_id(),
+    Origin(OriginState) => |state| state.skill_id(),
+    Hearten(HeartenState) => |state| state.skill_id(),
+    Heal(HealState) => |state| state.skill_id(),
+    Fury(FuryState) => |state| state.skill_id(),
+    RageBreak(RageBreakState) => |state| state.skill_id(),
+    BossBlueFury(BossBlueFuryState) => |state| state.skill_id(),
+    BossBlueQuake(BossBlueQuakeState) => |state| state.skill_id(),
+    Cure(CureState) => |state| state.skill_id(),
+    DaubPoison(DaubPoisonState) => |state| state.skill_id(),
+    Seal(SealState) => |state| state.skill_id(),
+    PoisonArrow(PoisonArrowState) => |state| state.skill_id(),
+    PoisonFog(PoisonFogState) => |state| state.skill_id(),
+    MeteorArrow(MeteorArrowState) => |state| state.skill_id(),
+    SpiderPoison(SpiderPoisonState) => |state| state.skill_id(),
+    SpriteBurn(SpriteBurnState) => |state| state.skill_id(),
+    SpiderWeb(SpiderWebState) => |state| state.skill_id(),
+    Weak(WeakState) => |state| state.skill_id(),
+    GodBless(GodBlessState) => |state| state.skill_id(),
+    SoulCollect(SoulCollectState) => |state| state.skill_id(),
+    KnockOut(KnockOutState) => |state| state.skill_id(),
+    Blind(BlindState) => |state| state.skill_id(),
+    BoaLock(BoaLockState) => |state| state.skill_id(),
+    Rush(RushState) => |state| state.skill_id(),
+    Rush2(Rush2State) => |state| state.skill_id(),
+    Roar(RoarState) => |state| state.skill_id(),
+    EnergyHolding(EnergyHoldingState) => |state| state.skill_id(),
+    Pillar(PillarState) => |state| state.skill_id(),
+    KnightCut(KnightCutState) => |state| state.skill_id(),
+    BloodLoss(BloodLossState) => |state| state.skill_id(),
+    LeafCut(LeafCutState) => |state| state.skill_id(),
+    LeafCut2(LeafCutState2) => |state| state.skill_id(),
+    LeafCut3(LeafCutState3) => |state| state.skill_id(),
+    Kerosene(KeroseneState) => |state| state.skill_id(),
+    Swordship(SwordshipState) => |state| state.skill_id(),
+    Strike(StrikeState) => |state| state.skill_id(),
+    WuXing(WuXingState) => |state| state.skill_id(),
+    AutomaticRestore(AutomaticRestoreState) => |state| state.state_id(),
+    ConsumableRestore(ConsumableRestoreState) => |state| state.state_id(),
+    Particular(ParticularState) => |_state| PARTICULAR_STATE_ID,
+    Team(CTeamState) => |_state| TEAM_STATE_ID,
+    BattleFairyAttribute(BattleFairyAttributeState) => |state| state.skill_id(),
+    TianShenXiaFan(TianShenXiaFanState) => |state| state.state_id(),
+    Wangsheng(WangshengState) => |state| state.state_id(),
+    DefenseShield(DefenseShieldState) => |state| state.skill_id(),
+    ChangeBody(ChangeBodyState) => |_state| CHANGE_BODY_STATE_ID,
+    Extended(ExtendedState) => |state| state.kind.state_id(),
+    Undead(UndeadState) => |_state| UNDEAD_STATE_ID,
+    Script(ScriptMoveState) => |state| state.state_id(),
+    Ride(RideState) => |_state| RIDE_STATE_ID,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AppliedStateEntries {
     instances: SlotMap<StateKey, Option<StateData>>,
     order: Vec<Option<StateAddress>>,
+}
+
+impl StateData {
+    pub(crate) fn has_materialized_ai(&self) -> bool {
+        !matches!(self, Self::PersistentAgility(_) | Self::Callosity(_) | Self::TaiJi(_)
+            | Self::EnlargeFullMiss(_) | Self::EnlargeMaxHp(_) | Self::EnlargeMaxMp(_)
+            | Self::Origin(_) | Self::MeteorArrow(_) | Self::EnergyHolding(_)
+            | Self::Swordship(_) | Self::WuXing(_) | Self::AutomaticRestore(_))
+    }
+
+    pub(crate) fn is_curable(&self) -> bool {
+        matches!(self, Self::Seal(_) | Self::PoisonFog(_) | Self::SpiderPoison(_)
+            | Self::SpriteBurn(_) | Self::SpiderWeb(_) | Self::KnockOut(_)
+            | Self::BoaLock(_) | Self::Rush(_) | Self::Rush2(_)
+            | Self::BossBlueQuake(_) | Self::KnightCut(_))
+    }
+
+    pub(crate) fn is_blind(&self) -> bool {
+        matches!(self, Self::Blind(_) | Self::KnockOut(_) | Self::SpiderWeb(_)
+            | Self::Seal(_) | Self::Strike(_))
+    }
+
+    pub(crate) fn is_periodic_attack(&self) -> bool {
+        matches!(self, Self::PoisonArrow(_) | Self::SpiderPoison(_) | Self::SpriteBurn(_)
+            | Self::BloodLoss(_) | Self::LeafCut(_) | Self::LeafCut2(_)
+            | Self::LeafCut3(_) | Self::Kerosene(_))
+    }
 }
 
 #[derive(Debug)]
@@ -197,6 +232,14 @@ impl AppliedStateEntries {
         self.order.push(Some(StateAddress::Skill(slot)));
     }
 
+    pub(crate) fn detach_skill(&mut self, slot: SkillSlot) {
+        for address in &mut self.order {
+            if *address == Some(StateAddress::Skill(slot)) {
+                *address = None;
+            }
+        }
+    }
+
     pub(crate) fn get(&self, key: StateKey) -> Option<&StateData> {
         self.instances.get(key)?.as_ref()
     }
@@ -227,12 +270,27 @@ impl AppliedStateEntries {
     }
 
     pub(crate) fn first_key<T: AppliedState>(&self) -> Option<StateKey> {
-        self.order.iter().find_map(|address| {
+        self.key_at::<T>(0)
+    }
+
+    pub(crate) fn key_at<T: AppliedState>(&self, index: usize) -> Option<StateKey> {
+        self.order.iter().filter_map(|address| {
             let StateAddress::Applied(key) = (*address)? else {
                 return None;
             };
             T::as_data_ref(self.get(key)?).map(|_| key)
+        }).nth(index)
+    }
+
+    pub(crate) fn entries(&self) -> impl DoubleEndedIterator<Item = (StateKey, &StateData)> {
+        self.order.iter().filter_map(|address| {
+            let StateAddress::Applied(key) = (*address)? else { return None };
+            Some((key, self.get(key)?))
         })
+    }
+
+    pub(crate) fn iter_data(&self) -> impl DoubleEndedIterator<Item = &StateData> {
+        self.entries().map(|(_, state)| state)
     }
 
     pub(crate) fn keys<T: AppliedState>(&self) -> Vec<StateKey> {
@@ -254,6 +312,20 @@ impl AppliedStateEntries {
     pub(crate) fn first_mut<T: AppliedState>(&mut self) -> Option<&mut T> {
         let key = self.first_key::<T>()?;
         T::as_data_mut(self.get_mut(key)?)
+    }
+
+    pub(crate) fn nth<T: AppliedState>(&self, position: usize) -> Option<&T> {
+        self.iter::<T>().nth(position)
+    }
+
+    pub(crate) fn nth_mut<T: AppliedState>(&mut self, position: usize) -> Option<&mut T> {
+        let key = self.key_at::<T>(position)?;
+        T::as_data_mut(self.get_mut(key)?)
+    }
+
+    pub(crate) fn take_nth<T: AppliedState>(&mut self, position: usize) -> Option<T> {
+        let key = self.key_at::<T>(position)?;
+        self.take(key)
     }
 
     pub(crate) fn iter<T: AppliedState>(&self) -> impl Iterator<Item = &T> {

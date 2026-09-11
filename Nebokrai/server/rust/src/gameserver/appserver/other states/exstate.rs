@@ -16,6 +16,8 @@
 //! Persisted Serialize (`0x005d9510/0x005d9bb0`) заменяет keeptime остатком
 //! прямо в живом объекте, не перезапуская started_ms. Клиентская проекция
 //! только читает остаток; эти два пути нельзя объединять по побочным эффектам.
+//! Payload хранится в общей арене CMoveShape; decode_at читает только
+//! достигнутую фабрикой запись, сохраняя её вариант и serialized offset.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -126,63 +128,56 @@ impl ExtendedState {
         })
     }
 
-    pub(crate) fn decode_all(payload: &[u8], now_ms: u32) -> Vec<Self> {
-        if payload.len() < 4 {
-            return Vec::new();
+    pub(crate) fn decode_at(payload: &[u8], offset: usize, now_ms: u32) -> Option<Self> {
+        let Some(state_id) = read_u32(payload, offset) else {
+            return None;
+        };
+        let kind = match state_id {
+            EX_STATE_ID => ExtendedStateKind::Original,
+            EX_STATE_NEW_ID => ExtendedStateKind::New,
+            _ => return None,
+        };
+        let base = offset.checked_add(4)?;
+        if base.checked_add(kind.parameter_bytes())? > payload.len() {
+            return None;
         }
-        let mut states = Vec::new();
-        for offset in 4..payload.len().saturating_sub(3) {
-            let Some(state_id) = read_u32(payload, offset) else {
-                continue;
-            };
-            let kind = match state_id {
-                EX_STATE_ID => ExtendedStateKind::Original,
-                EX_STATE_NEW_ID => ExtendedStateKind::New,
-                _ => continue,
-            };
-            let base = offset + 4;
-            if base + kind.parameter_bytes() > payload.len() {
-                continue;
-            }
-            let Some(level) = read_u32(payload, base + 4) else {
-                continue;
-            };
-            if level == 0 {
-                continue;
-            }
-            states.push(Self {
-                kind,
-                state_type: read_u16(payload, base).unwrap_or_default(),
-                level,
-                keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
-                maximum_hp: read_u16(payload, base + 12).unwrap_or_default(),
-                maximum_mp: read_u16(payload, base + 14).unwrap_or_default(),
-                minimum_attack: read_u16(payload, base + 16).unwrap_or_default(),
-                maximum_attack: read_u16(payload, base + 18).unwrap_or_default(),
-                element_modify: read_u16(payload, base + 20).unwrap_or_default(),
-                defense: read_u16(payload, base + 22).unwrap_or_default(),
-                element_resistance: read_u16(payload, base + 24).unwrap_or_default(),
-                cch: read_u16(payload, base + 26).unwrap_or_default(),
-                full_miss: read_u16(payload, base + 28).unwrap_or_default(),
-                attack_avoid: read_u16(payload, base + 30).unwrap_or_default(),
-                element_avoid: read_u16(payload, base + 32).unwrap_or_default(),
-                hit: read_u16(payload, base + 34).unwrap_or_default(),
-                dodge: read_u16(payload, base + 36).unwrap_or_default(),
-                item_index: (kind == ExtendedStateKind::New)
-                    .then(|| read_u32(payload, base + 40).unwrap_or_default())
-                    .unwrap_or(0),
-                item_amount: (kind == ExtendedStateKind::New)
-                    .then(|| read_u32(payload, base + 44).unwrap_or_default())
-                    .unwrap_or(0),
-                frequency_ms: (kind == ExtendedStateKind::New)
-                    .then(|| read_u32(payload, base + 48).unwrap_or_default())
-                    .unwrap_or(0),
-                started_ms: now_ms,
-                last_item_tick_ms: now_ms,
-                serialized_offset: Some(offset),
-            });
+        let Some(level) = read_u32(payload, base + 4) else {
+            return None;
+        };
+        if level == 0 {
+            return None;
         }
-        states
+        Some(Self {
+            kind,
+            state_type: read_u16(payload, base).unwrap_or_default(),
+            level,
+            keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
+            maximum_hp: read_u16(payload, base + 12).unwrap_or_default(),
+            maximum_mp: read_u16(payload, base + 14).unwrap_or_default(),
+            minimum_attack: read_u16(payload, base + 16).unwrap_or_default(),
+            maximum_attack: read_u16(payload, base + 18).unwrap_or_default(),
+            element_modify: read_u16(payload, base + 20).unwrap_or_default(),
+            defense: read_u16(payload, base + 22).unwrap_or_default(),
+            element_resistance: read_u16(payload, base + 24).unwrap_or_default(),
+            cch: read_u16(payload, base + 26).unwrap_or_default(),
+            full_miss: read_u16(payload, base + 28).unwrap_or_default(),
+            attack_avoid: read_u16(payload, base + 30).unwrap_or_default(),
+            element_avoid: read_u16(payload, base + 32).unwrap_or_default(),
+            hit: read_u16(payload, base + 34).unwrap_or_default(),
+            dodge: read_u16(payload, base + 36).unwrap_or_default(),
+            item_index: (kind == ExtendedStateKind::New)
+                .then(|| read_u32(payload, base + 40).unwrap_or_default())
+                .unwrap_or(0),
+            item_amount: (kind == ExtendedStateKind::New)
+                .then(|| read_u32(payload, base + 44).unwrap_or_default())
+                .unwrap_or(0),
+            frequency_ms: (kind == ExtendedStateKind::New)
+                .then(|| read_u32(payload, base + 48).unwrap_or_default())
+                .unwrap_or(0),
+            started_ms: now_ms,
+            last_item_tick_ms: now_ms,
+            serialized_offset: Some(offset),
+        })
     }
 
     pub(crate) const fn state_id(&self) -> u32 {

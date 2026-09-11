@@ -3936,11 +3936,11 @@ impl CPlayer {
     }
 
     pub(crate) fn has_team_recruitment_state(&self) -> bool {
-        !self.move_shape.team_recruitment_states().is_empty()
+        self.move_shape.team_recruitment_states().next().is_some()
     }
 
     pub(crate) fn team_recruitment_state_count(&self) -> usize {
-        self.move_shape.team_recruitment_states().len()
+        self.move_shape.team_recruitment_states().count()
     }
 
     pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
@@ -3948,11 +3948,11 @@ impl CPlayer {
     }
 
     pub(crate) fn first_team_recruitment_state(&self) -> Option<&CTeamState> {
-        self.move_shape.team_recruitment_states().first()
+        self.move_shape.team_recruitment_states().next()
     }
 
     pub(crate) fn team_recruitment_state(&self, index: usize) -> Option<&CTeamState> {
-        self.move_shape.team_recruitment_states().get(index)
+        self.move_shape.team_recruitment_states().nth(index)
     }
 
     pub(crate) fn team_recruitment_state_mut(
@@ -4777,6 +4777,13 @@ impl CPlayer {
         self.move_shape.delete_undead_state(state_id)
     }
 
+    pub(crate) fn delete_appellation_state_key(
+        &mut self,
+        key: super::moveshape::StateKey,
+    ) -> super::moveshape::UndeadStateMutation {
+        self.move_shape.delete_undead_state_key(key)
+    }
+
     pub(crate) fn delete_undead_state(
         &mut self,
         state_id: u32,
@@ -4872,7 +4879,7 @@ impl CPlayer {
     pub(crate) fn appellation_state_tick(
         &mut self,
         now_ms: u32,
-    ) -> (Vec<u32>, Vec<(u32, u32, u32)>) {
+    ) -> (Vec<super::moveshape::StateKey>, Vec<(super::moveshape::StateKey, u32, u32)>) {
         let dead = self.is_dead();
         self.move_shape.undead_state_tick(now_ms, dead)
     }
@@ -4929,6 +4936,23 @@ impl CPlayer {
         factory: &CSkillFactory,
     ) -> super::chbystate::ChangeBodyMutation {
         let mutation = self.move_shape.delete_change_body_state(state_id);
+        self.finish_change_body_state_removal(mutation, factory)
+    }
+
+    pub(crate) fn delete_change_body_state_key(
+        &mut self,
+        key: super::moveshape::StateKey,
+        factory: &CSkillFactory,
+    ) -> super::chbystate::ChangeBodyMutation {
+        let mutation = self.move_shape.delete_change_body_state_key(key);
+        self.finish_change_body_state_removal(mutation, factory)
+    }
+
+    fn finish_change_body_state_removal(
+        &mut self,
+        mutation: super::chbystate::ChangeBodyMutation,
+        factory: &CSkillFactory,
+    ) -> super::chbystate::ChangeBodyMutation {
         if let Some(state) = mutation.removed.as_ref() {
             self.base_properties.mode = 0;
             for (index, hotkey) in state.old_hotkeys.iter().copied().enumerate() {
@@ -4958,23 +4982,23 @@ impl CPlayer {
         self.move_shape.activate_loaded_change_body_states(now_ms)
     }
 
-    pub(crate) fn expired_change_body_state_ids(&self, now_ms: u32) -> Vec<u32> {
-        self.move_shape.expired_change_body_state_ids(now_ms)
+    pub(crate) fn expired_change_body_state_keys(&self, now_ms: u32) -> Vec<super::moveshape::StateKey> {
+        self.move_shape.expired_change_body_state_keys(now_ms)
     }
 
-    pub(crate) fn change_body_region_transition_end_ids(&mut self) -> Vec<u32> {
-        self.move_shape.change_body_region_transition_end_ids()
+    pub(crate) fn change_body_region_transition_end_keys(&mut self) -> Vec<super::moveshape::StateKey> {
+        self.move_shape.change_body_region_transition_end_keys()
     }
 
-    pub(crate) fn change_body_player_lost_end_ids(&mut self) -> Vec<u32> {
-        self.move_shape.change_body_player_lost_end_ids()
+    pub(crate) fn change_body_player_lost_end_keys(&mut self) -> Vec<super::moveshape::StateKey> {
+        self.move_shape.change_body_player_lost_end_keys()
     }
 
-    pub(crate) fn change_body_death_end_ids(&self) -> Vec<u32> {
-        self.move_shape.change_body_death_end_ids()
+    pub(crate) fn change_body_death_end_keys(&self) -> Vec<super::moveshape::StateKey> {
+        self.move_shape.change_body_death_end_keys()
     }
 
-    pub(crate) const fn is_rider(&self) -> bool {
+    pub(crate) fn is_rider(&self) -> bool {
         self.move_shape.has_ride_state()
     }
 
@@ -5073,12 +5097,7 @@ impl CPlayer {
         self.move_shape.begin_persistent_agility_family_state(state);
     }
 
-    pub(crate) fn take_expired_agility_state_2(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<super::skills::agilitystate2::AgilityState2> {
-        self.move_shape.take_expired_agility_state_2(now_ms)
-    }
+
 
     pub(crate) fn replace_taiji_state(
         &mut self,
@@ -5133,12 +5152,7 @@ impl CPlayer {
         self.move_shape.promotion_heal_recover_factor()
     }
 
-    pub(crate) fn take_expired_hearten_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<super::skills::heartenstate::HeartenState> {
-        self.move_shape.take_expired_hearten_state(now_ms)
-    }
+
 
     pub(crate) fn replace_heal_state(
         &mut self,
@@ -5149,11 +5163,7 @@ impl CPlayer {
             .replace_heal_state(removed_skill_id, state)
     }
 
-    pub(crate) fn take_heal_states(&mut self) -> Vec<super::skills::healstate::HealState> {
-        self.move_shape.take_heal_states()
-    }
-
-    pub(crate) const fn rage_break_state(&self) -> Option<super::skills::ragebreakstate::RageBreakState> {
+    pub(crate) fn rage_break_state(&self) -> Option<super::skills::ragebreakstate::RageBreakState> {
         self.move_shape.rage_break_state()
     }
 
@@ -5167,7 +5177,7 @@ impl CPlayer {
     pub(crate) fn activate_loaded_rage_break_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::ragebreakstate::RageBreakState> {
+    ) -> Vec<super::skills::ragebreakstate::RageBreakState> {
         self.move_shape.activate_loaded_rage_break_state(now_ms)
     }
 
@@ -5179,12 +5189,7 @@ impl CPlayer {
         self.move_shape.restart_rage_break_state(now_ms)
     }
 
-    pub(crate) fn take_expired_rage_break_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<super::skills::ragebreakstate::RageBreakState> {
-        self.move_shape.take_expired_rage_break_state(now_ms)
-    }
+
 
     pub(crate) fn push_fury_state(
         &mut self,
@@ -5200,19 +5205,12 @@ impl CPlayer {
         self.move_shape.activate_loaded_fury_states(now_ms)
     }
 
-    pub(crate) fn fury_states(&self) -> &[super::skills::furystate::FuryState] {
+    pub(crate) fn fury_states(&self) -> impl Iterator<Item = &super::skills::furystate::FuryState> {
         self.move_shape.fury_states()
     }
 
     pub(crate) fn remove_fury_state(&mut self, position: usize) -> Option<super::skills::furystate::FuryState> {
         self.move_shape.remove_fury_state(position)
-    }
-
-    pub(crate) fn restore_heal_states(
-        &mut self,
-        states: Vec<super::skills::healstate::HealState>,
-    ) {
-        self.move_shape.restore_heal_states(states);
     }
 
     pub(crate) fn remove_serialized_heal_states(&mut self, skill_ids: &[u32]) {
@@ -5240,16 +5238,11 @@ impl CPlayer {
     pub(crate) fn activate_loaded_boss_blue_quake_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::bossbluequakestate::BossBlueQuakeState> {
+    ) -> Vec<super::skills::bossbluequakestate::BossBlueQuakeState> {
         self.move_shape.activate_loaded_boss_blue_quake_state(now_ms)
     }
 
-    pub(crate) fn take_expired_boss_blue_quake_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<super::skills::bossbluequakestate::BossBlueQuakeState> {
-        self.move_shape.take_expired_boss_blue_quake_state(now_ms)
-    }
+
 
     pub(crate) fn take_boss_blue_quake_state(
         &mut self,
@@ -5994,21 +5987,22 @@ impl CPlayer {
     ) -> Option<super::skills::daubpoisonstate::DaubPoisonState> {
         self.move_shape.replace_daub_poison_state(state)
     }
-    pub(crate) fn activate_loaded_daub_poison_state(&mut self, now_ms: u32) -> Option<super::skills::daubpoisonstate::DaubPoisonState> { self.move_shape.activate_loaded_daub_poison_state(now_ms) }
+    pub(crate) fn activate_loaded_daub_poison_state(&mut self, now_ms: u32) -> Vec<super::skills::daubpoisonstate::DaubPoisonState> { self.move_shape.activate_loaded_daub_poison_state(now_ms) }
 
     pub(crate) fn take_expired_daub_poison_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::daubpoisonstate::DaubPoisonState> {
-        self.move_shape.take_expired_daub_poison_state(now_ms)
+        self.move_shape.take_expired_daub_poison_state(key, now_ms)
     }
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
         self.move_shape.curable_state_ids()
     }
 
-    pub(crate) fn register_curable_skill_state(&mut self, skill_id: u32) {
-        self.move_shape.register_curable_skill_state(skill_id);
+    pub(crate) fn register_curable_skill_state(&mut self, slot: super::moveshape::SkillSlot) {
+        self.move_shape.register_curable_skill_state(slot);
     }
 
     pub(crate) fn finish_curable_skill_state(&mut self, skill_id: u32) {
@@ -6023,30 +6017,21 @@ impl CPlayer {
     }
 
     pub(crate) fn replace_poison_fog_state(&mut self, state: super::skills::poisonfogstate::PoisonFogState, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.replace_poison_fog_state(state, now_ms) }
-    pub(crate) fn take_expired_poison_fog_state(&mut self, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_expired_poison_fog_state(now_ms) }
+    pub(crate) fn take_expired_poison_fog_state(&mut self, key: super::moveshape::StateKey, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_expired_poison_fog_state(key, now_ms) }
     pub(crate) fn take_poison_fog_state(&mut self) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_poison_fog_state() }
     pub(crate) fn meteor_arrow_state(&self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.meteor_arrow_state() }
     pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.add_meteor_arrows(maximum, amount) }
     pub(crate) fn take_meteor_arrow_state(&mut self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.take_meteor_arrow_state() }
-    pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.activate_loaded_poison_fog_state(now_ms) }
+    pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Vec<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.activate_loaded_poison_fog_state(now_ms) }
 
-    pub(crate) fn take_poison_arrow_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
-        self.move_shape.take_poison_arrow_state_for_ai()
-    }
 
-    pub(crate) fn finish_poison_arrow_state(
-        &mut self,
-        state: super::skills::poisonarrowstate::PoisonArrowState,
-    ) {
-        self.move_shape.finish_poison_arrow_state(state);
-    }
+
+
 
     pub(crate) fn activate_loaded_poison_arrow_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
+    ) -> Vec<super::skills::poisonarrowstate::PoisonArrowState> {
         self.move_shape.activate_loaded_poison_arrow_state(now_ms)
     }
 
@@ -6057,14 +6042,10 @@ impl CPlayer {
         self.move_shape.replace_spider_poison_state(state)
     }
 
-    pub(crate) fn take_spider_poison_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
-        self.move_shape.take_spider_poison_state_for_ai()
-    }
-    pub(crate) fn restore_spider_poison_state_after_ai(&mut self, state: super::skills::spiderpoisonstate::SpiderPoisonState) { self.move_shape.restore_spider_poison_state_after_ai(state); }
-    pub(crate) fn finish_spider_poison_state_after_ai(&mut self) { self.move_shape.finish_spider_poison_state_after_ai(); }
-    pub(crate) fn activate_loaded_spider_poison_state(&mut self, now_ms: u32) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> { self.move_shape.activate_loaded_spider_poison_state(now_ms) }
+
+
+
+    pub(crate) fn activate_loaded_spider_poison_state(&mut self, now_ms: u32) -> Vec<super::skills::spiderpoisonstate::SpiderPoisonState> { self.move_shape.activate_loaded_spider_poison_state(now_ms) }
 
     pub(crate) fn take_spider_poison_state(
         &mut self,
@@ -6079,14 +6060,10 @@ impl CPlayer {
         self.move_shape.replace_sprite_burn_state(state)
     }
 
-    pub(crate) fn take_sprite_burn_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::spriteburnstate::SpriteBurnState> {
-        self.move_shape.take_sprite_burn_state_for_ai()
-    }
-    pub(crate) fn restore_sprite_burn_state_after_ai(&mut self, state: super::skills::spriteburnstate::SpriteBurnState) { self.move_shape.restore_sprite_burn_state_after_ai(state); }
-    pub(crate) fn finish_sprite_burn_state_after_ai(&mut self) { self.move_shape.finish_sprite_burn_state_after_ai(); }
-    pub(crate) fn activate_loaded_sprite_burn_state(&mut self, now_ms: u32) -> Option<super::skills::spriteburnstate::SpriteBurnState> { self.move_shape.activate_loaded_sprite_burn_state(now_ms) }
+
+
+
+    pub(crate) fn activate_loaded_sprite_burn_state(&mut self, now_ms: u32) -> Vec<super::skills::spriteburnstate::SpriteBurnState> { self.move_shape.activate_loaded_sprite_burn_state(now_ms) }
 
     pub(crate) fn take_sprite_burn_state(
         &mut self,
@@ -6104,7 +6081,7 @@ impl CPlayer {
     pub(crate) fn activate_loaded_spider_web_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
+    ) -> Vec<super::skills::spiderwebstate::SpiderWebState> {
         self.move_shape.activate_loaded_spider_web_state(now_ms)
     }
 
@@ -6114,16 +6091,16 @@ impl CPlayer {
     ) -> Option<super::skills::weakstate::WeakState> {
         self.move_shape.replace_weak_state(state)
     }
-    pub(crate) fn activate_loaded_weak_state(&self) -> Option<super::skills::weakstate::WeakState> { self.move_shape.activate_loaded_weak_state() }
+    pub(crate) fn activate_loaded_weak_state(&self) -> Vec<super::skills::weakstate::WeakState> { self.move_shape.activate_loaded_weak_state() }
 
     pub(crate) fn replace_god_bless_state(&mut self, state: super::skills::godblessstate::GodBlessState) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.replace_god_bless_state(state) }
-    pub(crate) fn activate_loaded_god_bless_state(&mut self, now_ms: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.activate_loaded_god_bless_state(now_ms) }
+    pub(crate) fn activate_loaded_god_bless_state(&mut self, now_ms: u32) -> Vec<super::skills::godblessstate::GodBlessState> { self.move_shape.activate_loaded_god_bless_state(now_ms) }
     pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_god_bless_state(skill_id) }
-    pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_expired_god_bless_state(now_ms) }
+
     pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
-    pub(crate) fn activate_loaded_roar_state(&mut self, now_ms: u32) -> Option<super::skills::roarstate::RoarState> { self.move_shape.activate_loaded_roar_state(now_ms) }
-    pub(crate) fn take_expired_roar_state(&mut self, now_ms: u32) -> Option<super::skills::roarstate::RoarState> { self.move_shape.take_expired_roar_state(now_ms) }
-    pub(crate) const fn energy_holding_state(&self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state() }
+    pub(crate) fn activate_loaded_roar_state(&mut self, now_ms: u32) -> Vec<super::skills::roarstate::RoarState> { self.move_shape.activate_loaded_roar_state(now_ms) }
+
+    pub(crate) fn energy_holding_state(&self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state() }
     pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state_mut() }
     pub(crate) fn begin_energy_holding_state(&mut self, state: super::skills::energyholdingstate::EnergyHoldingState) { self.move_shape.begin_energy_holding_state(state); }
     pub(crate) fn take_energy_holding_state(&mut self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.take_energy_holding_state() }
@@ -6143,22 +6120,23 @@ impl CPlayer {
 
     pub(crate) fn tick_boss_blue_fury_state(
         &mut self,
+        key: crate::gameserver::appserver::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<(
         super::skills::bossbluefurystate::BossBlueFuryState,
         super::skills::bossbluefurystate::BossBlueFuryTick,
     )> {
-        self.move_shape.tick_boss_blue_fury_state(now_ms)
+        self.move_shape.tick_boss_blue_fury_state(key, now_ms)
     }
 
     pub(crate) fn activate_loaded_boss_blue_fury_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::bossbluefurystate::BossBlueFuryState> {
+    ) -> Vec<super::skills::bossbluefurystate::BossBlueFuryState> {
         self.move_shape.activate_loaded_boss_blue_fury_state(now_ms)
     }
 
-    pub(crate) const fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
+    pub(crate) fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.soul_collect_state()
     }
 
@@ -6169,7 +6147,7 @@ impl CPlayer {
     pub(crate) fn begin_soul_collect_state(&mut self, state: super::skills::soulcollectstate::SoulCollectState) {
         self.move_shape.begin_soul_collect_state(state);
     }
-    pub(crate) fn activate_loaded_soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> { self.move_shape.activate_loaded_soul_collect_state() }
+    pub(crate) fn activate_loaded_soul_collect_state(&self) -> Vec<super::skills::soulcollectstate::SoulCollectState> { self.move_shape.activate_loaded_soul_collect_state() }
 
     pub(crate) fn take_soul_collect_state(&mut self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.take_soul_collect_state()
@@ -6189,9 +6167,10 @@ impl CPlayer {
 
     pub(crate) fn take_expired_spider_web_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
-        self.move_shape.take_expired_spider_web_state(now_ms)
+        self.move_shape.take_expired_spider_web_state(key, now_ms)
     }
 
     pub(crate) fn take_spider_web_state(
@@ -6210,21 +6189,21 @@ impl CPlayer {
     pub(crate) fn activate_loaded_blind_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::blindstate::BlindState> {
+    ) -> Vec<super::skills::blindstate::BlindState> {
         self.move_shape.activate_loaded_blind_state(now_ms)
     }
 
     pub(crate) fn activate_loaded_seal_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::sealstate::SealState> {
+    ) -> Vec<super::skills::sealstate::SealState> {
         self.move_shape.activate_loaded_seal_state(now_ms)
     }
 
     pub(crate) fn activate_loaded_knock_out_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::knockoutstate::KnockOutState> {
+    ) -> Vec<super::skills::knockoutstate::KnockOutState> {
         self.move_shape.activate_loaded_knock_out_state(now_ms)
     }
 
@@ -6236,17 +6215,18 @@ impl CPlayer {
         &mut self,
         now_ms: u32,
     ) -> (
-        Option<super::skills::agilitystate::PersistentAgilityFamilyState>,
-        Option<super::skills::agilitystate2::AgilityState2>,
+        Vec<super::skills::agilitystate::PersistentAgilityFamilyState>,
+        Vec<super::skills::agilitystate2::AgilityState2>,
     ) {
         self.move_shape.activate_loaded_agility_states(now_ms)
     }
 
     pub(crate) fn take_expired_blind_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::blindstate::BlindState> {
-        self.move_shape.take_expired_blind_state(now_ms)
+        self.move_shape.take_expired_blind_state(key, now_ms)
     }
 
     pub(crate) fn take_blind_state(
@@ -6256,8 +6236,8 @@ impl CPlayer {
     }
 
     pub(crate) fn replace_boa_lock_state(&mut self, state: super::skills::boalockstate::BoaLockState) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.replace_boa_lock_state(state) }
-    pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.activate_loaded_boa_lock_state(now_ms) }
-    pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(now_ms) }
+    pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Vec<super::skills::boalockstate::BoaLockState> { self.move_shape.activate_loaded_boa_lock_state(now_ms) }
+    pub(crate) fn take_expired_boa_lock_state(&mut self, key: super::moveshape::StateKey, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(key, now_ms) }
     pub(crate) fn take_boa_lock_state(&mut self) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_boa_lock_state() }
 
     pub(crate) fn pillar_state(&self) -> Option<super::skills::pillarstate::PillarState> {
@@ -6274,15 +6254,16 @@ impl CPlayer {
     pub(crate) fn activate_loaded_rush_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::rushstate::RushState> {
+    ) -> Vec<super::skills::rushstate::RushState> {
         self.move_shape.activate_loaded_rush_state(now_ms)
     }
 
     pub(crate) fn take_expired_rush_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::rushstate::RushState> {
-        self.move_shape.take_expired_rush_state(now_ms)
+        self.move_shape.take_expired_rush_state(key, now_ms)
     }
 
     pub(crate) fn take_rush_state(&mut self) -> Option<super::skills::rushstate::RushState> {
@@ -6299,15 +6280,16 @@ impl CPlayer {
     pub(crate) fn activate_loaded_rush_2_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::rushstate2::Rush2State> {
+    ) -> Vec<super::skills::rushstate2::Rush2State> {
         self.move_shape.activate_loaded_rush_2_state(now_ms)
     }
 
     pub(crate) fn take_expired_rush_2_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::rushstate2::Rush2State> {
-        self.move_shape.take_expired_rush_2_state(now_ms)
+        self.move_shape.take_expired_rush_2_state(key, now_ms)
     }
 
     pub(crate) fn take_rush_2_state(&mut self) -> Option<super::skills::rushstate2::Rush2State> {
@@ -6323,15 +6305,11 @@ impl CPlayer {
     pub(crate) fn activate_loaded_pillar_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::pillarstate::PillarState> {
+    ) -> Vec<super::skills::pillarstate::PillarState> {
         self.move_shape.activate_loaded_pillar_state(now_ms)
     }
 
-    pub(crate) fn take_expired_pillar_state(
-        &mut self, now_ms: u32,
-    ) -> Option<super::skills::pillarstate::PillarState> {
-        self.move_shape.take_expired_pillar_state(now_ms)
-    }
+
 
     pub(crate) fn take_pillar_state(&mut self) -> Option<super::skills::pillarstate::PillarState> {
         self.move_shape.take_pillar_state()
@@ -6339,9 +6317,10 @@ impl CPlayer {
 
     pub(crate) fn take_expired_knock_out_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::knockoutstate::KnockOutState> {
-        self.move_shape.take_expired_knock_out_state(now_ms)
+        self.move_shape.take_expired_knock_out_state(key, now_ms)
     }
 
     pub(crate) fn take_knock_out_state(
@@ -6360,15 +6339,16 @@ impl CPlayer {
     pub(crate) fn activate_loaded_knight_cut_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::knightcutstate::KnightCutState> {
+    ) -> Vec<super::skills::knightcutstate::KnightCutState> {
         self.move_shape.activate_loaded_knight_cut_state(now_ms)
     }
 
     pub(crate) fn take_expired_knight_cut_state(
         &mut self,
+        key: super::moveshape::StateKey,
         now_ms: u32,
     ) -> Option<super::skills::knightcutstate::KnightCutState> {
-        self.move_shape.take_expired_knight_cut_state(now_ms)
+        self.move_shape.take_expired_knight_cut_state(key, now_ms)
     }
 
     pub(crate) fn take_knight_cut_state(
@@ -6396,30 +6376,16 @@ impl CPlayer {
         self.move_shape.replace_leaf_cut_state(state, now_ms)
     }
 
-    pub(crate) fn take_leaf_cut_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::leafcutstate::LeafCutState> {
-        self.move_shape.take_leaf_cut_state_for_ai()
-    }
 
-    pub(crate) fn restore_leaf_cut_state_after_ai(
-        &mut self,
-        state: super::skills::leafcutstate::LeafCutState,
-    ) {
-        self.move_shape.restore_leaf_cut_state_after_ai(state);
-    }
 
-    pub(crate) fn finish_leaf_cut_state(
-        &mut self,
-        state: super::skills::leafcutstate::LeafCutState,
-    ) {
-        self.move_shape.finish_leaf_cut_state(state);
-    }
+
+
+
 
     pub(crate) fn activate_loaded_leaf_cut_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::leafcutstate::LeafCutState> {
+    ) -> Vec<super::skills::leafcutstate::LeafCutState> {
         self.move_shape.activate_loaded_leaf_cut_state(now_ms)
     }
 
@@ -6430,27 +6396,16 @@ impl CPlayer {
         self.move_shape.replace_leaf_cut_2_state(state)
     }
 
-    pub(crate) fn take_leaf_cut_2_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::leafcutstate2::LeafCutState2> {
-        self.move_shape.take_leaf_cut_2_state_for_ai()
-    }
 
-    pub(crate) fn restore_leaf_cut_2_state_after_ai(
-        &mut self,
-        state: super::skills::leafcutstate2::LeafCutState2,
-    ) {
-        self.move_shape.restore_leaf_cut_2_state_after_ai(state);
-    }
 
-    pub(crate) fn finish_leaf_cut_2_state(&mut self) {
-        self.move_shape.finish_leaf_cut_2_state();
-    }
+
+
+
 
     pub(crate) fn activate_loaded_leaf_cut_2_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::leafcutstate2::LeafCutState2> {
+    ) -> Vec<super::skills::leafcutstate2::LeafCutState2> {
         self.move_shape.activate_loaded_leaf_cut_2_state(now_ms)
     }
 
@@ -6482,38 +6437,24 @@ impl CPlayer {
         self.move_shape.replace_leaf_cut_3_state(state, now_ms)
     }
 
-    pub(crate) fn take_leaf_cut_3_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
-        self.move_shape.take_leaf_cut_3_state_for_ai()
-    }
 
-    pub(crate) fn restore_leaf_cut_3_state_after_ai(
-        &mut self,
-        state: super::skills::leafcutstate3::LeafCutState3,
-    ) {
-        self.move_shape.restore_leaf_cut_3_state_after_ai(state);
-    }
 
-    pub(crate) fn finish_leaf_cut_3_state(
-        &mut self,
-        state: super::skills::leafcutstate3::LeafCutState3,
-    ) {
-        self.move_shape.finish_leaf_cut_3_state(state);
-    }
+
+
+
 
     pub(crate) fn activate_loaded_leaf_cut_3_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
+    ) -> Vec<super::skills::leafcutstate3::LeafCutState3> {
         self.move_shape.activate_loaded_leaf_cut_3_state(now_ms)
     }
-    pub(crate) fn activate_loaded_kerosene_state(&mut self, now_ms: u32) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.activate_loaded_kerosene_state(now_ms) }
+    pub(crate) fn activate_loaded_kerosene_state(&mut self, now_ms: u32) -> Vec<super::skills::kerosenestate::KeroseneState> { self.move_shape.activate_loaded_kerosene_state(now_ms) }
     pub(crate) fn replace_kerosene_state(&mut self, state: super::skills::kerosenestate::KeroseneState, now_ms: u32) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.replace_kerosene_state(state, now_ms) }
-    pub(crate) fn take_kerosene_state_for_ai(&mut self) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.take_kerosene_state_for_ai() }
-    pub(crate) fn restore_kerosene_state_after_ai(&mut self, state: super::skills::kerosenestate::KeroseneState) { self.move_shape.restore_kerosene_state_after_ai(state); }
+
+
     pub(crate) fn take_kerosene_state(&mut self) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.take_kerosene_state() }
-    pub(crate) fn finish_kerosene_state(&mut self, state: super::skills::kerosenestate::KeroseneState) { self.move_shape.finish_kerosene_state(state); }
+
 
     pub(crate) fn replace_battle_fairy_attribute_state(
         &mut self,
@@ -6536,32 +6477,19 @@ impl CPlayer {
         self.move_shape.activate_loaded_battle_fairy_attribute_states(now_ms)
     }
 
-    pub(crate) fn take_blood_loss_state_for_ai(
-        &mut self,
-    ) -> Option<super::skills::bloodlossstate::BloodLossState> {
-        self.move_shape.take_blood_loss_state_for_ai()
-    }
 
-    pub(crate) fn finish_blood_loss_state(
-        &mut self,
-        state: super::skills::bloodlossstate::BloodLossState,
-    ) {
-        self.move_shape.finish_blood_loss_state(state);
-    }
+
+
 
     pub(crate) fn activate_loaded_blood_loss_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::bloodlossstate::BloodLossState> {
+    ) -> Vec<super::skills::bloodlossstate::BloodLossState> {
         self.move_shape.activate_loaded_blood_loss_state(now_ms)
     }
 
-    pub(crate) fn periodic_attack_state_ids(&self) -> Vec<u32> {
-        self.move_shape.periodic_attack_state_ids()
-    }
-
-    pub(crate) fn finish_periodic_attack_state(&mut self, skill_id: u32) {
-        self.move_shape.finish_periodic_attack_state(skill_id);
+    pub(crate) fn periodic_attack_states(&self) -> Vec<(super::moveshape::StateKey, u32)> {
+        self.move_shape.periodic_attack_states()
     }
 
     pub(crate) fn add_script_move_state(
@@ -6619,30 +6547,20 @@ impl CPlayer {
     pub(crate) fn activate_loaded_tian_shen_xia_fan_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::tianshenxiafanstate::TianShenXiaFanState> {
+    ) -> Vec<super::skills::tianshenxiafanstate::TianShenXiaFanState> {
         self.move_shape.activate_loaded_tian_shen_xia_fan_state(now_ms)
     }
 
-    pub(crate) fn take_expired_tian_shen_xia_fan_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<super::skills::tianshenxiafanstate::TianShenXiaFanState> {
-        self.move_shape.take_expired_tian_shen_xia_fan_state(now_ms)
-    }
+
 
     pub(crate) fn activate_loaded_wangsheng_state(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::wangshengstate::WangshengState> {
+    ) -> Vec<super::skills::wangshengstate::WangshengState> {
         self.move_shape.activate_loaded_wangsheng_state(now_ms)
     }
 
-    pub(crate) fn take_expired_wangsheng_state(
-        &mut self,
-        now_ms: u32,
-    ) -> Option<super::skills::wangshengstate::WangshengState> {
-        self.move_shape.take_expired_wangsheng_state(now_ms)
-    }
+
 
     pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {
         let removed = self
@@ -6683,7 +6601,6 @@ impl CPlayer {
     pub(crate) fn improve_experience_multiplier(&self) -> f64 {
         self.move_shape
             .script_states()
-            .iter()
             .fold(1.0_f64, |multiplier, state| {
                 multiplier + state.experience_multiplier_delta()
             })
@@ -6807,7 +6724,7 @@ impl CPlayer {
         self.move_shape.end_ride_state()
     }
 
-    pub(crate) fn activate_loaded_ride_state(&mut self) -> Option<super::ridestate::RideState> {
+    pub(crate) fn activate_loaded_ride_state(&mut self) -> Vec<super::ridestate::RideState> {
         self.move_shape.activate_loaded_ride_state()
     }
 
@@ -7211,6 +7128,13 @@ impl CPlayer {
         self.move_shape.delete_extended_state(kind, state_id)
     }
 
+    pub(crate) fn delete_extended_state_key(
+        &mut self,
+        key: super::moveshape::StateKey,
+    ) -> super::exstate::ExtendedStateMutation {
+        self.move_shape.delete_extended_state_key(key)
+    }
+
     pub(crate) fn delete_extended_state_by_type(
         &mut self,
         state_type: u16,
@@ -7237,10 +7161,7 @@ impl CPlayer {
     pub(crate) fn extended_state_tick(
         &mut self,
         now_ms: u32,
-    ) -> (
-        Vec<(super::exstate::ExtendedStateKind, u32)>,
-        Vec<(super::exstate::ExtendedStateKind, u32, u32, u32)>,
-    ) {
+    ) -> (Vec<super::moveshape::StateKey>, Vec<(super::moveshape::StateKey, u32, u32)>) {
         self.move_shape.extended_state_tick(now_ms)
     }
 
@@ -14430,7 +14351,7 @@ impl CPlayer {
     }
 
     pub(crate) fn particular_state(&self, index: usize) -> Option<ParticularState> {
-        self.move_shape.particular_states().get(index).copied()
+        self.move_shape.particular_states().nth(index).copied()
     }
 
     pub(crate) fn remove_particular_state_at(&mut self, index: usize) -> Option<ParticularState> {
@@ -14488,7 +14409,7 @@ impl CPlayer {
         begun
     }
 
-    pub(crate) const fn automatic_restore_state_count(&self) -> usize {
+    pub(crate) fn automatic_restore_state_count(&self) -> usize {
         self.move_shape.automatic_restore_state_count()
     }
 

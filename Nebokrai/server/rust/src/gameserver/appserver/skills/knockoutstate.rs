@@ -1,4 +1,6 @@
 //! Каноническое состояние оглушения `CKnockOutState` (`0x192`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Общий CBlindState::AI (0x005d5ba0) сравнивает абсолютный wrapping deadline
 //! строго с now, в том числе при нулевом сроке; elapsed здесь неэквивалентен.
 //!
@@ -152,9 +154,9 @@ pub(crate) fn replace_monster_knock_out_state(
     true
 }
 
-fn finish_player_state(game: &mut CGame, player_id: i32, now_ms: u32, only_expired: bool) -> bool {
+fn finish_player_state(game: &mut CGame, player_id: i32, now_ms: u32, expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>) -> bool {
     let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = if only_expired { player.take_expired_knock_out_state(now_ms)? } else { player.take_knock_out_state()? };
+        let state = if let Some(key) = expired_key { player.take_expired_knock_out_state(key, now_ms)? } else { player.take_knock_out_state()? };
         player.set_skill_fightable(true);
         player.set_skill_moveable(true);
         Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
@@ -164,9 +166,9 @@ fn finish_player_state(game: &mut CGame, player_id: i32, now_ms: u32, only_expir
     true
 }
 
-fn finish_monster_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32, only_expired: bool) -> bool {
+fn finish_monster_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32, expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>) -> bool {
     let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = if only_expired { monster.move_shape_mut().take_expired_knock_out_state(now_ms)? } else { monster.move_shape_mut().take_knock_out_state()? };
+        let state = if let Some(key) = expired_key { monster.move_shape_mut().take_expired_knock_out_state(key, now_ms)? } else { monster.move_shape_mut().take_knock_out_state()? };
         monster.move_shape_mut().set_fightable(true);
         monster.move_shape_mut().set_moveable(true);
         Some((state, monster.move_shape().shape().clone()))
@@ -176,21 +178,21 @@ fn finish_monster_state(game: &mut CGame, region: &mut CServerRegion, monster_id
     true
 }
 
-pub(crate) fn expire_player_knock_out_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool { finish_player_state(game, player_id, now_ms, true) }
-pub(crate) fn finish_player_knock_out_state_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool { finish_player_state(game, player_id, now_ms, false) }
-pub(crate) fn expire_monster_knock_out_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool { finish_monster_state(game, region, monster_id, now_ms, true) }
+pub(crate) fn expire_player_knock_out_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool { finish_player_state(game, player_id, now_ms, Some(key)) }
+pub(crate) fn finish_player_knock_out_state_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool { finish_player_state(game, player_id, now_ms, None) }
+pub(crate) fn expire_monster_knock_out_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool { finish_monster_state(game, region, monster_id, now_ms, Some(key)) }
 pub(crate) fn finish_knock_out_state_on_defense(game: &mut CGame, region: &mut CServerRegion, target: ShapeIdentity, now_ms: u32) -> bool {
-    match target.object_type { 400 => finish_player_state(game, target.id, now_ms, false), 600 => finish_monster_state(game, region, target.id, now_ms, false), _ => false }
+    match target.object_type { 400 => finish_player_state(game, target.id, now_ms, None), 600 => finish_monster_state(game, region, target.id, now_ms, None), _ => false }
 }
 
 pub(crate) fn expire_player_blind_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let order = game.find_player(player_id).map(|player| player.blind_state_order()).unwrap_or_default();
+    let order = game.find_player(player_id).map(|player| player.move_shape().blind_state_instances()).unwrap_or_default();
     let mut changed = false;
-    for state_id in order {
+    for (key, state_id) in order {
         changed |= match state_id {
-            BLIND_STATE_ID => expire_player_blind_state(game, player_id, now_ms),
-            SPIDER_WEB_SKILL_ID => expire_player_spider_web_state(game, player_id, now_ms),
-            KNOCK_OUT_STATE_ID => expire_player_knock_out_state(game, player_id, now_ms),
+            BLIND_STATE_ID => expire_player_blind_state(game, player_id, key, now_ms),
+            SPIDER_WEB_SKILL_ID => expire_player_spider_web_state(game, player_id, key, now_ms),
+            KNOCK_OUT_STATE_ID => expire_player_knock_out_state(game, player_id, key, now_ms),
             _ => false,
         };
     }
@@ -213,13 +215,13 @@ pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id:
 }
 
 pub(crate) fn expire_monster_blind_states(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
-    let order = region.find_monster_by_id(monster_id).map(|monster| monster.move_shape().blind_state_order()).unwrap_or_default();
+    let order = region.find_monster_by_id(monster_id).map(|monster| monster.move_shape().blind_state_instances()).unwrap_or_default();
     let mut changed = false;
-    for state_id in order {
+    for (key, state_id) in order {
         changed |= match state_id {
-            SPIDER_WEB_SKILL_ID => expire_monster_spider_web_state(game, region, monster_id, now_ms),
-            KNOCK_OUT_STATE_ID => expire_monster_knock_out_state(game, region, monster_id, now_ms),
-            SEAL_STATE_ID => expire_monster_seal_state(game, region, monster_id, now_ms),
+            SPIDER_WEB_SKILL_ID => expire_monster_spider_web_state(game, region, monster_id, key, now_ms),
+            KNOCK_OUT_STATE_ID => expire_monster_knock_out_state(game, region, monster_id, key, now_ms),
+            SEAL_STATE_ID => expire_monster_seal_state(game, region, monster_id, key, now_ms),
             _ => false,
         };
     }

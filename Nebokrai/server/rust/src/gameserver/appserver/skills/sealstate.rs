@@ -1,4 +1,6 @@
 //! Каноническое состояние печати `CSealState` (`0x138`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x006615f4, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
 //! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
@@ -137,10 +139,11 @@ pub(crate) fn expire_monster_seal_state(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
     let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_seal_state(now_ms)?;
+        let state = monster.move_shape_mut().take_expired_seal_state(key, now_ms)?;
         monster.move_shape_mut().set_moveable(true);
         monster.move_shape_mut().set_fightable(true);
         Some((

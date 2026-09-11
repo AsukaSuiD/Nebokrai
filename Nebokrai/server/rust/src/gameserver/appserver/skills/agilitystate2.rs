@@ -7,6 +7,9 @@
 //! Жизненный цикл принадлежит `CanonicalStateStorage`; DB-запись хранит
 //! остаток срока и WORD-прибавку полного уклонения. Истечение сразу запускает
 //! полный пересчёт свойств, чтобы снятая прибавка не оставалась в combat snapshot.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
 
 use super::agility2::AGILITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -86,13 +89,19 @@ pub(crate) fn expire_player_agility_state_2(
     player_id: i32,
     now_ms: u32,
 ) -> bool {
-    let ended = game
-        .find_player_mut(player_id)
-        .and_then(|player| player.take_expired_agility_state_2(now_ms))
-        .is_some();
-    if ended {
-        let _ = game.publish_player_states(player_id);
-        let _ = game.update_player_properties(player_id);
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<AgilityState2>()).unwrap_or_default();
+    let mut ended = false;
+    for key in keys {
+        let removed = game.find_player_mut(player_id).and_then(|player| {
+            player.move_shape().applied_state::<AgilityState2>(key).filter(|state| state.expired(now_ms))?;
+            player.move_shape_mut().remove_applied_state_record::<AgilityState2>(key, AGILITY_STATE_2_BYTES)
+        }).is_some();
+        if removed {
+            let _ = game.publish_player_states(player_id);
+            let _ = game.update_player_properties(player_id);
+            ended = true;
+        }
     }
     ended
 }

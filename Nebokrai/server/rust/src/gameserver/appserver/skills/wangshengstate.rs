@@ -7,6 +7,9 @@
 //! напрямую и его не создаёт. Загруженная legacy-запись использует timed AI
 //! `CPobingState`; её `OnUpdateProperties` ставит HP в максимум только когда
 //! `current + gain >= max`, а при меньшем результате не меняет HP.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
@@ -95,4 +98,22 @@ pub(crate) fn send_wangsheng_state_visual(
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn expire_player_wangsheng_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<WangshengState>()).unwrap_or_default();
+    let mut ended = false;
+    for key in keys {
+        let removed = game.find_player_mut(player_id).and_then(|player| {
+            player.move_shape().applied_state::<WangshengState>(key).filter(|state| state.expired(now_ms))?;
+            player.move_shape_mut().remove_applied_state_record::<WangshengState>(key, WANGSHENG_STATE_BYTES)
+        });
+        if let Some(state) = removed {
+            send_wangsheng_state_visual(game, player_id, state, false, || now_ms);
+            let _ = game.update_player_properties(player_id);
+            ended = true;
+        }
+    }
+    ended
 }

@@ -1,8 +1,9 @@
 //! Каноническое состояние подготовки яростного удара `CRageBreakState` (`0x6E`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/ragebreakstate.cpp`. Состояние заменяет предыдущий
-//! экземпляр, строго истекает после `started + keep`, увеличивает только
+//! `appserver/skills/ragebreakstate.cpp`. Новое наложение заменяет первый
+//! найденный экземпляр, не удаляя остальные загруженные записи. Состояние
+//! строго истекает после `started + keep`, увеличивает только
 //! максимальную атаку. Signed-прибавка, `0.01_f32` и полный unsigned-максимум
 //! перемножаются в x87, а общее с `CFuryState` тело `__ftol2` усекает результат
 //! к нулю. Для игрока прибавка сужается до `WORD` и ограничивается суммой
@@ -17,6 +18,9 @@
 //! End (slot +0x1C, `0x005FD420`) сначала отправляет эффект, затем удаляет
 //! состояние через RemoveState с пересчётом свойств игрока. Замена и AI
 //! используют один этот порядок.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -87,7 +91,15 @@ impl RageBreakState {
 }
 
 pub(crate) fn end_player_rage_break_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let Some(state) = game.find_player(player_id).and_then(|player| player.rage_break_state()) else {
+    let Some(key) = game.find_player(player_id)
+        .and_then(|player| player.move_shape().applied_state_key::<RageBreakState>()) else {
+        return false;
+    };
+    end_player_rage_break_state_key(game, player_id, key, now_ms)
+}
+
+fn end_player_rage_break_state_key(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
+    let Some(state) = game.find_player(player_id).and_then(|player| player.move_shape().applied_state::<RageBreakState>(key).copied()) else {
         return false;
     };
     let context = game.find_player(player_id).and_then(|player| {
@@ -97,9 +109,23 @@ pub(crate) fn end_player_rage_break_state(game: &mut CGame, player_id: i32, now_
     if let Some((region_id, identity, tile_x, tile_y)) = context {
         send_rage_break_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
     }
-    let _ = game.find_player_mut(player_id).and_then(|player| player.take_rage_break_state());
+    let _ = game.find_player_mut(player_id).and_then(|player| player.move_shape_mut().remove_applied_state_record::<RageBreakState>(key, RAGE_BREAK_STATE_BYTES));
     let _ = game.update_player_properties(player_id);
     true
+}
+
+pub(crate) fn expire_player_rage_break_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<RageBreakState>()).unwrap_or_default();
+    let mut ended = false;
+    for key in keys {
+        if game.find_player(player_id)
+            .and_then(|player| player.move_shape().applied_state::<RageBreakState>(key))
+            .is_some_and(|state| state.expired(now_ms)) {
+            ended |= end_player_rage_break_state_key(game, player_id, key, now_ms);
+        }
+    }
+    ended
 }
 
 pub(crate) fn send_rage_break_state_visual(

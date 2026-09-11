@@ -2,13 +2,17 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/bossbluefurystate.cpp`. Достигнутые пути игрока и монстра
-//! заменяют прежнее состояние до установки нового, запрещают движение и бой на слабой
-//! фазе, а затем сохраняют состояние до общего срока. Только для монстра минимальная
+//! заменяют первый найденный экземпляр до установки нового, сохраняя остальные
+//! загруженные записи. Движение и бой запрещены на слабой фазе, после неё
+//! состояние сохраняется до общего срока. Только для монстра минимальная
 //! и максимальная атака заменяются указанной долей коэффициента: полный unsigned
 //! attack и signed-коэффициент перемножаются в x87 с `0.01_f32`, затем результат
 //! усекается в `i32`. Визуальные начало и завершение сохраняют `0xBFE03/04`.
 //! DB-запись содержит остаток срока и коэффициент атаки;
 //! `weak_time` после загрузки остаётся нулевым, а `Begin` повторно не вызывается.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
@@ -319,24 +323,30 @@ pub(crate) fn expire_monster_boss_blue_fury_state(
     monster_id: i32,
     now_ms: u32,
 ) -> bool {
-    let Some((shape, state, tick)) = region
-        .find_monster_by_id_mut(monster_id)
-        .and_then(|monster| {
-            let shape = monster.move_shape().shape().clone();
-            let (state, tick) = monster.move_shape_mut().tick_boss_blue_fury_state(now_ms)?;
-            if tick.release_control {
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-            }
-            Some((shape, state, tick))
-        })
-    else {
-        return false;
-    };
-    if tick.expired {
-        send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
+    let keys = region.find_monster_by_id(monster_id)
+        .map(|monster| monster.move_shape().applied_state_keys::<BossBlueFuryState>()).unwrap_or_default();
+    let mut updated = false;
+    for key in keys {
+        let Some((shape, state, tick)) = region
+            .find_monster_by_id_mut(monster_id)
+            .and_then(|monster| {
+                let shape = monster.move_shape().shape().clone();
+                let (state, tick) = monster.move_shape_mut().tick_boss_blue_fury_state(key, now_ms)?;
+                if tick.release_control {
+                    monster.move_shape_mut().set_moveable(true);
+                    monster.move_shape_mut().set_fightable(true);
+                }
+                Some((shape, state, tick))
+            })
+        else {
+            continue;
+        };
+        if tick.expired {
+            send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
+        }
+        updated = true;
     }
-    true
+    updated
 }
 
 pub(crate) fn expire_player_boss_blue_fury_state<Runtime: crate::gameserver::gameserver::game::GameMainLoopRuntime>(
@@ -345,28 +355,34 @@ pub(crate) fn expire_player_boss_blue_fury_state<Runtime: crate::gameserver::gam
     now_ms: u32,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some((region_id, identity, tile_x, tile_y, state, tick)) = game
-        .find_player_mut(player_id)
-        .and_then(|player| {
-            let region_id = player.server_region_id()?;
-            let identity = player.shape().identity();
-            let tile_x = player.shape().get_tile_x().ok()?;
-            let tile_y = player.shape().get_tile_y().ok()?;
-            let (state, tick) = player.tick_boss_blue_fury_state(now_ms)?;
-            if tick.release_control {
-                player.set_skill_moveable(true);
-                player.set_skill_fightable(true);
-            }
-            Some((region_id, identity, tile_x, tile_y, state, tick))
-        })
-    else {
-        return false;
-    };
-    if tick.expired {
-        send_boss_blue_fury_state_visual(
-            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
-        );
-        let _ = game.update_player_properties(player_id);
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<BossBlueFuryState>()).unwrap_or_default();
+    let mut updated = false;
+    for key in keys {
+        let Some((region_id, identity, tile_x, tile_y, state, tick)) = game
+            .find_player_mut(player_id)
+            .and_then(|player| {
+                let region_id = player.server_region_id()?;
+                let identity = player.shape().identity();
+                let tile_x = player.shape().get_tile_x().ok()?;
+                let tile_y = player.shape().get_tile_y().ok()?;
+                let (state, tick) = player.tick_boss_blue_fury_state(key, now_ms)?;
+                if tick.release_control {
+                    player.set_skill_moveable(true);
+                    player.set_skill_fightable(true);
+                }
+                Some((region_id, identity, tile_x, tile_y, state, tick))
+            })
+        else {
+            continue;
+        };
+        if tick.expired {
+            send_boss_blue_fury_state_visual(
+                game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+            );
+            let _ = game.update_player_properties(player_id);
+        }
+        updated = true;
     }
-    true
+    updated
 }

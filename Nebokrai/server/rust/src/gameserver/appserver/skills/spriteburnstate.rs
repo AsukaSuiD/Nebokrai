@@ -1,4 +1,7 @@
 //! Каноническое периодическое состояние `CSpriteBurnState` (`0x1a6`).
+//! Периодический AI изменяет payload по поколенческому ключу общей арены.
+//! Чистый tick завершается до межвладельческого удара; состояние не вынимается
+//! и остаётся доступным вложенному End/Clear. Снимок нужен только пакету End.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spriteburnstate.cpp`. Состояние хранит снимок
@@ -239,34 +242,28 @@ pub(crate) fn install_sprite_burn_state(
 pub(crate) fn update_player_sprite_burn_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((mut state, identity, x, y, region_id, dead)) = game.find_player_mut(player_id).and_then(|player| {
-        let identity = player.shape().identity();
-        let x = player.shape().get_tile_x().ok()?;
-        let y = player.shape().get_tile_y().ok()?;
-        let region_id = player.server_region_id()?;
-        let dead = player.is_dead();
-        let state = player.take_sprite_burn_state_for_ai()?;
-        Some((
-            state, identity, x, y, region_id, dead,
-        ))
-    }) else {
-        return false;
-    };
+    let target = game.find_player(player_id).and_then(|player| {
+        player.move_shape().applied_state::<SpriteBurnState>(key)?;
+        let shape = player.move_shape().shape();
+        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
+            player.server_region_id()?, player.is_dead()))
+    });
+    let Some((identity, x, y, region_id, dead)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
     let frequency_now_ms = runtime.now_milliseconds();
-    match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
-        SpriteBurnStateTick::Pending => {
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.restore_sprite_burn_state_after_ai(state);
-            }
-        }
+    let prepared = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.move_shape_mut().applied_state_mut::<SpriteBurnState>(key)?;
+        let tick = state.tick(lifetime_now_ms, frequency_now_ms, dead);
+        Some((tick, *state))
+    });
+    let Some((tick, state)) = prepared else { return false };
+    match tick {
+        SpriteBurnStateTick::Pending => {}
         SpriteBurnStateTick::Attack(attack) => {
             let master = state.master();
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.restore_sprite_burn_state_after_ai(state);
-            }
             if master.master_type == MONSTER_TYPE {
                 game.apply_monster_periodic_state_attack(master, identity, region_id, attack, runtime);
             } else {
@@ -275,18 +272,10 @@ pub(crate) fn update_player_sprite_burn_state<Runtime: GameMainLoopRuntime>(
         }
         SpriteBurnStateTick::Ended => {
             if let Some(player) = game.find_player_mut(player_id) {
-                player.finish_sprite_burn_state_after_ai();
+                let move_shape = player.move_shape_mut();
+                let _ = move_shape.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES);
             }
-            send_sprite_burn_state_visual(
-                game,
-                region_id,
-                identity,
-                x,
-                y,
-                state,
-                false,
-                lifetime_now_ms,
-            );
+            send_sprite_burn_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
             let _ = game.publish_player_states(player_id);
         }
     }
@@ -297,46 +286,32 @@ pub(crate) fn update_monster_sprite_burn_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region_id: i32,
     monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(mut owner) = game.take_region_owner(region_id) else {
-        return false;
-    };
-    let state_and_target = owner
-        .base_mut()
-        .find_monster_by_id_mut(monster_id)
-        .and_then(|monster| {
-            let shape = monster.move_shape().shape();
-            let identity = shape.identity();
-            let x = shape.get_tile_x().ok()?;
-            let y = shape.get_tile_y().ok()?;
-            let dead = monster.hit_points() == 0;
-            let state = monster.move_shape_mut().take_sprite_burn_state_for_ai()?;
-            Some((state, identity, x, y, dead))
-        });
+    let Some(owner) = game.take_region_owner(region_id) else { return false };
+    let target = owner.base().find_monster_by_id(monster_id).and_then(|monster| {
+        monster.move_shape().applied_state::<SpriteBurnState>(key)?;
+        let shape = monster.move_shape().shape();
+        Some((shape.identity(), shape.get_tile_x().ok()?, shape.get_tile_y().ok()?,
+            monster.hit_points() == 0))
+    });
     game.restore_region_owner(owner);
-    let Some((mut state, identity, x, y, dead)) = state_and_target else {
-        return false;
-    };
+    let Some((identity, x, y, dead)) = target else { return false };
     let lifetime_now_ms = runtime.now_milliseconds();
     let frequency_now_ms = runtime.now_milliseconds();
-    match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
-        SpriteBurnStateTick::Pending => {
-            if let Some(mut owner) = game.take_region_owner(region_id) {
-                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().restore_sprite_burn_state_after_ai(state);
-                }
-                game.restore_region_owner(owner);
-            }
-        }
+    let Some(mut owner) = game.take_region_owner(region_id) else { return false };
+    let prepared = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().applied_state_mut::<SpriteBurnState>(key)?;
+        let tick = state.tick(lifetime_now_ms, frequency_now_ms, dead);
+        Some((tick, *state))
+    });
+    game.restore_region_owner(owner);
+    let Some((tick, state)) = prepared else { return false };
+    match tick {
+        SpriteBurnStateTick::Pending => {}
         SpriteBurnStateTick::Attack(attack) => {
             let master = state.master();
-            if let Some(mut owner) = game.take_region_owner(region_id) {
-                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().restore_sprite_burn_state_after_ai(state);
-                }
-                game.restore_region_owner(owner);
-            }
             if master.master_type == MONSTER_TYPE {
                 game.apply_monster_periodic_state_attack(master, identity, region_id, attack, runtime);
             } else {
@@ -346,20 +321,12 @@ pub(crate) fn update_monster_sprite_burn_state<Runtime: GameMainLoopRuntime>(
         SpriteBurnStateTick::Ended => {
             if let Some(mut owner) = game.take_region_owner(region_id) {
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    monster.move_shape_mut().finish_sprite_burn_state_after_ai();
+                    let move_shape = monster.move_shape_mut();
+                    let _ = move_shape.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES);
                 }
                 game.restore_region_owner(owner);
             }
-            send_sprite_burn_state_visual(
-                game,
-                region_id,
-                identity,
-                x,
-                y,
-                state,
-                false,
-                lifetime_now_ms,
-            );
+            send_sprite_burn_state_visual(game, region_id, identity, x, y, state, false, lifetime_now_ms);
         }
     }
     true

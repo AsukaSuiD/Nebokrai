@@ -1,4 +1,6 @@
 //! Каноническое состояние рыцарского удара `CKnightCutState` (`0x67`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/knightcutstate.cpp`. Состояние запрещает движение и бой,
@@ -109,18 +111,18 @@ pub(crate) fn replace_monster_knight_cut_state(game: &mut CGame, region: &mut CS
     send_owned_monster_visual(game, region, &shape, state, true, game_tick_milliseconds); true
 }
 
-pub(crate) fn expire_player_knight_cut_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+pub(crate) fn expire_player_knight_cut_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
     let expired = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_expired_knight_cut_state(now_ms)?; player.set_skill_moveable(true); player.set_skill_fightable(true);
+        let state = player.take_expired_knight_cut_state(key, now_ms)?; player.set_skill_moveable(true); player.set_skill_fightable(true);
         Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
     });
     let Some((state, region_id, identity, tile_x, tile_y)) = expired else { return false };
     send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms); true
 }
 
-pub(crate) fn expire_monster_knight_cut_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
+pub(crate) fn expire_monster_knight_cut_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
     let expired = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_expired_knight_cut_state(now_ms)?; monster.move_shape_mut().set_moveable(true); monster.move_shape_mut().set_fightable(true);
+        let state = monster.move_shape_mut().take_expired_knight_cut_state(key, now_ms)?; monster.move_shape_mut().set_moveable(true); monster.move_shape_mut().set_fightable(true);
         Some((state, monster.move_shape().shape().clone()))
     });
     let Some((state, shape)) = expired else { return false }; send_owned_monster_visual(game, region, &shape, state, false, || now_ms); true

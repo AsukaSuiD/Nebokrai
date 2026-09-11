@@ -4,11 +4,15 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/pillarstate.cpp`. Состояние хранит коэффициент поздней
-//! защиты и строгий срок, публикует `0xBFE03/0xBFE04` и остаётся единственным
-//! типизированным источником для проверки запрета рывков и `PostDefense`.
+//! защиты и строгий срок, публикует `0xBFE03/0xBFE04`. Проверка запрета рывков
+//! и `PostDefense` читают типизированный экземпляр из общей арены владельца.
 //! Общая с `CBossBlueFuryState` serializer-пара `0x005E7330/0x005D6190`
 //! сохраняет 12 байт: `ID + remaining time + IEEE-754 factor bits`;
 //! spatial login восстанавливает срок и вложенный запрет движения.
+//! Достигнутый AI обходит исходный набор поколенческих ключей общей арены:
+//! повторные записи сохраняются, после удаления и публикаций следующий
+//! экземпляр разрешается заново; новые экземпляры в этот проход не входят.
+//! Загрузка добавляет вложенный запрет движения для каждого экземпляра.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -77,11 +81,22 @@ pub(crate) fn replace_player_pillar_state(
 }
 
 pub(crate) fn expire_player_pillar_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = player.take_expired_pillar_state(now_ms)?; player.set_skill_moveable(true);
-        Some((state, player.server_region_id()?, player.shape().identity(),
-            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    });
-    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms); true
+    let keys = game.find_player(player_id)
+        .map(|player| player.move_shape().applied_state_keys::<PillarState>()).unwrap_or_default();
+    let mut ended_any = false;
+    for key in keys {
+        if !game.find_player(player_id)
+            .and_then(|player| player.move_shape().applied_state::<PillarState>(key))
+            .is_some_and(|state| state.expired(now_ms)) {
+            continue;
+        }
+        let finished = game.find_player_mut(player_id).and_then(|player| {
+            let state = player.move_shape_mut().remove_applied_state_record::<PillarState>(key, PILLAR_STATE_BYTES)?; player.set_skill_moveable(true);
+            Some((state, player.server_region_id()?, player.shape().identity(),
+                player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+        });
+        let Some((state, region_id, identity, tile_x, tile_y)) = finished else { continue; };
+        send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms); ended_any = true;
+    }
+    ended_any
 }

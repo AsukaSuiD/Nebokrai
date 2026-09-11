@@ -1,4 +1,6 @@
 //! Каноническая загружаемая часть `CBlindState` (`0x76`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x00662214, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
 //! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
@@ -293,11 +295,11 @@ fn finish_player_blind_state(
     game: &mut CGame,
     player_id: i32,
     now_ms: u32,
-    only_expired: bool,
+    expired_key: Option<crate::gameserver::appserver::moveshape::StateKey>,
 ) -> bool {
     let finished = game.find_player_mut(player_id).and_then(|player| {
-        let state = if only_expired {
-            player.take_expired_blind_state(now_ms)?
+        let state = if let Some(key) = expired_key {
+            player.take_expired_blind_state(key, now_ms)?
         } else {
             player.take_blind_state()?
         };
@@ -323,9 +325,10 @@ fn finish_player_blind_state(
 pub(crate) fn expire_player_blind_state(
     game: &mut CGame,
     player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> bool {
-    finish_player_blind_state(game, player_id, now_ms, true)
+    finish_player_blind_state(game, player_id, now_ms, Some(key))
 }
 
 pub(crate) fn finish_player_blind_state_on_defense(
@@ -333,5 +336,5 @@ pub(crate) fn finish_player_blind_state_on_defense(
     player_id: i32,
     now_ms: u32,
 ) -> bool {
-    finish_player_blind_state(game, player_id, now_ms, false)
+    finish_player_blind_state(game, player_id, now_ms, None)
 }

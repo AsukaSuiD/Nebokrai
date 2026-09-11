@@ -1,4 +1,6 @@
 //! Каноническое состояние связывания `CBoaLockState` (`0xD2`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //! Vtable 0x006610dc, слот +0x0c: CBlindState::AI (0x005d5ba0).
 //! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
 //! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
@@ -62,9 +64,9 @@ pub(crate) fn replace_player_boa_lock_state(game: &mut CGame, player_id: i32, st
 pub(crate) fn replace_monster_boa_lock_state(game: &CGame, region: &mut CServerRegion, monster_id: i32, state: BoaLockState, now_ms: u32) -> bool {
     let installed = region.find_monster_by_id_mut(monster_id).map(|monster| { let shape = monster.move_shape().shape().clone(); let old = monster.move_shape_mut().replace_boa_lock_state(state); if old.is_some() { monster.move_shape_mut().set_moveable(true); } monster.move_shape_mut().set_moveable(false); (old, shape) }); let Some((old, shape)) = installed else { return false }; if let Some(old) = old { send_monster_visual(game, region, &shape, old, false, || now_ms); } send_monster_visual(game, region, &shape, state, true, game_tick_milliseconds); true
 }
-pub(crate) fn expire_player_boa_lock_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
-    let finished = game.find_player_mut(player_id).and_then(|player| { let state = player.take_expired_boa_lock_state(now_ms)?; player.set_skill_moveable(true); Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)) }); let Some((state, region, identity, x, y)) = finished else { return false }; send_boa_lock_state_visual(game, region, identity, x, y, state, false, || now_ms); true
+pub(crate) fn expire_player_boa_lock_state(game: &mut CGame, player_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
+    let finished = game.find_player_mut(player_id).and_then(|player| { let state = player.take_expired_boa_lock_state(key, now_ms)?; player.set_skill_moveable(true); Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)) }); let Some((state, region, identity, x, y)) = finished else { return false }; send_boa_lock_state_visual(game, region, identity, x, y, state, false, || now_ms); true
 }
-pub(crate) fn expire_monster_boa_lock_state(game: &CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
-    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| { let state = monster.move_shape_mut().take_expired_boa_lock_state(now_ms)?; monster.move_shape_mut().set_moveable(true); Some((state, monster.move_shape().shape().clone())) }); let Some((state, shape)) = finished else { return false }; send_monster_visual(game, region, &shape, state, false, || now_ms); true
+pub(crate) fn expire_monster_boa_lock_state(game: &CGame, region: &mut CServerRegion, monster_id: i32, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> bool {
+    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| { let state = monster.move_shape_mut().take_expired_boa_lock_state(key, now_ms)?; monster.move_shape_mut().set_moveable(true); Some((state, monster.move_shape().shape().clone())) }); let Some((state, shape)) = finished else { return false }; send_monster_visual(game, region, &shape, state, false, || now_ms); true
 }

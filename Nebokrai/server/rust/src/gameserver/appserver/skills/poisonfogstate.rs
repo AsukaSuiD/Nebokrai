@@ -1,4 +1,6 @@
 //! Каноническое ослабление ядовитого тумана `CPoisonFogState` (`0xC9`).
+//! Истечение получает ключ конкретного экземпляра общей арены; проверка
+//! срока и End не подменяют его первым состоянием с тем же ID.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/poisonfogstate.cpp`. Сохранены 36-байтовая DB-запись,
@@ -125,6 +127,7 @@ pub(crate) fn send_poison_fog_state_visual(game: &mut CGame, region_id: i32, ide
 pub(crate) fn expire_player_poison_fog_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
     _runtime: &mut Runtime,
 ) -> bool {
@@ -132,7 +135,7 @@ pub(crate) fn expire_player_poison_fog_state<Runtime: GameMainLoopRuntime>(
         let region_id = player.server_region_id()?;
         let tile_x = player.shape().get_tile_x().ok()?;
         let tile_y = player.shape().get_tile_y().ok()?;
-        let state = player.take_expired_poison_fog_state(now_ms)?;
+        let state = player.take_expired_poison_fog_state(key, now_ms)?;
         Some((region_id, tile_x, tile_y, state))
     });
     let Some((region_id, tile_x, tile_y, state)) = removed else {
@@ -183,6 +186,7 @@ impl PoisonFogStateExpiration {
 pub(crate) fn take_expired_monster_poison_fog_state(
     region: &mut CServerRegion,
     monster_id: i32,
+    key: crate::gameserver::appserver::moveshape::StateKey,
     now_ms: u32,
 ) -> Option<PoisonFogStateExpiration> {
     region.find_monster_by_id_mut(monster_id).and_then(|monster| {
@@ -191,7 +195,7 @@ pub(crate) fn take_expired_monster_poison_fog_state(
         let identity = monster.move_shape().shape().identity();
         let state = monster
             .move_shape_mut()
-            .take_expired_poison_fog_state(now_ms)?;
+            .take_expired_poison_fog_state(key, now_ms)?;
         Some(PoisonFogStateExpiration {
             identity,
             tile_x,

@@ -17130,6 +17130,19 @@ impl CGame {
         game_legacy_random(&mut self.random_state, maximum)
     }
 
+    /// Только чистая подготовка tick: payload остаётся в арене, RNG — у CGame.
+    /// Межвладельческое действие выполняется после освобождения обоих borrow.
+    pub(crate) fn with_player_state_random<T: crate::gameserver::appserver::moveshape::AppliedState, R>(
+        &mut self,
+        player_id: i32,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        prepare: impl FnOnce(&mut T, &mut dyn FnMut(i32) -> i32) -> R,
+    ) -> Option<R> {
+        let (players, random_state) = (&mut self.players, &mut self.random_state);
+        let state = players.get_mut(&player_id)?.move_shape_mut().applied_state_mut::<T>(key)?;
+        Some(prepare(state, &mut |maximum| game_legacy_random(random_state, maximum)))
+    }
+
     /// Точный владелец `RunScript`: загруженный экземпляр получает
     /// переполняющийся идентификатор и попадает в упорядоченный `g_Scripts`;
     /// команды исполняются только на сценарной стадии главного цикла. Повтор
@@ -28346,6 +28359,28 @@ impl CGame {
             return 0;
         };
         let mutation = player.delete_appellation_state(state_id);
+        self.finish_appellation_state_removal(player_id, mutation, now_ms)
+    }
+
+    fn delete_player_appellation_state_key(
+        &mut self,
+        player_id: i32,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        now_ms: u32,
+    ) -> u32 {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return 0;
+        };
+        let mutation = player.delete_appellation_state_key(key);
+        self.finish_appellation_state_removal(player_id, mutation, now_ms)
+    }
+
+    fn finish_appellation_state_removal(
+        &mut self,
+        player_id: i32,
+        mutation: crate::gameserver::appserver::moveshape::UndeadStateMutation,
+        now_ms: u32,
+    ) -> u32 {
         for state in &mutation.removed {
             self.send_appellation_visual(player_id, state, false, now_ms);
         }
@@ -28476,6 +28511,29 @@ impl CGame {
             .find_player_mut(player_id)
             .map(|player| player.delete_extended_state(kind, state_id));
         let Some(mutation) = mutation else { return 0 };
+        self.finish_extended_state_removal(player_id, mutation, now_ms)
+    }
+
+    fn delete_player_extended_state_key(
+        &mut self,
+        player_id: i32,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        now_ms: u32,
+    ) -> u32 {
+        let Some(mutation) = self.find_player_mut(player_id)
+            .map(|player| player.delete_extended_state_key(key))
+        else {
+            return 0;
+        };
+        self.finish_extended_state_removal(player_id, mutation, now_ms)
+    }
+
+    fn finish_extended_state_removal(
+        &mut self,
+        player_id: i32,
+        mutation: crate::gameserver::appserver::exstate::ExtendedStateMutation,
+        now_ms: u32,
+    ) -> u32 {
         for removed in &mutation.removed {
             self.send_extended_state_visual(player_id, removed, false, now_ms);
         }
@@ -28498,14 +28556,7 @@ impl CGame {
         else {
             return 0;
         };
-        for removed in &mutation.removed {
-            self.send_extended_state_visual(player_id, removed, false, now_ms);
-        }
-        if !mutation.removed.is_empty() {
-            self.refresh_script_change_body_properties(player_id);
-            self.send_script_player_state_changed(player_id);
-        }
-        mutation.legacy_return
+        self.finish_extended_state_removal(player_id, mutation, now_ms)
     }
 
     pub(crate) fn set_script_jing_li_dan_count(&mut self, player_id: i32, used_count: i32) -> i32 {
@@ -28564,12 +28615,12 @@ impl CGame {
             .unwrap_or_default();
         let mut ended = 0;
         let mut items_consumed = 0_u32;
-        for (kind, state_id) in expired {
+        for key in expired {
             ended += usize::from(
-                self.delete_script_extended_state(player_id, state_id, kind, now_ms) != 0,
+                self.delete_player_extended_state_key(player_id, key, now_ms) != 0,
             );
         }
-        for (kind, state_id, item_index, item_amount) in item_due {
+        for (key, item_index, item_amount) in item_due {
             let enough = self
                 .find_player(player_id)
                 .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
@@ -28586,7 +28637,7 @@ impl CGame {
                 let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
                     .send_to_player(self.net_server(), player_id);
                 ended += usize::from(
-                    self.delete_script_extended_state(player_id, state_id, kind, now_ms)
+                    self.delete_player_extended_state_key(player_id, key, now_ms)
                         != 0,
                 );
                 continue;
@@ -28608,7 +28659,7 @@ impl CGame {
             items_consumed = items_consumed.wrapping_add(removed);
             if removed != item_amount {
                 ended += usize::from(
-                    self.delete_script_extended_state(player_id, state_id, kind, now_ms)
+                    self.delete_player_extended_state_key(player_id, key, now_ms)
                         != 0,
                 );
             }
@@ -28627,12 +28678,12 @@ impl CGame {
             .unwrap_or_default();
         let mut ended = 0;
         let mut items_consumed = 0_u32;
-        for state_id in expired {
+        for key in expired {
             ended += usize::from(
-                self.delete_script_appellation_state(player_id, state_id, now_ms) != 0,
+                self.delete_player_appellation_state_key(player_id, key, now_ms) != 0,
             );
         }
-        for (state_id, item_index, item_amount) in item_due {
+        for (key, item_index, item_amount) in item_due {
             let enough = self
                 .find_player(player_id)
                 .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
@@ -28649,7 +28700,7 @@ impl CGame {
                 let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
                     .send_to_player(self.net_server(), player_id);
                 ended += usize::from(
-                    self.delete_script_appellation_state(player_id, state_id, now_ms) != 0,
+                    self.delete_player_appellation_state_key(player_id, key, now_ms) != 0,
                 );
                 continue;
             }
@@ -28670,7 +28721,7 @@ impl CGame {
             items_consumed = items_consumed.wrapping_add(removed);
             if removed != item_amount {
                 ended += usize::from(
-                    self.delete_script_appellation_state(player_id, state_id, now_ms) != 0,
+                    self.delete_player_appellation_state_key(player_id, key, now_ms) != 0,
                 );
             }
         }
@@ -28813,6 +28864,29 @@ impl CGame {
             };
             player.delete_change_body_state(state_id, skill_factory)
         };
+        self.finish_change_body_state_removal(player_id, mutation)
+    }
+
+    fn delete_player_change_body_state_key(
+        &mut self,
+        player_id: i32,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+    ) -> u32 {
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            let Some(player) = players.get_mut(&player_id) else {
+                return 0;
+            };
+            player.delete_change_body_state_key(key, skill_factory)
+        };
+        self.finish_change_body_state_removal(player_id, mutation)
+    }
+
+    fn finish_change_body_state_removal(
+        &mut self,
+        player_id: i32,
+        mutation: crate::gameserver::appserver::chbystate::ChangeBodyMutation,
+    ) -> u32 {
         let Some(removed) = mutation.removed.as_ref() else {
             return mutation.legacy_return;
         };
@@ -28845,16 +28919,16 @@ impl CGame {
     fn end_change_body_states(
         &mut self,
         player_id: i32,
-        state_ids: Vec<u32>,
+        state_keys: Vec<crate::gameserver::appserver::moveshape::StateKey>,
         notice_id: Option<&[u8]>,
     ) {
-        for state_id in state_ids {
+        for key in state_keys {
             if let Some(notice_id) = notice_id {
                 let text = self.get_string_by_id(notice_id);
                 let _ = colored_player_notice_message(0xffff_ffff, 0, text)
                     .send_to_player(self.net_server(), player_id);
             }
-            let _ = self.delete_script_change_body_state(player_id, state_id);
+            let _ = self.delete_player_change_body_state_key(player_id, key);
         }
     }
 
@@ -28865,16 +28939,16 @@ impl CGame {
     ) -> usize {
         let expired = self
             .find_player(player_id)
-            .map(|player| player.expired_change_body_state_ids(now_ms))
+            .map(|player| player.expired_change_body_state_keys(now_ms))
             .unwrap_or_default();
         let mut ended = expired.len();
-        for state_id in expired {
-            self.end_change_body_states(player_id, vec![state_id], Some(b"GS1145"));
+        for key in expired {
+            self.end_change_body_states(player_id, vec![key], Some(b"GS1145"));
         }
         let death_ended = self
             .find_player(player_id)
             .filter(|player| player.is_dead())
-            .map(CPlayer::change_body_death_end_ids)
+            .map(CPlayer::change_body_death_end_keys)
             .unwrap_or_default();
         if !death_ended.is_empty() {
             ended = ended.wrapping_add(death_ended.len());
@@ -29046,39 +29120,55 @@ impl CGame {
             self.update_player_script_move_states(player_id, now_ms);
         let _ = expire_player_pillar_state(self, player_id, now_ms);
         let _ = expire_player_callosity_state(self, player_id, now_ms);
-        let _ = expire_player_rush_state(self, player_id, now_ms);
-        let _ = expire_player_rush_2_state(self, player_id, now_ms);
+        for key in self.find_player(player_id)
+            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate::RushState>())
+            .unwrap_or_default()
+        {
+            let _ = expire_player_rush_state(self, player_id, key, now_ms);
+        }
+        for key in self.find_player(player_id)
+            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate2::Rush2State>())
+            .unwrap_or_default()
+        {
+            let _ = expire_player_rush_2_state(self, player_id, key, now_ms);
+        }
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let strike_states_ended = expire_player_strike_states(self, player_id, now_ms);
-        let _ = expire_player_boa_lock_state(self, player_id, now_ms);
+        for key in self.find_player(player_id)
+            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::boalockstate::BoaLockState>())
+            .unwrap_or_default()
+        {
+            let _ = expire_player_boa_lock_state(self, player_id, key, now_ms);
+        }
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_boss_blue_fury_state(self, player_id, now_ms, runtime);
-        let _ = expire_player_knight_cut_state(self, player_id, now_ms);
-        let _ = expire_player_daub_poison_state(self, player_id, now_ms);
-        let expired_tian_shen_xia_fan = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_expired_tian_shen_xia_fan_state(now_ms));
-        if let Some(state) = expired_tian_shen_xia_fan {
-            send_tian_shen_xia_fan_state_visual(self, player_id, state, false, || now_ms);
-            let _ = self.update_player_properties(player_id);
+        for key in self.find_player(player_id)
+            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::knightcutstate::KnightCutState>())
+            .unwrap_or_default()
+        {
+            let _ = expire_player_knight_cut_state(self, player_id, key, now_ms);
         }
-        let expired_wangsheng = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_expired_wangsheng_state(now_ms));
-        if let Some(state) = expired_wangsheng {
-            send_wangsheng_state_visual(self, player_id, state, false, || now_ms);
-            let _ = self.update_player_properties(player_id);
+        for key in self.find_player(player_id)
+            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState>())
+            .unwrap_or_default()
+        {
+            let _ = expire_player_daub_poison_state(self, player_id, key, now_ms);
         }
-        let _ = expire_player_poison_fog_state(self, player_id, now_ms, runtime);
-        let expired_rage_break = self
-            .find_player(player_id)
-            .and_then(|player| player.rage_break_state())
-            .is_some_and(|state| state.expired(now_ms));
-        if expired_rage_break {
-            let _ = crate::gameserver::appserver::skills::ragebreakstate::end_player_rage_break_state(
-                self, player_id, now_ms,
-            );
+        let _ = crate::gameserver::appserver::skills::tianshenxiafanstate::expire_player_tian_shen_xia_fan_states(
+            self, player_id, now_ms,
+        );
+        let _ = crate::gameserver::appserver::skills::wangshengstate::expire_player_wangsheng_states(
+            self, player_id, now_ms,
+        );
+        for key in self.find_player(player_id)
+            .map(|player| player.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState>())
+            .unwrap_or_default()
+        {
+            let _ = expire_player_poison_fog_state(self, player_id, key, now_ms, runtime);
         }
+        let _ = crate::gameserver::appserver::skills::ragebreakstate::expire_player_rage_break_states(
+            self, player_id, now_ms,
+        );
         let _ = expire_player_fury_states(self, player_id, now_ms, runtime);
         let weak_ended = finish_player_weak_outside(self, player_id, runtime);
         let god_bless_ended = finish_player_god_bless(self, player_id, now_ms, runtime);
@@ -29088,27 +29178,27 @@ impl CGame {
         );
         let periodic_state_ids = self
             .find_player(player_id)
-            .map(CPlayer::periodic_attack_state_ids)
+            .map(CPlayer::periodic_attack_states)
             .unwrap_or_default();
         let mut periodic_attacks_updated = 0usize;
-        for state_id in periodic_state_ids {
+        for (key, state_id) in periodic_state_ids {
             let updated = match state_id {
                 POISON_ARROW_SKILL_ID => {
-                    update_player_poison_arrow_state(self, player_id, runtime)
+                    update_player_poison_arrow_state(self, player_id, key, runtime)
                 }
                 SPIDER_POISON_SKILL_ID => {
-                    update_player_spider_poison_state(self, player_id, runtime)
+                    update_player_spider_poison_state(self, player_id, key, runtime)
                 }
                 SPRITE_BURN_SKILL_ID => {
-                    update_player_sprite_burn_state(self, player_id, runtime)
+                    update_player_sprite_burn_state(self, player_id, key, runtime)
                 }
-                BLOOD_LOSS_SKILL_ID => update_player_blood_loss_state(self, player_id, runtime),
+                BLOOD_LOSS_SKILL_ID => update_player_blood_loss_state(self, player_id, key, runtime),
                 crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
-                    update_player_leaf_cut_state(self, player_id, runtime)
+                    update_player_leaf_cut_state(self, player_id, key, runtime)
                 }
-                LEAF_CUT_2_STATE_ID => update_player_leaf_cut_2_state(self, player_id, runtime),
-                LEAF_CUT_3_STATE_ID => update_player_leaf_cut_3_state(self, player_id, runtime),
-                crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => update_player_kerosene_state(self, player_id, runtime),
+                LEAF_CUT_2_STATE_ID => update_player_leaf_cut_2_state(self, player_id, key, runtime),
+                LEAF_CUT_3_STATE_ID => update_player_leaf_cut_3_state(self, player_id, key, runtime),
+                crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => update_player_kerosene_state(self, player_id, key, runtime),
                 _ => false,
             };
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
@@ -29252,7 +29342,7 @@ impl CGame {
     pub(crate) fn change_body_after_region_transition(&mut self, player_id: i32) {
         let state_ids = self
             .find_player_mut(player_id)
-            .map(CPlayer::change_body_region_transition_end_ids)
+            .map(CPlayer::change_body_region_transition_end_keys)
             .unwrap_or_default();
         self.end_change_body_states(player_id, state_ids, Some(b"GS1146"));
     }
@@ -29260,7 +29350,7 @@ impl CGame {
     pub(crate) fn change_body_after_player_lost(&mut self, player_id: i32) -> usize {
         let state_ids = self
             .find_player_mut(player_id)
-            .map(CPlayer::change_body_player_lost_end_ids)
+            .map(CPlayer::change_body_player_lost_end_keys)
             .unwrap_or_default();
         let ended = state_ids.len();
         self.end_change_body_states(player_id, state_ids, None);
@@ -29270,7 +29360,7 @@ impl CGame {
     fn change_body_after_player_death(&mut self, player_id: i32) {
         let state_ids = self
             .find_player(player_id)
-            .map(CPlayer::change_body_death_end_ids)
+            .map(CPlayer::change_body_death_end_keys)
             .unwrap_or_default();
         self.end_change_body_states(player_id, state_ids, None);
     }
@@ -30775,7 +30865,7 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_change_body_states(login_tick_ms);
-        let loaded_ride_state = self
+        let loaded_ride_states = self
             .players
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
@@ -30940,7 +31030,7 @@ impl CGame {
             .players
             .get(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
-            .energy_holding_state();
+            .move_shape().energy_holding_states().copied().collect::<Vec<_>>();
         self.players
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
@@ -30982,7 +31072,7 @@ impl CGame {
         for state in loaded_script_move_states {
             let _ = self.send_script_move_state_visual(expected_player_id, state, true);
         }
-        if let Some(state) = loaded_tian_shen_xia_fan_state {
+        for state in loaded_tian_shen_xia_fan_state {
             send_tian_shen_xia_fan_state_visual(
                 self,
                 expected_player_id,
@@ -30991,59 +31081,59 @@ impl CGame {
                 || login_tick_ms,
             );
         }
-        if let Some(state) = loaded_wangsheng_state {
+        for state in loaded_wangsheng_state {
             send_wangsheng_state_visual(self, expected_player_id, state, true, || login_tick_ms);
         }
         for state in &loaded_change_body_states {
             self.send_change_body_visual(expected_player_id, state, true);
         }
-        if let Some(state) = &loaded_ride_state {
+        for state in &loaded_ride_states {
             self.send_ride_visual(expected_player_id, state, true);
         }
-        if let Some(state) = loaded_leaf_cut_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_leaf_cut_state_visual(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_leaf_cut_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_leaf_cut_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_leaf_cut_2_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_leaf_cut_2_state_visual(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_leaf_cut_2_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_leaf_cut_2_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_leaf_cut_3_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_leaf_cut_3_state_visual(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_leaf_cut_3_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_leaf_cut_3_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
         if let Some(player) = self.find_player(expected_player_id)
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
@@ -31053,260 +31143,262 @@ impl CGame {
                 send_strike_state_visual(self, region_id, identity, x, y, state, true, login_tick_ms);
             }
         }
-        if let Some(state) = loaded_poison_fog_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
-        if let Some(state) = loaded_kerosene_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        { crate::gameserver::appserver::skills::kerosenestate::send_kerosene_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
-        if let Some(state) = loaded_blind_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_blind_state_visual(
-                self,
-                region_id,
-                ShapeIdentity {
-                    object_type: PLAYER_TYPE,
-                    id: expected_player_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                x,
-                y,
-                state,
-                true,
-                || context.now_milliseconds(),
-            );
+        for state in loaded_poison_fog_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
         }
-        if let Some(state) = loaded_seal_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_seal_state_visual(
-                self,
-                region_id,
-                ShapeIdentity {
-                    object_type: PLAYER_TYPE,
-                    id: expected_player_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                x,
-                y,
-                state,
-                true,
-                || context.now_milliseconds(),
-            );
+        for state in loaded_kerosene_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { crate::gameserver::appserver::skills::kerosenestate::send_kerosene_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
         }
-        if let Some(state) = loaded_boa_lock_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_boa_lock_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                || login_tick_ms,
-            );
+        for state in loaded_blind_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_blind_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: expected_player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    x,
+                    y,
+                    state,
+                    true,
+                    || context.now_milliseconds(),
+                );
+            }
         }
-        if let Some(state) = loaded_rush_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_rush_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                || login_tick_ms,
-            );
+        for state in loaded_seal_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_seal_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: expected_player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    x,
+                    y,
+                    state,
+                    true,
+                    || context.now_milliseconds(),
+                );
+            }
         }
-        if let Some(state) = loaded_rush_2_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_rush_2_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_boa_lock_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_boa_lock_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    || login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_pillar_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_pillar_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_rush_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_rush_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    || login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_rage_break_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_rage_break_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_rush_2_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_rush_2_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_knock_out_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_knock_out_state_visual(
-                self,
-                region_id,
-                ShapeIdentity {
-                    object_type: PLAYER_TYPE,
-                    id: expected_player_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                x,
-                y,
-                state,
-                true,
-                || context.now_milliseconds(),
-            );
+        for state in loaded_pillar_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_pillar_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_spider_web_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_spider_web_state_visual(
-                self,
-                region_id,
-                ShapeIdentity {
-                    object_type: PLAYER_TYPE,
-                    id: expected_player_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                x,
-                y,
-                state,
-                true,
-                || context.now_milliseconds(),
-            );
+        for state in loaded_rage_break_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_rage_break_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_god_bless_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_god_bless_state_visual(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                x,
-                y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_knock_out_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_knock_out_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: expected_player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    x,
+                    y,
+                    state,
+                    true,
+                    || context.now_milliseconds(),
+                );
+            }
         }
-        if let Some(state) = loaded_weak_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_weak_state_visual(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                x,
-                y,
-                state,
-                true,
-            );
+        for state in loaded_spider_web_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_spider_web_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: expected_player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    x,
+                    y,
+                    state,
+                    true,
+                    || context.now_milliseconds(),
+                );
+            }
         }
-        if let Some(state) = loaded_roar_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_roar_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                || login_tick_ms,
-            );
+        for state in loaded_god_bless_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_god_bless_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_soul_collect_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_soul_collect_state_visual(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                x,
-                y,
-                state,
-                true,
-            );
+        for state in loaded_weak_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_weak_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                    x,
+                    y,
+                    state,
+                    true,
+                );
+            }
         }
-        if let Some(state) = loaded_sprite_burn_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_sprite_burn_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms);
+        for state in loaded_roar_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_roar_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    || login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_spider_poison_state && let Some(player) = self.find_player(expected_player_id) && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { send_spider_poison_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms); }
-        if let Some(state) = loaded_daub_poison_state { send_daub_poison_state_visual(self, expected_player_id, state, true, || login_tick_ms); }
-        if let Some(state) = loaded_boss_blue_quake_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_boss_blue_quake_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                || login_tick_ms,
-            );
+        for state in loaded_soul_collect_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_soul_collect_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                    x,
+                    y,
+                    state,
+                    true,
+                );
+            }
         }
-        if let Some(state) = loaded_knight_cut_state
-            && let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            send_knight_cut_state_visual(
-                self,
-                region_id,
-                player.shape().identity(),
-                x,
-                y,
-                state,
-                true,
-                || login_tick_ms,
-            );
+        for state in loaded_sprite_burn_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_sprite_burn_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms);
+            }
+        }
+        for state in loaded_spider_poison_state {
+            if let Some(player) = self.find_player(expected_player_id) && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { send_spider_poison_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms); }
+        }
+        for state in loaded_daub_poison_state { send_daub_poison_state_visual(self, expected_player_id, state, true, || login_tick_ms); }
+        for state in loaded_boss_blue_quake_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_boss_blue_quake_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    || login_tick_ms,
+                );
+            }
+        }
+        for state in loaded_knight_cut_state {
+            if let Some(player) = self.find_player(expected_player_id)
+                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                send_knight_cut_state_visual(
+                    self,
+                    region_id,
+                    player.shape().identity(),
+                    x,
+                    y,
+                    state,
+                    true,
+                    || login_tick_ms,
+                );
+            }
         }
         for state in loaded_cure_states {
             send_cure_state_visual(self, expected_player_id, state, true);
@@ -31355,7 +31447,7 @@ impl CGame {
                 );
             }
         }
-        if let Some(state) = loaded_persistent_agility {
+        for state in loaded_persistent_agility {
             crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
                 self,
                 expected_player_id,
@@ -31364,7 +31456,7 @@ impl CGame {
                 0,
             );
         }
-        if let Some(state) = loaded_agility_2 {
+        for state in loaded_agility_2 {
             crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
                 self,
                 expected_player_id,
@@ -31373,73 +31465,73 @@ impl CGame {
                 state.client_time(|| context.now_milliseconds()),
             );
         }
-        if let Some(state) = loaded_blood_loss_state
-            && let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                Some((
-                    player.shape().identity(),
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                ))
-            })
-        {
-            crate::gameserver::appserver::skills::bloodlossstate::send_blood_loss_state_visual(
-                self,
-                region_id,
-                identity,
-                tile_x,
-                tile_y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_blood_loss_state {
+            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
+                    Some((
+                        player.shape().identity(),
+                        player.shape().get_tile_x().ok()?,
+                        player.shape().get_tile_y().ok()?,
+                    ))
+                }) {
+                crate::gameserver::appserver::skills::bloodlossstate::send_blood_loss_state_visual(
+                    self,
+                    region_id,
+                    identity,
+                    tile_x,
+                    tile_y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_energy_holding_state
-            && let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                Some((
-                    player.shape().identity(),
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                ))
-            })
-        {
-            crate::gameserver::appserver::skills::energyholdingstate::send_energy_holding_state_visual(
-                self,
-                region_id,
-                identity,
-                tile_x,
-                tile_y,
-                state,
-                true,
-            );
+        for state in loaded_energy_holding_state {
+            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
+                    Some((
+                        player.shape().identity(),
+                        player.shape().get_tile_x().ok()?,
+                        player.shape().get_tile_y().ok()?,
+                    ))
+                }) {
+                crate::gameserver::appserver::skills::energyholdingstate::send_energy_holding_state_visual(
+                    self,
+                    region_id,
+                    identity,
+                    tile_x,
+                    tile_y,
+                    state,
+                    true,
+                );
+            }
         }
-        if let Some(state) = loaded_boss_blue_fury_state
-            && let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                Some((
-                    player.shape().identity(),
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                ))
-            })
-        {
-            crate::gameserver::appserver::skills::bossbluefurystate::send_boss_blue_fury_state_visual(
-                self,
-                region_id,
-                identity,
-                tile_x,
-                tile_y,
-                state,
-                true,
-                login_tick_ms,
-            );
+        for state in loaded_boss_blue_fury_state {
+            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
+                    Some((
+                        player.shape().identity(),
+                        player.shape().get_tile_x().ok()?,
+                        player.shape().get_tile_y().ok()?,
+                    ))
+                }) {
+                crate::gameserver::appserver::skills::bossbluefurystate::send_boss_blue_fury_state_visual(
+                    self,
+                    region_id,
+                    identity,
+                    tile_x,
+                    tile_y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
-        if let Some(state) = loaded_poison_arrow_state
-            && let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                Some((player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-            })
-        {
-            crate::gameserver::appserver::skills::poisonarrowstate::send_poison_arrow_state_visual(
-                self, region_id, identity, tile_x, tile_y, state, true, login_tick_ms,
-            );
+        for state in loaded_poison_arrow_state {
+            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
+                    Some((player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+                }) {
+                crate::gameserver::appserver::skills::poisonarrowstate::send_poison_arrow_state_visual(
+                    self, region_id, identity, tile_x, tile_y, state, true, login_tick_ms,
+                );
+            }
         }
         for state in loaded_defense_shields {
             match state {
@@ -47411,30 +47503,36 @@ impl CGame {
                 let _ = finish_monster_god_bless(self, region_id, monster_id, now_ms);
                 let _ = finish_monster_roar(self, region_id, monster_id, now_ms);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
-                    let _ = expire_monster_rush_state(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    let _ = expire_monster_rush_2_state(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
+                    for key in owner.base().find_monster_by_id(monster_id)
+                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate::RushState>())
+                        .unwrap_or_default()
+                    {
+                        let _ = expire_monster_rush_state(
+                            self, owner.base_mut(), monster_id, key, now_ms,
+                        );
+                    }
+                    for key in owner.base().find_monster_by_id(monster_id)
+                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::rushstate2::Rush2State>())
+                        .unwrap_or_default()
+                    {
+                        let _ = expire_monster_rush_2_state(
+                            self, owner.base_mut(), monster_id, key, now_ms,
+                        );
+                    }
                     let _ = expire_monster_blind_states(
                         self,
                         owner.base_mut(),
                         monster_id,
                         now_ms,
                     );
-                    let _ = expire_monster_boa_lock_state(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
+                    for key in owner.base().find_monster_by_id(monster_id)
+                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::boalockstate::BoaLockState>())
+                        .unwrap_or_default()
+                    {
+                        let _ = expire_monster_boa_lock_state(
+                            self, owner.base_mut(), monster_id, key, now_ms,
+                        );
+                    }
                     let _ = expire_monster_cure_state(self, owner.base_mut(), monster_id, now_ms);
                     let _ = expire_monster_fury_states(
                         self,
@@ -47454,24 +47552,27 @@ impl CGame {
                         monster_id,
                         now_ms,
                     );
-                    let _ = expire_monster_knight_cut_state(
-                        self,
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
-                    let expired_poison_fog = take_expired_monster_poison_fog_state(
-                        owner.base_mut(),
-                        monster_id,
-                        now_ms,
-                    );
+                    for key in owner.base().find_monster_by_id(monster_id)
+                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::knightcutstate::KnightCutState>())
+                        .unwrap_or_default()
+                    {
+                        let _ = expire_monster_knight_cut_state(
+                            self, owner.base_mut(), monster_id, key, now_ms,
+                        );
+                    }
+                    let poison_fog_keys = owner.base().find_monster_by_id(monster_id)
+                        .map(|monster| monster.move_shape().applied_state_keys::<crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState>())
+                        .unwrap_or_default();
+                    let expired_poison_fog: Vec<_> = poison_fog_keys.into_iter().filter_map(|key| {
+                        take_expired_monster_poison_fog_state(owner.base_mut(), monster_id, key, now_ms)
+                    }).collect();
                     let _ = expire_monster_promotion_state(
                         owner.base_mut(),
                         monster_id,
                         now_ms,
                     );
                     self.restore_region_owner(owner);
-                    if let Some(expired) = expired_poison_fog {
+                    for expired in expired_poison_fog {
                         expired.deliver(self, region_id, now_ms);
                     }
                 }
@@ -47492,15 +47593,16 @@ impl CGame {
                 let periodic_state_ids = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
-                    .map(|monster| monster.move_shape().periodic_attack_state_ids())
+                    .map(|monster| monster.move_shape().periodic_attack_states())
                     .unwrap_or_default();
-                for state_id in periodic_state_ids {
+                for (key, state_id) in periodic_state_ids {
                     match state_id {
                         POISON_ARROW_SKILL_ID => {
                             let _ = update_monster_poison_arrow_state(
                                 self,
                                 region_id,
                                 monster_id,
+                                key,
                                 runtime,
                             );
                         }
@@ -47509,6 +47611,7 @@ impl CGame {
                                 self,
                                 region_id,
                                 monster_id,
+                                key,
                                 runtime,
                             );
                         }
@@ -47517,6 +47620,7 @@ impl CGame {
                                 self,
                                 region_id,
                                 monster_id,
+                                key,
                                 runtime,
                             );
                         }
@@ -47525,20 +47629,21 @@ impl CGame {
                                 self,
                                 region_id,
                                 monster_id,
+                                key,
                                 runtime,
                             );
                         }
                         crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
-                            let _ = update_monster_leaf_cut_state(self, region_id, monster_id, runtime);
+                            let _ = update_monster_leaf_cut_state(self, region_id, monster_id, key, runtime);
                         }
                         LEAF_CUT_2_STATE_ID => {
-                            let _ = update_monster_leaf_cut_2_state(self, region_id, monster_id, runtime);
+                            let _ = update_monster_leaf_cut_2_state(self, region_id, monster_id, key, runtime);
                         }
                         LEAF_CUT_3_STATE_ID => {
-                            let _ = update_monster_leaf_cut_3_state(self, region_id, monster_id, runtime);
+                            let _ = update_monster_leaf_cut_3_state(self, region_id, monster_id, key, runtime);
                         }
                         crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => {
-                            let _ = update_monster_kerosene_state(self, region_id, monster_id, runtime);
+                            let _ = update_monster_kerosene_state(self, region_id, monster_id, key, runtime);
                         }
                         _ => {}
                     }
