@@ -149,7 +149,7 @@ applied_states! {
     AutomaticRestore(AutomaticRestoreState) => |state| state.state_id(),
     ConsumableRestore(ConsumableRestoreState) => |state| state.state_id(),
     Particular(ParticularState) => |state| state.state_id(),
-    Team(CTeamState) => |_state| TEAM_STATE_ID,
+    Team(CTeamState) => |state| state.state_id(),
     BattleFairyAttribute(BattleFairyAttributeState) => |state| state.skill_id(),
     TianShenXiaFan(TianShenXiaFanState) => |state| state.state_id(),
     Wangsheng(WangshengState) => |state| state.state_id(),

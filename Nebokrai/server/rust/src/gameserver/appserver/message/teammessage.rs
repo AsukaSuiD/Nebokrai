@@ -7,13 +7,15 @@
 //! отправка сообщений выполняются сразу в исходном порядке; подробности
 //! завершённых действий публикуются через `tracing`, а не возвращаются
 //! вызывающей стороне в накопительном отчёте.
+//! Включение набора вызывает owner Begin до append в общую арену: BFE03
+//! использует текущую team, а не постоянное число участников. Выключение
+//! завершает первый найденный экземпляр через общий virtual End.
 
 use crate::gameserver::appserver::session::csessionfactory::{
     TeamMemberSnapshot, TeamSessionSnapshot,
 };
-use crate::gameserver::appserver::teamstate::{
-    CTeamState, team_state_begin_message,
-};
+use crate::gameserver::appserver::states::state::end_move_shape_state;
+use crate::gameserver::appserver::teamstate::{CTeamState, begin_primary_team_state};
 use crate::gameserver::gameserver::game::{
     CGame, GameTeamChatResult, GameTeamJoinResult, colored_player_notice_message,
     game_tick_milliseconds,
@@ -540,7 +542,7 @@ pub(crate) fn dispatch_game_team_message(
             trace!(player_id, "Набор в группу уже выключен");
             return Some(Ok(()));
         };
-        let removed = game.end_move_shape_team_recruitment_state(region_id, holder, key);
+        let removed = end_move_shape_state(game, region_id, holder, key);
         let state_count = game
             .find_player(player_id)
             .map(|player| player.team_recruitment_state_count())
@@ -565,16 +567,13 @@ pub(crate) fn dispatch_game_team_message(
         return Some(Ok(()));
     }
 
-    let state = CTeamState::new(team_name, team_password);
-    let begun = team_state_begin_message(player_id, &state);
-    let delivery = game.send_player_shape_around(player_id, None, &begun);
-    game.find_player_mut(player_id)
-        .expect("team message player разрешён до state attach")
-        .attach_team_recruitment_state(state);
+    let key = begin_primary_team_state(
+        game, player_id, team_name, team_password, &mut game_tick_milliseconds,
+    );
     let state_count = game
         .find_player(player_id)
         .map(|player| player.team_recruitment_state_count())
         .unwrap_or_default();
-    trace!(player_id, ?delivery, state_count, "Набор в группу включён");
+    trace!(player_id, ?key, state_count, "Обработано включение набора в группу");
     Some(Ok(()))
 }

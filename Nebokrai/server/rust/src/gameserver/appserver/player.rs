@@ -4004,10 +4004,6 @@ impl CPlayer {
         self.move_shape.team_recruitment_states().count()
     }
 
-    pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
-        self.move_shape.attach_team_recruitment_state(state);
-    }
-
     pub(crate) fn first_team_recruitment_state(&self) -> Option<&CTeamState> {
         self.move_shape.team_recruitment_states().next()
     }

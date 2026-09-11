@@ -56,6 +56,9 @@
 //! цели → OnChangeStates → отдельный expiry clock. Смерть не читает часы;
 //! missing sufferer и MP non-player вызывают End. Локальный ключ не переносится
 //! в арену цели; End удаляет только найденный там исходный экземпляр.
+//! CTeamState обслуживает свой Begin/AI/End через общий каталог. Число
+//! участников для visual и client snapshot читает один живой session registry,
+//! где GetTeamatesAmount пропускает отсутствующие, но не ended plug-ы.
 //! Это не универсальная замена CState::End:
 //! базовый End лишь ставит флаг, а Clear отдельно владеет удалением остатка.
 //! Повторный Attack проверяет requested CSkill: IsEnded и prepared (+0x44),
@@ -986,9 +989,7 @@ use crate::gameserver::appserver::serverwarregion::{
     WarRegionClearContext, WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError,
     WarRegionOwnership,
 };
-use crate::gameserver::appserver::teamstate::{
-    CTeamState, team_state_update_message,
-};
+use crate::gameserver::appserver::teamstate::team_state_update_message;
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
     EquipmentComposeAuditLog, EquipmentComposeSourceSnapshot,
@@ -29171,67 +29172,6 @@ impl CGame {
         )
     }
 
-    pub(crate) fn update_move_shape_team_recruitment_state<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        region_id: i32,
-        identity: ShapeIdentity,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        runtime: &mut Runtime,
-    ) -> usize {
-        let sampled_at_ms = runtime.now_milliseconds();
-        let due = resolve_state_move_shape(self, region_id, identity)
-            .and_then(|shape| shape.applied_state::<CTeamState>(key))
-            .is_some_and(|state| state.check_due(sampled_at_ms));
-        if !due {
-            return 0;
-        }
-        let recorded_at_ms = runtime.now_milliseconds();
-        let Some(state) = resolve_state_move_shape_mut(self, region_id, identity)
-            .and_then(|shape| shape.applied_state_mut::<CTeamState>(key))
-        else {
-            return 0;
-        };
-        state.record_check(recorded_at_ms);
-        if identity.object_type == PLAYER_TYPE {
-            let Some(player) = self.find_player(identity.id) else {
-                return 0;
-            };
-            let team_id = player.team_id();
-            let team_leader_id = (team_id != 0)
-                .then(|| self.get_team_session_id(team_id as u32))
-                .and_then(|session_id| self.session_factory.query_team(session_id))
-                .map(|team| team.leader_id());
-            if !CTeamState::ends_for_team(identity.id, team_id, team_leader_id) {
-                return 0;
-            }
-        }
-        usize::from(self.end_move_shape_team_recruitment_state(region_id, identity, key))
-    }
-
-    pub(crate) fn end_move_shape_team_recruitment_state(
-        &mut self,
-        region_id: i32,
-        identity: ShapeIdentity,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-    ) -> bool {
-        if resolve_state_move_shape(self, region_id, identity)
-            .and_then(|shape| shape.applied_state::<CTeamState>(key)).is_none()
-        {
-            return false;
-        }
-        let mut message = CMessage::new(0x0b_fe04);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(crate::gameserver::appserver::teamstate::TEAM_STATE_ID);
-        let _ = self.send_move_shape_around(region_id, identity, &message);
-        let removed = resolve_state_move_shape_mut(self, region_id, identity)
-            .and_then(|shape| shape.remove_team_recruitment_state_key(key)).is_some();
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
-        }
-        removed
-    }
-
     /// Исполняет virtual `AI` одного достигнутого состояния `CMoveShape::AddState`.
     /// Общий обход владеет позицией, а End удаляет только переданный ключ.
     pub(crate) fn update_move_shape_script_move_state<Runtime: GameMainLoopRuntime>(
@@ -31236,9 +31176,11 @@ impl CGame {
     }
 
     pub(crate) fn script_team_member_count(&self, player_id: i32) -> i32 {
+        // Script 2302 (0x004B3299) возвращает DWORD размера GetPlugList,
+        // не число успешно разрешённых участников GetTeamatesAmount.
         self.script_team_session_id(player_id)
-            .and_then(|session_id| self.session_factory.team_member_count(session_id))
-            .map(|count| i32::try_from(count).unwrap_or(i32::MAX))
+            .and_then(|session_id| self.session_factory.query_session(session_id))
+            .map(|session| session.plug_ids_storage().len() as i32)
             .unwrap_or_default()
     }
 
@@ -31678,10 +31620,14 @@ impl CGame {
             {
                 return GameTeamJoinResult::SamePlayer;
             }
-            let Some(count) = self.session_factory.team_member_count(session_id) else {
+            // JoinTeam (0x0048BEF0) проверяет raw GetPlugList().size(),
+            // в отличие от GetTeamatesAmount у визуального состояния набора.
+            let Some(count) = self.session_factory.query_session(session_id)
+                .map(|session| session.plug_ids_storage().len())
+            else {
                 return GameTeamJoinResult::UnknownError;
             };
-            if count > 7 {
+            if count as i32 > 7 {
                 return GameTeamJoinResult::MaxMemberLimit;
             }
         }

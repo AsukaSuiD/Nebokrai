@@ -13,6 +13,8 @@
 //! `QuestTeamData/CompleteTeamData` заменены принадлежащей
 //! `CGame` очередью повторов: вход задаёт ID команды, стадия сеанса отправляет
 //! `0x60008`, а успешный `0x7FD08` снимает запрос.
+//! GetTeamatesAmount (0x00507590) обслуживает CSessionFactory: каждый ID
+//! списка учитывается при успешном QueryPlugByID, без ended/owner-фильтра.
 
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::session::cplug::CPlug;
@@ -241,20 +243,6 @@ impl CTeam {
 // RVA: 0x00107510
 // ADDRESS: 00507510
 // PROTOTYPE: void __thiscall SetAllocationScheme(ALLOCATION_SCHEME param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeam::GetTeamatesAmount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cteam.cpp:156
-// RVA: 0x00107590
-// ADDRESS: 00507590
-// PROTOTYPE: ulong __thiscall GetTeamatesAmount(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

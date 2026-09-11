@@ -37,6 +37,9 @@
 //! Session start timestamps берутся из текущего
 //! MainLoop sample; ненулевой lifetime команды завершается через terminal
 //! report, чтобы `CGame` сохранил derived World/client side effects.
+//! CTeam::GetTeamatesAmount (0x00507590) считает только разрешённые plug ID
+//! своего списка через QueryPlugByID (0x0047B6C0), не его сырую длину.
+//! Повторные ID учитываются повторно; ended/type/локальность не фильтруются.
 
 use std::collections::BTreeMap;
 
@@ -511,11 +514,11 @@ impl CSessionFactory {
     }
 
     pub(crate) fn team_member_count(&self, session_id: i32) -> Option<usize> {
-        self.teams
-            .contains_key(&session_id)
-            .then(|| self.sessions.get(&session_id))
-            .flatten()
-            .map(|session| session.plug_ids_storage().len())
+        self.query_team(session_id)?;
+        let session = self.query_session(session_id)?;
+        Some(session.plug_ids_storage().iter()
+            .filter(|plug_id| self.query_plug(**plug_id).is_some())
+            .count())
     }
 
     pub(crate) fn set_team_leader(&mut self, session_id: i32, player_id: i32) -> Option<i32> {

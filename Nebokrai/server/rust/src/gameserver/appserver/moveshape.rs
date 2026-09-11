@@ -258,7 +258,7 @@ use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
 use super::states::visualeffect::SkillVisualEffect;
-use super::teamstate::{CTeamState, TEAM_STATE_ID};
+use super::teamstate::CTeamState;
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
@@ -1769,30 +1769,6 @@ impl CMoveShape {
         self.state_entries.iter::<CTeamState>()
     }
 
-
-    pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-    }
-
-    pub(crate) fn remove_team_recruitment_state_key(
-        &mut self,
-        key: StateKey,
-    ) -> Option<CTeamState> {
-        let index = self.state_entries.keys::<CTeamState>().iter()
-            .position(|candidate| *candidate == key)?;
-        let offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .filter(|offset| read_i32(&self.ex_states, *offset) == Some(TEAM_STATE_ID))
-            .nth(index);
-        let state = self.state_entries.take::<CTeamState>(key)?;
-        if let Some(offset) = offset
-            && let Some(amount) = CTeamState::serialized_size(&self.ex_states, offset)
-        {
-            let _ = self.remove_serialized_state_record_at(offset, amount);
-        }
-        Some(state)
-    }
 
     pub(crate) fn automatic_restore_state(&self, key: StateKey) -> Option<AutomaticRestoreState> {
         self.applied_state::<AutomaticRestoreState>(key).copied()
