@@ -12,7 +12,7 @@
 //! End +0x1C наследует CBlindState, но OnAction +0x34→0x00601A70
 //! является ret 4: защитное действие само по себе паутину не снимает.
 //! Persisted-запись `ID + remaining time` декодируется, активируется при
-//! spatial login и удаляется вместе с canonical state. Vtable exact EXE
+//! StartAllStates после 8F801 и удаляется вместе с canonical state. Vtable exact EXE
 //! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0`,
 //! включая отдельное чтение clock для положительного остатка.
 
@@ -39,17 +39,12 @@ impl SpiderWebState {
         }
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != SPIDER_WEB_SKILL_ID {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(0, reader.read_u32()?))
-    }
-
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
+        Ok(Self::new(now_ms, reader.read_u32()?))
     }
 
     pub(crate) const fn skill_id(self) -> u32 {

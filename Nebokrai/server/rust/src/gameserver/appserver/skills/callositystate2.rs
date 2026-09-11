@@ -31,7 +31,7 @@ impl CallosityState2 {
     pub(crate) const fn blast_factor(self) -> u16 { self.blast_factor }
     pub(crate) const fn started_at_ms(self) -> u32 { self.started_at_ms }
     pub(crate) const fn time_to_keep(self) -> i32 { self.time_to_keep }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.time_to_keep as u32, now_milliseconds) as i32 }
     pub(crate) const fn additional_data(self) -> u32 { default_additional_data() }
 

@@ -13,7 +13,8 @@
 //! сохранённого объёма. CPlayer::RestoreHpMp (0x004455D0) сначала вызывает
 //! End всех четырёх типов вместе с Particular в общем порядке массива, затем
 //! добавляет четыре свежих. Begin(nullptr, holder) не читает часы и оставляет
-//! last_tick_ms=0. Peace-варианты сохраняют объём как биты
+//! last_tick_ms=0 у свежего constructor; загруженный экземпляр сохраняет
+//! собственный clock Unserialize 0x004F9D80. Peace-варианты сохраняют объём как биты
 //! `float`, fight-варианты — как исходный `DWORD`. Живой `AI` по-прежнему
 //! читает актуальный объём из свойств игрока.
 //! HP AI (0x004FA8E0/0x004FA4D0) сначала проверяет смерть, HP/max HP и
@@ -23,9 +24,22 @@
 //! Общий End 0x005EEBA0 только удаляет запись из живого sufferer без visual;
 //! отсутствие sufferer не позволяет удалить чужую запись. В обоих случаях
 //! новый общий dispatch передаёт один ключ существующей арены.
+//! restart_automatic_restore_state переносит object Begin(NULL, holder)
+//! четырёх owners (0x004FA860/0x004FA450/0x004FA0B0/0x004F9D00):
+//! без guards, base Begin → visual SetRun(1), без Update/пакета и часов.
+//! CPlayer::OnEnterRegion (0x0045A2C6/0x0045A376) до RestoreHpMp временно
+//! создаёт только HP/MP peace: общий lResumeTimer и WORD recovery * 0.001_f32.
+//! Точный x87 fmul читает float 0x3A83126F, затем fstp округляет аргумент
+//! конструктора до float; его биты становятся persisted_volume без clock.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, resolve_state_move_shape,
+};
+use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) const AUTOMATIC_RESTORE_STATE_BYTES: usize = 12;
 pub(crate) const AUTOMATIC_RESTORE_HP_PEACE_STATE_ID: u32 = 0x186a2;
@@ -63,6 +77,24 @@ pub(crate) struct AutomaticRestoreState {
     frequency_ms: u32,
     persisted_volume: u32,
     last_tick_ms: u32,
+}
+
+pub(crate) fn restart_automatic_restore_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<AutomaticRestoreState>(key)).is_none()
+    {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) { return false }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    true
 }
 
 impl AutomaticRestoreState {
@@ -104,7 +136,25 @@ impl AutomaticRestoreState {
         ]
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Option<Self> {
+    pub(crate) fn region_entry_peace(
+        resume_timer_ms: u32,
+        properties: PlayerCombatProperties,
+    ) -> [Self; 2] {
+        [
+            Self::new(
+                AutomaticRestoreKind::HealthPeace,
+                resume_timer_ms,
+                (f32::from(properties.hp_recovery) * 0.001_f32).to_bits(),
+            ),
+            Self::new(
+                AutomaticRestoreKind::ManaPeace,
+                resume_timer_ms,
+                (f32::from(properties.mp_recovery) * 0.001_f32).to_bits(),
+            ),
+        ]
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Option<Self> {
         let mut reader = LegacyReader::at(payload, offset).ok()?;
         let state_id = reader.read_u32().ok()?;
         let kind = match state_id {
@@ -114,11 +164,12 @@ impl AutomaticRestoreState {
             AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID => AutomaticRestoreKind::ManaFight,
             _ => return None,
         };
-        Some(Self::new(
+        Some(Self {
             kind,
-            reader.read_u32().ok()?,
-            reader.read_u32().ok()?,
-        ))
+            frequency_ms: reader.read_u32().ok()?,
+            persisted_volume: reader.read_u32().ok()?,
+            last_tick_ms: now_ms,
+        })
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; AUTOMATIC_RESTORE_STATE_BYTES] {
@@ -132,10 +183,6 @@ impl AutomaticRestoreState {
             .expect("размер автоматического состояния восстановления фиксирован")
     }
 
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.last_tick_ms = now_ms;
-        self
-    }
 
     pub(crate) const fn state_id(self) -> u32 {
         match self.kind {

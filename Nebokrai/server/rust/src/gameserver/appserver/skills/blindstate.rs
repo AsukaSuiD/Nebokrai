@@ -27,6 +27,16 @@
 //! живые getters. Для остальных форм неперенесённый override не подменяется
 //! придуманным callback. Region-adapter Defense использует того же владельца
 //! payload и общий tail End, не копируя временную владеющую форму.
+//! Object Begin Blind/KnockOut/SpiderWeb/Seal/Strike по адресам
+//! 0x006075E0/0x005F5230/0x005EAA00/0x005FFAD0/0x00606AA0:
+//! null sufferer даёт отказ до базы. Далее base Begin→новый visual(0xC)→
+//! BeginVisualEffect(1)→Update(state,0)→SetMoveable(0)→SetFightable(0)→1.
+//! Begin(NULL,holder) не читает clock и сохраняет timestamp Unserialize;
+//! сама Unserialize 0x005EAAC0 читает clock до DWORD оставшегося срока.
+//! Clock визуального GetRemainedTime остаётся отдельным от этих операций.
+//! OnChangeRegion +0x2C (0x005E3B30) меняет sufferer-region в общей базе.
+//! GetRemainedTime0x005F2CD0 и Serialize0x005F51E0 исполняются общими
+//! timed getter/ordered codec: ID, затем отдельные clock-read остатка срока.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -34,64 +44,6 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.h
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp
-
-
-// ============================================================================
-// FUNCTION: CBlindState::OnChangeRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp:112
-// RVA: 0x001E3B30
-// ADDRESS: 005e3b30
-// PROTOTYPE: void __thiscall OnChangeRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: CBlindState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp:130
-// RVA: 0x001EAAC0
-// ADDRESS: 005eaac0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBlindState::GetRemainedTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp:37
-// RVA: 0x001F2CD0
-// ADDRESS: 005f2cd0
-// PROTOTYPE: ulong __thiscall GetRemainedTime(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBlindState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blindstate.cpp:120
-// RVA: 0x001F51E0
-// ADDRESS: 005f51e0
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBlindState::OnAction
@@ -203,7 +155,8 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::{StateData, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+    begin_applied_state_visual, begin_base_applied_state, resolve_state_move_shape,
+    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_visual_base,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -225,7 +178,7 @@ impl BlindState {
         }
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != BLIND_STATE_ID {
             return Err(LegacyReadBlock {
@@ -234,16 +187,11 @@ impl BlindState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self::new(0, reader.read_u32()?))
+        Ok(Self::new(now_ms, reader.read_u32()?))
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
         BLIND_STATE_ID
-    }
-
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
@@ -280,6 +228,52 @@ pub(crate) fn send_blind_state_visual(
         message.add_ulong(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_blind_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if !resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_data(key)).is_some_and(StateData::is_blind)
+    {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key)
+        || !begin_applied_state_visual(game, region_id, holder, key, 1)
+    {
+        return false;
+    }
+    let snapshot = resolve_state_move_shape(game, region_id, holder).and_then(|shape| {
+        let state = shape.applied_state_data(key)?;
+        let remaining = match state {
+            StateData::Blind(state) => state.client_state_time(&mut *now),
+            StateData::KnockOut(state) => state.client_time(&mut *now) as u32,
+            StateData::SpiderWeb(state) => state.client_time(&mut *now) as u32,
+            StateData::Seal(state) => state.client_time(&mut *now) as u32,
+            StateData::Strike(state) => state.client_time(&mut *now),
+            _ => return None,
+        };
+        Some((state.state_id(), remaining))
+    });
+    let Some((state_id, remaining)) = snapshot else { return false };
+    let mut message = CMessage::new(0x000b_fe03);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(state_id as i32);
+    message.add_ulong(remaining);
+    message.add_ulong(0);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_moveable(false);
+        shape.set_fightable(false);
+    }
+    true
 }
 
 pub(crate) fn update_blind_state(

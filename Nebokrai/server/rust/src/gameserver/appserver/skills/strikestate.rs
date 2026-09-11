@@ -6,8 +6,8 @@
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/strikestate.cpp`. Достигнутый путь загрузки сохраняет
 //! exact-пару `CBlindState::Serialize/Unserialize` `0x005F51E0/0x005EAAC0`:
-//! идентификатор и остаток срока занимают восемь байт. Player-login повторно
-//! начинает срок, восстанавливает вложенные запреты движения/боя и публикует
+//! идентификатор и остаток срока занимают восемь байт. Unserialize читает clock;
+//! общий restart_blind_state сохраняет этот срок, восстанавливает запреты и публикует
 //! begin-визуал, а logout сохраняет отдельный остаток для каждого экземпляра
 //! состояния. AI и End общие с CBlindState, но OnAction +0x34→0x00601A70
 //! является ret 4 и не снимает Strike при Defense. Создание остаётся RAW до
@@ -29,7 +29,7 @@ pub(crate) struct StrikeState {
 }
 
 impl StrikeState {
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != STRIKE_STATE_ID {
             return Err(LegacyReadBlock {
@@ -38,13 +38,12 @@ impl StrikeState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self { started_at_ms: 0, keep_time_ms: reader.read_u32()? })
+        Ok(Self { started_at_ms: now_ms, keep_time_ms: reader.read_u32()? })
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
         STRIKE_STATE_ID
     }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) }
 }

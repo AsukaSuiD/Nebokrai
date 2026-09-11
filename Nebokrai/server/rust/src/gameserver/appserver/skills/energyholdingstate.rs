@@ -13,9 +13,15 @@
 //! Vtable 0x0065FDA4: End +0x1C→0x005E1D20 публикует visual phase2,
 //! пишет IsEnded=1, затем GetSufferer и RemoveState. AI при этом пустой;
 //! это не отменяет прямой End. Payload остаётся живым до доставки visual.
+//! Object Begin +0x08→0x005EC610: без null-guards вызывает base Begin,
+//! создаёт visual(0xC) и BeginVisualEffect(1), затем возвращает 1. Update
+//! не вызывается: restart не публикует пакет и не меняет число зарядов.
 
 use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::state::{
+    begin_applied_state_visual, begin_base_applied_state,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
+};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
@@ -23,6 +29,23 @@ use crate::nets::netserver::message::CMessage;
 
 pub(crate) const ENERGY_HOLDING_STATE_ID: u32 = 0x89;
 pub(crate) const ENERGY_HOLDING_STATE_BYTES: usize = 12;
+
+pub(crate) fn restart_energy_holding_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<EnergyHoldingState>(key)).is_none()
+    {
+        return false;
+    }
+    begin_base_applied_state(game, region_id, holder, key)
+        && begin_applied_state_visual(game, region_id, holder, key, 1)
+}
 
 pub(crate) fn end_energy_holding_state(
     game: &mut CGame,

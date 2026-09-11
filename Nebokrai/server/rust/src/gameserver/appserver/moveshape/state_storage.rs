@@ -24,8 +24,13 @@
 //! в текущего держателя. Это существенно для базового End (0x005DBCE0).
 //! Отметка ended фиксирует известный результат End; None не подменяет
 //! ещё не проведённые через общую базу constructor/Begin произвольным bool.
+//! Cache-span загруженной записи принадлежит тому же поколенческому ключу.
+//! Это технические границы Serialize-cache, не native input-offset:
+//! Tian читает 10 байт, но пишет 12. Удаление/вставка сдвигает общие spans,
+//! не разрешая отдельному typed payload перезаписать неизвестный raw-tail.
 
 use super::*;
+use crate::gameserver::appserver::states::visualeffect::CVisualEffect;
 
 new_key_type! {
     pub(crate) struct StateKey;
@@ -143,22 +148,24 @@ applied_states! {
     Ride(RideState) => |_state| RIDE_STATE_ID,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct AppliedStateEntries {
     instances: SlotMap<StateKey, AppliedStateInstance>,
     order: Vec<Option<StateKey>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 struct AppliedStateInstance {
     payload: Option<StateData>,
     from_save: bool,
     ended: Option<bool>,
+    visual: Option<CVisualEffect>,
+    serialized_span: Option<(usize, usize)>,
 }
 
 impl AppliedStateInstance {
     fn new(payload: StateData, from_save: bool) -> Self {
-        Self { payload: Some(payload), from_save, ended: None }
+        Self { payload: Some(payload), from_save, ended: None, visual: None, serialized_span: None }
     }
 }
 
@@ -220,8 +227,43 @@ impl AppliedStateEntries {
         self.insert_data(state.into_data(), false)
     }
 
-    pub(crate) fn append_loaded_data(&mut self, state: StateData) -> StateKey {
-        self.insert_data(state, true)
+    pub(crate) fn append_loaded_data(&mut self, state: StateData, span: (usize, usize)) -> StateKey {
+        let key = self.insert_data(state, true);
+        self.set_serialized_span(key, span);
+        key
+    }
+
+    pub(crate) fn serialized_span(&self, key: StateKey) -> Option<(usize, usize)> {
+        self.instances.get(key)?.serialized_span
+    }
+
+    pub(crate) fn set_serialized_span(&mut self, key: StateKey, span: (usize, usize)) {
+        if let Some(instance) = self.instances.get_mut(key) {
+            instance.serialized_span = Some(span);
+        }
+    }
+
+    pub(crate) fn shift_serialized_spans_after_remove(&mut self, offset: usize, amount: usize) {
+        let Some(end) = offset.checked_add(amount) else { return };
+        for instance in self.instances.values_mut() {
+            let Some((start, size)) = instance.serialized_span else { continue };
+            if start >= end {
+                instance.serialized_span = Some((start - amount, size));
+            } else if start.checked_add(size).is_none_or(|state_end| state_end > offset) {
+                instance.serialized_span = None;
+            }
+        }
+    }
+
+    pub(crate) fn shift_serialized_spans_for_insert(&mut self, offset: usize, amount: usize) {
+        for instance in self.instances.values_mut() {
+            let Some((start, size)) = instance.serialized_span else { continue };
+            if start >= offset {
+                instance.serialized_span = start.checked_add(amount).map(|start| (start, size));
+            } else if start.checked_add(size).is_none_or(|end| end > offset) {
+                instance.serialized_span = None;
+            }
+        }
     }
 
     fn insert_data(&mut self, state: StateData, from_save: bool) -> StateKey {
@@ -245,6 +287,26 @@ impl AppliedStateEntries {
     pub(crate) fn mark_ended(&mut self, key: StateKey) -> bool {
         let Some(instance) = self.instances.get_mut(key) else { return false };
         instance.ended = Some(true);
+        true
+    }
+
+    pub(crate) fn mark_begun(&mut self, key: StateKey) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        instance.ended = Some(false);
+        true
+    }
+
+    pub(crate) fn begin_visual(&mut self, key: StateKey, loop_value: i32) -> bool {
+        let Some(instance) = self.instances.get_mut(key) else { return false };
+        let mut visual = CVisualEffect::new();
+        visual.begin_visual_effect(loop_value);
+        instance.visual = Some(visual);
+        true
+    }
+
+    pub(crate) fn update_visual_base(&mut self, key: StateKey) -> bool {
+        let Some(visual) = self.instances.get_mut(key).and_then(|entry| entry.visual.as_mut()) else { return false };
+        visual.update_visual_effect();
         true
     }
 

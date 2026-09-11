@@ -10,6 +10,13 @@
 //! End +0x1C→0x005FD420 публикует visual phase1, затем GetSufferer и
 //! RemoveState. Он не вызывает базовый End и не пишет IsEnded.
 //! Удаляется достигнутый ключ; UpdateProperty следует за RemoveState.
+//! Object Begin Agility/Natural/Rapture 0x005F4370/0x005F39D0/0x005F3EE0:
+//! только null sufferer даёт отказ; base Begin, новый visual(0xC),
+//! BeginVisualEffect(1), Update(state,0), затем return 1. При null user
+//! timestamp сохраняется, payload не сбрасывается; Begin-пакет содержит 0,0.
+//! OnChangeRegion +0x2C→0x005D9BA0 записывает только user-region в общей
+//! lifecycle-базе. PDB alias SetSourceContainerExtendID — то же ICF-тело setter-а,
+//! но не отдельный владелец или дополнительное игровое действие.
 
 use super::agility::AGILITY_SKILL_ID;
 use super::natural::NATURAL_SKILL_ID;
@@ -19,7 +26,10 @@ use super::rapturestate::RaptureState;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::state::{
+    begin_applied_state_visual, begin_base_applied_state, resolve_state_move_shape,
+    resolve_state_move_shape_mut, update_applied_state_visual_base,
+};
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -150,6 +160,34 @@ pub(crate) fn send_agility_family_state_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
+pub(crate) fn restart_persistent_agility_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(skill_id) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PersistentAgilityFamilyState>(key))
+        .map(|state| state.skill_id())
+    else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key)
+        || !begin_applied_state_visual(game, region_id, holder, key, 1)
+    {
+        return false;
+    }
+    let mut message = CMessage::new(AGILITY_STATE_BEGIN_MESSAGE);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(skill_id as i32);
+    message.add_long(0);
+    message.add_long(0);
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    true
+}
+
 pub(crate) fn end_persistent_agility_state(
     game: &mut CGame,
     region_id: i32,
@@ -175,28 +213,13 @@ pub(crate) fn end_persistent_agility_state(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранены посторонний недостигнутый helper и конструктор по умолчанию.
+// Сохранён конструктор по умолчанию; OnChangeRegion находится в общей lifecycle-базе.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp
-
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetSourceContainerExtendID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:148
-// RVA: 0x001D9BA0
-// ADDRESS: 005d9ba0
-// PROTOTYPE: void __thiscall SetSourceContainerExtendID(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // ============================================================================
 // FUNCTION: CAgilityState::CAgilityState

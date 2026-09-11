@@ -27,6 +27,13 @@
 //! AddCure с вложенным End прежнего Cure до своего visual и удаления;
 //! Machine/Mana выполняют visual→Remove, Promotion не создаёт End-пакет.
 //! Player-wrapper и generic AI входят в один End с опубликованным holder.
+//! restart_defense_shield_state переносит object Begin(NULL, holder):
+//! Life 0x005E2CE0, Mana 0x005F3400, Machine 0x005F1F50,
+//! Promotion 0x005F2F00. Guard требует только sufferer, затем base Begin
+//! без сброса времени → создание visual → Begin-пакет → base visual tail.
+//! У Promotion loop=0 и base tail завершает visual, у остальных loop=1.
+//! Timestamp каждого payload задаётся отдельным clock его Unserialize;
+//! Begin читает часы лишь через клиентский остаток для пакета.
 
 use super::lifeshieldstate::{finish_life_shield_state_for_holder, LifeShieldState};
 use super::machineshieldstate::MachineShieldState;
@@ -111,6 +118,44 @@ impl DefenseShieldState {
             Self::Promotion(state) => state.expired(now_ms),
         }
     }
+}
+
+pub(crate) fn restart_defense_shield_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.defense_shield(key)).copied()
+    else { return false };
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    let loop_value = if matches!(state, DefenseShieldState::Promotion(_)) { 0 } else { 1 };
+    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, loop_value,
+    ) {
+        let mut message = CMessage::new(super::manashieldstate::MANA_SHIELD_STATE_BEGIN_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        let (time, life) = match state {
+            DefenseShieldState::Life(state) => (state.client_time(&mut *now), state.life()),
+            DefenseShieldState::Machine(state) => (state.client_time(&mut *now), state.life()),
+            DefenseShieldState::Mana(state) => (state.client_time(&mut *now), state.life()),
+            DefenseShieldState::Promotion(state) => (state.client_time(&mut *now), 0),
+        };
+        message.add_long(time);
+        message.add_long(life);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
+            game, region_id, holder, key,
+        );
+    }
+    true
 }
 
 pub(crate) fn update_defense_shield(

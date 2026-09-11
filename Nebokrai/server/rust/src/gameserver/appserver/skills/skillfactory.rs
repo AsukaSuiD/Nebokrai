@@ -45,6 +45,16 @@
 //! У Po/Yu и transfer-owner-ов End(bool) в `+0x94` не подменяет End(int)
 //! в `+0x68`. Удерживаемый HeartLessArrow при ненулевом End имеет отдельный
 //! ранний release-переход; эта карта не заменяет проверку его concrete-флагов.
+//! OnChangeRegion (+0x2C) всех concrete CSkill-derived vtable не присваивает
+//! регионы базы. Большинство используют ret4 0x00601A70; overrides по
+//! 0x0056A370/0x0052AAC0 вызывают End(0)/End(1), а 0x0053CF10 проверяет
+//! IsEnded и вызывает End(0) только при false. Эта политика хранится здесь
+//! вместе с тем же owner, не в отдельной таблице идентификаторов.
+//! Клиентские virtual getters +0x70/+0x74/+0x78: minimum range обычно 1;
+//! ChuckStone/SkeletonArchery 0x005387A0 читают usage5004 и принимают только
+//! signed-положительный результат, иначе 1. Общие maximum range0x004D81C0
+//! и MP cost0x004D81F0 читают свежие properties usage5003/2; отсутствующая
+//! запись даёт соответственно 1/0. Это getters, не сырой triplet usages.
 //! Attack/State AfterUse (`+0x8C`) и Summon AfterUse (`+0x90`) вызываются
 //! только при ненулевом End перед общим сбросом. `53CF30` изнашивает оружие
 //! разрешённого CPlayer; пять пустых overrides используют `601A70`.
@@ -165,8 +175,20 @@ pub(crate) enum SkillAfterUse {
     ItemGroup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillRegionChange {
+    None,
+    EndZero,
+    EndOne,
+    EndZeroUnlessEnded,
+}
+
 macro_rules! skill_owners {
-    ($($(#[$attribute:meta])* $owner:ident: $category:ident, $end_policy:ident, $after_use:ident => $id:pat),+ $(,)?) => {
+    (@region_policy) => { SkillRegionChange::None };
+    (@region_policy $policy:ident) => { SkillRegionChange::$policy };
+    (@minimum_range_usage) => { None };
+    (@minimum_range_usage $usage:literal) => { Some($usage) };
+    ($($(#[$attribute:meta])* $owner:ident: $category:ident, $end_policy:ident, $after_use:ident $(, $region_policy:ident $(, $minimum_range_usage:literal)?)? => $id:pat),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub(crate) enum SkillOwner {
             $($(#[$attribute])* $owner,)+
@@ -190,6 +212,18 @@ macro_rules! skill_owners {
                     $(Self::$owner => SkillAfterUse::$after_use,)+
                 }
             }
+
+            pub(crate) const fn region_change(self) -> SkillRegionChange {
+                match self {
+                    $(Self::$owner => skill_owners!(@region_policy $($region_policy)?),)+
+                }
+            }
+
+            pub(crate) const fn minimum_range_usage(self) -> Option<u32> {
+                match self {
+                    $(Self::$owner => skill_owners!(@minimum_range_usage $($($minimum_range_usage)?)?),)+
+                }
+            }
         }
 
         impl CSkillFactory {
@@ -206,12 +240,12 @@ macro_rules! skill_owners {
 // Имена классов сохранены по PDB. Это единственный каталог фабричного выбора:
 // категория принадлежит конструктору экземпляра, а не записи runtime-свойств.
 skill_owners! {
-    CBaseAttack: Attack, COMMON, Weapon => 0x001,
+    CBaseAttack: Attack, COMMON, Weapon, EndZero => 0x001,
     CArchery: Summon, USER, Weapon => 0x002,
     CBaseMagic: Summon, USER, Weapon => 0x003,
     CFightDefense: Defense, COMMON, None => 0x00a,
     CMosou: Attack, USER, Weapon => 0x065,
-    CGhostCut: Attack, USER, Weapon => 0x066,
+    CGhostCut: Attack, USER, Weapon, EndZero => 0x066,
     CKnightCut: State, USER, Weapon => 0x067,
     CArmyBreak: Attack, USER, Weapon => 0x068,
     CFlash: Attack, USER, Weapon => 0x069,
@@ -230,8 +264,8 @@ skill_owners! {
     CBlind: State, USER, Weapon => 0x076,
     CLightningSword2: Attack, USER, Weapon => 0x077,
     CLightningSword3: Attack, USER, Weapon => 0x078,
-    CGhostCut2: Attack, USER, Weapon => 0x079,
-    CGhostCut3: Attack, USER, Weapon => 0x07a,
+    CGhostCut2: Attack, USER, Weapon, EndZero => 0x079,
+    CGhostCut3: Attack, USER, Weapon, EndZero => 0x07a,
     CArmyBreak2: Attack, USER, Weapon => 0x07b,
     CRush2: State, USER_PATHS_AFTER_MOVEMENT, Weapon => 0x07c,
     CCallosity2: State, USER, Weapon => 0x07d,
@@ -245,35 +279,35 @@ skill_owners! {
     CLeafCut3: State, USER, Weapon => 0x08f,
     CPoisonFog: Summon, USER, Weapon => 0x0c9,
     CHeartLessArrow: Attack, USER, Weapon => 0x0ca,
-    CLightingArrow: Attack, USER, Weapon => 0x0cb,
+    CLightingArrow: Attack, USER, Weapon, EndOne => 0x0cb,
     CMeteorArrowMass: State, USER_OR_SUFFERER, Weapon => 0x0cc,
     CMeteorArrow: Summon, USER, Weapon => 0x0cd,
-    CRainArrow: Attack, USER, Weapon => 0x0ce,
-    CPoisonMoth: Attack, USER, Weapon => 0x0cf,
+    CRainArrow: Attack, USER, Weapon, EndOne => 0x0ce,
+    CPoisonMoth: Attack, USER, Weapon, EndOne => 0x0cf,
     CBloodRose: Attack, USER, Weapon => 0x0d0,
     CScorpion: Attack, SCORPION, Weapon => 0x0d1,
     CBoaLock: State, USER, Weapon => 0x0d2,
-    CHeal: State, USER, Weapon => 0x0d3,
+    CHeal: State, USER, Weapon, EndZero => 0x0d3,
     CMonsterTaming: Attack, USER, None => 0x0d4,
     CFallingStar: Summon, USER, Weapon => 0x0d5,
     CExplosiveArrow: Attack, USER, Weapon => 0x0d6,
     CPetsControl: Attack, USER, None => 0x0d7,
     CGibe: Attack, COMMON, None => 0x0d8,
-    CSuperHeal: State, USER, Weapon => 0x0d9,
+    CSuperHeal: State, USER, Weapon, EndZero => 0x0d9,
     CAgility: State, USER, Weapon => 0x0da,
     CRapture: State, USER, Weapon => 0x0db,
     CNatural: State, USER, Weapon => 0x0dc,
-    CStrike: Attack, USER, Weapon => 0x0dd,
+    CStrike: Attack, USER, Weapon, EndZero => 0x0dd,
     CMachineShield: State, USER, Weapon => 0x0de,
     CDaubPoison: State, USER, Weapon => 0x0df,
     CSwordship2: State, COMMON, Weapon => 0x0e0,
     CExplosiveArrow2: Attack, USER, Weapon => 0x0e1,
     CExplosiveArrow3: Attack, USER, Weapon => 0x0e2,
-    CHeal2: State, USER, Weapon => 0x0e3,
-    CSuperHeal2: State, USER, Weapon => 0x0e4,
+    CHeal2: State, USER, Weapon, EndZero => 0x0e3,
+    CSuperHeal2: State, USER, Weapon, EndZero => 0x0e4,
     CHeartLessArrow2: Attack, USER, Weapon => 0x0e5,
     CHeartLessArrow3: Attack, USER, Weapon => 0x0e6,
-    CLightingArrow2: Attack, USER, Weapon => 0x0e7,
+    CLightingArrow2: Attack, USER, Weapon, EndOne => 0x0e7,
     CSwordship3: State, COMMON, Weapon => 0x0e8,
     CSwordship4: State, COMMON, Weapon => 0x0e9,
     CKerosene: State, USER, Weapon => 0x0f1,
@@ -317,11 +351,11 @@ skill_owners! {
     CSummonCorpseCandle: Summon, USER, Weapon => 0x19a,
     CSummonSkeleton: Summon, USER, Weapon => 0x19b,
     CSummonSpore: Summon, USER, Weapon => 0x19c,
-    CChuckStone: Attack, USER, Weapon => 0x19d,
+    CChuckStone: Attack, USER, Weapon, EndZeroUnlessEnded, 5004 => 0x19d,
     CYunShengLightning: Attack, USER, Weapon => 0x19e,
     CCorpsePtomaine: State, USER, None => 0x19f,
     CEnergyBolt: Attack, USER, Weapon => 0x1a0,
-    CSkeletonArchery: Attack, USER, Weapon => 0x1a1,
+    CSkeletonArchery: Attack, USER, Weapon, EndZeroUnlessEnded, 5004 => 0x1a1,
     CZombieClaw: Attack, USER, Weapon => 0x1a2,
     CFury: State, USER, Weapon => 0x1a3,
     CLittleStar: Attack, STAR, Weapon => 0x1a4,
@@ -333,7 +367,7 @@ skill_owners! {
     CBossBlueFury: State, USER, Weapon => 0x1f7,
     CBossBlueQuake: Attack, USER, Weapon => 0x1f8,
     CBossFiendSummon: Summon, USER, Weapon => 0x1f9,
-    CBossFiendPenetrate: Attack, USER, Weapon => 0x1fa,
+    CBossFiendPenetrate: Attack, USER, Weapon, EndOne => 0x1fa,
     CPojia: State, COMMON, Weapon => 0x212,
     CPobing: State, COMMON, Weapon => 0x213,
     CPomo: State, COMMON, Weapon => 0x214,
@@ -356,7 +390,7 @@ skill_owners! {
     CEnlargeMaxHp: State, COMMON, Weapon => 0x259,
     CEnlargeMaxMp: State, COMMON, Weapon => 0x25a,
     CEnlargeFullMiss: State, COMMON, Weapon => 0x25b,
-    CMonsterBaseAttack: Attack, COMMON, Weapon => 0x2bd,
+    CMonsterBaseAttack: Attack, COMMON, Weapon, EndZero => 0x2bd,
     CMonsterFastAttack: Attack, USER_AVAILABLE, Weapon => 0x2d1,
     CMonsterRangeAttack: Attack, USER, Weapon => 0x2ef,
     #[allow(non_camel_case_types)]

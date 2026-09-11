@@ -17,6 +17,16 @@
 //! у игрока и только при фактическом удалении точной записи.
 //! Прямой End и AI используют один exact-key хвост без чтения часов.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005EE7A0):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
+
+//! Unserialize 0x004F9D80 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
@@ -92,9 +102,7 @@ impl HeartenState {
         self.encoded_with_remaining(self.keep_time_ms)
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-    }
+
 }
 
 pub(crate) fn send_hearten_state_visual(
@@ -121,6 +129,25 @@ pub(crate) fn send_hearten_state_visual(
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn restart_hearten_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<HeartenState>(key)).is_none() {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    true
 }
 
 pub(crate) fn update_hearten_state(

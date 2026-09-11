@@ -1,4 +1,4 @@
-//! Базовые контракты и общий virtual AI/End применённых состояний GameServer.
+//! Базовые контракты и общий virtual Begin/AI/End состояний GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходные owners
 //! `appserver/states/state.h/.cpp`. Vtable-аудит exact EXE подтверждает, что
@@ -35,8 +35,15 @@
 //! ID, прямой GetCell и строгий байт Undead==1. End и destructor-only хвост
 //! разделены; по окончании End перечитывается текущая позиция. Общий хвост
 //! использует также CastCure, без второго UpdateProperty и уплотнения.
-//! Данные Begin для базового End различают загруженный null GetUser и
-//! подтверждённого runtime user-holder; полный общий Begin ещё не введён.
+//! StartAllStates (0x004CE050) использует живой индекс: SetRegion, повторное
+//! чтение позиции, затем object Begin(NULL, holder). Фильтр после смерти
+//! и специальный трёхаргументный CHBY Begin сохраняются отдельно. Отказ Begin
+//! не удаляет запись. NULL user не сбрасывает source/timestamp: часы загрузки
+//! читаются конкретным Unserialize. Общий CVisualEffect принадлежит экземпляру;
+//! новый Begin освобождает старый ресурс безопасно, без пакетов из Drop.
+//! Источник базового End различает загруженный NULL и runtime user-holder.
+//! Первичная установка до регистрации и её replacement-callbacks ещё остаются
+//! у достигнутых конкретных владельцев; этот общий вход их не подменяет.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::{CMoveShape, StateData, StateKey};
@@ -51,6 +58,79 @@ use crate::public::guid::CGuid;
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 
 type StateAi<Runtime> = fn(&mut CGame, i32, ShapeIdentity, StateKey, &mut Runtime);
+
+type StateRestart = fn(&mut CGame, i32, ShapeIdentity, StateKey, bool, &mut dyn FnMut() -> u32) -> bool;
+
+/// CHBY/CExState GetRemainedTime (0x005DA030), включая самостоятельные
+/// чтения часов и специальное значение 1 после ненулевого срока.
+pub(crate) fn change_body_client_time(start: u32, keep: u32, now: &mut dyn FnMut() -> u32) -> u32 {
+    let deadline = start.wrapping_add(keep);
+    if keep != 0 && deadline <= now() { return 1; }
+    if deadline <= now() { return 0; }
+    deadline.wrapping_sub(now())
+}
+
+/// CExStateNew/CNotDisappearAfterDead (0x005D6320): нулевой срок
+/// бессрочен и не читает часы, положительный читает одно либо два значения.
+pub(crate) fn extended_client_time(start: u32, keep: u32, now: &mut dyn FnMut() -> u32) -> u32 {
+    if keep == 0 { return 0; }
+    let deadline = start.wrapping_add(keep);
+    if deadline <= now() { return 0; }
+    deadline.wrapping_sub(now())
+}
+
+/// Объектный CState::Begin (0x005DBD70) с NULL user. Часы и прежний user
+/// сохраняются; concrete owner обновляет своё представление sufferer.
+/// Возвращаемое значение сообщает наличие экземпляра, не native return 0.
+pub(crate) fn begin_base_applied_state(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) -> bool {
+    resolve_state_move_shape_mut(game, region_id, holder)
+        .is_some_and(|shape| shape.mark_applied_state_begun(key))
+}
+
+pub(crate) fn begin_applied_state_visual(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey, loop_value: i32) -> bool {
+    resolve_state_move_shape_mut(game, region_id, holder)
+        .is_some_and(|shape| shape.begin_applied_state_visual(key, loop_value))
+}
+
+pub(crate) fn update_applied_state_visual_base(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) -> bool {
+    resolve_state_move_shape_mut(game, region_id, holder)
+        .is_some_and(|shape| shape.update_applied_state_visual_base(key))
+}
+
+/// CMoveShape::StartAllStates (0x004CE050). SetRegion может выполнить End;
+/// Begin получает новое чтение той же позиции, а не прежний ключ. Длина
+/// живая, результат Begin игнорируется: отказ не означает удаление состояния.
+/// Простые SetRegion 0x005D9BA0/0x005E3B30/0x00601660 меняют только регион
+/// user/sufferer: у достигнутых payload он разрешается через живого holder,
+/// а отдельный source у периодических состояний здесь не изменяется.
+pub(crate) fn start_move_shape_states(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    after_death: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<()> {
+    let actual_region = resolve_state_move_shape(game, region_id, holder)?.shape().get_region_id();
+    game.find_region(actual_region)?;
+    let mut index = 0;
+    loop {
+        let shape = resolve_state_move_shape(game, region_id, holder)?;
+        if index >= shape.state_slot_count() { break; }
+        let selected = shape.state_at(index).filter(|(_, state)| {
+            !after_death || !matches!(state.state_id(), 100_007..=100_012 | 0x32 | 0x33 | 0x38)
+        }).map(|(key, state)| (key, state_set_region(state)));
+        if let Some((key, set_region)) = selected {
+            set_region(game, actual_region, holder, key);
+            let next = resolve_state_move_shape(game, region_id, holder)?
+                .state_at(index).map(|(key, state)| (key, state_restart(state)));
+            if let Some((key, restart)) = next {
+                restart(game, actual_region, holder, key, after_death, now);
+            }
+        }
+        index += 1;
+    }
+    Some(())
+}
 
 /// Базовый End 0x005DBCE0 для owners, у которых runtime GetUser подтверждён
 /// как holder, а StartAllStates вызывает Begin(null, holder). Sufferer у
@@ -224,10 +304,10 @@ fn log_state_array_change(
     crate::public::tools::put_debug_string(&text);
 }
 
-// Один список виртуального поведения порождает оба selector-а: End не
-// дублирует каталог AI и не требует фиктивного Runtime/чтения часов.
+// Один список виртуального поведения задаёт AI, End, повторный Begin и
+// особые SetRegion; новые callbacks не создают параллельного каталога типов.
 macro_rules! state_callbacks {
-    ($($pattern:pat => ($ai:expr, $end:path)),+ $(,)?) => {
+    ($($pattern:pat => ($ai:expr, $end:path, $restart:path $(, $set_region:path)?)),+ $(,)?) => {
         fn state_ai<Runtime: GameMainLoopRuntime>(state: &StateData) -> StateAi<Runtime> {
             match state { $($pattern => $ai),+ }
         }
@@ -235,108 +315,138 @@ macro_rules! state_callbacks {
         fn state_end(state: &StateData) -> fn(&mut CGame, i32, ShapeIdentity, StateKey) -> bool {
             match state { $($pattern => $end),+ }
         }
+
+        fn state_restart(state: &StateData) -> StateRestart {
+            match state { $($pattern => $restart),+ }
+        }
+
+        fn state_set_region(state: &StateData) -> fn(&mut CGame, i32, ShapeIdentity, StateKey) {
+            match state { $($pattern => |_game, _region, _holder, _key| {
+                $($set_region(_game, _region, _holder, _key);)?
+            }),+ }
+        }
     };
 }
 
 state_callbacks! {
     StateData::PersistentAgility(_) => (
         |_, _, _, _, _| {},
-        skills::agilitystate::end_persistent_agility_state
+        skills::agilitystate::end_persistent_agility_state,
+        skills::agilitystate::restart_persistent_agility_state
     ),
     StateData::TaiJi(_) => (
         |_, _, _, _, _| {},
-        skills::taijistate::end_tai_ji_state
+        skills::taijistate::end_tai_ji_state,
+        skills::taijistate::restart_tai_ji_state
     ),
     StateData::EnlargeFullMiss(_) => (
         |_, _, _, _, _| {},
-        skills::enlargefullmissstate::end_enlarge_full_miss_state
+        skills::enlargefullmissstate::end_enlarge_full_miss_state,
+        skills::enlargefullmissstate::restart_enlarge_full_miss_state
     ),
     StateData::EnlargeMaxHp(_) => (
         |_, _, _, _, _| {},
-        skills::enlargemaxhpstate::end_enlarge_max_hp_state
+        skills::enlargemaxhpstate::end_enlarge_max_hp_state,
+        skills::enlargemaxhpstate::restart_enlarge_max_hp_state
     ),
     StateData::EnlargeMaxMp(_) => (
         |_, _, _, _, _| {},
-        skills::enlargemaxmpstate::end_enlarge_max_mp_state
+        skills::enlargemaxmpstate::end_enlarge_max_mp_state,
+        skills::enlargemaxmpstate::restart_enlarge_max_mp_state
     ),
     StateData::Origin(_) => (
         |_, _, _, _, _| {},
-        skills::originstate::end_origin_state
+        skills::originstate::end_origin_state,
+        skills::originstate::restart_origin_state
     ),
     StateData::MeteorArrow(_) => (
         |_, _, _, _, _| {},
-        skills::meteorarrowstate::end_meteor_arrow_state
+        skills::meteorarrowstate::end_meteor_arrow_state,
+        skills::meteorarrowstate::restart_meteor_arrow_state
     ),
     StateData::EnergyHolding(_) => (
         |_, _, _, _, _| {},
-        skills::energyholdingstate::end_energy_holding_state
+        skills::energyholdingstate::end_energy_holding_state,
+        skills::energyholdingstate::restart_energy_holding_state
     ),
     StateData::SoulCollect(_) => (
         |_, _, _, _, _| {},
-        skills::soulcollectstate::end_soul_collect_state
+        skills::soulcollectstate::end_soul_collect_state,
+        skills::soulcollectstate::restart_soul_collect_state
     ),
     StateData::Swordship(_) => (
         |_, _, _, _, _| {},
-        skills::swordshipstate::end_swordship_state
+        skills::swordshipstate::end_swordship_state,
+        skills::swordshipstate::restart_swordship_state
     ),
     StateData::WuXing(_) => (
         |_, _, _, _, _| {},
-        skills::wuxingstate::end_wuxing_state
+        skills::wuxingstate::end_wuxing_state,
+        skills::wuxingstate::restart_wuxing_state
     ),
     StateData::Agility2(_) => (
         |game, region, target, key, runtime| {
             skills::agilitystate2::update_agility_state_2(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::agilitystate2::end_agility_state_2
+        skills::agilitystate2::end_agility_state_2,
+        skills::agilitystate2::restart_agility_state_2
     ),
     StateData::Callosity(_) => (
         |game, region, target, key, runtime| {
             skills::callositystate::update_callosity_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::callositystate::end_callosity_state_key
+        skills::callositystate::end_callosity_state_key,
+        skills::callositystate::restart_callosity_state
     ),
     StateData::Hearten(_) => (
         |game, region, target, key, runtime| {
             skills::heartenstate::update_hearten_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::heartenstate::end_hearten_state
+        skills::heartenstate::end_hearten_state,
+        skills::heartenstate::restart_hearten_state
     ),
     StateData::RageBreak(_) => (
         |game, region, target, key, runtime| {
             skills::ragebreakstate::update_rage_break_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::ragebreakstate::end_rage_break_state_key
+        skills::ragebreakstate::end_rage_break_state_key,
+        skills::ragebreakstate::restart_rage_break_state
     ),
     StateData::Pillar(_) => (
         |game, region, target, key, runtime| {
             skills::pillarstate::update_pillar_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::pillarstate::end_pillar_state
+        skills::pillarstate::end_pillar_state,
+        skills::pillarstate::restart_pillar_state
     ),
     StateData::TianShenXiaFan(_) => (
         |game, region, target, key, runtime| {
             skills::tianshenxiafanstate::update_tian_shen_xia_fan_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::tianshenxiafanstate::end_tian_shen_xia_fan_state
+        skills::tianshenxiafanstate::end_tian_shen_xia_fan_state,
+        skills::tianshenxiafanstate::restart_tian_shen_xia_fan_state
     ),
     StateData::Wangsheng(_) => (
         |game, region, target, key, runtime| {
             skills::wangshengstate::update_wangsheng_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::wangshengstate::end_wangsheng_state
+        skills::wangshengstate::end_wangsheng_state,
+        skills::wangshengstate::restart_wangsheng_state
     ),
     StateData::Blind(_) | StateData::KnockOut(_) | StateData::SpiderWeb(_)
     | StateData::Seal(_) | StateData::Strike(_) => (
         |game, region, target, key, runtime| {
             skills::blindstate::update_blind_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::blindstate::end_blind_state
+        skills::blindstate::end_blind_state,
+        skills::blindstate::restart_blind_state
     ),
     StateData::Heal(_) => (
         |game, region, target, key, runtime| {
             skills::healstate::update_stored_heal_state(game, region, target, key, || runtime.now_milliseconds());
         },
-        skills::healstate::end_heal_state
+        skills::healstate::end_heal_state,
+        skills::healstate::restart_heal_state
     ),
     StateData::PoisonArrow(_) => (
         |game, region, target, key, runtime| {
@@ -346,7 +456,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::poisonarrowstate::end_poison_arrow_state
+        skills::poisonarrowstate::end_poison_arrow_state,
+        skills::poisonarrowstate::restart_poison_arrow_state
     ),
     StateData::SpiderPoison(_) => (
         |game, region, target, key, runtime| {
@@ -356,7 +467,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::spiderpoisonstate::end_spider_poison_state
+        skills::spiderpoisonstate::end_spider_poison_state,
+        skills::spiderpoisonstate::restart_spider_poison_state
     ),
     StateData::SpriteBurn(_) => (
         |game, region, target, key, runtime| {
@@ -366,7 +478,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::spriteburnstate::end_sprite_burn_state
+        skills::spriteburnstate::end_sprite_burn_state,
+        skills::spriteburnstate::restart_sprite_burn_state
     ),
     StateData::BloodLoss(_) => (
         |game, region, target, key, runtime| {
@@ -376,7 +489,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::bloodlossstate::end_blood_loss_state
+        skills::bloodlossstate::end_blood_loss_state,
+        skills::bloodlossstate::restart_blood_loss_state
     ),
     StateData::LeafCut(_) => (
         |game, region, target, key, runtime| {
@@ -386,7 +500,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::leafcutstate::end_leaf_cut_state
+        skills::leafcutstate::end_leaf_cut_state,
+        skills::leafcutstate::restart_leaf_cut_state
     ),
     StateData::LeafCut2(_) => (
         |game, region, target, key, runtime| {
@@ -396,7 +511,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::leafcutstate2::end_leaf_cut_2_state
+        skills::leafcutstate2::end_leaf_cut_2_state,
+        skills::leafcutstate2::restart_leaf_cut_2_state
     ),
     StateData::LeafCut3(_) => (
         |game, region, target, key, runtime| {
@@ -406,7 +522,8 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::leafcutstate3::end_leaf_cut_3_state
+        skills::leafcutstate3::end_leaf_cut_3_state,
+        skills::leafcutstate3::restart_leaf_cut_3_state
     ),
     StateData::Kerosene(_) => (
         |game, region, target, key, runtime| {
@@ -416,151 +533,178 @@ state_callbacks! {
                 _ => {}
             }
         },
-        skills::kerosenestate::end_kerosene_state
+        skills::kerosenestate::end_kerosene_state,
+        skills::kerosenestate::restart_kerosene_state
     ),
     StateData::Cure(_) => (
         |game, region, target, key, runtime| {
             skills::curestate::update_cure_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::curestate::end_cure_state_key
+        skills::curestate::end_cure_state_key,
+        skills::curestate::restart_cure_state
     ),
     StateData::BossBlueQuake(_) => (
         |game, region, target, key, runtime| {
             skills::bossbluequakestate::update_boss_blue_quake_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::bossbluequakestate::end_boss_blue_quake_state
+        skills::bossbluequakestate::end_boss_blue_quake_state,
+        skills::bossbluequakestate::restart_boss_blue_quake_state
     ),
     StateData::BoaLock(_) => (
         |game, region, target, key, runtime| {
             skills::boalockstate::update_boa_lock_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::boalockstate::end_boa_lock_state
+        skills::boalockstate::end_boa_lock_state,
+        skills::boalockstate::restart_boa_lock_state
     ),
     StateData::Rush(_) => (
         |game, region, target, key, runtime| {
             skills::rushstate::update_rush_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::rushstate::end_rush_state
+        skills::rushstate::end_rush_state,
+        skills::rushstate::restart_rush_state
     ),
     StateData::Rush2(_) => (
         |game, region, target, key, runtime| {
             skills::rushstate2::update_rush_2_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::rushstate2::end_rush_2_state
+        skills::rushstate2::end_rush_2_state,
+        skills::rushstate2::restart_rush_2_state
     ),
     StateData::KnightCut(_) => (
         |game, region, target, key, runtime| {
             skills::knightcutstate::update_knight_cut_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::knightcutstate::end_knight_cut_state
+        skills::knightcutstate::end_knight_cut_state,
+        skills::knightcutstate::restart_knight_cut_state
     ),
     StateData::GodBless(_) => (
         |game, region, target, key, runtime| {
             skills::godblessstate::update_god_bless_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::godblessstate::end_god_bless_state
+        skills::godblessstate::end_god_bless_state,
+        skills::godblessstate::restart_god_bless_state
     ),
     StateData::Roar(_) => (
         |game, region, target, key, runtime| {
             skills::roarstate::update_roar_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::roarstate::end_roar_state
+        skills::roarstate::end_roar_state,
+        skills::roarstate::restart_roar_state
     ),
     StateData::Weak(_) => (
-        |game, region, target, key, _runtime| {
-            skills::weakstate::update_weak_state(game, region, target, key);
+        |game, region, target, key, runtime| {
+            skills::weakstate::update_weak_state(game, region, target, key, &mut || runtime.now_milliseconds());
         },
-        skills::weakstate::end_weak_state
+        skills::weakstate::end_weak_state,
+        skills::weakstate::restart_weak_state,
+        skills::weakstate::set_weak_state_region
     ),
     StateData::Fury(_) => (
         |game, region, target, key, runtime| {
             skills::furystate::update_fury_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::furystate::end_fury_state
+        skills::furystate::end_fury_state,
+        skills::furystate::restart_fury_state
     ),
     StateData::BossBlueFury(_) => (
         |game, region, target, key, runtime| {
             skills::bossbluefurystate::update_boss_blue_fury_state(game, region, target, key, || runtime.now_milliseconds());
         },
-        skills::bossbluefurystate::end_boss_blue_fury_state
+        skills::bossbluefurystate::end_boss_blue_fury_state,
+        skills::bossbluefurystate::restart_boss_blue_fury_state
     ),
     StateData::PoisonFog(_) => (
         |game, region, target, key, runtime| {
             skills::poisonfogstate::update_poison_fog_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::poisonfogstate::end_poison_fog_state
+        skills::poisonfogstate::end_poison_fog_state,
+        skills::poisonfogstate::restart_poison_fog_state
     ),
     StateData::BattleFairyAttribute(_) => (
         |game, region, target, key, runtime| {
             skills::battlefairyattributestate::update_battle_fairy_attribute_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::battlefairyattributestate::end_battle_fairy_attribute_state
+        skills::battlefairyattributestate::end_battle_fairy_attribute_state,
+        skills::battlefairyattributestate::restart_battle_fairy_attribute_state
     ),
     StateData::DefenseShield(_) => (
         |game, region, target, key, runtime| {
             skills::shieldstate::update_defense_shield(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::shieldstate::end_defense_shield
+        skills::shieldstate::end_defense_shield,
+        skills::shieldstate::restart_defense_shield_state
     ),
     StateData::DaubPoison(_) => (
         |game, region, target, key, runtime| {
             skills::daubpoisonstate::update_daub_poison_state(game, region, target, key, runtime.now_milliseconds());
         },
-        skills::daubpoisonstate::end_daub_poison_state
+        skills::daubpoisonstate::end_daub_poison_state,
+        skills::daubpoisonstate::restart_daub_poison_state
     ),
     StateData::AutomaticRestore(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_automatic_restore_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_automatic_restore_state
+        CGame::end_move_shape_automatic_restore_state,
+        super::automaticrestore::restart_automatic_restore_state
     ),
     StateData::ConsumableRestore(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_consumable_restore_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_consumable_restore_state
+        CGame::end_move_shape_consumable_restore_state,
+        crate::gameserver::appserver::restorestate::restart_consumable_restore_state
     ),
     StateData::Particular(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_particular_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_particular_state
+        CGame::end_move_shape_particular_state,
+        crate::gameserver::appserver::particularstate::restart_particular_state
     ),
     StateData::Team(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_team_recruitment_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_team_recruitment_state
+        CGame::end_move_shape_team_recruitment_state,
+        crate::gameserver::appserver::teamstate::restart_team_recruitment_state
     ),
     StateData::Script(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_script_move_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_script_move_state
+        CGame::end_move_shape_script_move_state,
+        crate::gameserver::appserver::scriptstate::restart_script_move_state
     ),
     StateData::ChangeBody(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_change_body_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_change_body_state
+        CGame::end_move_shape_change_body_state,
+        crate::gameserver::appserver::chbystate::restart_change_body_state,
+        CGame::set_change_body_state_region
     ),
     StateData::Extended(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_extended_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_extended_state
+        CGame::end_move_shape_extended_state,
+        CGame::restart_move_shape_extended_state
     ),
     StateData::Undead(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_appellation_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_appellation_state
+        CGame::end_move_shape_appellation_state,
+        CGame::restart_move_shape_appellation_state
     ),
     StateData::Ride(_) => (
         |game, region, target, key, runtime| {
             game.update_move_shape_ride_state(region, target, key, runtime);
         },
-        CGame::end_move_shape_ride_state
+        CGame::end_move_shape_ride_state,
+        CGame::restart_move_shape_ride_state
     ),
 }
 

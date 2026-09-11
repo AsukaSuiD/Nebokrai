@@ -12,16 +12,41 @@
 //! Runtime Begin в MeteorArrowMass0x00588628 получает self,self; загрузочный
 //! StartAllStates0x004CE050 передаёт null user. Общая metadata сохраняет
 //! различие: отсутствие user не подменяется удалением из holder.
+//! Object Begin +0x08→0x005F6B10 не имеет null-guards: base Begin,
+//! новый visual(0xC), BeginVisualEffect(1), одноаргументный Update +0x0C
+//! 0x005DC1E0 и return 1. Этот Update базовый, при loop=1 пакетов нет;
+//! restart не пополняет запас и не сбрасывает timestamp при null user.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::appserver::states::state::{
+    begin_applied_state_visual, begin_base_applied_state, end_base_applied_state,
+    resolve_state_move_shape, update_applied_state_visual_base,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const METEOR_ARROW_MASS_SKILL_ID: u32 = 0xcc;
 pub(crate) const METEOR_ARROW_STATE_BYTES: usize = 12;
+
+pub(crate) fn restart_meteor_arrow_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<MeteorArrowState>(key)).is_none()
+    {
+        return false;
+    }
+    begin_base_applied_state(game, region_id, holder, key)
+        && begin_applied_state_visual(game, region_id, holder, key, 1)
+        && update_applied_state_visual_base(game, region_id, holder, key)
+}
 
 pub(crate) fn end_meteor_arrow_state(
     game: &mut CGame,

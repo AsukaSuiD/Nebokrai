@@ -16,9 +16,20 @@
 //! CMoveShape health/OnChangeStates и death-pause; MP non-player немедленно
 //! заканчивается без часов. Во время публикации payload остаётся у владельца,
 //! после неё срок проверяется по тому же поколенческому ключу.
+//! restart_consumable_restore_state переносит object Begin(NULL, holder)
+//! HP 0x004F8720 / MP 0x004F8A10: base Begin без guards → visual SetRun(1)
+//! → restore_count=0, без Update/пакета и часов. Timestamp сохраняется;
+//! Unserialize 0x005EEC70 читает собственный clock до keep/frequency/gain.
 
 use super::restorehpstate::{RESTORE_HP_STATE_ID, RestoreHpState};
 use super::restorempstate::{RESTORE_MP_STATE_ID, RestoreMpState};
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::gameserver::game::CGame;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConsumableRestoreMutation {
@@ -32,14 +43,40 @@ pub(crate) enum ConsumableRestoreState {
     Mana(RestoreMpState),
 }
 
+pub(crate) fn restart_consumable_restore_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<ConsumableRestoreState>(key)).is_none()
+    {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) { return false }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<ConsumableRestoreState>(key))
+    {
+        match state {
+            ConsumableRestoreState::Health(state) => state.reset_restore_count(),
+            ConsumableRestoreState::Mana(state) => state.reset_restore_count(),
+        }
+    }
+    true
+}
+
 impl ConsumableRestoreState {
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Option<Self> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Option<Self> {
         match payload.get(offset..offset.checked_add(4)?)? {
             id if id == RESTORE_HP_STATE_ID.to_le_bytes() => {
-                RestoreHpState::decode(payload, offset).ok().map(Self::Health)
+                RestoreHpState::decode(payload, offset, now_ms).ok().map(Self::Health)
             }
             id if id == RESTORE_MP_STATE_ID.to_le_bytes() => {
-                RestoreMpState::decode(payload, offset).ok().map(Self::Mana)
+                RestoreMpState::decode(payload, offset, now_ms).ok().map(Self::Mana)
             }
             _ => None,
         }
@@ -100,12 +137,6 @@ impl ConsumableRestoreState {
         }
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        match self {
-            Self::Health(state) => state.activate_loaded(now_ms),
-            Self::Mana(state) => state.activate_loaded(now_ms),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

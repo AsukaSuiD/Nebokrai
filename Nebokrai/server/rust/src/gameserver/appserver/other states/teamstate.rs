@@ -13,9 +13,21 @@
 //! `ID + team-name C-string + password C-string`; bounded Rust-кодек оставляет
 //! допустимый максимум каждого legacy-буфера 255 байт. Координатные overload-ы
 //! `Begin` пока не достигнуты и сохранены в RAW ниже.
+//! restart_team_recruitment_state переносит object Begin 0x005BF9A0:
+//! nonnull sufferer → base Begin(NULL, holder) → visual SetRun(1)/Update(0)
+//! → base visual tail → lastcheck=0. Update0x005BFAD0 читает настоящий
+//! GetAdditionalData0x005BFDD0: размер живой team либо1, затем password-bit,
+//! а не постоянный initial count; non-player также оставляет исходную1.
+//! Unserialize0x005BFF20 читает только две строки, без часов.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::states::state::default_client_state_time;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    default_client_state_time, begin_base_applied_state, begin_applied_state_visual,
+    update_applied_state_visual_base, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
@@ -111,6 +123,52 @@ impl CTeamState {
     ) -> bool {
         team_id != 0 && matches!(team_leader_id, Some(leader_id) if leader_id != player_id)
     }
+}
+
+pub(crate) fn restart_team_recruitment_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<CTeamState>(key)).is_none()
+    {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) { return false }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        let message = resolve_state_move_shape(game, region_id, holder)
+            .and_then(|shape| shape.applied_state::<CTeamState>(key))
+            .map(|state| {
+                let teammates = if holder.object_type == 400 {
+                    game.find_player(holder.id)
+                        .map(|player| game.team_state_member_count(player.team_id()))
+                        .unwrap_or(1)
+                } else { 1 };
+                let mut message = CMessage::new(TEAM_STATE_BEGIN_MESSAGE);
+                message.add_long(holder.object_type);
+                message.add_long(holder.id);
+                message.add_long(state.state_id());
+                message.add_long(state.client_state_time());
+                message.add_ulong(state.additional_data(teammates));
+                message.base_mut().add(state.team_name());
+                message.add_byte(0);
+                message
+            });
+        if let Some(message) = message {
+            let _ = game.send_move_shape_around(region_id, holder, &message);
+        }
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<CTeamState>(key))
+    {
+        state.last_check_timestamp_ms = 0;
+    }
+    true
 }
 
 pub(crate) fn team_state_begin_message(player_id: i32, state: &CTeamState) -> CMessage {
@@ -222,18 +280,5 @@ pub(crate) fn team_state_update_message(
 //
 //
 
-// ============================================================================
-// FUNCTION: CTeamState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:152
-// RVA: 0x001BFF20
-// ADDRESS: 005bff20
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // COMPONENT_VARIANT_END: GameServer

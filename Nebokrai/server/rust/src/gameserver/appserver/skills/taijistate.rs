@@ -11,7 +11,8 @@
 
 //! End +0x1C таблицы 0x006617C4 →0x005ECFC0→CState::End0x005DBCE0:
 //! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601050: null user завершает Begin с отказом.
+//! Begin +0x08 0x00601050: null user завершает Begin с отказом до базы,
+//! без изменения IsEnded, timer и payload. Restart сохраняет именно этот отказ.
 //! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
 //! не получает user=holder. Общий base End сохраняет эту привязку отдельно
 //! от payload и не заменяет отсутствующего user держателем состояния.
@@ -64,6 +65,17 @@ impl TaiJiState {
     pub(crate) const fn apply_to_monster(self, value: u32) -> u32 {
         value.wrapping_add(self.element_resistance_gain as u32)
     }
+}
+
+pub(crate) fn restart_tai_ji_state(
+    _game: &mut CGame,
+    _region_id: i32,
+    _holder: ShapeIdentity,
+    _key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    false
 }
 
 pub(crate) fn end_tai_ji_state(

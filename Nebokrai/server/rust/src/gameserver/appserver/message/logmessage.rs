@@ -197,7 +197,7 @@ fn dispatch_player_login<Runtime: ScriptFunctionRuntime>(
     };
     let player = {
         let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-        match game.decode_player_game_save(source, cursor, now_ms) {
+        match game.decode_player_game_save(source, cursor, now_ms, &mut || runtime.now_milliseconds()) {
             Ok(decoded) => decoded,
             Err(error) => {
                 put_string_to_file(

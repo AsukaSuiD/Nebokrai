@@ -12,9 +12,32 @@
 //! только после абсолютного wrapping deadline, а не на его границе.
 //! Payload принадлежит общей арене CMoveShape; decode_at читает одну
 //! фабрично подтверждённую запись и сохраняет её точный offset, без byte-scan.
+//! restart_change_body_state переносит object Begin0x005DB000 после смерти
+//! и Begin(NULL, holder, 1)0x005DADB0 в обычном StartAllStates. Первый требует
+//! CPlayer RTTI, второй native делает unchecked player-cast; безопасный
+//! адаптер явно отказывает non-player, не изображая определённый native результат.
+//! Base Begin сохраняет timestamp, затем visual/очистка emotion/mode, Update0
+//! и base visual tail, append пяти ID в m_vskill без очистки, hotkeys.
+//! Только двухаргументный Begin при !online сохраняет/обнуляет hotkeys12..23.
+//! Первые пять накопленных ID задают hotkeys12..16; нулевые ID не шлют пакет.
+//! Visual0x005DA390 добавляет навыки последовательно через общий AddSkill,
+//! затем читает реальный GetSkill и его virtual+70/+74/+78. ID0 занимает
+//! шесть ULONG0; missing skill/properties не создаёт placeholder. Клиентское
+//! время0x005DA030 читает часы1/2/3 раза; Unserialize выставляет online=true.
+//! Чистый visual-снимок не копирует накопленный m_vskill и не владеет состоянием.
+//! Текущий runtime-install создаёт уже начатое состояние через from_factory,
+//! поэтому его список заранее содержит пять ID; decode оставляет список пустым.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+    resolve_state_move_shape, change_body_client_time,
+};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const CHANGE_BODY_STATE_ID: u32 = 0x37;
 pub(crate) const CHANGE_BODY_SKILL_TYPE: u32 = 55;
@@ -41,6 +64,7 @@ pub(crate) struct ChangeBodyState {
     pub(crate) blast_attack: u16,
     pub(crate) blast_element_attack: u16,
     pub(crate) skills: [(u16, u16); 5],
+    begun_skill_ids: Vec<u16>,
     pub(crate) old_hotkeys: [u32; 12],
     pub(crate) started_ms: u32,
     serialized_offset: Option<usize>,
@@ -62,6 +86,13 @@ impl ChangeBodyState {
         let properties =
             factory.query_skill_base_properties(CHANGE_BODY_SKILL_TYPE, level as i32)?;
         let get = |usage| Some(properties.query_property(usage));
+        let skills = [
+            (get(60_011)? as u16, get(60_012)? as u16),
+            (get(60_021)? as u16, get(60_022)? as u16),
+            (get(60_031)? as u16, get(60_032)? as u16),
+            (get(60_041)? as u16, get(60_042)? as u16),
+            (get(60_051)? as u16, get(60_052)? as u16),
+        ];
         Some(Self {
             has_changed_region: true,
             visual_effect: get(60_001)? as u16,
@@ -81,13 +112,8 @@ impl ChangeBodyState {
             cch: get(108)? as u16,
             blast_attack: get(125)? as u16,
             blast_element_attack: get(126)? as u16,
-            skills: [
-                (get(60_011)? as u16, get(60_012)? as u16),
-                (get(60_021)? as u16, get(60_022)? as u16),
-                (get(60_031)? as u16, get(60_032)? as u16),
-                (get(60_041)? as u16, get(60_042)? as u16),
-                (get(60_051)? as u16, get(60_052)? as u16),
-            ],
+            skills,
+            begun_skill_ids: skills.into_iter().map(|(id, _)| id).collect(),
             old_hotkeys: [0; 12],
             started_ms,
             serialized_offset: None,
@@ -133,7 +159,7 @@ impl ChangeBodyState {
             change_region: payload[base + 16] != 0,
             restore_online: payload[base + 17] != 0,
             continue_after_death: payload[base + 18] != 0,
-            online: payload[base + 19] != 0,
+            online: true,
             maximum_hp: read_u32(payload, base + 20).unwrap_or_default(),
             maximum_mp: read_u32(payload, base + 24).unwrap_or_default(),
             minimum_attack: read_u32(payload, base + 28).unwrap_or_default(),
@@ -144,6 +170,7 @@ impl ChangeBodyState {
             blast_attack: read_u16(payload, base + 46).unwrap_or_default(),
             blast_element_attack: read_u16(payload, base + 48).unwrap_or_default(),
             skills,
+            begun_skill_ids: Vec::new(),
             old_hotkeys,
             started_ms,
             serialized_offset: Some(offset),
@@ -199,20 +226,13 @@ impl ChangeBodyState {
         self.serialized_offset = Some(offset);
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_ms = now_ms;
-        self.online = true;
-    }
 
     pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
-        let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
-        if self.keep_time_ms != 0 && deadline <= now_ms {
-            1
-        } else if deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms)
-        }
+        self.client_state_time(|| now_ms)
+    }
+
+    pub(crate) fn client_state_time(&self, mut now: impl FnMut() -> u32) -> u32 {
+        change_body_client_time(self.started_ms, self.keep_time_ms, &mut now)
     }
 
     pub(crate) fn expired(&self, now_ms: u32) -> bool {
@@ -268,6 +288,154 @@ impl ChangeBodyState {
     }
 }
 
+pub(crate) fn restart_change_body_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    after_death: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if holder.object_type != 400 { return false }
+    let Some(mode) = game.find_player(holder.id)
+        .and_then(|player| player.move_shape().applied_state::<ChangeBodyState>(key))
+        .map(|state| state.mode)
+    else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key) { return false }
+    if !begin_applied_state_visual(game, region_id, holder, key, 1) { return true }
+    let Some(player) = game.find_player_mut(holder.id) else { return true };
+    player.clear_emotion_state();
+    let (head, face, _) = player.appearance_and_mode();
+    player.restore_appearance_and_mode(head, face, mode);
+
+    let snapshot = game.find_player(holder.id)
+        .and_then(|player| player.move_shape().applied_state::<ChangeBodyState>(key))
+        .map(ChangeBodyBeginVisualSnapshot::from);
+    if let Some(snapshot) = snapshot {
+        let _ = send_change_body_begin_visual(game, region_id, holder, snapshot, Some(key), now);
+    }
+    let _ = update_applied_state_visual_base(game, region_id, holder, key);
+
+    let Some(player) = game.find_player_mut(holder.id) else { return true };
+    let Some(state) = player.move_shape_mut().applied_state_mut::<ChangeBodyState>(key)
+    else { return true };
+    state.begun_skill_ids.extend(state.skills.iter().map(|(id, _)| *id));
+    let save_hotkeys = after_death && !state.online;
+    if save_hotkeys {
+        for index in 0..12 {
+            let old = player.hotkey((index + 12) as u8).unwrap_or_default();
+            let Some(state) = player.move_shape_mut().applied_state_mut::<ChangeBodyState>(key)
+            else { return true };
+            state.old_hotkeys[index] = old;
+            let _ = player.set_hotkey((index + 12) as u8, 0);
+        }
+    }
+    for index in 0..5 {
+        let Some(skill_id) = game.find_player(holder.id)
+            .and_then(|player| player.move_shape().applied_state::<ChangeBodyState>(key))
+            .and_then(|state| state.begun_skill_ids.get(index)).copied()
+        else { return true };
+        if skill_id != 0 {
+            game.set_script_player_hotkey(holder.id, (index + 12) as u8, u32::from(skill_id) | 0x8000_0000);
+        }
+    }
+    if game.find_player(holder.id)
+        .and_then(|player| player.move_shape().applied_state::<ChangeBodyState>(key)).is_some()
+    {
+        game.set_script_player_hotkey(holder.id, 17, 0x8000_031f);
+    }
+    true
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChangeBodyBeginVisualSnapshot {
+    started_ms: u32,
+    keep_time_ms: u32,
+    mode: u32,
+    level: u32,
+    visual_effect: u16,
+    continue_after_death: bool,
+    skills: [(u16, u16); 5],
+}
+
+impl From<&ChangeBodyState> for ChangeBodyBeginVisualSnapshot {
+    fn from(state: &ChangeBodyState) -> Self {
+        Self {
+            started_ms: state.started_ms,
+            keep_time_ms: state.keep_time_ms,
+            mode: state.mode,
+            level: state.level,
+            visual_effect: state.visual_effect,
+            continue_after_death: state.continue_after_death,
+            skills: state.skills,
+        }
+    }
+}
+
+pub(crate) fn send_change_body_state_begin_visual(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    state: &ChangeBodyState,
+    now: &mut dyn FnMut() -> u32,
+) {
+    let _ = send_change_body_begin_visual(game, region_id, holder, state.into(), None, now);
+}
+
+fn send_change_body_begin_visual(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    snapshot: ChangeBodyBeginVisualSnapshot,
+    key: Option<StateKey>,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder).is_none() { return false }
+    let mut message = CMessage::new(0x000b_fe03);
+    message.add_long(holder.object_type);
+    message.add_long(holder.id);
+    message.add_long(CHANGE_BODY_STATE_ID as i32);
+    message.add_ulong(change_body_client_time(snapshot.started_ms, snapshot.keep_time_ms, &mut *now));
+    message.add_long(0);
+    message.add_ulong(snapshot.mode);
+    message.add_ulong(snapshot.level);
+    message.add_ulong(u32::from(snapshot.visual_effect));
+    message.add_byte(u8::from(snapshot.continue_after_death));
+    for index in 0..5 {
+        let (skill_id, level) = if let Some(key) = key {
+            let Some(skills) = resolve_state_move_shape(game, region_id, holder)
+                .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+                .map(|state| state.skills)
+            else { return false };
+            skills[index]
+        } else { snapshot.skills[index] };
+        if skill_id == 0 {
+            for _ in 0..6 { message.add_ulong(0); }
+            continue;
+        }
+        let _ = game.add_move_shape_skill(region_id, holder, u32::from(skill_id), i32::from(level));
+        let (skill_id, level) = if let Some(key) = key {
+            let Some(skills) = resolve_state_move_shape(game, region_id, holder)
+                .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+                .map(|state| state.skills)
+            else { return false };
+            skills[index]
+        } else { (skill_id, level) };
+        let skill = game.registered_move_shape_skill(region_id, holder, u32::from(skill_id));
+        let properties = game.skill_base_properties(u32::from(skill_id), i32::from(level));
+        if let (Some(skill), Some(properties)) = (skill, properties)
+            && let Some(parameters) = game.registered_skill_client_parameters(skill)
+        {
+            message.base_mut().add_short(skill_id as i16);
+            message.base_mut().add_short(level as i16);
+            message.add_ulong(properties.query_property(10_005));
+            for value in parameters { message.add_ulong(value); }
+        }
+    }
+    let _ = game.send_move_shape_around(region_id, holder, &message);
+    true
+}
+
 fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
     LegacyReader::at(source, offset).ok()?.read_u16().ok()
 }
@@ -318,19 +486,6 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CHBYState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:467
-// RVA: 0x001DA0C0
-// ADDRESS: 005da0c0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CHBYState::OnUpdateProperties
@@ -458,19 +613,6 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CHBYState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:175
-// RVA: 0x001DB000
-// ADDRESS: 005db000
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CHBYState::Begin

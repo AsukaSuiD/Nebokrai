@@ -10,7 +10,7 @@
 //! буквально используют реализацию `CBlindState`. Достигнутый путь сохраняет
 //! беззнаковую проверку срока, снимает запреты движения и боя при истечении
 //! либо защитном действии и публикует `0xBFE03/0xBFE04`. Persisted-запись
-//! `ID + remaining time` декодируется, активируется при spatial login и
+//! `ID + remaining time` декодируется, активируется StartAllStates после 8F801 и
 //! удаляется вместе с canonical state. Невостребованные координатные
 //! перегрузки сохранены ниже.
 //! Monster-визуал получает явного владельца региона, поэтому сохраняет around-
@@ -33,14 +33,13 @@ pub(crate) struct KnockOutState { started_at_ms: u32, keep_time_ms: u32 }
 
 impl KnockOutState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self { Self { started_at_ms, keep_time_ms } }
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != KNOCK_OUT_STATE_ID {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(0, reader.read_u32()?))
+        Ok(Self::new(now_ms, reader.read_u32()?))
     }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
     pub(crate) const fn skill_id(self) -> u32 { KNOCK_OUT_STATE_ID }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn encoded_for_install(self) -> [u8; KNOCK_OUT_STATE_BYTES] {

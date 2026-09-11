@@ -21,6 +21,12 @@
 //! сразу возвращает при NULL User, не создавая visual. Для загруженной записи
 //! User остаётся NULL: оба End лишь отмечают ended, не удаляя payload.
 
+//! Begin(NULL, holder) (0x00606040) возвращает 0 на проверке User до базы:
+//! restart не меняет время, ended или прежний visual-ресурс.
+
+//! Unserialize 0x005FD660 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
@@ -47,7 +53,7 @@ impl WangshengState {
         Self { started_at_ms, keep_time_ms, gain }
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != WANGSHENG_STATE_ID {
             return Err(LegacyReadBlock {
@@ -56,15 +62,12 @@ impl WangshengState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self::new(0, reader.read_u32()?, reader.read_i32()?))
+        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?))
     }
 
     pub(crate) const fn state_id(self) -> u32 { WANGSHENG_STATE_ID }
 
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
-    }
+
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
@@ -112,6 +115,17 @@ pub(crate) fn send_wangsheng_state_visual(
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn restart_wangsheng_state(
+    _game: &mut CGame,
+    _region_id: i32,
+    _holder: ShapeIdentity,
+    _key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    false
 }
 
 pub(crate) fn update_wangsheng_state(

@@ -629,7 +629,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                     });
                 }
             }
-            game.damage_player_armor(target.id, runtime);
+            game.damage_player_armor(target.id);
         } else if target.object_type == MONSTER_TYPE {
             let region_id = region.id;
             let _ = game.with_published_region(owner, |game| {

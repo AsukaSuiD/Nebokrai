@@ -46,6 +46,8 @@
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
 //! `lDiedStateTime +0x56C` из того же snapshot. Смена региона обновляет
 //! `STATE_AUTO_PROTECT` с точной длительностью `dwAutoProtectTime +0x804`.
+//! Временные peace-состояния CPlayer::OnEnterRegion читают lResumeTimer
+//! из +0x354: VA 0xEF4114 при base 0xEF3DC0, calls 0x0045A2CD/0x0045A37D.
 
 use crate::setup::regionrouter::{
     RegionRouter, RegionRouterDecodeError, RegionRouterSerializeError,
@@ -190,6 +192,7 @@ const REPAIR_FACTOR_OFFSET: usize = 0x2F4;
 // `CGlobeSetup::m_stSetup = 0xEF3DC0`.
 const GOODS_DISAPPEAR_TIMER_OFFSET: usize = 0x34C;
 const GOODS_PROTECTED_TIMER_OFFSET: usize = 0x350;
+const PLAYER_ENTRY_RESUME_TIMER_OFFSET: usize = 0x354;
 const MONSTER_RESUME_TIMER_OFFSET: usize = 0x360;
 // `CPlayerAI::Run` читает DWORD по VA `0xEF45E8` при том же base
 // `0xEF3DC0`; это exact interval между попытками восстановления energy.
@@ -757,6 +760,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn monster_resume_timer_ms(&self) -> u32 {
         self.read_u32(MONSTER_RESUME_TIMER_OFFSET)
+    }
+
+    pub(crate) fn player_entry_resume_timer_ms(&self) -> u32 {
+        self.read_u32(PLAYER_ENTRY_RESUME_TIMER_OFFSET)
     }
 
     pub(crate) fn auto_inc_energy_time_ms(&self) -> u32 {

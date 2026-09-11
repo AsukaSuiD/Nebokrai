@@ -1,4 +1,8 @@
 //! Каноническое периодическое состояние `CSpiderPoisonState` (`0x191`).
+//! Object Begin (0x005E9430) не требует user/sufferer: base Begin,
+//! visual SetRun(1) → Update(0) → base visual tail, затем обнуление attack-count.
+//! restart_spider_poison_state переносит Begin(NULL, holder) по точному ключу:
+//! timestamp из Unserialize и MasterInfo сохраняются; часы читает только visual.
 //! Периодический AI изменяет payload по поколенческому ключу общей арены.
 //! Чистый tick завершается до межвладельческого удара; состояние не вынимается
 //! и остаётся доступным вложенному End/Clear. Удар использует независимый снимок.
@@ -87,7 +91,6 @@ impl SpiderPoisonState {
         for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id, self.master.master_team_id, self.master.master_union_id, self.master.master_country_id, self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate, self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] { writer.write_i32(value); }
         writer.write_u32(remaining); writer.write_u32(self.frequency_ms); writer.write_u32(self.hp_loss); record.try_into().expect("размер состояния паучьего яда фиксирован")
     }
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
 
     pub(crate) const fn skill_id(self) -> u32 { SPIDER_POISON_SKILL_ID }
     pub(crate) const fn master(self) -> MasterInfo { self.master }
@@ -174,6 +177,42 @@ pub(crate) fn send_spider_poison_state_visual_in_region(
         message.add_long(0);
     }
     let _ = game.send_game_position_around(region, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_spider_poison_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SpiderPoisonState>(key)).copied()
+    else { return false };
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, 1,
+    ) {
+        let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_ulong(state.client_state_time(&mut *now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
+            game, region_id, holder, key,
+        );
+    }
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<SpiderPoisonState>(key))
+    {
+        state.attack_count = 0;
+    }
+    true
 }
 
 pub(crate) fn end_spider_poison_state(
@@ -379,20 +418,6 @@ pub(crate) fn finish_player_spider_poison_state_on_cure(
 //
 //
 
-// ============================================================================
-// FUNCTION: CSpiderPoisonState::Begin
-// STATUS: IMPLEMENTED
-// IMPLEMENTED: `SpiderPoisonState::new` и централизованная замена состояния.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoisonstate.cpp:55
-// RVA: 0x001E9430
-// ADDRESS: 005e9430
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CSpiderPoisonStateVisualEffect::UpdateVisualEffect

@@ -1,4 +1,8 @@
 //! Каноническое периодическое состояние потери крови `CBloodLossState`.
+//! Object Begin (0x005E3BD0) не требует user/sufferer: base Begin,
+//! visual SetRun(1) → Update(0) → base visual tail, затем обнуление attack-count.
+//! restart_blood_loss_state переносит Begin(NULL, holder) по точному ключу:
+//! timestamp из Unserialize и MasterInfo сохраняются; часы читает только visual.
 //! Периодический AI изменяет payload по поколенческому ключу общей арены.
 //! Чистый tick завершается до межвладельческого удара; состояние не вынимается
 //! и остаётся доступным вложенному End/Clear. Удар использует независимый снимок.
@@ -190,9 +194,6 @@ impl BloodLossState {
         self.encoded(self.started_at_ms)
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-    }
 
     pub(crate) fn tick(
         &mut self,
@@ -281,6 +282,42 @@ pub(crate) fn send_blood_loss_state_visual(
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_blood_loss_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BloodLossState>(key)).copied()
+    else { return false };
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, 1,
+    ) {
+        let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_ulong(state.client_state_time(&mut *now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
+            game, region_id, holder, key,
+        );
+    }
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<BloodLossState>(key))
+    {
+        state.attack_count = 0;
+    }
+    true
 }
 
 pub(crate) fn end_blood_loss_state(

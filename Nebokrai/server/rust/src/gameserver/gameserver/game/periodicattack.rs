@@ -432,7 +432,7 @@ impl CGame {
             hurt.add_ulong(current_health);
             Self::append_base_attack_tail(&mut hurt, &attack);
             let _ = self.send_player_shape_around(target_id, None, &hurt);
-            self.damage_player_armor(target_id, runtime);
+            self.damage_player_armor(target_id);
         }
         self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }

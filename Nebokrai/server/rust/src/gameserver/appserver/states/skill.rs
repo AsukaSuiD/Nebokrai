@@ -42,6 +42,17 @@
 //! но не требует фиктивных часов или реализации износа для region-entry/recall.
 //! SpiderMist возвращает движение до CSummonSkill::End; самостоятельная
 //! phalanx не принадлежит cast. Его Begin не добавляет навык в m_vStates.
+//! CMoveShape::OnEnterRegion0x004CEF40 после StartAllStates обходит Attack,
+//! Defense, Summon с живой длиной, затем State с начальной длиной и вызывает
+//! virtual OnChangeRegion(+0x2C) каждого текущего экземпляра. Это не запись
+//! region в SkillLifecycle: подтверждённые overrides выполняют только
+//! End(0), End(1), условный End(0) или пустой ret4; выбор находится у SkillOwner.
+//! AfterUse получает только необходимые часы; износ оружия и его вложенные
+//! equipment/property callbacks целиком принадлежат CGame, без fake runtime.
+//! CHBY visual читает три virtual getter-а зарегистрированного навыка в
+//! порядке minimum range(+0x70), maximum range(+0x74), MP cost(+0x78).
+//! Каждый property-getter заново разрешает текущий ID/level; отсутствующие
+//! properties имеют доказанные defaults 1/0 и не удаляют поля wire.
 
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -49,9 +60,10 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::skills::kernel::SkillTermination;
 use crate::gameserver::appserver::skills::skillfactory::{
-    SkillAfterUse, SkillCategory, SkillEndEffect, SkillEndMovement, SkillEndPathOrder, UNKNOWN_SKILL_ID,
+    SkillAfterUse, SkillCategory, SkillEndEffect, SkillEndMovement, SkillEndPathOrder,
+    SkillRegionChange, UNKNOWN_SKILL_ID,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameClockContext};
 
 use super::state::{resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut, resolve_state_user};
 use super::visualeffect::SkillVisualEffectKind;
@@ -89,6 +101,28 @@ impl CGame {
         resolve_state_move_shape_mut(self, address.holder.0, address.holder.1)?.skill_at_mut(address.slot)
     }
 
+    pub(crate) fn registered_skill_client_parameters(
+        &self,
+        address: RegisteredSkill,
+    ) -> Option<[u32; 3]> {
+        let skill = self.registered_skill(address)?;
+        let minimum = if let Some(usage) = skill.owner().minimum_range_usage() {
+            let value = self.skill_base_properties(skill.id(), skill.level())
+                .map(|properties| properties.query_property(usage)).unwrap_or(0);
+            if (value as i32) > 0 { value } else { 1 }
+        } else {
+            1
+        };
+        let skill = self.registered_skill(address)?;
+        let maximum = self.skill_base_properties(skill.id(), skill.level())
+            .map(|properties| properties.query_property(5003)).unwrap_or(0);
+        let maximum = if (maximum as i32) > 0 { maximum } else { 1 };
+        let skill = self.registered_skill(address)?;
+        let cost = self.skill_base_properties(skill.id(), skill.level())
+            .map(|properties| properties.query_property(2)).unwrap_or(0);
+        Some([minimum, maximum, cost])
+    }
+
     /// CMoveShape::StopAllSkills (0x004CDF50): без IsEnded-gate и без
     /// удаления экземпляров или AI-команд. Первые три категории читают длину
     /// заново; State фиксирует её перед циклом, но перечитывает каждый индекс.
@@ -109,6 +143,47 @@ impl CGame {
                 index += 1;
             }
         }
+    }
+
+    pub(crate) fn on_change_region_move_shape_skills(
+        &mut self,
+        region_id: i32,
+        holder: ShapeIdentity,
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<()> {
+        for category in [SkillCategory::Attack, SkillCategory::Defense, SkillCategory::Summon, SkillCategory::State] {
+            let shape = resolve_state_move_shape(self, region_id, holder)?;
+            let state_length = (category == SkillCategory::State)
+                .then(|| shape.skill_count_in_category(category));
+            let mut index = 0;
+            loop {
+                let shape = resolve_state_move_shape(self, region_id, holder)?;
+                let length = state_length.unwrap_or_else(|| shape.skill_count_in_category(category));
+                if index >= length { break; }
+                let instance = shape.skill_slot_at(category, index)
+                    .map(|slot| RegisteredSkill { holder: (region_id, holder), slot });
+                if let Some(instance) = instance {
+                    let policy = self.registered_skill(instance)
+                        .map(|skill| (skill.owner().region_change(), skill.lifecycle().is_ended()));
+                    match policy {
+                        Some((SkillRegionChange::EndOne, _)) => {
+                            let _ = self.end_registered_instance_with_clock(
+                                instance, 1, SkillTermination::Cancelled, now,
+                            );
+                        }
+                        Some((SkillRegionChange::EndZero, _)
+                            | (SkillRegionChange::EndZeroUnlessEnded, false)) => {
+                            let _ = self.end_registered_instance_without_after_use(
+                                instance, SkillTermination::Cancelled,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                index += 1;
+            }
+        }
+        Some(())
     }
 
     fn current_registered_skill(&self, region_id: i32, holder: ShapeIdentity) -> Option<RegisteredSkill> {
@@ -210,10 +285,10 @@ impl CGame {
         }
     }
 
-    fn after_use_registered_skill<Runtime: GameMainLoopRuntime>(
+    fn after_use_registered_skill(
         &mut self,
         address: RegisteredSkill,
-        runtime: &mut Runtime,
+        now: &mut dyn FnMut() -> u32,
     ) -> Option<()> {
         let skill = self.registered_skill(address)?;
         if skill.owner().category() == SkillCategory::Defense { return Some(()); }
@@ -222,7 +297,7 @@ impl CGame {
                 if let Some((_, source)) = self.registered_skill_user(address)
                     && source.object_type == 400
                 {
-                    self.damage_player_weapon(source.id, runtime);
+                    self.damage_player_weapon(source.id);
                 }
             }
             SkillAfterUse::ItemGroup => {
@@ -232,9 +307,9 @@ impl CGame {
                     let skill = self.registered_skill(address)?;
                     if let Some(properties) = self.skill_base_properties(skill.id(), skill.level()) {
                         let group = properties.query_property(0xC351);
-                        let now = runtime.now_milliseconds();
+                        let used_at = now();
                         if let Some(player) = self.find_player_mut(source.id) {
-                            player.mark_skill_item_used(group, now);
+                            player.mark_skill_item_used(group, used_at);
                         }
                     }
                 }
@@ -243,22 +318,22 @@ impl CGame {
         }
         // Callback мог удалить исходный экземпляр. Его замена не наследует reuse.
         self.registered_skill(address)?;
-        let now = runtime.now_milliseconds();
-        self.registered_skill_mut(address)?.mark_used(now);
+        let used_at = now();
+        self.registered_skill_mut(address)?.mark_used(used_at);
         Some(())
     }
 
     /// Общий AfterUse/reuse для concrete End, ещё выполняющих свои остальные
     /// части самостоятельно. Это не полный End и не изменение AI-команды.
-    pub(crate) fn after_use_player_skill<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn after_use_player_skill<Runtime: GameClockContext>(
         &mut self, player_id: i32, skill_id: u32, runtime: &mut Runtime,
     ) {
         if let Some(address) = self.registered_player_skill(player_id, skill_id) {
-            let _ = self.after_use_registered_skill(address, runtime);
+            let _ = self.after_use_registered_skill(address, &mut || runtime.now_milliseconds());
         }
     }
 
-    pub(crate) fn end_registered_player_skill<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn end_registered_player_skill<Runtime: GameClockContext>(
         &mut self,
         player_id: i32,
         skill_id: u32,
@@ -270,17 +345,29 @@ impl CGame {
         self.end_registered_instance(address, argument, termination, runtime)
     }
 
-    pub(crate) fn end_registered_instance<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn end_registered_instance<Runtime: GameClockContext>(
         &mut self,
         address: RegisteredSkill,
         argument: i32,
         termination: SkillTermination,
         runtime: &mut Runtime,
     ) -> Option<RegisteredSkillEnd> {
+        self.end_registered_instance_with_clock(
+            address, argument, termination, &mut || runtime.now_milliseconds(),
+        )
+    }
+
+    pub(crate) fn end_registered_instance_with_clock(
+        &mut self,
+        address: RegisteredSkill,
+        argument: i32,
+        termination: SkillTermination,
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<RegisteredSkillEnd> {
         if self.prepare_registered_end(address, argument)? == RegisteredSkillEnd::Released {
             return Some(RegisteredSkillEnd::Released);
         }
-        if argument != 0 { self.after_use_registered_skill(address, runtime)?; }
+        if argument != 0 { self.after_use_registered_skill(address, now)?; }
         self.finish_registered_base_end(address, termination)
     }
 

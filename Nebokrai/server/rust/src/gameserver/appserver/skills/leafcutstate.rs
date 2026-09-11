@@ -1,4 +1,8 @@
 //! Каноническое периодическое состояние `CLeafCutState` (`0x6B`).
+//! Object Begin (0x005FC800) не требует user/sufferer: base Begin,
+//! visual SetRun(1) → Update(0) → base visual tail, затем обнуление attack-count.
+//! restart_leaf_cut_state переносит Begin(NULL, holder) по точному ключу:
+//! timestamp из Unserialize и MasterInfo сохраняются; часы читает только visual.
 //! Периодический AI изменяет payload по поколенческому ключу общей арены.
 //! Чистый tick завершается до межвладельческого удара; состояние не вынимается
 //! и остаётся доступным вложенному End/Clear. Удар использует независимый снимок.
@@ -82,6 +86,7 @@ impl LeafCutState {
 
     pub(crate) const fn skill_id(self) -> u32 { self.state_id }
     pub(crate) const fn master(self) -> MasterInfo { self.master }
+    pub(crate) fn reset_attack_count(&mut self) { self.attack_count = 0; }
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, LEAF_CUT_STATE_BYTES)), None => None } }
     pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
         if let Some(offset) = &mut self.serialized_offset {
@@ -93,7 +98,6 @@ impl LeafCutState {
 
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) }
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         Self::decode_with_id(payload, offset, now_ms, LEAF_CUT_STATE_ID)
@@ -140,6 +144,42 @@ impl LeafCutState {
 
 pub(crate) fn send_leaf_cut_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: LeafCutState, begin: bool, now_ms: u32) {
     let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(state.skill_id() as i32); if begin { message.add_ulong(state.client_state_time(|| now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_leaf_cut_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<LeafCutState>(key)).copied()
+    else { return false };
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, 1,
+    ) {
+        let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_ulong(state.client_state_time(&mut *now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
+            game, region_id, holder, key,
+        );
+    }
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<LeafCutState>(key))
+    {
+        state.reset_attack_count();
+    }
+    true
 }
 
 pub(crate) fn end_leaf_cut_state(

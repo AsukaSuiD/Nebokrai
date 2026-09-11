@@ -1,4 +1,8 @@
 //! Каноническое периодическое состояние `CSpriteBurnState` (`0x1a6`).
+//! Object Begin (0x006064C0) не требует user/sufferer: base Begin,
+//! visual SetRun(1) → Update(0) → base visual tail, затем обнуление attack-count.
+//! restart_sprite_burn_state переносит Begin(NULL, holder) по точному ключу:
+//! timestamp из Unserialize и MasterInfo сохраняются; часы читает только visual.
 //! Периодический AI изменяет payload по поколенческому ключу общей арены.
 //! Чистый tick завершается до межвладельческого удара; состояние не вынимается
 //! и остаётся доступным вложенному End/Clear. Удар использует независимый снимок.
@@ -117,7 +121,6 @@ impl SpriteBurnState {
         record.try_into().expect("размер состояния горения духа фиксирован")
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
 
     pub(crate) const fn skill_id(self) -> u32 {
         SPRITE_BURN_SKILL_ID
@@ -249,6 +252,42 @@ pub(crate) fn install_sprite_burn_state(
     send_sprite_burn_state_visual_in_region(
         game, region, identity, x, y, state, true, now_ms,
     );
+}
+
+pub(crate) fn restart_sprite_burn_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<SpriteBurnState>(key)).copied()
+    else { return false };
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, 1,
+    ) {
+        let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_ulong(state.client_state_time(&mut *now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
+            game, region_id, holder, key,
+        );
+    }
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<SpriteBurnState>(key))
+    {
+        state.attack_count = 0;
+    }
+    true
 }
 
 pub(crate) fn end_sprite_burn_state(
@@ -439,19 +478,6 @@ pub(crate) fn finish_player_sprite_burn_state_on_cure(
 //
 //
 
-// ============================================================================
-// FUNCTION: CSpriteBurnState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spriteburnstate.cpp:55
-// RVA: 0x002064C0
-// ADDRESS: 006064c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CSpriteBurnStateVisualEffect::UpdateVisualEffect

@@ -451,7 +451,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
                 hurt.add_ulong(current_health);
                 CGame::append_base_attack_tail(&mut hurt, &attack);
                 let _ = game.send_player_shape_around(target_id, None, &hurt);
-                game.damage_player_armor(target_id, runtime);
+                game.damage_player_armor(target_id);
             }
         } else if attack.full_miss != 0 {
             let mut missed = CMessage::new(0x000b_f612);

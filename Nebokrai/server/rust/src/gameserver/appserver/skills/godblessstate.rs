@@ -17,6 +17,17 @@
 //! ведёт на 0x005D5B80 с тем же хвостом, но БЕЗ visual. Прямой End не читает
 //! часы; AI проверяет срок и вызывает это же завершение точного экземпляра.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x00601790/0x005EE380):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
+//! GodBless2 требует ненулевой User и при таком restart возвращает 0 до базы.
+
+//! Unserialize 0x00601830 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -44,15 +55,15 @@ impl GodBlessState {
         debug_assert!(matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID));
         Self { skill_id, started_at_ms, keep_time_ms, minimum_attack_gain, maximum_attack_gain, element_gain }
     }
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
         if !matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID) {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(skill_id, 0, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
+        Ok(Self::new(skill_id, now_ms, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
     }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
@@ -84,6 +95,27 @@ pub(crate) fn send_god_bless_state_visual(game: &mut CGame, region_id: i32, targ
     message.add_long(state.skill_id() as i32);
     if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_god_bless_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<GodBlessState>(key)).copied()
+        else { return false };
+    if state.skill_id() != GOD_BLESS_STATE_ID {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    true
 }
 
 pub(crate) fn update_god_bless_state(

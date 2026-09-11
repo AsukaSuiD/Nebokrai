@@ -7,11 +7,14 @@
 //! До завершения оно участвует в `OnChangeStates`.
 //! End (`0x005FD420`) отправляет эффект до удаления; RemoveState затем
 //! вызывает UpdateProperty. Та же цепочка действует при замене через LifeShield.
-//! Запись сохраняет ID и четыре `long` базового `CState`:
-//! user type/ID и sufferer type/ID. Это же представление читается при
-//! входе и удаляется вместе с каноническим однотиковым состоянием. Vtable
-//! exact EXE направляет `GetRemainedTime` на `CBlindState` (`0x005F2CD0`),
-//! а нулевая длительность задаётся конструктором самого `CCureState`.
+//! Exact vtable 0x0065FB0C направляет Serialize (+0x40) на 0x005F51E0,
+//! Unserialize (+0x44) на 0x005EAAC0: запись — ID и remaining (8 байт),
+//! не четыре identity поля базового CState. Unserialize сначала читает
+//! clock, затем remaining в +0x38; runtime constructor задаёт там ноль.
+//! GetRemainedTime 0x005F2CD0 использует +0x2C/+0x38 и условный второй clock.
+//! restart_cure_state переносит object Begin 0x005EA0F0: nonnull sufferer,
+//! base Begin(NULL, holder) без изменения timestamp → visual SetRun(1)
+//! → Update(0)/Begin-пакет → base visual tail. Повторного clock Begin нет.
 //! AI и замена монстрового Cure используют опубликованный настоящий region;
 //! direct End заново разрешает holder после visual, не извлекает payload заранее.
 //! Fury может накопить несколько Cure: общая арена CMoveShape сохраняет
@@ -25,17 +28,17 @@
 //! состояний через живые getters, неперенесённые overrides не выдумываются.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
-pub(crate) const CURE_STATE_BYTES: usize = 20;
+pub(crate) const CURE_STATE_BYTES: usize = 8;
 
 use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::states::state::{
-    decode_state_identities, encode_state_identities, timed_client_state_time,
+    timed_client_state_time,
     resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
@@ -43,14 +46,13 @@ use crate::nets::netserver::message::CMessage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CureState {
-    user: ShapeIdentity,
-    sufferer: ShapeIdentity,
     started_at_ms: u32,
+    keep_time_ms: u32,
 }
 
 impl CureState {
-    pub(crate) const fn new(user: ShapeIdentity, sufferer: ShapeIdentity) -> Self {
-        Self { user, sufferer, started_at_ms: 0 }
+    pub(crate) const fn new(_user: ShapeIdentity, _sufferer: ShapeIdentity) -> Self {
+        Self { started_at_ms: 0, keep_time_ms: 0 }
     }
 
     /// Соответствует timestamp-записи унаследованного `CState::Begin`.
@@ -59,23 +61,24 @@ impl CureState {
         self
     }
 
-    pub(crate) const fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-    }
 
     pub(crate) const fn skill_id(self) -> u32 {
         CURE_STATE_SKILL_ID
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms < now_ms
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) fn client_time(self) -> i32 {
-        timed_client_state_time(self.started_at_ms, 0, game_tick_milliseconds) as i32
+        self.client_state_time(game_tick_milliseconds) as i32
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn client_state_time(self, now: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now)
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != CURE_STATE_SKILL_ID {
             return Err(LegacyReadBlock {
@@ -84,17 +87,54 @@ impl CureState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        let (user, sufferer) = decode_state_identities(payload, reader.position())?;
-        Ok(Self::new(user, sufferer))
+        Ok(Self { started_at_ms: now_ms, keep_time_ms: reader.read_u32()? })
     }
 
-    pub(crate) fn encoded(self) -> [u8; CURE_STATE_BYTES] {
-        let mut bytes = Vec::with_capacity(CURE_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(CURE_STATE_SKILL_ID);
-        writer.write_bytes(&encode_state_identities(self.user, self.sufferer));
-        bytes.try_into().expect("размер состояния очищения фиксирован")
+    pub(crate) fn encoded(self, now: impl FnMut() -> u32) -> [u8; CURE_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_state_time(now))
     }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; CURE_STATE_BYTES] {
+        self.encoded_with_remaining(self.keep_time_ms)
+    }
+
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; CURE_STATE_BYTES] {
+        let mut bytes = [0; CURE_STATE_BYTES];
+        bytes[..4].copy_from_slice(&CURE_STATE_SKILL_ID.to_le_bytes());
+        bytes[4..].copy_from_slice(&remaining.to_le_bytes());
+        bytes
+    }
+}
+
+pub(crate) fn restart_cure_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.cure_state_by_key(key))
+    else { return false };
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    if crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, 1,
+    ) {
+        let mut message = CMessage::new(MANA_SHIELD_STATE_BEGIN_MESSAGE);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_ulong(state.client_state_time(&mut *now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
+            game, region_id, holder, key,
+        );
+    }
+    true
 }
 
 pub(crate) fn end_player_cure_state(game: &mut CGame, player_id: i32) -> bool {

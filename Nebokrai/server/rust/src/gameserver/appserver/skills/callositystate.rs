@@ -26,6 +26,17 @@
 //! для игрока и только при фактическом удалении этой записи.
 //! Прямой End, замена и AI используют один exact-key хвост без чтения часов.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005F4830/0x005F10F0):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
+//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
+
+//! Unserialize 0x005F48E0 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -70,10 +81,7 @@ impl CallosityState {
         self.time_to_keep
     }
 
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
-    }
+
 
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(
@@ -111,7 +119,7 @@ impl CallosityFamilyState {
         started.wrapping_add(keep as u32) < now_ms
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
         let keep_time_ms = reader.read_i32()?;
@@ -119,12 +127,12 @@ impl CallosityFamilyState {
         match skill_id {
             CALLOSITY_SKILL_ID => Ok(Self::Callosity(CallosityState::new(
                 blast_factor,
-                0,
+                now_ms,
                 keep_time_ms,
             ))),
             CALLOSITY_2_SKILL_ID => Ok(Self::Callosity2(CallosityState2::new(
                 blast_factor,
-                0,
+                now_ms,
                 keep_time_ms,
             ))),
             _ => Err(LegacyReadBlock {
@@ -156,12 +164,7 @@ impl CallosityFamilyState {
         }
     }
 
-    pub(crate) const fn activate_loaded(self, now_ms: u32) -> Self {
-        match self {
-            Self::Callosity(state) => Self::Callosity(state.activate_loaded(now_ms)),
-            Self::Callosity2(state) => Self::Callosity2(state.activate_loaded(now_ms)),
-        }
-    }
+
 
     pub(crate) fn encoded(self, now_ms: u32) -> [u8; CALLOSITY_STATE_BYTES] {
         let mut bytes = [0; CALLOSITY_STATE_BYTES];
@@ -223,6 +226,33 @@ pub(crate) fn end_callosity_state_key(
         let _ = game.update_player_properties(holder.id);
     }
     removed
+}
+
+pub(crate) fn restart_callosity_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<CallosityFamilyState>(key)).copied()
+        else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_long(state.client_state_time(now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    true
 }
 
 pub(crate) fn update_callosity_state(

@@ -18,6 +18,18 @@
 //! GetSufferer → SetFightable(true) → SetMoveable(true) → RemoveState.
 //! Прямой End, очищение и AI используют этот exact-key хвост без чтения часов.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005E8860):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
+//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
+//! После visual добавляются запреты движения, затем боя, для каждого экземпляра.
+
+//! Unserialize 0x005EAAC0 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
@@ -42,7 +54,7 @@ impl BossBlueQuakeState {
         Self { started_at_ms, keep_time_ms }
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != BOSS_BLUE_QUAKE_STATE_ID {
             return Err(LegacyReadBlock {
@@ -51,13 +63,10 @@ impl BossBlueQuakeState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self::new(0, reader.read_u32()?))
+        Ok(Self::new(now_ms, reader.read_u32()?))
     }
 
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
-    }
+
 
     pub(crate) fn encoded_for_install(self) -> [u8; BOSS_BLUE_QUAKE_STATE_BYTES] {
         self.encoded_with_remaining(self.keep_time_ms)
@@ -108,6 +117,37 @@ pub(crate) fn send_boss_blue_quake_state_visual(
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_boss_blue_quake_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueQuakeState>(key)).copied()
+        else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_long(state.client_time(now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_moveable(false);
+        shape.set_fightable(false);
+    }
+    true
 }
 
 pub(crate) fn update_boss_blue_quake_state(

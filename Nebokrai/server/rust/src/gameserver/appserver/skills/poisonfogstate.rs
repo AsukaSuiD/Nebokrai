@@ -1,4 +1,8 @@
 //! Каноническое ослабление ядовитого тумана `CPoisonFogState` (`0xC9`).
+//! Object Begin 0x00608420 требует sufferer: base Begin → visual SetRun(1),
+//! но не вызывает visual Update и не отправляет Begin-пакет. Точный
+//! restart_poison_fog_state сохраняет timestamp Unserialize (clock 0x006085E0),
+//! допускает NULL user и не читает часы; созданный visual нужен последующему End.
 //! Истечение получает ключ конкретного экземпляра общей арены; проверка
 //! срока и End не подменяют его первым состоянием с тем же ID.
 //! Direct End (vtable 0x006622D4 +0x1C, тело 0x005FD420) отправляет
@@ -61,7 +65,6 @@ impl PoisonFogState {
     }
 
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
     fn player_loss(self, target_level: u8, coefficient: u32, maximum: u32, current: u32) -> u32 {
         let scaled = if coefficient == 0 {
             0.0
@@ -127,6 +130,28 @@ impl PoisonFogState {
 }
 
 pub(crate) fn send_poison_fog_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: PoisonFogState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(POISON_FOG_STATE_ID as i32); if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }
+
+pub(crate) fn restart_poison_fog_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: crate::gameserver::appserver::moveshape::StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PoisonFogState>(key)).is_none()
+    {
+        return false;
+    }
+    if !crate::gameserver::appserver::states::state::begin_base_applied_state(
+        game, region_id, holder, key,
+    ) { return false }
+    let _ = crate::gameserver::appserver::states::state::begin_applied_state_visual(
+        game, region_id, holder, key, 1,
+    );
+    true
+}
 
 pub(crate) fn update_poison_fog_state(
     game: &mut CGame,

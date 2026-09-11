@@ -16,10 +16,20 @@
 //! Состояниями владеет `CanonicalStateStorage`; `CGame` только доставляет
 //! точные `0xBFE03/0xBFE04`. Координатный и object-identity overload-ы `Begin`
 //! пока не достигнуты и сохранены ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! restart_particular_state переносит object Begin 0x004F9710:
+//! nonnull sufferer → base Begin(NULL, holder) → visual SetRun(1),
+//! Update(0) и base visual tail → checkstamp=0. Поле checkstamp не растёт
+//! в native AI и представлено постоянным нулём, а не вторым таймером.
+//! Unserialize 0x00601350 часов не читает; Begin-пакет тоже бессрочный.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::shape::CShape;
-use crate::gameserver::appserver::states::state::default_client_state_time;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::states::state::{
+    default_client_state_time, begin_base_applied_state, begin_applied_state_visual,
+    update_applied_state_visual_base, resolve_state_move_shape,
+};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const PARTICULAR_STATE_ID: u32 = 0x186a5;
@@ -75,6 +85,32 @@ impl ParticularState {
     pub(crate) const fn due(self, now_ms: u32) -> bool {
         PARTICULAR_STATE_CHECK_INTERVAL_MS <= now_ms
     }
+}
+
+pub(crate) fn restart_particular_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<ParticularState>(key)).is_none()
+    {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) { return false }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        let message = resolve_state_move_shape(game, region_id, holder)
+            .and_then(|shape| shape.applied_state::<ParticularState>(key)
+                .map(|state| particular_state_visual_message(shape.shape(), *state, true)));
+        if let Some(message) = message {
+            let _ = game.send_move_shape_around(region_id, holder, &message);
+        }
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    true
 }
 
 pub(crate) fn particular_state_visual_message(

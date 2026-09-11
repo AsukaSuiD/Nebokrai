@@ -9,7 +9,9 @@
 
 //! End +0x1C таблицы 0x0065F044 →0x005ECFC0→CState::End0x005DBCE0:
 //! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin.
+//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin и возвращает 1.
+//! Restart Begin(NULL, holder) сохраняет user и timestamp, снимает IsEnded;
+//! собственных guards, visual, часов и сброса payload нет.
 //! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
 //! не получает user=holder. Общий base End сохраняет эту привязку отдельно
 //! от payload и не заменяет отсутствующего user держателем состояния.
@@ -18,11 +20,29 @@
 use super::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, end_base_applied_state, resolve_state_move_shape,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 pub(crate) const ENLARGE_FULL_MISS_STATE_BYTES: usize = 8;
+
+pub(crate) fn restart_enlarge_full_miss_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<EnlargeFullMissState>(key)).is_none()
+    {
+        return false;
+    }
+    begin_base_applied_state(game, region_id, holder, key)
+}
 
 pub(crate) fn end_enlarge_full_miss_state(
     game: &mut CGame,

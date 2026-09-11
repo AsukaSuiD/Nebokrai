@@ -64,7 +64,7 @@ impl CGame {
                 missed.add_long(target.id);
                 let _ = self.send_player_shape_around(target.id, None, &missed);
             } else {
-                self.damage_player_armor(target.id, runtime);
+                self.damage_player_armor(target.id);
             }
             return;
         }

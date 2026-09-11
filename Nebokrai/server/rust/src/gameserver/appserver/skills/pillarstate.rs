@@ -20,6 +20,18 @@
 //! Загрузка добавляет вложенный запрет движения для каждого экземпляра.
 //! Прямой End и AI используют один exact-key хвост без чтения часов.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005F4D30):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
+//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
+//! Запрет движения добавляется после начального visual для каждого экземпляра.
+
+//! Unserialize 0x005D6190 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 
@@ -39,15 +51,15 @@ impl PillarState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, damage_factor: f32) -> Self {
         Self { started_at_ms, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
     }
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != PILLAR_STATE_ID {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
         let remaining = reader.read_u32()?;
-        Ok(Self { started_at_ms: 0, keep_time_ms: remaining, damage_factor_bits: reader.read_u32()? })
+        Ok(Self { started_at_ms: now_ms, keep_time_ms: remaining, damage_factor_bits: reader.read_u32()? })
     }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+
     pub(crate) fn encoded_for_install(self) -> [u8; PILLAR_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
     pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; PILLAR_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
     fn encoded_with_remaining(self, remaining: u32) -> [u8; PILLAR_STATE_BYTES] {
@@ -87,6 +99,36 @@ pub(crate) fn replace_player_pillar_state(
     let Some((old, (region_id, identity, tile_x, tile_y))) = installed else { return false };
     if let Some(old) = old { send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, old, false, now_ms); }
     send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms); true
+}
+
+pub(crate) fn restart_pillar_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PillarState>(key)).copied()
+        else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_long(state.client_time(now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_moveable(false);
+    }
+    true
 }
 
 pub(crate) fn update_pillar_state(

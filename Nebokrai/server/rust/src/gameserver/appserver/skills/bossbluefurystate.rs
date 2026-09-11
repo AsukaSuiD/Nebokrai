@@ -17,6 +17,17 @@
 //! снимает оба запрета; окончание срока не подменяет проверку слабой границы.
 //! Прямой End и AI используют один exact-key хвост; только AI читает часы.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005E8ED0):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
+//! Оба запрета добавляются до выделения visual, включая loaded weak_time=0.
+
+//! Unserialize 0x005D6190 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -264,9 +275,7 @@ impl BossBlueFuryState {
         self.encoded(self.started_at_ms)
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-    }
+
 
     pub(crate) const fn weak_elapsed(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.weak_time_ms) < now_ms
@@ -305,6 +314,29 @@ pub(crate) fn send_boss_blue_fury_state_visual(
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_boss_blue_fury_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<BossBlueFuryState>(key)).is_none() {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_moveable(false);
+        shape.set_fightable(false);
+    }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    true
 }
 
 pub(crate) fn update_boss_blue_fury_state(

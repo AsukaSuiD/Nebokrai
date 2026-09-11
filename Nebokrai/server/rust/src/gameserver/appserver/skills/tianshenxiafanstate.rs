@@ -3,9 +3,15 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/skills/tianshenxiafanstate.cpp`. `Serialize` пишет три `DWORD`:
 //! ID, оставшееся время и уровень, поэтому запись занимает 12 байт. Нативный
-//! `Unserialize` асимметричен: он читает время как `WORD`, а level с `+6`;
-//! этот legacy defect сохранён при загрузке: остаток сужается до `WORD`, а
-//! level читается с `+6`. Типизированный owner участвует в login, пересчёте
+//! `Unserialize` 0x00605C20 асимметричен: без чтения часов пишет `WORD`
+//! с wire +4 в timestamp (+0x2C), а level читает с +6. Factory 0x005D8A34
+//! передаёт constructor(level=0, keep=0); Unserialize keep не меняет.
+//! Native input занимает 10 байт с ID; общий factory сохраняет это продвижение,
+//! а отдельный tracked cache-span содержит 12 байт Serialize. Неизвестный
+//! исходный tail не перечитывается с +12 и не перезаписывается расширением.
+//! GetRemainedTime — constant-zero 0x00601200, поэтому нормализация без часов.
+//! Сохранение непрозрачного tail не объявляется native round-trip гарантией.
+//! Этот legacy defect сохранён. Типизированный owner участвует в login, пересчёте
 //! свойств, строгом `CBlindState::AI`, визуалах и обратном DB-кодеке.
 //! Достигнутый AI получает один поколенческий ключ общей арены;
 //! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
@@ -20,13 +26,22 @@
 //! создаёт visual, но User остаётся NULL. Для загруженной записи базовый End
 //! лишь отмечает ended; удаление из контейнера User отсутствует.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x00605B70):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
+//! concrete Update(0) → базовый visual-хвост.
+//! Его vtable +0x30/+0x38 ведёт на 0x00601200: пакет пишет два нуля без часов.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -66,32 +81,26 @@ impl TianShenXiaFanState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        // Exact `Unserialize`: WORD времени, затем DWORD level с offset + 6.
-        let keep_time_ms = u32::from(reader.read_u16()?);
+        // Exact `Unserialize`: WORD в timestamp, затем DWORD level с offset + 6.
+        let started_at_ms = u32::from(reader.read_u16()?);
         let level = reader.read_i32()?;
-        Ok(Self::new(0, keep_time_ms, level))
+        Ok(Self::new(started_at_ms, 0, level))
     }
 
     pub(crate) const fn state_id(self) -> u32 { TIAN_SHEN_XIA_FAN_STATE_ID }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
-    }
+
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
+    pub(crate) const fn client_time(self) -> u32 {
+        0
     }
 
-    pub(crate) fn encoded(
-        self,
-        now_milliseconds: impl FnMut() -> u32,
-    ) -> [u8; TIAN_SHEN_XIA_FAN_STATE_BYTES] {
+    pub(crate) fn encoded(self) -> [u8; TIAN_SHEN_XIA_FAN_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(TIAN_SHEN_XIA_FAN_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(self.state_id());
-        writer.write_u32(self.client_time(now_milliseconds));
+        writer.write_u32(self.client_time());
         writer.write_i32(self.level);
         bytes.try_into().expect("размер состояния сошествия фиксирован")
     }
@@ -141,7 +150,7 @@ pub(crate) fn send_tian_shen_xia_fan_state_visual(
     player_id: i32,
     state: TianShenXiaFanState,
     begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
+    _now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some(player) = game.find_player(player_id) else {
         return;
@@ -152,10 +161,37 @@ pub(crate) fn send_tian_shen_xia_fan_state_visual(
     message.add_long(identity.id);
     message.add_long(state.state_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_milliseconds) as i32);
+        message.add_long(state.client_time() as i32);
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+pub(crate) fn restart_tian_shen_xia_fan_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<TianShenXiaFanState>(key)).copied()
+        else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.state_id() as i32);
+        message.add_long(0);
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    true
 }
 
 pub(crate) fn update_tian_shen_xia_fan_state(

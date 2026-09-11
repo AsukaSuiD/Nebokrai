@@ -18,6 +18,19 @@
 //! UpdateProperty вызывается только для игрока при фактическом удалении.
 //! Прямой End и AI используют один exact-key хвост; проверка срока остаётся только в AI.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005F0350):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(0) →
+//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
+//! У loop=0 базовый visual-хвост завершает ресурс; End этого состояния visual не вызывает.
+
+//! Unserialize 0x005F48E0 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+};
+use crate::nets::netserver::message::CMessage;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
@@ -90,9 +103,34 @@ impl AgilityState2 {
         self.encoded(self.started_at_ms)
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
+
+}
+
+pub(crate) fn restart_agility_state_2(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<AgilityState2>(key)).copied()
+        else { return false };
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
     }
+    if begin_applied_state_visual(game, region_id, holder, key, 0) {
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_long(state.client_time(now));
+        message.add_long(0);
+        let _ = game.send_move_shape_around(region_id, holder, &message);
+        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    }
+    true
 }
 
 pub(crate) fn update_agility_state_2(

@@ -27,6 +27,12 @@
 //! только получает отметку ended; для runtime self-cast User совпадает с holder
 //! и базовый End удаляет точную запись.
 
+//! Begin(NULL, holder) (0x005EA500) возвращает 0 на проверке User до базы:
+//! restart не меняет время, ended или прежний visual-ресурс.
+
+//! Unserialize 0x005FD660 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
@@ -64,15 +70,15 @@ impl FuryState {
         FURY_STATE_SKILL_ID
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != FURY_STATE_SKILL_ID {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(0, reader.read_u32()?, reader.read_i32()?))
+        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?))
     }
 
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+
     pub(crate) fn encoded_for_install(self) -> [u8; FURY_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
     pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; FURY_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
     fn encoded_with_remaining(self, remaining: u32) -> [u8; FURY_STATE_BYTES] {
@@ -160,6 +166,17 @@ fn fury_state_message(
         message.add_long(0);
     }
     message
+}
+
+pub(crate) fn restart_fury_state(
+    _game: &mut CGame,
+    _region_id: i32,
+    _holder: ShapeIdentity,
+    _key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    false
 }
 
 pub(crate) fn update_fury_state(

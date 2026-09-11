@@ -103,9 +103,6 @@ impl MachineShieldState {
         self.encoded_with_remaining(self.keep_time_ms)
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-    }
 
     pub(crate) fn absorb_damage(
         &mut self,

@@ -44,7 +44,7 @@ impl SealState {
         SEAL_STATE_ID
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != SEAL_STATE_ID {
             return Err(LegacyReadBlock {
@@ -53,12 +53,7 @@ impl SealState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self::new(0, reader.read_u32()?))
-    }
-
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
-        self.started_at_ms = now_ms;
-        self
+        Ok(Self::new(now_ms, reader.read_u32()?))
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; SEAL_STATE_BYTES] {

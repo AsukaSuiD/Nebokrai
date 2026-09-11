@@ -12,11 +12,17 @@
 //! направляет тот же двухчтенийный контракт на `0x005D5F30`.
 //! AutoProtect использует общий 8-байтный DB-кодек `CBlindState`, остальные
 //! шесть concrete vtable — 12-байтный кодек `ID + остаток + DWORD`.
+//! restart_script_move_state переносит только Begin(NULL, holder):
+//! шесть UseGoods/ImproveExp object Begin (0x005D52F0/0x005D4E30/
+//! 0x005D4930/0x005D5C90/0x005D57A0/0x005D60F0) сразу возвращают false
+//! при NULL user, не трогая base/visual. AutoProtect0x005D4290 требует
+//! sufferer и отклоняет только CPlayer GM: base Begin → visual SetRun(1),
+//! без Update/пакета и часов. Timestamp сохраняет отдельный clock Unserialize.
 
 use super::autoprotectstate::{AutoProtectState, AUTO_PROTECT_STATE_ID};
 use super::improveexpstate::{ImproveExpState, IMPROVE_EXP_STATE_ID};
 use super::player::PlayerCombatProperties;
-use super::shape::CShape;
+use super::shape::{CShape, ShapeIdentity};
 use super::usegoodsenlargedefstate::{
     UseGoodsEnlargeDefState, USE_GOODS_ENLARGE_DEF_STATE_ID,
 };
@@ -33,7 +39,12 @@ use super::usegoodsenlargemaxmpstate::{
     UseGoodsEnlargeMaxMpState, USE_GOODS_ENLARGE_MAX_MP_STATE_ID,
 };
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::states::state::{
+    timed_client_state_time, begin_base_applied_state, begin_applied_state_visual,
+    resolve_state_move_shape,
+};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 const SCRIPT_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
@@ -108,7 +119,7 @@ impl ScriptMoveState {
         })
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let state_id = reader.read_i32()?;
         let keep_time = reader.read_u32()?;
@@ -117,7 +128,8 @@ impl ScriptMoveState {
         } else {
             reader.read_u32()?
         };
-        Self::from_factory(state_id, keep_time as i32, value as i32, false, 0).ok_or(
+        Self::from_factory(state_id, keep_time as i32, value as i32, false, now_ms)
+            .map(|mut state| { state.visual_pending = false; state }).ok_or(
             LegacyReadBlock {
                 offset,
                 needed: 4,
@@ -139,10 +151,6 @@ impl ScriptMoveState {
         }
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-        self.visual_pending = false;
-    }
 
     pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(Self::serialized_size(self.state_id()).unwrap_or(0));
@@ -235,6 +243,28 @@ impl ScriptMoveState {
         self.visual_pending = false;
         pending
     }
+}
+
+pub(crate) fn restart_script_move_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<ScriptMoveState>(key))
+    else { return false };
+    if !state.is_auto_protect()
+        || (holder.object_type == 400
+            && game.script_player_gm_level(holder.id).unwrap_or(0) != 0)
+    {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) { return false }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    true
 }
 
 pub(crate) fn script_state_visual_message(

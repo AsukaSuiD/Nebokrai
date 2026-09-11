@@ -78,6 +78,11 @@ impl RideState {
         self.cached_goods_id = CGuid::GUID_INVALID;
     }
 
+    /// Хвост объектного Begin 0x004F8D60; cached goods не сбрасывается.
+    pub(crate) const fn reset_goods_check(&mut self) {
+        self.check_goods_timestamp_ms = 0;
+    }
+
     pub(crate) const fn additional_data(&self) -> u32 {
         self.mount_type.wrapping_shl(16) | self.level
     }

@@ -904,6 +904,7 @@ use crate::gameserver::appserver::region::{
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, resolve_state_move_shape_mut,
+    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
 };
 use crate::gameserver::appserver::script::function::{
     ScriptAwardAuthenticationContext, ScriptAwardAuthenticationSubmission, ScriptFunctionRuntime,
@@ -979,7 +980,7 @@ use crate::gameserver::appserver::shape::{
     ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
-    abort_player_base_attack_on_region_change, cancel_player_base_attack,
+    cancel_player_base_attack,
     finish_player_base_attack, BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
     SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -991,7 +992,6 @@ use crate::gameserver::appserver::skills::agility::{
 };
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
-use crate::gameserver::appserver::skills::tianshenxiafanstate::send_tian_shen_xia_fan_state_visual;
 use crate::gameserver::appserver::skills::wangsheng::{
     execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
 };
@@ -1078,7 +1078,6 @@ use crate::gameserver::appserver::skills::daubpoison::{
     cancel_player_daub_poison, complete_player_daub_poison, execute_player_daub_poison,
     is_daub_poison_dispatch, DAUB_POISON_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::daubpoisonstate::send_daub_poison_state_visual;
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -1124,19 +1123,15 @@ use crate::gameserver::appserver::skills::thunderslashphalanx::{
 use crate::gameserver::appserver::skills::pillar::{
     cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::pillarstate::send_pillar_state_visual;
 use crate::gameserver::appserver::skills::rush::{
     cancel_player_rush, execute_player_rush, is_rush_dispatch, RUSH_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::rushstate::send_rush_state_visual;
 use crate::gameserver::appserver::skills::rush2::{
     cancel_player_rush_2, execute_player_rush_2, is_rush_2_dispatch, RUSH_2_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::rushstate2::send_rush_2_state_visual;
 use crate::gameserver::appserver::skills::roar::{
     cancel_player_roar, execute_player_roar, is_roar_dispatch, ROAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::roarstate::send_roar_state_visual;
 use crate::gameserver::appserver::skills::energyholding::{
     cancel_player_energy_holding, execute_player_energy_holding, is_energy_holding_dispatch,
     ENERGY_HOLDING_SKILL_ID,
@@ -1175,7 +1170,7 @@ use crate::gameserver::appserver::skills::directprojectile::{
     cancel_player_direct_projectile, is_player_direct_projectile_dispatch,
 };
 use crate::gameserver::appserver::skills::chuckstone::{
-    execute_player_chuck_stone, on_player_chuck_stone_change_region, CHUCK_STONE_SKILL_ID,
+    execute_player_chuck_stone, CHUCK_STONE_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::skeletonarchery::{
     execute_player_skeleton_archery, SKELETON_ARCHERY_SKILL_ID,
@@ -1315,7 +1310,6 @@ use crate::gameserver::appserver::skills::littleflash::{
     LITTLE_FLASH_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
-use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, chaos_sphere_targets, ChaosSpherePhalanxTick,
 };
@@ -1338,14 +1332,13 @@ use crate::gameserver::appserver::skills::battlefairyattribute::{
     definition as battle_fairy_attribute_definition, execute_battle_fairy_attribute,
 };
 use crate::gameserver::appserver::skills::battlefairyattributestate::{
-    send_battle_fairy_attribute_state_visual, BattleFairyAttributeState,
+    BattleFairyAttributeState,
 };
 use crate::gameserver::appserver::skills::callosity::{
     cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
     CALLOSITY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::callositystate::send_callosity_state_begin;
-use crate::gameserver::appserver::skills::curestate::send_cure_state_visual;
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
     truncate_original,
@@ -1353,8 +1346,6 @@ use crate::gameserver::appserver::skills::fightdefense::{
 use crate::gameserver::appserver::skills::fury::{
     cancel_player_fury, execute_player_fury, is_fury_dispatch, FURY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::bossbluequakestate::send_boss_blue_quake_state_visual;
-use crate::gameserver::appserver::skills::knightcutstate::send_knight_cut_state_visual;
 use crate::gameserver::appserver::ai::baseai::{
     AiShapeAction, PassiveDeathAction, PassiveStiffenAction,
 };
@@ -1412,12 +1403,8 @@ use crate::gameserver::appserver::skills::knockoutruntime::{
 };
 use crate::gameserver::appserver::skills::knockout::is_knock_out_dispatch;
 use crate::gameserver::appserver::skills::knockoutstate::{
-    finish_blind_states_on_defense, finish_player_blind_states_on_defense, send_knock_out_state_visual,
+    finish_blind_states_on_defense, finish_player_blind_states_on_defense,
 };
-use crate::gameserver::appserver::skills::blindstate::send_blind_state_visual;
-use crate::gameserver::appserver::skills::sealstate::send_seal_state_visual;
-use crate::gameserver::appserver::skills::spiderwebstate::send_spider_web_state_visual;
-use crate::gameserver::appserver::skills::boalockstate::send_boa_lock_state_visual;
 use crate::gameserver::appserver::skills::snowstorm::{
     cancel_player_snow_storm, complete_player_snow_storm, execute_player_snow_storm,
     is_snow_storm_target, SNOW_STORM_SKILL_ID,
@@ -1430,8 +1417,6 @@ use crate::gameserver::appserver::skills::weak::{
     cancel_player_weak, complete_player_weak, execute_player_weak, is_weak_target, WEAK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
-use crate::gameserver::appserver::skills::weakstate::send_weak_state_visual;
-use crate::gameserver::appserver::skills::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::skills::yinyang::{
     cancel_player_yin_yang_family, complete_player_yin_yang_family,
     execute_player_yin_yang, is_yin_yang_target, YIN_YANG_SKILL_ID,
@@ -1511,22 +1496,19 @@ use crate::gameserver::appserver::skills::spiderpoison::{
     SPIDER_POISON_SKILL_ID, cancel_player_spider_poison, execute_player_spider_poison,
     is_player_spider_poison_dispatch,
 };
-use crate::gameserver::appserver::skills::spiderpoisonstate::send_spider_poison_state_visual;
-use crate::gameserver::appserver::skills::spriteburnstate::send_sprite_burn_state_visual;
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{
-    LeafCutState, send_leaf_cut_state_visual,
+    LeafCutState,
 };
 use crate::gameserver::appserver::skills::leafcutstate2::{
-    LeafCutState2, send_leaf_cut_2_state_visual,
+    LeafCutState2,
 };
 use crate::gameserver::appserver::skills::leafcutstate3::{
-    LeafCutState3, send_leaf_cut_3_state_visual,
+    LeafCutState3,
 };
-use crate::gameserver::appserver::skills::strikestate::send_strike_state_visual;
 use crate::gameserver::appserver::skills::kerosene::{
     cancel_player_kerosene, complete_player_kerosene, execute_player_kerosene,
     is_kerosene_dispatch, KEROSENE_SKILL_ID,
@@ -1573,7 +1555,6 @@ use crate::gameserver::appserver::skills::selfshield::{
     is_self_shield_skill,
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
-use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -6569,6 +6550,7 @@ impl CGame {
         source: &[u8],
         cursor: &mut usize,
         now_ms: u32,
+        state_now: &mut dyn FnMut() -> u32,
     ) -> Result<CPlayer, PlayerGameSaveCodecError> {
         let mut ordinary_threshold =
             |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level);
@@ -6582,6 +6564,7 @@ impl CGame {
             self.variable_list_file_data.as_deref(),
             now_ms,
             self.globe_setup.one_pk_count_time_ms(),
+            state_now,
             self.globe_setup.pack_add_enabled(),
             &mut ordinary_threshold,
             &mut battle_threshold,
@@ -18045,13 +18028,6 @@ impl CGame {
         let mut team_delivery = None;
         let mut world_delivery = None;
         let mut player_snapshot_size = None;
-        if self
-            .find_player(player_id)
-            .and_then(CPlayer::server_region_id)
-            .is_some_and(|source_region_id| source_region_id != target_region_id)
-        {
-            self.change_body_after_region_transition(player_id);
-        }
         let Some(source_region_id) = self
             .find_player(player_id)
             .and_then(CPlayer::server_region_id)
@@ -19460,12 +19436,34 @@ impl CGame {
         }
     }
 
-    fn prepare_changed_player_region_entry(&mut self, player_id: i32, region_id: i32, now_milliseconds: impl FnMut() -> u32) {
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.begin_region_entry_states();
+    fn restart_player_region_states(&mut self, player_id: i32, after_death: bool, now: &mut dyn FnMut() -> u32) {
+        let Some(player) = self.find_player(player_id) else { return };
+        let region_id = player.shape().get_region_id();
+        let holder = player.shape().identity();
+        if self.find_region(region_id).is_none() { return; }
+        if let Some(player) = self.find_player_mut(player_id) { player.begin_region_entry_states(); }
+        let _ = crate::gameserver::appserver::states::state::start_move_shape_states(self, region_id, holder, after_death, now);
+        let _ = self.on_change_region_move_shape_skills(region_id, holder, now);
+    }
+
+    fn prepare_changed_player_region_entry(&mut self, player_id: i32, region_id: i32, after_death: bool, mut now_milliseconds: impl FnMut() -> u32) {
+        self.restart_player_region_states(player_id, after_death, &mut now_milliseconds);
+        // CPlayer::OnEnterRegion (0x0045A170): первый проход завершает
+        // только peace-восстановление и Particular, сохраняя живые позиции.
+        let mut index = 0;
+        loop {
+            let Some(player) = self.find_player(player_id) else { return; };
+            if index >= player.move_shape().state_slot_count() { break; }
+            let key = player.move_shape().state_at(index).and_then(|(key, state)| {
+                matches!(state.state_id(), 0x186a2 | 0x186a3 | 0x186a5).then_some(key)
+            });
+            if let Some(key) = key {
+                crate::gameserver::appserver::states::state::end_move_shape_state(
+                    self, region_id, player.shape().identity(), key,
+                );
+            }
+            index += 1;
         }
-        let auto_started_skills = self.begin_player_back_stage_skills(player_id, now_milliseconds);
-        let skill_interrupted = self.on_player_skill_change_region(player_id);
         let router_delivery = self
             .region_router
             .region_info(region_id)
@@ -19476,6 +19474,15 @@ impl CGame {
                 message.add_long(range);
                 message.send_to_player(self.net_server(), player_id)
             });
+        let resume_timer = self.globe_setup.player_entry_resume_timer_ms();
+        if let Some(player) = self.find_player_mut(player_id) {
+            let states = crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState::region_entry_peace(
+                resume_timer, player.combat_properties(),
+            );
+            for state in states {
+                player.move_shape_mut().append_automatic_restore_state(state);
+            }
+        }
         let restored_hp_mp = self.restore_player_hp_mp_states(player_id).is_some();
         let particular_states = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
@@ -19492,8 +19499,7 @@ impl CGame {
         tracing::trace!(
             player_id,
             region_id,
-            auto_started_skills,
-            skill_interrupted,
+            after_death,
             ?router_delivery,
             restored_hp_mp,
             particular_states = particular_states.len(),
@@ -19637,6 +19643,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         if membership.is_ok() {
+            let _ = self.begin_player_back_stage_skills(player_id, || context.now_milliseconds());
             let _ = self.enter_gods_battle_player(region_id, player_id);
             let player_entry_delivery = self
                 .find_player(player_id)
@@ -19701,7 +19708,7 @@ impl CGame {
                 let _ = message.send_to_socket(self.net_server(), socket_id);
                 nearby_deliveries += 1;
             }
-            self.prepare_changed_player_region_entry(player_id, region_id, || context.now_milliseconds());
+            self.prepare_changed_player_region_entry(player_id, region_id, false, || context.now_milliseconds());
             self.restore_player_region_pets(player_id, region_id);
             self.restore_player_region_carriage(player_id, region_id);
             self.finish_changed_player_region_entry(player_id, region_id);
@@ -19727,31 +19734,6 @@ impl CGame {
         true
     }
 
-    /// Координирует заимствование `CPlayerAI`, а конкретный `End(false)`
-    /// оставляет владельцам навыков. Базовый `CSkill::OnChangeRegion` пуст,
-    /// поэтому сюда входят только доказанные переопределения.
-    fn on_player_skill_change_region(&mut self, player_id: i32) -> bool {
-        let Some(skill_id) = self.find_player(player_id).and_then(CPlayer::current_skill_id) else {
-            return false;
-        };
-        let Some(mut player_ai) = self.find_player_mut(player_id).map(CPlayer::take_player_ai)
-        else {
-            return false;
-        };
-        let interrupted = match skill_id {
-            BASE_ATTACK_SKILL_ID => {
-                abort_player_base_attack_on_region_change(self, player_id, &mut player_ai)
-            }
-            CHUCK_STONE_SKILL_ID => {
-                on_player_chuck_stone_change_region(self, player_id, &mut player_ai)
-            }
-            _ => false,
-        };
-        self.find_player_mut(player_id)
-            .expect("игрок сохраняется во время OnChangeRegion навыка")
-            .restore_player_ai(player_ai);
-        interrupted
-    }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем
     /// сдвигает внешний message cursor на consumed length.
@@ -25246,10 +25228,9 @@ impl CGame {
         })
     }
 
-    /// Полный достигнутый путь `CPlayer::OnRelive`. Первый
-    /// `AutoStartPassSkill` и следующий virtual `OnEnterRegion(true)` замкнуты
-    /// на тех же canonical player/region owner-ах; поэтому исходный двойной
-    /// запуск back-stage навыков сохраняется. Очистку спутников, пересчёт
+    /// Достигнутый путь CPlayer::OnRelive: AutoStartPassiveSkill предшествует
+    /// virtual OnEnterRegion(true), внутри которого повторного AutoStart нет.
+    /// Оба вызова используют те же player/region owners. Очистку спутников, пересчёт
     /// свойств, движение, `OnChangeStates`, состояния покоя и мира, virtual
     /// `GetReturnPoint`, смену региона и client publication исполняет `CGame`.
     pub(crate) fn relive_player(&mut self, player_id: i32, relive_type: i32, mut now_milliseconds: impl FnMut() -> u32) {
@@ -25270,7 +25251,7 @@ impl CGame {
                 .expect("игрок сохранён после синхронной проверки смерти");
             player.clear_relive_uncreated_companions()
         };
-        self.prepare_changed_player_region_entry(player_id, region_id, now_milliseconds);
+        self.prepare_changed_player_region_entry(player_id, region_id, true, now_milliseconds);
         self.finish_changed_player_region_entry(player_id, region_id);
         let (combat_property_delivery, tao_zhuang_ran) = self
             .update_player_properties(player_id)
@@ -28585,9 +28566,101 @@ impl CGame {
         message.add_ulong(state.level);
         if begin {
             message.add_ulong(state.remaining_time_ms(now_ms));
-            message.add_ulong(u32::from(state.state_type));
+            message.add_ulong(0);
         }
         let _ = self.send_player_shape_around(player_id, None, &message);
+    }
+
+    /// Повторный объектный Begin CExState/CExStateNew (0x005D9780/0x005D9C40).
+    /// NULL user сохраняет время загрузки и источник; sufferer — живой holder.
+    pub(crate) fn restart_move_shape_extended_state(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        _after_death: bool, now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<ExtendedState>(key)).cloned() else { return false };
+        begin_base_applied_state(self, region_id, holder, key);
+        begin_applied_state_visual(self, region_id, holder, key, 1);
+        let remaining = match state.kind {
+            ExtendedStateKind::Original => crate::gameserver::appserver::states::state::change_body_client_time(state.started_ms, state.keep_time_ms, now),
+            ExtendedStateKind::New => crate::gameserver::appserver::states::state::extended_client_time(state.started_ms, state.keep_time_ms, now),
+        };
+        let mut message = CMessage::new(0x0b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_ulong(state.state_id());
+        message.add_ulong(state.level);
+        message.add_ulong(remaining);
+        message.add_ulong(0);
+        let _ = self.send_move_shape_around(region_id, holder, &message);
+        update_applied_state_visual_base(self, region_id, holder, key);
+        true
+    }
+
+    /// CNotDisappearAfterDead::Begin (0x005D7910), без сброса item timestamp.
+    pub(crate) fn restart_move_shape_appellation_state(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        _after_death: bool, now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<UndeadState>(key)).cloned() else { return false };
+        begin_base_applied_state(self, region_id, holder, key);
+        begin_applied_state_visual(self, region_id, holder, key, 1);
+        let remaining = crate::gameserver::appserver::states::state::extended_client_time(state.started_ms(), state.keep_time_ms(), now);
+        let mut message = CMessage::new(0x0b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_ulong(56);
+        message.add_ulong(state.state_id());
+        message.add_ulong(remaining);
+        message.add_ulong(0);
+        let _ = self.send_move_shape_around(region_id, holder, &message);
+        update_applied_state_visual_base(self, region_id, holder, key);
+        true
+    }
+
+    /// CRideState::Begin (0x004F8D60): visual предшествует fight-lock и reset.
+    pub(crate) fn restart_move_shape_ride_state(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+        _after_death: bool, _now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        let Some(state) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<RideState>(key)).cloned() else { return false };
+        begin_base_applied_state(self, region_id, holder, key);
+        begin_applied_state_visual(self, region_id, holder, key, 1);
+        let mut message = CMessage::new(0x0b_fe03);
+        message.add_long(holder.object_type);
+        message.add_long(holder.id);
+        message.add_ulong(RIDE_STATE_ID);
+        message.add_long(state.client_state_time());
+        message.add_ulong(state.additional_data());
+        let _ = self.send_move_shape_around(region_id, holder, &message);
+        update_applied_state_visual_base(self, region_id, holder, key);
+        if let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) {
+            shape.set_fightable(false);
+            if let Some(state) = shape.applied_state_mut::<RideState>(key) { state.reset_goods_check(); }
+        }
+        true
+    }
+
+    /// CHBY virtual SetRegion (0x005DAB80), вызывается только общим живым обходом.
+    pub(crate) fn set_change_body_state_region(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey,
+    ) {
+        let should_end = resolve_state_move_shape_mut(self, region_id, holder)
+            .and_then(|shape| shape.applied_state_mut::<ChangeBodyState>(key))
+            .is_some_and(ChangeBodyState::on_change_region);
+        if should_end {
+            if holder.object_type == PLAYER_TYPE {
+                let text = self.get_string_by_id(b"GS1146");
+                let _ = colored_player_notice_message(0xffff_ffff, 0, text).send_to_player(self.net_server(), holder.id);
+            }
+            self.end_move_shape_change_body_state(region_id, holder, key);
+        }
     }
 
     pub(crate) fn update_move_shape_extended_state<Runtime: GameMainLoopRuntime>(
@@ -29000,12 +29073,9 @@ impl CGame {
                 self.send_change_body_hotkeys(identity.id, std::iter::once(index + 12));
             }
         }
-        let factory = self.skill_factory.clone();
         for (skill_id, _) in state.skills {
-            if skill_id != 0
-                && let Some(shape) = resolve_state_move_shape_mut(self, region_id, identity)
-            {
-                let _ = shape.delete_skill(u32::from(skill_id), &factory);
+            if skill_id != 0 {
+                let _ = self.delete_move_shape_skill(region_id, identity, u32::from(skill_id));
             }
         }
         let removed = resolve_state_move_shape_mut(self, region_id, identity)
@@ -29406,13 +29476,6 @@ impl CGame {
         }
     }
 
-    pub(crate) fn change_body_after_region_transition(&mut self, player_id: i32) {
-        let state_ids = self
-            .find_player_mut(player_id)
-            .map(CPlayer::change_body_region_transition_end_keys)
-            .unwrap_or_default();
-        self.end_change_body_states(player_id, state_ids, Some(b"GS1146"));
-    }
 
     pub(crate) fn change_body_after_player_lost(&mut self, player_id: i32) -> usize {
         let state_ids = self
@@ -29472,43 +29535,23 @@ impl CGame {
     }
 
     fn send_change_body_visual(&mut self, player_id: i32, state: &ChangeBodyState, begin: bool) {
-        let Some(player) = self.find_player(player_id) else {
+        let Some(player) = self.find_player(player_id) else { return };
+        let holder = player.shape().identity();
+        let region_id = player.shape().get_region_id();
+        if begin {
+            crate::gameserver::appserver::chbystate::send_change_body_state_begin_visual(
+                self, region_id, holder, state, &mut game_tick_milliseconds,
+            );
             return;
-        };
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
-        message.add_long(identity.object_type);
+        }
+        let mut message = CMessage::new(0x0b_fe04);
+        message.add_long(holder.object_type);
         message.add_long(player_id);
         message.add_long(0x37);
-        if begin {
-            message.add_ulong(state.keep_time_ms);
-            message.add_long(0);
-            message.add_ulong(state.mode);
-            message.add_ulong(state.level);
-            message.add_ulong(u32::from(state.visual_effect));
-            message.add_byte(u8::from(state.continue_after_death));
-            for (skill_id, level) in state.skills {
-                message.base_mut().add_short(skill_id as i16);
-                message
-                    .base_mut()
-                    .add_short(if skill_id == 0 { 0 } else { level as i16 });
-                let properties = self
-                    .skill_factory
-                    .query_skill_base_properties(u32::from(skill_id), i32::from(level));
-                message.add_long(properties.map_or(0, |p| p.query_property(10_005) as i32));
-                message.add_long(properties.map_or(0, |p| {
-                    let range = p.query_property(5_003) as i32;
-                    if range > 0 { range } else { 1 }
-                }));
-                message.add_long(properties.map_or(0, |p| p.query_property(2) as i32));
-                message.add_long(properties.map_or(0, |p| p.query_property(10_001) as i32));
-            }
-        } else {
-            message.add_long(0);
-            message.add_ulong(state.level);
-            for (skill_id, _) in state.skills {
-                message.base_mut().add_short(skill_id as i16);
-            }
+        message.add_long(0);
+        message.add_ulong(state.level);
+        for (skill_id, _) in state.skills {
+            message.base_mut().add_short(skill_id as i16);
         }
         let _ = self.send_player_shape_around(player_id, None, &message);
     }
@@ -29564,7 +29607,7 @@ impl CGame {
         message.add_ulong(state.state_id());
         if begin {
             message.add_ulong(state.remaining_time_ms(now_ms));
-            message.add_ulong(u32::from(state.state_type()));
+            message.add_ulong(0);
         }
         let _ = message.send_to_around(Some(region), player.shape(), None, &runtime);
     }
@@ -30841,7 +30884,7 @@ impl CGame {
             .players
             .remove(&expected_player_id)
             .expect("login player только что зарегистрирован");
-        let Some(mut owner) = self.take_region_owner(region_id) else {
+        let Some(owner) = self.take_region_owner(region_id) else {
             self.players.insert(expected_player_id, player);
             return Err(GamePlayerLoginBlock::MissingRegion { region_id });
         };
@@ -30878,38 +30921,14 @@ impl CGame {
                 .set_pos_xy_base(position.x as f32 + 0.5, position.y as f32 + 0.5);
             relocation = Some((position.x, position.y));
         }
-        let facts = ShapeRuntimeFacts {
-            is_player: true,
-            monster: None,
-            is_npc: false,
-            goods: None,
-            is_move_shape: true,
-            blocks_region_cell: !player.is_dead(),
-            figure: player.figure(),
-        };
-        let area_width = self.globe_setup.area_width();
-        let area_height = self.globe_setup.area_height();
-        let membership_tick_ms = context.now_milliseconds();
-        let membership = self.with_legacy_random_stream(|game, random| {
-            owner.base_mut().add_object_with_area_entry(
-                &mut player,
-                facts,
-                area_width,
-                area_height,
-                membership_tick_ms,
-                random,
-                |region, area_index, context| {
-                    game.wake_owned_monsters_around_area(region, area_index, || {
-                        context.now_milliseconds()
-                    });
-                },
-            )
-        });
+        // OnLogMessage 0x49F140 ещё не выполняет spatial AddObject: после
+        // подготовки XY остаётся ссылка на регион, а AddObject/AutoStart и
+        // OnEnterRegion(false) исполняет только подтверждение 8F801.
+        // Region-specific SetEnterPosXY(+0xA8, call 0x49FBAF) для City/Country
+        // пока не подключён: здесь сохранена только прежняя общая XY-подготовка.
+        player.movement_shape_mut().assign_to_server_region();
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
-        membership.map_err(GamePlayerLoginBlock::Membership)?;
-        let auto_started_skills = self.begin_player_back_stage_skills(expected_player_id, || context.now_milliseconds());
-        let _ = self.enter_gods_battle_player(region_id, expected_player_id);
         let team_snapshot_queued = team_id != 0 && !team_session_found;
         if team_snapshot_queued {
             self.team_snapshot_queries
@@ -30917,724 +30936,10 @@ impl CGame {
         }
 
         let login_tick_ms = context.now_milliseconds();
-        let _loaded_consumable_restore_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_consumable_restore_states(login_tick_ms);
-        let _loaded_automatic_restore_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_automatic_restore_states(login_tick_ms);
-        let loaded_change_body_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_change_body_states(login_tick_ms);
-        let loaded_ride_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_ride_state();
-        let loaded_extended_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_extended_states(login_tick_ms);
-        let loaded_script_move_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_script_move_states(login_tick_ms);
-        let loaded_tian_shen_xia_fan_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_tian_shen_xia_fan_state(login_tick_ms);
-        self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_wangsheng_state(login_tick_ms);
-        let loaded_appellation_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_appellation_states(login_tick_ms);
-        let loaded_leaf_cut_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_leaf_cut_state(login_tick_ms);
-        let loaded_leaf_cut_2_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_leaf_cut_2_state(login_tick_ms);
-        let loaded_leaf_cut_3_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_leaf_cut_3_state(login_tick_ms);
-        let loaded_strike_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_strike_states(login_tick_ms);
-        let loaded_kerosene_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_kerosene_state(login_tick_ms);
-        let loaded_poison_fog_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_poison_fog_state(login_tick_ms);
-        let loaded_blind_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_blind_state(login_tick_ms);
-        let loaded_seal_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_seal_state(login_tick_ms);
-        let loaded_boa_lock_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_boa_lock_state(login_tick_ms);
-        let loaded_rush_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_rush_state(login_tick_ms);
-        let loaded_rush_2_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_rush_2_state(login_tick_ms);
-        let loaded_pillar_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_pillar_state(login_tick_ms);
-        let loaded_rage_break_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_rage_break_state(login_tick_ms);
-        let loaded_knock_out_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_knock_out_state(login_tick_ms);
-        let loaded_spider_web_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_spider_web_state(login_tick_ms);
-        let loaded_god_bless_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_god_bless_state(login_tick_ms);
-        let loaded_weak_state = self
-            .players
-            .get(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_weak_state();
-        let loaded_roar_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_roar_state(login_tick_ms);
-        let loaded_soul_collect_state = self
-            .players
-            .get(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_soul_collect_state();
-        let loaded_sprite_burn_state = self.players.get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_sprite_burn_state(login_tick_ms);
-        let loaded_spider_poison_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_spider_poison_state(login_tick_ms);
-        let loaded_daub_poison_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_daub_poison_state(login_tick_ms);
-        let loaded_boss_blue_quake_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_boss_blue_quake_state(login_tick_ms);
-        let loaded_knight_cut_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_knight_cut_state(login_tick_ms);
-        let loaded_cure_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_cure_states(login_tick_ms);
-        let loaded_heal_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_heal_states(login_tick_ms);
-        self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_fury_states(login_tick_ms);
-        self.players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_hearten_state(login_tick_ms);
-        let (loaded_persistent_agility, loaded_agility_2) = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_agility_states(login_tick_ms);
-        let loaded_blood_loss_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_blood_loss_state(login_tick_ms);
-        let loaded_energy_holding_state = self
-            .players
-            .get(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .move_shape().energy_holding_states().copied().collect::<Vec<_>>();
-        self.players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_callosity_state(login_tick_ms);
-        let loaded_boss_blue_fury_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_boss_blue_fury_state(login_tick_ms);
-        let loaded_poison_arrow_state = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_poison_arrow_state(login_tick_ms);
-        let loaded_defense_shields = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_persisted_defense_shields(login_tick_ms);
-        let loaded_battle_fairy_attribute_states = self
-            .players
-            .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
-            .activate_loaded_battle_fairy_attribute_states(login_tick_ms);
-        for state in &loaded_appellation_states {
-            self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
-        }
-        if let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            let identity = player.shape().identity();
-            for state in loaded_battle_fairy_attribute_states {
-                send_battle_fairy_attribute_state_visual(self, region_id, identity, x, y, state, true);
-            }
-        }
-        for state in &loaded_extended_states {
-            self.send_extended_state_visual(expected_player_id, state, true, login_tick_ms);
-        }
-        for state in loaded_script_move_states {
-            let _ = self.send_script_move_state_visual(expected_player_id, state, true);
-        }
-        for state in loaded_tian_shen_xia_fan_state {
-            send_tian_shen_xia_fan_state_visual(
-                self,
-                expected_player_id,
-                state,
-                true,
-                || login_tick_ms,
-            );
-        }
-        for state in &loaded_change_body_states {
-            self.send_change_body_visual(expected_player_id, state, true);
-        }
-        for state in &loaded_ride_states {
-            self.send_ride_visual(expected_player_id, state, true);
-        }
-        for state in loaded_leaf_cut_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_leaf_cut_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_leaf_cut_2_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_leaf_cut_2_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_leaf_cut_3_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_leaf_cut_3_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        if let Some(player) = self.find_player(expected_player_id)
-            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-        {
-            let identity = player.shape().identity();
-            for state in loaded_strike_states {
-                send_strike_state_visual(self, region_id, identity, x, y, state, true, login_tick_ms);
-            }
-        }
-        for state in loaded_poison_fog_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
-        }
-        for state in loaded_kerosene_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { crate::gameserver::appserver::skills::kerosenestate::send_kerosene_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
-        }
-        for state in loaded_blind_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_blind_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity {
-                        object_type: PLAYER_TYPE,
-                        id: expected_player_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    x,
-                    y,
-                    state,
-                    true,
-                    || context.now_milliseconds(),
-                );
-            }
-        }
-        for state in loaded_seal_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_seal_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity {
-                        object_type: PLAYER_TYPE,
-                        id: expected_player_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    x,
-                    y,
-                    state,
-                    true,
-                    || context.now_milliseconds(),
-                );
-            }
-        }
-        for state in loaded_boa_lock_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_boa_lock_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    || login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_rush_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_rush_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    || login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_rush_2_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_rush_2_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_pillar_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_pillar_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_rage_break_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_rage_break_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_knock_out_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_knock_out_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity {
-                        object_type: PLAYER_TYPE,
-                        id: expected_player_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    x,
-                    y,
-                    state,
-                    true,
-                    || context.now_milliseconds(),
-                );
-            }
-        }
-        for state in loaded_spider_web_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_spider_web_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity {
-                        object_type: PLAYER_TYPE,
-                        id: expected_player_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    x,
-                    y,
-                    state,
-                    true,
-                    || context.now_milliseconds(),
-                );
-            }
-        }
-        for state in loaded_god_bless_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_god_bless_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                    x,
-                    y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_weak_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_weak_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                    x,
-                    y,
-                    state,
-                    true,
-                );
-            }
-        }
-        for state in loaded_roar_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_roar_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    || login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_soul_collect_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_soul_collect_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
-                    x,
-                    y,
-                    state,
-                    true,
-                );
-            }
-        }
-        for state in loaded_sprite_burn_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_sprite_burn_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms);
-            }
-        }
-        for state in loaded_spider_poison_state {
-            if let Some(player) = self.find_player(expected_player_id) && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { send_spider_poison_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms); }
-        }
-        for state in loaded_daub_poison_state { send_daub_poison_state_visual(self, expected_player_id, state, true, || login_tick_ms); }
-        for state in loaded_boss_blue_quake_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_boss_blue_quake_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    || login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_knight_cut_state {
-            if let Some(player) = self.find_player(expected_player_id)
-                && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                send_knight_cut_state_visual(
-                    self,
-                    region_id,
-                    player.shape().identity(),
-                    x,
-                    y,
-                    state,
-                    true,
-                    || login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_cure_states {
-            send_cure_state_visual(self, expected_player_id, state, true);
-        }
-        let loaded_heal_position = self.find_player(expected_player_id).and_then(|player| {
-            Some((
-                player.shape().get_tile_x().ok()?,
-                player.shape().get_tile_y().ok()?,
-            ))
-        });
-        if let Some((x, y)) = loaded_heal_position {
-            for state in loaded_heal_states {
-                crate::gameserver::appserver::skills::healstate::send_heal_state_visual(
-                    self,
-                    region_id,
-                    ShapeIdentity {
-                        object_type: PLAYER_TYPE,
-                        id: expected_player_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    x,
-                    y,
-                    state,
-                    true,
-                    || context.now_milliseconds(),
-                );
-            }
-        }
-        for state in loaded_persistent_agility {
-            crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
-                self,
-                expected_player_id,
-                state.skill_id(),
-                true,
-                0,
-            );
-        }
-        for state in loaded_agility_2 {
-            crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
-                self,
-                expected_player_id,
-                state.skill_id(),
-                true,
-                state.client_time(|| context.now_milliseconds()),
-            );
-        }
-        for state in loaded_blood_loss_state {
-            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                    Some((
-                        player.shape().identity(),
-                        player.shape().get_tile_x().ok()?,
-                        player.shape().get_tile_y().ok()?,
-                    ))
-                }) {
-                crate::gameserver::appserver::skills::bloodlossstate::send_blood_loss_state_visual(
-                    self,
-                    region_id,
-                    identity,
-                    tile_x,
-                    tile_y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_energy_holding_state {
-            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                    Some((
-                        player.shape().identity(),
-                        player.shape().get_tile_x().ok()?,
-                        player.shape().get_tile_y().ok()?,
-                    ))
-                }) {
-                crate::gameserver::appserver::skills::energyholdingstate::send_energy_holding_state_visual(
-                    self,
-                    region_id,
-                    identity,
-                    tile_x,
-                    tile_y,
-                    state,
-                    true,
-                );
-            }
-        }
-        for state in loaded_boss_blue_fury_state {
-            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                    Some((
-                        player.shape().identity(),
-                        player.shape().get_tile_x().ok()?,
-                        player.shape().get_tile_y().ok()?,
-                    ))
-                }) {
-                crate::gameserver::appserver::skills::bossbluefurystate::send_boss_blue_fury_state_visual(
-                    self,
-                    region_id,
-                    identity,
-                    tile_x,
-                    tile_y,
-                    state,
-                    true,
-                    login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_poison_arrow_state {
-            if let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
-                    Some((player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-                }) {
-                crate::gameserver::appserver::skills::poisonarrowstate::send_poison_arrow_state_visual(
-                    self, region_id, identity, tile_x, tile_y, state, true, login_tick_ms,
-                );
-            }
-        }
-        for state in loaded_defense_shields {
-            match state {
-                DefenseShieldState::Mana(state) => {
-                    crate::gameserver::appserver::skills::manashieldstate::send_mana_shield_state_visual(
-                        self,
-                        expected_player_id,
-                        state,
-                        true,
-                        || context.now_milliseconds(),
-                    );
-                }
-                DefenseShieldState::Machine(state) => {
-                    crate::gameserver::appserver::skills::machineshieldstate::send_machine_shield_state_visual(
-                        self,
-                        expected_player_id,
-                        state,
-                        true,
-                        || context.now_milliseconds(),
-                    );
-                }
-                DefenseShieldState::Life(state) => {
-                    crate::gameserver::appserver::skills::lifeshieldstate::send_life_shield_state_visual(
-                        self,
-                        expected_player_id,
-                        state,
-                        true,
-                        || context.now_milliseconds(),
-                    );
-                }
-                DefenseShieldState::Promotion(state) => {
-                    let target_position = self.find_player(expected_player_id).and_then(|player| {
-                        Some((
-                            player.shape().identity(),
-                            player.shape().get_tile_x().ok()?,
-                            player.shape().get_tile_y().ok()?,
-                        ))
-                    });
-                    if let Some((target, tile_x, tile_y)) = target_position {
-                        crate::gameserver::appserver::skills::promotionstate::send_promotion_state_begin(
-                            self,
-                            region_id,
-                            target,
-                            tile_x,
-                            tile_y,
-                            state,
-                            || context.now_milliseconds(),
-                        );
-                    }
-                }
-            }
-        }
-        self.restore_player_region_pets(expected_player_id, region_id);
-        self.restore_player_region_carriage(expected_player_id, region_id);
-
         let first_login = self
             .players
             .get_mut(&expected_player_id)
-            .expect("spatial login сохраняет player map owner")
+            .expect("login сохраняет player map owner")
             .mark_login_script_started();
         let login_script_id = if first_login {
             let path = self.quest_system.player_login_script.clone();
@@ -31650,6 +30955,25 @@ impl CGame {
         } else {
             None
         };
+        // Native call 0x49FC0A — InitSkills(+0x14C), не UpdateProperty:
+        // создание отсутствующих intrinsic skills, затем SetCurrentSkill.
+        let (default_skill_id, current_skill_id) = {
+            let player = self.players.get_mut(&expected_player_id)
+                .expect("login script не удаляет player owner");
+            player.initialize_intrinsic_skills(&self.skill_factory);
+            (player.default_attack_skill_id(&self.goods_factory), player.current_skill_id())
+        };
+        if let Some(current) = current_skill_id
+            .and_then(|id| self.registered_player_skill(expected_player_id, id))
+            && self.registered_skill(current).is_some_and(|skill| {
+                !skill.lifecycle().is_ended() && !skill.lifecycle().is_prepared()
+            })
+        {
+            let _ = self.end_registered_instance_without_after_use(current, SkillTermination::Cancelled);
+        }
+        if let Some(player) = self.find_player_mut(expected_player_id) {
+            player.set_current_skill_id(Some(default_skill_id));
+        }
         let recomputed = self
             .recompute_player_properties_for_update(expected_player_id)
             .expect("login script не удаляет player owner");
@@ -31694,7 +31018,7 @@ impl CGame {
         };
         let region = self
             .find_region(region_id)
-            .expect("spatial login уже проверил region owner")
+            .expect("login уже проверил region owner")
             .base();
         let region_snapshot = (
             region.name.as_bytes().to_vec(),
@@ -31836,7 +31160,6 @@ impl CGame {
             team_id,
             captain,
             region_id,
-            auto_started_skills,
             first_login,
             ?relocation,
             ?login_script_id,
@@ -31900,7 +31223,7 @@ impl CGame {
 
     /// Точный lookup `CTeamState::GetAdditionalData`: отсутствие team ID,
     /// session mapping или живого `CTeam` оставляет исходное значение `1`.
-    fn team_state_member_count(&self, team_id: i32) -> usize {
+    pub(crate) fn team_state_member_count(&self, team_id: i32) -> usize {
         if team_id == 0 {
             return 1;
         }
@@ -38478,11 +37801,10 @@ impl CGame {
         }
     }
 
-    fn damage_player_equipment<Runtime: GameMainLoopRuntime>(
+    fn damage_player_equipment(
         &mut self,
         player_id: i32,
         position: u32,
-        _runtime: &mut Runtime,
     ) {
         let fray = self.globe_setup.goods_durability_fray();
         let (old, current, identity, payload) = {
@@ -38541,12 +37863,11 @@ impl CGame {
         }
     }
 
-    pub(crate) fn damage_player_weapon<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn damage_player_weapon(
         &mut self,
         player_id: i32,
-        runtime: &mut Runtime,
     ) {
-        self.damage_player_equipment(player_id, 2, runtime);
+        self.damage_player_equipment(player_id, 2);
     }
 
     fn drop_monster_goods<Runtime: MonsterDeathContext>(
@@ -39025,10 +38346,9 @@ impl CGame {
         let _ = self.queue_script_file(b"scripts/monster/monster_all.script", context);
     }
 
-    pub(crate) fn damage_player_armor<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn damage_player_armor(
         &mut self,
         player_id: i32,
-        runtime: &mut Runtime,
     ) {
         const POSITIONS: [u32; 10] = [0, 1, 3, 4, 9, 10, 12, 13, 14, 15];
         let safe_cell = self
@@ -39053,7 +38373,7 @@ impl CGame {
             std::array::from_fn(|_| game_legacy_random(&mut self.random_state, 100));
         for ((position, probability), roll) in POSITIONS.into_iter().zip(probabilities).zip(rolls) {
             if roll < probability {
-                self.damage_player_equipment(player_id, position, runtime);
+                self.damage_player_equipment(player_id, position);
             }
         }
     }
@@ -45570,7 +44890,7 @@ impl CGame {
             hurt.add_ulong(current_health);
             Self::append_base_attack_tail(&mut hurt, &attack);
             let _ = self.send_player_shape_around(target_id, None, &hurt);
-            self.damage_player_armor(target_id, runtime);
+            self.damage_player_armor(target_id);
         }
         self.increase_owned_player_rp(master.master_id, true, 0);
         true
@@ -48240,9 +47560,6 @@ impl CGame {
                     ServerRegionClearPlayerTick::Expired => {
                         let player_ids = owner.base().registered_player_ids();
                         self.restore_region_owner(owner);
-                        for change in &region_changes {
-                            self.change_body_after_region_transition(change.player_id);
-                        }
                         let returned_players = player_ids.len();
                         for player_id in player_ids {
                             self.return_region_player(region_id, player_id);
@@ -48277,9 +47594,6 @@ impl CGame {
                 }
             }
             self.restore_region_owner(owner);
-            for change in &region_changes {
-                self.change_body_after_region_transition(change.player_id);
-            }
             trace_region_ai_pass(
                 region_id,
                 battle_fairy_deaths,

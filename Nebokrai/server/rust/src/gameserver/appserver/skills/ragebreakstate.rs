@@ -27,6 +27,20 @@
 //! для игрока и только при фактическом удалении этой записи.
 //! Прямой End, замена и AI используют один exact-key хвост без чтения часов.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005FD5C0):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
+//! Остаток общего property-прохода: OnUpdateProperties 0x005FD480 после
+//! GetSufferer вызывает существующий visual Update(0) перед формулой атаки.
+//! BFE03 использует dynamic client-time и additional=0, затем base visual tail;
+//! текущая property-проекция переносит формулу, но ещё не этот callback.
+
+//! Unserialize 0x005FD660 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 
@@ -52,15 +66,15 @@ impl RageBreakState {
         Self { started_at_ms, keep_time_ms, attack_gain_percent }
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != RAGE_BREAK_STATE_ID {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(0, reader.read_u32()?, reader.read_i32()?))
+        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?))
     }
 
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+
     pub(crate) fn encoded_for_install(self) -> [u8; RAGE_BREAK_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
     pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; RAGE_BREAK_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
     fn encoded_with_remaining(self, remaining: u32) -> [u8; RAGE_BREAK_STATE_BYTES] {
@@ -72,6 +86,10 @@ impl RageBreakState {
     }
 
     pub(crate) const fn skill_id(self) -> u32 { RAGE_BREAK_STATE_ID }
+
+    pub(crate) const fn restart_timer(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+    }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
@@ -127,6 +145,25 @@ pub(crate) fn end_rage_break_state_key(
         let _ = game.update_player_properties(holder.id);
     }
     removed
+}
+
+pub(crate) fn restart_rage_break_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<RageBreakState>(key)).is_none() {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    true
 }
 
 pub(crate) fn update_rage_break_state(

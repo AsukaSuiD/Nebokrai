@@ -51,14 +51,14 @@ impl RestoreMpState {
         RESTORE_MP_STATE_ID
     }
 
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let _state_id = reader.read_i32()?;
         Ok(Self::new(
             reader.read_u32()?,
             reader.read_u32()?,
             reader.read_u32()?,
-            0,
+            now_ms,
         ))
     }
 
@@ -80,8 +80,8 @@ impl RestoreMpState {
         bytes.try_into().expect("размер состояния восстановления MP фиксирован")
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
+
+    pub(crate) fn reset_restore_count(&mut self) {
         self.restore_count = 0;
     }
 

@@ -11,7 +11,7 @@
 //! `DWORD HP, DWORD MP, WORD RP, WORD YP` и текущий spatial owner. Цель эффекта
 //! хранится отдельно от владельца записи только ради подтверждённой
 //! ветви `CSuperHeal2`; DB-запись её не сохраняет, поэтому после загрузки
-//! целью снова становится владелец записи, как в исходном `Unserialize`.
+//! целью снова становится владелец записи при исходном `Begin(NULL, holder)`.
 //! Vtable exact EXE направляет клиентский срок семейства на общее тело
 //! `CBlindState::GetRemainedTime` по `0x005F2CD0`.
 //! Периодическая прибавка загружает полный unsigned `hp_gain` в x87,
@@ -31,6 +31,17 @@
 //! Прямой End и истечение используют один exact-key хвост без часов;
 //! ключ никогда не ищется в чужой арене при отличающемся effect_target.
 
+//! Restart воспроизводит только Begin(NULL, holder) (0x005F8BA0/0x005EFD20/0x005F6650/0x005EEBE0):
+//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
+//! Sufferer перепривязывается к holder до visual; heal_count обнуляется после BeginVisual.
+
+//! Unserialize 0x005EEC70 сохраняет один собственный clock в timestamp;
+//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
+
+use crate::gameserver::appserver::states::state::{
+    begin_base_applied_state, begin_applied_state_visual,
+};
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use super::fightdefense::truncate_original;
@@ -96,6 +107,7 @@ impl HealState {
         payload: &[u8],
         offset: usize,
         effect_target: ShapeIdentity,
+        now_ms: u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
@@ -105,7 +117,7 @@ impl HealState {
         Ok(Self::new(
             skill_id,
             effect_target,
-            0,
+            now_ms,
             keep_time_ms,
             frequency_ms,
             hp_gain,
@@ -133,10 +145,7 @@ impl HealState {
         bytes.try_into().expect("размер состояния лечения фиксирован")
     }
 
-    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
-        self.started_at_ms = now_ms;
-        self.heal_count = 0;
-    }
+
 
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
@@ -231,6 +240,33 @@ fn target_heal_values(
         }
         _ => None,
     }
+}
+
+pub(crate) fn restart_heal_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    key: StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<HealState>(key)).is_none() {
+        return false;
+    }
+    if !begin_base_applied_state(game, region_id, holder, key) {
+        return false;
+    }
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<HealState>(key)) {
+        state.effect_target = holder;
+    }
+    let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
+    if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_mut::<HealState>(key)) {
+        state.heal_count = 0;
+    }
+    true
 }
 
 /// Счётчик меняется в живом payload до OnChangeStates. Между публикацией HP

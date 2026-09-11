@@ -16,6 +16,9 @@
 //! Runtime Po* Begin получает (target, caster), Y* — (holder, holder);
 //! GetUser в обоих случаях совпадает с владельцем state-list
 //! (Pojia 0x0052AA6B..0x0052AA87, Yujia 0x00527002..0x0052701A).
+//! restart_battle_fairy_attribute_state сохраняет этот false-return для
+//! Begin(NULL, holder): без base Begin, изменения timestamp/ended и visual.
+//! Собственный Unserialize 0x005FD660 читает часы до remaining/value.
 //! Загруженный Begin(null, holder) возвращает до создания visual
 //! (0x005E83B0, 0x005E6EE0), поэтому base End лишь отмечает такой ключ:
 //! общий Clear удаляет остаток отдельно, таймер не выдумывает End-пакет.
@@ -82,13 +85,12 @@ impl BattleFairyAttributeState {
     pub(crate) const fn started_at_ms(self) -> u32 { self.started_at_ms }
     pub(crate) const fn keep_time_ms(self) -> u32 { self.keep_time_ms }
     pub(crate) const fn value(self) -> i32 { self.value }
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
         let Some(definition) = super::battlefairyattribute::definition(skill_id) else { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); };
-        Ok(Self::new(skill_id, definition.kind, 0, reader.read_u32()?, reader.read_i32()?))
+        Ok(Self::new(skill_id, definition.kind, now_ms, reader.read_u32()?, reader.read_i32()?))
     }
-    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
     pub(crate) fn encoded(self, now_ms: u32) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
         let elapsed = now_ms.wrapping_sub(self.started_at_ms); let remaining = if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) };
         let mut bytes = [0; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES]; bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes()); bytes[4..8].copy_from_slice(&remaining.to_le_bytes()); bytes[8..].copy_from_slice(&self.value.to_le_bytes()); bytes
@@ -196,6 +198,18 @@ pub(crate) fn send_battle_fairy_attribute_state_visual(
         message.add_long(state.started_at_ms() as i32);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn restart_battle_fairy_attribute_state(
+    _game: &mut CGame,
+    _region_id: i32,
+    _holder: ShapeIdentity,
+    _key: crate::gameserver::appserver::moveshape::StateKey,
+    _changing_region: bool,
+    _now: &mut dyn FnMut() -> u32,
+) -> bool {
+    // Все восемь object Begin проверяют user до base Begin и visual.
+    false
 }
 
 pub(crate) fn update_battle_fairy_attribute_state(
