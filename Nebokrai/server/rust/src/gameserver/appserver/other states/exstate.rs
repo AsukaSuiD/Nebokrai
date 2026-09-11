@@ -12,7 +12,7 @@
 //! Client-time различает два exact vtable-owner-а: original `CExState`
 //! разделяет `CHBYState::GetRemainedTime` и возвращает `1` после истечения
 //! ненулевого срока, а `CExStateNew` возвращает `0`.
-//! Сырой псевдокод ниже остаётся локальным provenance реализованного owner-а.
+//! Ниже сохранены исходные перегрузки и операции, не закрытые этим Begin/End.
 //! Little-endian поля читает и пишет общий legacy codec поверх `bytes`.
 //! AI обоих вариантов сравнивает абсолютный wrapping DWORD deadline строго
 //! с текущим tick (`0x005d94e0/0x005d9fb0`); тот же порядок сохраняется для
@@ -28,7 +28,7 @@
 //! Только после этого Begin(this,this) (0x005D9780/0x005D9C40) проверяет sufferer,
 //! читает один базовый clock, создаёт loop1 visual и делает Update(0) до append.
 //! Успех завершает отдельный UpdateProperty; самостоятельного OnChangeStates нет.
-//! Конструкторы часов не читают: base timestamp равен нулю, New.last_item_tick
+//! Конструкторы 0x005D9230/0x005D9990 часов не читают: base timestamp равен нулю, New.last_item_tick
 //! также ноль (0x005D99A0); из этих двух времён объектный Begin меняет только
 //! базовый timestamp, не перезапуская item clock.
 //! Vtable 0x0065E33C/0x0065E39C имеют End +0x1C = 0x005FD420:
@@ -329,19 +329,6 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\exstate.cpp
 
-// ============================================================================
-// FUNCTION: CExState::CExState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\exstate.cpp:15
-// RVA: 0x001D9230
-// ADDRESS: 005d9230
-// PROTOTYPE: undefined __thiscall CExState(tagExState * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CExState::CExState
@@ -442,32 +429,6 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 //
 
 
-// ============================================================================
-// FUNCTION: CExState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\exstate.cpp:98
-// RVA: 0x001D9780
-// ADDRESS: 005d9780
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CExStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\exstate.cpp:227
-// RVA: 0x001D9830
-// ADDRESS: 005d9830
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // COMPONENT_VARIANT_END: GameServer

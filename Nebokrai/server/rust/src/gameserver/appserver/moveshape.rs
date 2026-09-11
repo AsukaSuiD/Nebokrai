@@ -4865,36 +4865,7 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::RemoveState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:725
-// RVA: 0x000CDAB0
-// ADDRESS: 004cdab0
-// PROTOTYPE: void __thiscall RemoveState(CState * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::RemoveState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:744
-// RVA: 0x000CDB20
-// ADDRESS: 004cdb20
-// PROTOTYPE: void __thiscall RemoveState(tagSkillID param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED, VERIFIED_DISASSEMBLY: `AutoStartPassiveSkill` RVA `0x000CDBB0`
-// материализован в owner-е выше и вызывается точным `AddObject` caller-ом.
 
 // ============================================================================
 // FUNCTION: CMoveShape::GetCurrentSkill
@@ -4993,47 +4964,8 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::DelExState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3299
-// RVA: 0x000CE9C0
-// ADDRESS: 004ce9c0
-// PROTOTYPE: uint __thiscall DelExState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::DelExStateByType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3321
-// RVA: 0x000CEA30
-// ADDRESS: 004cea30
-// PROTOTYPE: uint __thiscall DelExStateByType(ushort param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::DelExStateNew
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3343
-// RVA: 0x000CEAA0
-// ADDRESS: 004ceaa0
-// PROTOTYPE: uint __thiscall DelExStateNew(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::GetExState
@@ -5408,33 +5340,7 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::AddExState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3155
-// RVA: 0x000D1E40
-// ADDRESS: 004d1e40
-// PROTOTYPE: uint __thiscall AddExState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::AddExStateNew
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3228
-// RVA: 0x000D20D0
-// ADDRESS: 004d20d0
-// PROTOTYPE: uint __thiscall AddExStateNew(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // CMoveShape::prison_check (0x004D2360, moveshape.cpp:3404)
