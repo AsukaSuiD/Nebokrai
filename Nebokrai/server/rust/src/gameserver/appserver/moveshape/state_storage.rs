@@ -29,7 +29,7 @@
 //! Agility2/Promotion и owners без ресурса; повторный Begin заменяет ресурс.
 //! DecodeExStates 0x004D1B18 записывает sufferer type/id держателя, но оставляет
 //! region=0 из CState ctor 0x005DBCA0. Object Begin устанавливает текущий
-//! sufferer-region. Первичная установка GodBless/Fog/BF/Ex/CHBY записывает фактические
+//! sufferer-region. Первичная установка GodBless/Fog/BF/Ex/CHBY/Undead записывает фактические
 //! User/Sufferer identity и region, включая допустимый NULL; Begin(NULL,holder)
 //! при повторном входе сохраняет User. Для ещё не перенесённых primary owners
 //! остаётся явная holder-привязка. Отдельный признак from_save больше не
@@ -38,6 +38,9 @@
 //! Это технические границы Serialize-cache, не native input-offset:
 //! Tian читает 10 байт, но пишет 12. Удаление/вставка сдвигает общие spans,
 //! не разрешая отдельному typed payload перезаписать неизвестный raw-tail.
+//! Serializer заимствует ту же арену в ReadOnly либо Save-режиме. Только Save
+//! допускает запись уже вычисленного remaining в текущий ключ до следующей
+//! позиции; адаптер не знает игровых типов, не копирует арену и не читает часы.
 
 use super::*;
 use crate::gameserver::appserver::states::visualeffect::CVisualEffect;
@@ -266,6 +269,27 @@ impl PartialEq for AppliedStateEntries {
 }
 
 impl Eq for AppliedStateEntries {}
+
+pub(super) enum StateSerialization<'a> {
+    ReadOnly(&'a AppliedStateEntries),
+    Save(&'a mut AppliedStateEntries),
+}
+
+impl StateSerialization<'_> {
+    pub(super) fn entries(&self) -> &AppliedStateEntries {
+        match self {
+            Self::ReadOnly(entries) => entries,
+            Self::Save(entries) => entries,
+        }
+    }
+
+    pub(super) fn get_mut(&mut self, key: StateKey) -> Option<&mut StateData> {
+        match self {
+            Self::ReadOnly(_) => None,
+            Self::Save(entries) => entries.get_mut(key),
+        }
+    }
+}
 
 impl AppliedStateEntries {
     pub(crate) fn append<T: AppliedState>(&mut self, state: T) -> StateKey {

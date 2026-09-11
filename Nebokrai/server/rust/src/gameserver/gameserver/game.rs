@@ -14,6 +14,12 @@
 //! уведомляет (GS0128/GS1147). Сырые Player-cast в этих owners и CHBY заменены
 //! проверкой настоящего типизированного владельца packet/hotkeys; lifetime,
 //! визуальный End и DelSkill/Remove продолжаются через живой CMoveShape.
+//! Undead Begin (0x005D7910) сохраняет item stamp и создаёт loop1-ресурс;
+//! visual (0x005D79C0) проверяет собственный ended и actual sufferer, но
+//! всегда достигает base tail при наличии ресурса. End (0x005FD420) после
+//! visual заново разрешает sufferer и RemoveState(pointer), не ставя ended.
+//! AI/use_item (0x005D7C80/0x005D7B20) расходуют packet actual sufferer;
+//! чтения keep/item/record clock предшествуют этому owning callback.
 //! Direct state End (+0x1C) девяти специальных семейств имеет отдельный
 //! exact-key вход без таймера; AI и явные DelUndead/DelEx/DelCHBY используют
 //! тот же хвост. Particular/Team/Extended/Undead (0x005FD420) отправляют
@@ -13893,14 +13899,12 @@ impl CGame {
         &self,
         region: &CServerRegion,
         monster: &CMonster,
-        now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
         let (property, master_name) = self.monster_client_snapshot_context(monster)?;
         let message = monster.build_enter_message(
             property,
             master_name,
-            now_ms,
             timed_state_now_milliseconds,
         )?;
         Some(self.send_game_shape_around(
@@ -28281,57 +28285,79 @@ impl CGame {
             .map(CPlayer::attempt_appellation_id)
     }
 
+    /// AddUndeadState 0x004D1780: Query и полный снимок параметров предшествуют
+    /// End всех совпавших type/inner ID. После End уничтожается свежий остаток
+    /// той же позиции. ID=0 останавливает только новый Begin, не старые End.
+    /// Script prefix 0x004B68B3..CC имеет лишь parse/error gate, без часов.
     pub(crate) fn add_script_appellation_state(
         &mut self,
         player_id: i32,
         state_id: u32,
-        now_ms: u32,
+        now: &mut dyn FnMut() -> u32,
     ) -> u32 {
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            let Some(player) = players.get_mut(&player_id) else {
+        use crate::gameserver::appserver::moveshape::StateData;
+        use crate::gameserver::appserver::notdisappearafterdead::begin_primary_undead_state;
+        use crate::gameserver::appserver::states::state::end_and_destroy_state_at;
+
+        let Some(player) = self.find_player(player_id) else { return 0 };
+        let region_id = player.shape().get_region_id();
+        let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let Some(mut state) = UndeadState::from_factory(state_id, &self.skill_factory)
+        else { return 0 };
+        let mut index = 0;
+        loop {
+            let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return 0 };
+            if index >= shape.state_slot_count() { break; }
+            let selected = shape.state_at(index).is_some_and(|(_, data)| {
+                matches!(data, StateData::Undead(previous)
+                    if previous.state_type() == state.state_type() || previous.state_id() == state_id)
+            });
+            if selected && end_and_destroy_state_at(self, region_id, holder, index).is_none() {
                 return 0;
-            };
-            player.add_appellation_state(state_id, skill_factory, || now_ms)
-        };
-        for state in &mutation.removed {
-            self.send_appellation_visual(player_id, state, false, now_ms);
+            }
+            index += 1;
         }
-        if let Some(state) = &mutation.added {
-            self.send_appellation_visual(player_id, state, true, now_ms);
-        }
-        if mutation.state_list_changed {
-            self.refresh_script_change_body_properties(player_id);
-            self.send_script_player_state_changed(player_id);
-        }
-        mutation.legacy_return
+        if state.state_id() == 0 { return 0; }
+        let Some((begin_region, participant)) = begin_primary_undead_state(
+            self, region_id, holder, &mut state, now,
+        ) else { return 0 };
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return 0 };
+        let record = state.encoded_for_install();
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some((begin_region, participant)));
+        shape.set_applied_state_sufferer(key, Some((begin_region, participant)));
+        let _ = self.update_move_shape_properties(begin_region, participant);
+        1
     }
 
     pub(crate) fn delete_script_appellation_state(
         &mut self,
         player_id: i32,
         state_id: u32,
-        _now_ms: u32,
     ) -> u32 {
         self.delete_player_undead_state(player_id, state_id)
     }
 
     /// CMoveShape::DelUndeadState (0x004CDE80): первый inner ID вызывает
     /// End, затем отдельный UpdateProperty сверх пересчёта внутри RemoveState.
+    /// Ни часов, ни forced destructor нет; возврат ID не зависит от End-result.
     fn delete_player_undead_state(&mut self, player_id: i32, state_id: u32) -> u32 {
+        use crate::gameserver::appserver::moveshape::StateData;
+
         let Some(player) = self.find_player(player_id) else {
             return 0;
         };
         let shape = player.move_shape();
-        let Some(key) = shape.applied_state_keys::<UndeadState>().into_iter().find(|&key| {
-            shape.applied_state::<UndeadState>(key).is_some_and(|state| state.state_id() == state_id)
+        let Some((_, key)) = shape.find_state_position(|data| {
+            matches!(data, StateData::Undead(state) if state.state_id() == state_id)
         }) else {
             return 0;
         };
         let region_id = player.shape().get_region_id();
         let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
         let _ = self.end_move_shape_appellation_state(region_id, identity, key);
-        let _ = self.update_player_properties(player_id);
+        let _ = self.update_move_shape_properties(region_id, identity);
         state_id
     }
 
@@ -28640,20 +28666,26 @@ impl CGame {
         key: crate::gameserver::appserver::moveshape::StateKey,
         _after_death: bool, now: &mut dyn FnMut() -> u32,
     ) -> bool {
-        let Some(state) = resolve_state_move_shape(self, region_id, holder)
-            .and_then(|shape| shape.applied_state::<UndeadState>(key)).cloned() else { return false };
-        begin_base_applied_state(self, region_id, holder, key);
-        begin_applied_state_visual(self, region_id, holder, key, 1);
-        let remaining = crate::gameserver::appserver::states::state::extended_client_time(state.started_ms(), state.keep_time_ms(), now);
-        let mut message = CMessage::new(0x0b_fe03);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_ulong(56);
-        message.add_ulong(state.state_id());
-        message.add_ulong(remaining);
-        message.add_ulong(0);
-        let _ = self.send_move_shape_around(region_id, holder, &message);
-        update_applied_state_visual_base(self, region_id, holder, key);
+        if resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<UndeadState>(key)).is_none()
+            || !begin_base_applied_state(self, region_id, holder, key)
+        {
+            return false;
+        }
+        if begin_applied_state_visual(self, region_id, holder, key, 1) {
+            if let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+                self, region_id, holder, key,
+            ) {
+                if let Some(state) = resolve_state_move_shape(self, region_id, holder)
+                    .and_then(|shape| shape.applied_state::<UndeadState>(key)) {
+                    let message = crate::gameserver::appserver::notdisappearafterdead::undead_state_visual_message(
+                        target, state, Some(now),
+                    );
+                    let _ = self.send_move_shape_around(target_region, target, &message);
+                }
+            }
+            update_applied_state_visual_base(self, region_id, holder, key);
+        }
         true
     }
 
@@ -28721,7 +28753,11 @@ impl CGame {
         let Some((item_index, item_amount)) = item_due else {
             return (0, 0);
         };
-        let removed = self.use_move_shape_state_item(identity, item_index, item_amount, b"GS0128");
+        let removed = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+            self, region_id, identity, key,
+        ).map(|(_, sufferer)| {
+            self.use_move_shape_state_item(sufferer, item_index, item_amount, b"GS0128")
+        }).unwrap_or(0);
         let ended = removed == 0
             && self.end_move_shape_extended_state(region_id, identity, key);
         (usize::from(ended), removed)
@@ -28784,7 +28820,11 @@ impl CGame {
         let Some((item_index, item_amount)) = item_due else {
             return (0, 0);
         };
-        let removed = self.use_move_shape_state_item(identity, item_index, item_amount, b"GS1147");
+        let removed = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+            self, region_id, identity, key,
+        ).map(|(_, sufferer)| {
+            self.use_move_shape_state_item(sufferer, item_index, item_amount, b"GS1147")
+        }).unwrap_or(0);
         let ended = removed == 0
             && self.end_move_shape_appellation_state(region_id, identity, key);
         (usize::from(ended), removed)
@@ -28796,23 +28836,32 @@ impl CGame {
         identity: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
     ) -> bool {
-        let Some(state) = resolve_state_move_shape(self, region_id, identity)
-            .and_then(|shape| shape.applied_state::<UndeadState>(key)).cloned()
-        else {
+        if resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<UndeadState>(key)).is_none() {
             return false;
-        };
-        let mut message = CMessage::new(0x0b_fe04);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(56 as i32);
-        message.add_ulong(state.state_id());
-        let _ = self.send_move_shape_around(region_id, identity, &message);
-        let removed = resolve_state_move_shape_mut(self, region_id, identity)
-            .is_some_and(|shape| !shape.delete_undead_state_key(key).removed.is_empty());
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
         }
-        removed
+        if let Some(ended) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state_visual_ended(key)) {
+            if !ended
+                && let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+                    self, region_id, identity, key,
+                ) {
+                if let Some(state) = resolve_state_move_shape(self, region_id, identity)
+                    .and_then(|shape| shape.applied_state::<UndeadState>(key)) {
+                    let message = crate::gameserver::appserver::notdisappearafterdead::undead_state_visual_message(
+                        target, state, None,
+                    );
+                    let _ = self.send_move_shape_around(target_region, target, &message);
+                }
+            }
+            update_applied_state_visual_base(self, region_id, identity, key);
+        }
+        let Some(target) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+            self, region_id, identity, key,
+        ) else { return false };
+        crate::gameserver::appserver::states::state::remove_applied_state_from(
+            self, region_id, identity, key, target, UndeadState::SERIALIZED_BYTES,
+        )
     }
 
     fn use_move_shape_state_item(
@@ -28849,8 +28898,10 @@ impl CGame {
         if removed != item_amount {
             let goods_name = self.goods_factory.query_goods_name(item_index).unwrap_or_default();
             let text = format_legacy_text_fields(self.get_string_by_id(notice_id), &[goods_name], 0xff);
-            let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
-                .send_to_player(self.net_server(), identity.id);
+            let mut message = CMessage::new(0x0b_f807);
+            message.add_ulong(0xffff_ffff);
+            add_legacy_c_string(message.base_mut(), &text);
+            let _ = message.send_to_player(self.net_server(), identity.id);
         }
         removed
     }
@@ -29577,12 +29628,6 @@ impl CGame {
     }
 
 
-    fn refresh_script_change_body_properties(&mut self, player_id: i32) {
-        let Some(properties) = self.recompute_player_properties_for_update(player_id) else {
-            return;
-        };
-        self.apply_player_state_properties(player_id, properties);
-    }
 
 
     /// Exact selector `2560`: slot проверяется до mutation, skill type `1`
@@ -29621,56 +29666,6 @@ impl CGame {
         Some(i32::from(mutation.succeeded))
     }
 
-    fn send_appellation_visual(
-        &self,
-        player_id: i32,
-        state: &UndeadState,
-        begin: bool,
-        now_ms: u32,
-    ) {
-        let Some(player) = self.find_player(player_id) else {
-            return;
-        };
-        let Some(region) = player
-            .server_region_id()
-            .and_then(|region_id| self.find_region(region_id))
-            .map(ServerRegionOwner::base)
-        else {
-            return;
-        };
-        let Some(runtime) = GameServerAroundRuntime::new(
-            self,
-            &self.session_factory,
-            self.globe_setup.area_width(),
-            self.globe_setup.area_height(),
-        ) else {
-            return;
-        };
-        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
-        message.add_long(player.shape().identity().object_type);
-        message.add_long(player_id);
-        message.add_long(56);
-        message.add_ulong(state.state_id());
-        if begin {
-            message.add_ulong(state.remaining_time_ms(now_ms));
-            message.add_ulong(0);
-        }
-        let _ = message.send_to_around(Some(region), player.shape(), None, &runtime);
-    }
-
-    fn send_script_player_state_changed(&self, player_id: i32) {
-        let Some(player) = self.find_player(player_id) else {
-            return;
-        };
-        let mut message = CMessage::new(0x0b_fe02);
-        message.add_long(player.shape().identity().object_type);
-        message.add_long(player_id);
-        message.add_ulong(player.health());
-        message.add_ulong(player.mana());
-        message.base_mut().add_short(0);
-        message.base_mut().add_short(0);
-        let _ = message.send_to_player(self.net_server(), player_id);
-    }
 
     pub(crate) const fn honor_ranks(&self) -> &CHonorRanks {
         &self.honor_ranks
@@ -30996,7 +30991,6 @@ impl CGame {
                 .insert(team_id as u32, GameTeamSnapshotQuery::default());
         }
 
-        let login_tick_ms = context.now_milliseconds();
         let first_login = self
             .players
             .get_mut(&expected_player_id)
@@ -31066,7 +31060,6 @@ impl CGame {
                     team_member_count,
                     self.globe_setup.loan_time_limit(),
                     self.globe_setup.ci_qing_quest_id(),
-                    login_tick_ms,
                     || context.now_milliseconds(),
                 )
                 .ok_or(GamePlayerLoginBlock::ClientSnapshot {
@@ -43227,13 +43220,10 @@ impl CGame {
                 return None;
             }
             let (property, master_name) = self.monster_client_snapshot_context(monster)?;
-            let mut now_milliseconds = now_milliseconds;
-            let now_ms = now_milliseconds();
             let payload = monster.encode_client_snapshot(
                 property,
                 master_name,
-                now_ms,
-                &mut now_milliseconds,
+                now_milliseconds,
             )?;
             return Some((canonical_identity, payload));
         }
@@ -43253,9 +43243,7 @@ impl CGame {
             if canonical_identity != identity {
                 return None;
             }
-            let mut now_milliseconds = now_milliseconds;
-            let now_ms = now_milliseconds();
-            let payload = build.encode_client_snapshot(true, now_ms, &mut now_milliseconds)?;
+            let payload = build.encode_client_snapshot(true, now_milliseconds)?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
@@ -43264,9 +43252,7 @@ impl CGame {
             if canonical_identity != identity {
                 return None;
             }
-            let mut now_milliseconds = now_milliseconds;
-            let now_ms = now_milliseconds();
-            let payload = gate.encode_client_snapshot(true, now_ms, &mut now_milliseconds)?;
+            let payload = gate.encode_client_snapshot(true, now_milliseconds)?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type != SUMMON_SHAPE_TYPE {

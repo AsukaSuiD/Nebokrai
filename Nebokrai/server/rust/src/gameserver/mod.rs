@@ -49,6 +49,8 @@ pub(crate) mod appserver {
     pub(crate) mod exstate;
     #[path = "other states/improveexpstate.rs"]
     pub(crate) mod improveexpstate;
+    #[path = "other states/notdisappearafterdead.rs"]
+    pub(crate) mod notdisappearafterdead;
     #[path = "other states/particularstate.rs"]
     pub(crate) mod particularstate;
     #[path = "other states/ridestate.rs"]

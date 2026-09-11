@@ -38,6 +38,14 @@
 //! Технический cache новой записи имеет 44/56 байт вместе с ID и полный keepTime,
 //! без игрового Serialize и часов. При save общей записи меняется только остаток:
 //! исходные padding-байты загруженного tagExState не заменяются нулями.
+//! Save один раз вызывает native remaining-getter в общем порядке состояний;
+//! тот же результат пишет в запись и живой keepTime до следующего экземпляра.
+//! ExNew.use_item0x005D9E50 использует фактического Sufferer и возвращает
+//! реальное списанное количество. GS0128 отправляется через SendSystemInfo
+//! 0x0042CD70: BF807(FFFFFFFF,CString), без второго цвета BF806.
+//! Общий адаптер CGame заменяет небезопасный sprintf в buffer256 ограничением
+//! 255 байт, NULL goods-name — пустой строкой, неверный non-player cast — нулём.
+//! Это безопасные границы для native UB, а не native-контракт этих случаев.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -209,6 +217,16 @@ impl ExtendedState {
         self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
+    pub(crate) fn client_state_time(&self, now: &mut dyn FnMut() -> u32) -> u32 {
+        use crate::gameserver::appserver::states::state::{
+            change_body_client_time, extended_client_time,
+        };
+        match self.kind {
+            ExtendedStateKind::Original => change_body_client_time(self.started_ms, self.keep_time_ms, now),
+            ExtendedStateKind::New => extended_client_time(self.started_ms, self.keep_time_ms, now),
+        }
+    }
+
     pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
         let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
         match self.kind {
@@ -278,15 +296,15 @@ impl ExtendedState {
         payload
     }
 
-    pub(crate) fn update_serialized_record(&self, payload: &mut [u8], offset: usize, now_ms: u32) {
+    pub(crate) fn update_serialized_record(&self, payload: &mut [u8], offset: usize, remaining: u32) {
         if offset.checked_add(4 + self.kind.parameter_bytes())
             .is_some_and(|end| end <= payload.len()) {
-            write_u32(payload, offset + 12, self.remaining_time_ms(now_ms));
+            write_u32(payload, offset + 12, remaining);
         }
     }
 
-    pub(crate) fn commit_saved_time(&mut self, now_ms: u32) {
-        self.keep_time_ms = self.remaining_time_ms(now_ms);
+    pub(crate) fn commit_serialized_time(&mut self, remaining: u32) {
+        self.keep_time_ms = remaining;
     }
 
     pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {

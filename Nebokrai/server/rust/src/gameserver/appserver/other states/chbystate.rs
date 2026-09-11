@@ -45,6 +45,8 @@
 //! Новый cache-record кодируется после Begin без Serialize и без часов.
 //! Writer по общему span обновляет все поля, включая mode/old_hotkeys,
 //! сохраняя padding загруженных tagCHBYState по смещениям +1 и +70..71.
+//! Общий Save читает native remaining-getter один раз и передаёт одно значение
+//! writer-у и commit живого keepTime до обработки следующего экземпляра.
 //! End0x005DA240 реализован в CGame::end_move_shape_change_body_state:
 //! visual Update1 при наличии ресурса, свежий Sufferer, обнуление режима
 //! игрока и payload, двенадцать восстановленных hotkeys/BF908, пять DelSkill
@@ -264,8 +266,8 @@ impl ChangeBodyState {
         self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) fn commit_saved_time(&mut self, now_ms: u32) {
-        self.keep_time_ms = self.remaining_time_ms(now_ms);
+    pub(crate) fn commit_serialized_time(&mut self, remaining: u32) {
+        self.keep_time_ms = remaining;
     }
 
     pub(crate) fn on_change_region(&mut self) -> bool {

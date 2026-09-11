@@ -20,6 +20,8 @@
 //! `CGame`. Vtable exact EXE `0x0066041C` использует serializer-пару
 //! `0x005F51E0/0x005EAAC0`: persisted-запись `ID + remaining time` занимает
 //! 8 байт. Spatial login восстанавливает оба вложенных запрета.
+//! Клиентский AddToByteArray вызывает +0x30 той же vtable →0x005F2CD0:
+//! проверка deadline и положительный остаток читают часы раздельно.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -79,6 +81,12 @@ impl Rush2State {
     pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
         let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
         if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    }
+
+    pub(crate) fn client_state_time(self, now: impl FnMut() -> u32) -> u32 {
+        crate::gameserver::appserver::states::state::timed_client_state_time(
+            self.started_at_ms, self.keep_time_ms, now,
+        )
     }
 }
 

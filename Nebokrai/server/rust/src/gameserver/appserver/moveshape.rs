@@ -18,6 +18,24 @@
 //! вызывает UpdateProperty; GetCHBYState (0x004CEC40) не вызывает callbacks.
 //! CHBY-кодек пишет актуальные mode/hotkeys/flags/remaining по общему span,
 //! сохраняя исходный padding; отдельный owning ChangeBodyMutation устранён.
+//! AddUndeadState (0x004D1780) снимает параметры до End/destructor всех
+//! совпавших type/inner ID; проверка ID0 идёт после этих завершений. Новый
+//! object Begin выполняется до append, без заранее снятых часов и пачки
+//! removed/added. DelUndeadState (0x004CDE80) завершает первое совпадение,
+//! отдельно пересчитывает свойства и возвращает запрошенный ID.
+//! Клиентский AddToByteArray_ForClient (0x004CDD30, moveshape.cpp:1779)
+//! считает непустые позиции общей арены, затем пишет ID/+30/+38 и Team-name
+//! в том же порядке. DB Serialize и его offsets здесь не используются;
+//! клиентские getters заданы в едином каталоге states/state.rs. IsEnded
+//! не фильтрует запись; повторные ID и пустые позиции не меняют идентичность.
+//! Общая цепочка client snapshot не снимает предварительный timestamp:
+//! каждый конкретный getter читает динамические часы на своём месте.
+//! Для ещё не загруженного opaque owner отказ от снимка остаётся явным
+//! безопасным отличием: неизвестный клиентский контракт не заменяется пустым.
+//! Общий Save для Ex/CHBY/Undead вызывает remaining-getter ровно один раз
+//! на экземпляр: один остаток записывается по общему DB-span и сразу в живой
+//! keep до перехода к следующей позиции. Начальные timestamp не сбрасываются;
+//! отдельные проходы по типам больше не меняют порядок часов и мутаций.
 //! Немедленный background-owner сохраняет признак End у навыка до следующего
 //! OnExecuteBackStageSkills (0x004C88E0): сначала проверка IsEnded, затем AI.
 //! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
@@ -209,23 +227,21 @@
 
 mod state_storage;
 pub(crate) use state_storage::{AppliedState, AppliedStateEntries, StateBatch, StateData, StateKey};
+use state_storage::StateSerialization;
 
-use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use slotmap::{SlotMap, new_key_type};
 
 use super::ai::baseai::CBaseAI;
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyState};
-use super::exstate::{
-    EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind,
-};
+use super::exstate::{ExtendedState, ExtendedStateKind};
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreMutation, ConsumableRestoreState};
-use super::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
-use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
+use super::restorehpstate::RESTORE_HP_STATE_BYTES;
+use super::restorempstate::RESTORE_MP_STATE_BYTES;
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
@@ -282,7 +298,7 @@ use crate::gameserver::appserver::skills::roarstate::{
     ROAR_STATE_BYTES, RoarState,
 };
 use crate::gameserver::appserver::skills::energyholdingstate::{
-    EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID,
+    EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::lifeshieldstate::{
     LifeShieldState, LIFE_SHIELD_STATE_BYTES,
@@ -316,8 +332,8 @@ use crate::gameserver::appserver::skills::pillarstate::{
 use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, POISON_ARROW_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
-use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
+use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES};
+use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::{SPIDER_POISON_STATE_BYTES, SpiderPoisonState};
 use crate::gameserver::appserver::skills::spriteburnstate::{
     SPRITE_BURN_STATE_BYTES, SpriteBurnState,
@@ -335,9 +351,9 @@ use crate::gameserver::appserver::skills::strikestate::StrikeState;
 use crate::gameserver::appserver::skills::bloodlossstate::{
     BloodLossState, BLOOD_LOSS_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
-use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_BYTES, LEAF_CUT_2_STATE_ID};
-use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
+use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES};
+use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_BYTES};
+use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES};
 use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BOSS_BLUE_FURY_STATE_BYTES,
@@ -353,7 +369,7 @@ use crate::gameserver::appserver::skills::tianshenxiafanstate::{
     TianShenXiaFanState,
 };
 use crate::gameserver::appserver::skills::weakstate::{
-    WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState,
+    WEAK_STATE_BYTES, WeakState,
 };
 use crate::gameserver::appserver::skills::wangshengstate::{
     WangshengState,
@@ -363,13 +379,10 @@ use crate::gameserver::appserver::skills::godblessstate::{
     GodBlessState,
 };
 use crate::gameserver::appserver::skills::soulcollectstate::{
-    SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
+    SOUL_COLLECT_STATE_BYTES, SoulCollectState,
 };
 use crate::gameserver::appserver::states::automaticrestore::{
-    AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES, is_automatic_restore_state_id,
-};
-use crate::gameserver::appserver::states::state::{
-    default_additional_data, default_client_state_time,
+    AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES,
 };
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
@@ -557,6 +570,8 @@ pub(crate) struct UndeadState {
 }
 
 impl UndeadState {
+    pub(crate) const SERIALIZED_BYTES: usize = 4 + UNDEAD_STATE_PARAMETER_BYTES;
+
     pub(crate) const fn state_id(&self) -> u32 {
         self.state_id
     }
@@ -573,16 +588,21 @@ impl UndeadState {
         self.started_ms
     }
 
-    pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
-        let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
-        if self.keep_time_ms == 0 || deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms)
-        }
+    pub(crate) fn begin_primary_at(&mut self, now_ms: u32) {
+        self.started_ms = now_ms;
     }
 
-    fn from_factory(state_id: u32, factory: &CSkillFactory, now_ms: u32) -> Option<Self> {
+    pub(crate) fn client_state_time(&self, now: &mut dyn FnMut() -> u32) -> u32 {
+        crate::gameserver::appserver::states::state::extended_client_time(
+            self.started_ms, self.keep_time_ms, now,
+        )
+    }
+
+    pub(crate) fn commit_serialized_time(&mut self, remaining: u32) {
+        self.keep_time_ms = remaining;
+    }
+
+    pub(crate) fn from_factory(state_id: u32, factory: &CSkillFactory) -> Option<Self> {
         let properties =
             factory.query_skill_base_properties(SKILL_NOT_DISAPPEAR_AFTER_DEAD, state_id as i32)?;
         let p = |usage| properties.query_property(usage);
@@ -590,8 +610,8 @@ impl UndeadState {
             state_id,
             state_type: p(SKILL_USAGE_CONST) as u16,
             keep_time_ms: p(SKILL_USAGE_STATE_PERSIST_TIME),
-            started_ms: now_ms,
-            last_item_tick_ms: now_ms,
+            started_ms: 0,
+            last_item_tick_ms: 0,
             disappear_after_dead: u8::from(p(80_001) != 0),
             percentage: p(80_002) != 0,
             maximum_hp: p(118) as i16,
@@ -627,9 +647,6 @@ impl UndeadState {
         let base = offset.checked_add(4)?;
         let _ = payload.get(base..base.checked_add(UNDEAD_STATE_PARAMETER_BYTES)?)?;
         let state_id = read_u32(payload, base + 4)?;
-        if state_id == 0 {
-            return None;
-        }
         Some(Self {
                 state_id,
                 state_type: read_u16(payload, base).unwrap_or_default(),
@@ -664,14 +681,28 @@ impl UndeadState {
         })
     }
 
-    fn write_serialized(&mut self, payload: &mut [u8], offset: usize) {
+    pub(crate) fn encoded_for_install(&self) -> [u8; Self::SERIALIZED_BYTES] {
+        let mut record = [0; Self::SERIALIZED_BYTES];
+        self.update_serialized_record(&mut record, 0, self.keep_time_ms);
+        record
+    }
+
+    pub(crate) fn update_serialized_record(
+        &self, payload: &mut [u8], offset: usize, remaining: u32,
+    ) {
+        if offset.checked_add(Self::SERIALIZED_BYTES).is_none_or(|end| end > payload.len()) {
+            return;
+        }
         let base = offset + 4;
         write_u32(payload, offset, UNDEAD_STATE_ID);
         write_u16(payload, base, self.state_type);
         write_u32(payload, base + 4, self.state_id);
-        write_u32(payload, base + 8, self.keep_time_ms);
+        write_u32(payload, base + 8, remaining);
         payload[base + 12] = self.disappear_after_dead;
-        payload[base + 13] = u8::from(self.percentage);
+        // Native Serialize копирует исходный BOOL-байт, а не нормализует его.
+        if (payload[base + 13] != 0) != self.percentage {
+            payload[base + 13] = u8::from(self.percentage);
+        }
         for (position, value) in [
             (14, self.maximum_hp),
             (16, self.maximum_mp),
@@ -702,15 +733,6 @@ impl UndeadState {
         write_u32(payload, base + 60, self.item_index);
         write_u32(payload, base + 64, self.item_amount);
         write_u32(payload, base + 68, self.frequency_ms);
-        self.serialized_offset = Some(offset);
-    }
-
-    fn update_serialized_runtime(&self, payload: &mut [u8], now_ms: u32) {
-        if let Some(offset) = self.serialized_offset
-            && offset + 4 + UNDEAD_STATE_PARAMETER_BYTES <= payload.len()
-        {
-            write_u32(payload, offset + 12, self.remaining_time_ms(now_ms));
-        }
     }
 
     fn serialized_span(&self) -> Option<(usize, usize)> {
@@ -750,13 +772,6 @@ impl UndeadState {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct UndeadStateMutation {
-    pub(crate) removed: Vec<UndeadState>,
-    pub(crate) added: Option<UndeadState>,
-    pub(crate) legacy_return: u32,
-    pub(crate) state_list_changed: bool,
-}
 
 impl MoveShapeSkill {
     pub(crate) const fn owner(&self) -> SkillOwner {
@@ -1231,243 +1246,65 @@ impl CMoveShape {
         Some(payload)
     }
 
-    /// Материализует общий `CMoveShape::AddToByteArray_ForClient` для всех
-    /// распознанных canonical state records. Неизвестный record не позволяет
-    /// доказать следующий offset, поэтому serializer возвращает `None`, а не
-    /// публикует неверный count или сдвинутые поля.
+    /// Материализует общий CMoveShape::AddToByteArray_ForClient из живых
+    /// экземпляров, а не их DB-записей. Незагруженный opaque owner блокирует
+    /// snapshot: его клиентский контракт пока не подтверждён.
     pub(crate) fn encode_client_snapshot(
         &self,
         include_child: bool,
         is_dead: bool,
-        now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         self.encode_client_snapshot_with_team_count(
             include_child,
             is_dead,
-            now_ms,
             1,
             timed_state_now_milliseconds,
         )
     }
 
-    /// Player-owner передаёт сюда канонический размер своей `CTeam`: точный
-    /// `CTeamState::GetAdditionalData` запрашивает team session при каждом
-    /// полном снимке, а при её отсутствии оставляет исходный fallback `1`.
+    /// CMoveShape::AddToByteArray_ForClient (0x004CDD30): два прохода
+    /// живого m_vStates, без DB Serialize и без уплотнения пустых позиций.
+    /// Player-owner передаёт канонический размер CTeam для GetAdditionalData.
     pub(crate) fn encode_client_snapshot_with_team_count(
         &self,
         include_child: bool,
         is_dead: bool,
-        now_ms: u32,
         team_member_count: usize,
         mut timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        // Непрозрачные declared records не превращаются в клиентские состояния,
-        // даже если их первые байты случайно совпали с известным ID.
+        // Непрозрачный незагруженный owner не выдаётся за пустое состояние.
         if self.ex_states.opaque_count != 0
             || (!self.ex_states.header_was_present && !self.ex_states.opaque_tail.is_empty())
         {
             return None;
         }
-        let states = self.serialize_state_records(now_ms, &mut timed_state_now_milliseconds, false);
-        let declared_count = if states.is_empty() {
-            0usize
-        } else {
-            usize::try_from(read_u32(&states, 0)?).ok()?
-        };
-        let offsets = known_state_record_offsets(&states);
-        if offsets.len() != declared_count {
-            return None;
+        let mut total_count = 0i32;
+        for index in 0..self.state_entries.len() {
+            if let Some(key) = self.state_entries.address(index) {
+                self.state_entries.get(key)?;
+                total_count = total_count.checked_add(1)?;
+            }
         }
-        let total_count = declared_count;
         let mut payload = Vec::new();
-        self.shape
-            .add_to_byte_array(&mut payload, include_child)
-            .then_some(())?;
+        self.shape.add_to_byte_array(&mut payload, include_child).then_some(())?;
         let mut writer = LegacyWriter::new(&mut payload);
         writer.write_u8(u8::from(is_dead));
-        writer.write_i32(i32::try_from(total_count).ok()?);
-        let mut restore_index = 0usize;
-        let mut particular_index = 0usize;
-        let mut team_index = 0usize;
-        let mut state_occurrences = BTreeMap::<u32, usize>::new();
-        for offset in offsets {
-            let state_id = read_i32(&states, offset)?;
-            let next_occurrence = state_occurrences.entry(state_id as u32).or_default();
-            let occurrence = *next_occurrence;
-            *next_occurrence += 1;
-            if state_id == RESTORE_HP_STATE_ID || state_id == RESTORE_MP_STATE_ID {
-                let state = self.state_entries.iter::<ConsumableRestoreState>().nth(restore_index)?;
-                let typed_state_id = state.state_id();
-                let client_time = state.client_state_time(&mut timed_state_now_milliseconds);
-                if typed_state_id != state_id {
-                    return None;
-                }
-                restore_index += 1;
-                writer.write_i32(state_id);
-                writer.write_i32(client_time);
-                writer.write_u32(default_additional_data());
-                continue;
+        writer.write_i32(total_count);
+        for index in 0..self.state_entries.len() {
+            let Some(key) = self.state_entries.address(index) else { continue };
+            let state = self.state_entries.get(key)?;
+            writer.write_u32(state.state_id());
+            let record = crate::gameserver::appserver::states::state::state_client_record(
+                state, team_member_count, &mut timed_state_now_milliseconds,
+            );
+            writer.write_i32(record.time);
+            writer.write_u32(record.additional);
+            if let Some(name) = record.team_name {
+                writer.write_c_string(name);
             }
-            if state_id == PARTICULAR_STATE_ID as i32 {
-                let state = self.state_entries.nth::<ParticularState>(particular_index)?;
-                if read_u32(&states, offset + 4) != Some(state.additional_data()) {
-                    return None;
-                }
-                particular_index += 1;
-                writer.write_i32(state_id);
-                writer.write_i32(state.client_state_time());
-                writer.write_u32(state.additional_data());
-                continue;
-            }
-            if state_id == TEAM_STATE_ID {
-                let state = self.state_entries.nth::<CTeamState>(team_index)?;
-                team_index += 1;
-                writer.write_i32(state_id);
-                writer.write_i32(state.client_state_time());
-                writer.write_u32(state.additional_data(team_member_count));
-                writer.write_c_string(state.team_name());
-                continue;
-            }
-            writer.write_i32(state_id);
-            writer.write_i32(self.client_state_time(
-                &states,
-                offset,
-                state_id as u32,
-                now_ms,
-                occurrence,
-                &mut timed_state_now_milliseconds,
-            )?);
-            writer.write_u32(self.client_state_additional_data(state_id as u32, occurrence));
-        }
-        if restore_index != self.state_entries.iter::<ConsumableRestoreState>().count() {
-            return None;
-        }
-        if particular_index != self.state_entries.iter::<ParticularState>().count()
-            || team_index != self.state_entries.iter::<CTeamState>().count()
-        {
-            return None;
         }
         Some(payload)
-    }
-
-    /// Exact virtual `CState::GetClientStateTime`: место persisted remaining
-    /// зависит от concrete serializer-а, а у постоянных состояний второй
-    /// DWORD вообще является игровым параметром. Особые owner-ы читаются из
-    /// канонического состояния; только записи с доказанным `remaining` сразу
-    /// после ID используют общий codec.
-    fn client_state_time(
-        &self,
-        states: &[u8],
-        offset: usize,
-        state_id: u32,
-        now_ms: u32,
-        occurrence: usize,
-        mut now_milliseconds: impl FnMut() -> u32,
-    ) -> Option<i32> {
-        let permanent = matches!(
-            state_id,
-            SWORDSHIP_SKILL_ID
-                | SWORDSHIP_2_SKILL_ID
-                | SWORDSHIP_3_SKILL_ID
-                | SWORDSHIP_4_SKILL_ID
-                | WUXING_METAL_SKILL_ID
-                | WUXING_WOOD_SKILL_ID
-                | WUXING_WATER_SKILL_ID
-                | WUXING_FIRE_SKILL_ID
-                | WUXING_EARTH_SKILL_ID
-                | METEOR_ARROW_MASS_SKILL_ID
-                | WEAK_STATE_ID
-                | ENERGY_HOLDING_STATE_ID
-                | CURE_STATE_SKILL_ID
-                | ENLARGE_FULL_MISS_SKILL_ID
-                | TAIJI_SKILL_ID
-                | ENLARGE_MAX_HP_SKILL_ID
-                | ENLARGE_MAX_MP_SKILL_ID
-                | ORIGIN_SKILL_ID
-                | RIDE_STATE_ID
-        ) || PersistentAgilityFamilyState::is_known_skill(state_id)
-            || is_automatic_restore_state_id(state_id);
-        if permanent {
-            return Some(default_client_state_time());
-        }
-        match state_id {
-            SOUL_COLLECT_STATE_ID => Some(
-                self.state_entries.iter::<SoulCollectState>().nth(occurrence).copied()
-                    .map_or(default_client_state_time(), |state| state.variable_percent() as i32),
-            ),
-            CHANGE_BODY_STATE_ID => self
-                .state_entries.iter::<ChangeBodyState>()
-                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
-                .map(|state| state.remaining_time_ms(now_ms) as i32),
-            EX_STATE_ID | EX_STATE_NEW_ID => self
-                .state_entries.iter::<ExtendedState>()
-                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
-                .map(|state| state.remaining_time_ms(now_ms) as i32),
-            UNDEAD_STATE_ID => self
-                .state_entries.iter::<UndeadState>()
-                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
-                .map(|state| state.remaining_time_ms(now_ms) as i32),
-            LEAF_CUT_STATE_ID => self.state_entries.iter::<LeafCutState>()
-                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            LEAF_CUT_2_STATE_ID => self.state_entries.iter::<LeafCutState2>().nth(occurrence).copied()
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            LEAF_CUT_3_STATE_ID => self.state_entries.iter::<LeafCutState3>()
-                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            POISON_FOG_STATE_ID => self.state_entries.iter::<PoisonFogState>()
-                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
-                .map(|state| state.client_time(&mut now_milliseconds)),
-            id if id == super::skills::spriteburn::SPRITE_BURN_SKILL_ID => self.state_entries.iter::<SpriteBurnState>().nth(occurrence).copied()
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            id if id == super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => self.state_entries.iter::<SpiderPoisonState>().nth(occurrence).copied()
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            id if id == super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => self.state_entries.iter::<BloodLossState>().nth(occurrence).copied()
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            id if id == super::skills::poisonarrow::POISON_ARROW_SKILL_ID => self.state_entries.iter::<PoisonArrowState>().nth(occurrence).copied()
-                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
-            _ => read_i32(states, offset + 4),
-        }
-    }
-
-    /// Exact virtual `CState::GetAdditionalData`: persisted tail не является
-    /// client-проекцией. Override-ы берутся из соответствующего typed owner-а;
-    /// остальные состояния используют нулевую базовую реализацию.
-    fn client_state_additional_data(&self, state_id: u32, occurrence: usize) -> u32 {
-        match state_id {
-            WEAK_STATE_ID => self
-                .state_entries.iter::<WeakState>().nth(occurrence).copied()
-                .map_or(default_additional_data(), WeakState::attack_loss),
-            SOUL_COLLECT_STATE_ID => self
-                .state_entries.iter::<SoulCollectState>().nth(occurrence).copied()
-                .map_or(default_additional_data(), |state| state.souls() as u32),
-            ENERGY_HOLDING_STATE_ID => self
-                .state_entries.iter::<EnergyHoldingState>().nth(occurrence).copied()
-                .map_or(default_additional_data(), EnergyHoldingState::parameter_percent),
-            METEOR_ARROW_MASS_SKILL_ID => self.state_entries.iter::<MeteorArrowState>().nth(occurrence).copied()
-                .map_or(default_additional_data(), |state| state.additional_data() as u32),
-            RIDE_STATE_ID => self
-                .state_entries.nth::<RideState>(occurrence)
-                .map_or(default_additional_data(), RideState::additional_data),
-            id if matches!(
-                id,
-                super::skills::machineshield::MACHINE_SHIELD_SKILL_ID
-                    | super::skills::manashield::MANA_SHIELD_SKILL_ID
-                    | super::skills::lifeshield::LIFE_SHIELD_SKILL_ID
-            ) => self
-                .state_entries
-                .iter::<DefenseShieldState>()
-                .filter(|state| state.skill_id() == id)
-                .nth(occurrence)
-                .map_or(default_additional_data(), |state| match state {
-                    DefenseShieldState::Life(state) => state.life() as u32,
-                    DefenseShieldState::Machine(state) => state.life() as u32,
-                    DefenseShieldState::Mana(state) => state.life() as u32,
-                    DefenseShieldState::Promotion(_) => default_additional_data(),
-                }),
-            _ => default_additional_data(),
-        }
     }
 
     /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
@@ -1556,16 +1393,13 @@ impl CMoveShape {
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
         let _ = self.compact_state_slots();
-        let payload = self.serialize_state_records(now_ms, timed_state_now_milliseconds, true);
-        self.state_entries.for_each_mut::<ExtendedState>(|state| {
-            state.commit_saved_time(now_ms);
-        });
-        self.state_entries.for_each_mut::<ChangeBodyState>(|state| {
-            state.commit_saved_time(now_ms);
-        });
-        self.state_entries.for_each_mut::<UndeadState>(|state| {
-            state.keep_time_ms = state.remaining_time_ms(now_ms);
-        });
+        let payload = Self::serialize_state_records_with_entries(
+            self.ex_states.to_vec(),
+            StateSerialization::Save(&mut self.state_entries),
+            now_ms,
+            timed_state_now_milliseconds,
+            true,
+        );
         self.ex_states.with_opaque_tail(payload)
     }
 
@@ -1582,10 +1416,25 @@ impl CMoveShape {
     fn serialize_state_records(
         &self,
         now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+        canonical_order: bool,
+    ) -> Vec<u8> {
+        Self::serialize_state_records_with_entries(
+            self.ex_states.to_vec(),
+            StateSerialization::ReadOnly(&self.state_entries),
+            now_ms,
+            timed_state_now_milliseconds,
+            canonical_order,
+        )
+    }
+
+    fn serialize_state_records_with_entries(
+        mut payload: Vec<u8>,
+        mut states: StateSerialization<'_>,
+        now_ms: u32,
         mut timed_state_now_milliseconds: impl FnMut() -> u32,
         canonical_order: bool,
     ) -> Vec<u8> {
-        let mut payload = self.ex_states.to_vec();
         let spans = known_state_record_spans(&payload);
         let declared_count = read_u32(&payload, 0).map(|count| count as usize);
         let parsed_end = spans.last().map_or(4, |(offset, amount)| offset + amount);
@@ -1593,14 +1442,14 @@ impl CMoveShape {
         let mut used = vec![false; spans.len()];
         let mut ordered_records = Vec::with_capacity(spans.len());
 
-        for index in 0..self.state_entries.len() {
-            let Some(key) = self.state_entries.address(index) else { continue };
-            let Some(state) = self.state_entries.get(key) else {
+        for index in 0..states.entries().len() {
+            let Some(key) = states.entries().address(index) else { continue };
+            let Some(state) = states.entries().get(key) else {
                 complete = false;
                 continue;
             };
             let state_id = state.state_id();
-            let exact_span = self.state_entries.serialized_span(key).map(Some).or_else(|| match state {
+            let exact_span = states.entries().serialized_span(key).map(Some).or_else(|| match state {
                 StateData::ChangeBody(state) => Some(state.serialized_span()),
                 StateData::Extended(state) => Some(state.serialized_span()),
                 StateData::Undead(state) => Some(state.serialized_span()),
@@ -1625,7 +1474,7 @@ impl CMoveShape {
                     !used[index] && payload.get(*offset..offset + amount) == Some(record.as_slice())
                 })
             } else {
-                let runtime_count = self.state_entries.iter_data()
+                let runtime_count = states.entries().iter_data()
                     .filter(|state| state.state_id() == state_id).count();
                 let wire_count = spans.iter()
                     .filter(|(offset, _)| read_u32(&payload, *offset) == Some(state_id)).count();
@@ -1643,23 +1492,44 @@ impl CMoveShape {
 
             // Часы вызываются здесь, в едином порядке m_vStates. Отсутствие
             // однозначной DB-пары запрещает запись, но не добавляет type-pass.
+            let mut commit_time: Option<(u32, fn(&mut StateData, u32))> = None;
             let encoded = match state {
                 StateData::ChangeBody(state) => {
+                    let remaining = state.client_state_time(&mut timed_state_now_milliseconds);
                     if let Some(record_index) = record_index {
                         state.update_serialized_record(
-                            &mut payload, spans[record_index].0, state.remaining_time_ms(now_ms),
+                            &mut payload, spans[record_index].0, remaining,
                         );
                     }
+                    commit_time = Some((remaining, |data, remaining| {
+                        if let Some(state) = ChangeBodyState::as_data_mut(data) {
+                            state.commit_serialized_time(remaining);
+                        }
+                    }));
                     None
                 }
                 StateData::Extended(state) => {
+                    let remaining = state.client_state_time(&mut timed_state_now_milliseconds);
                     if let Some(record_index) = record_index {
-                        state.update_serialized_record(&mut payload, spans[record_index].0, now_ms);
+                        state.update_serialized_record(&mut payload, spans[record_index].0, remaining);
                     }
+                    commit_time = Some((remaining, |data, remaining| {
+                        if let Some(state) = ExtendedState::as_data_mut(data) {
+                            state.commit_serialized_time(remaining);
+                        }
+                    }));
                     None
                 }
                 StateData::Undead(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    let remaining = state.client_state_time(&mut timed_state_now_milliseconds);
+                    if let Some(record_index) = record_index {
+                        state.update_serialized_record(&mut payload, spans[record_index].0, remaining);
+                    }
+                    commit_time = Some((remaining, |data, remaining| {
+                        if let Some(state) = UndeadState::as_data_mut(data) {
+                            state.commit_serialized_time(remaining);
+                        }
+                    }));
                     None
                 }
                 StateData::LeafCut(state) => {
@@ -1744,6 +1614,13 @@ impl CMoveShape {
                 | StateData::AutomaticRestore(_) | StateData::Particular(_)
                 | StateData::Team(_) | StateData::Ride(_) => None,
             };
+            if let Some((remaining, commit)) = commit_time
+                && let Some(state) = states.get_mut(key)
+            {
+                // Serialize сохраняет тот же остаток без повторного getter/clock
+                // и без сброса started/item timestamp. ReadOnly не даёт &mut.
+                commit(state, remaining);
+            }
             if let Some(record_index) = record_index {
                 let (offset, amount) = spans[record_index];
                 if let Some(record) = encoded {
@@ -3483,106 +3360,6 @@ impl CMoveShape {
 
 
 
-    /// Exact `AddUndeadState`: registry key `(56, stateID)`, затем удаление
-    /// всех state того же type либо ID, после чего ID `0` оставляет только
-    /// removal tail. Успешный Begin хранит state и возвращает `1`.
-    pub(crate) fn add_undead_state<Now>(
-        &mut self,
-        state_id: u32,
-        factory: &CSkillFactory,
-        now_ms: Now,
-    ) -> UndeadStateMutation
-    where
-        Now: FnOnce() -> u32,
-    {
-        let now_ms = now_ms();
-        let Some(mut state) = UndeadState::from_factory(state_id, factory, now_ms) else {
-            return UndeadStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-                state_list_changed: false,
-            };
-        };
-        let state_type = state.state_type;
-        let mut removed = Vec::new();
-        let mut index = 0;
-        while index < self.state_entries.iter::<UndeadState>().count() {
-            if self.state_entries.nth::<UndeadState>(index).expect("семейная позиция проверена до изменения списка").state_type == state_type
-                || self.state_entries.nth::<UndeadState>(index).expect("семейная позиция проверена до изменения списка").state_id == state_id
-            {
-                let removed_state = self.state_entries.take_nth::<UndeadState>(index).expect("семейная позиция проверена до удаления");
-                self.remove_undead_state_serialized(&removed_state);
-                removed.push(removed_state);
-            } else {
-                index += 1;
-            }
-        }
-        if state_id == 0 {
-            return UndeadStateMutation {
-                state_list_changed: !removed.is_empty(),
-                removed,
-                added: None,
-                legacy_return: 0,
-            };
-        }
-        if self.ex_states.len() < 4 {
-            self.ex_states.clear();
-            LegacyWriter::new(&mut self.ex_states).write_u32(0);
-        }
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        let offset = self.ex_states.len();
-        self.ex_states
-            .resize(offset + 4 + UNDEAD_STATE_PARAMETER_BYTES, 0);
-        state.write_serialized(&mut self.ex_states, offset);
-        self.state_entries.append(state.clone());
-        UndeadStateMutation {
-            removed,
-            added: Some(state),
-            legacy_return: 1,
-            state_list_changed: true,
-        }
-    }
-
-    /// Exact first-match `DelUndeadState`; native `End` удаляет найденный
-    /// state и возвращает его ID, отсутствующий state возвращает ноль.
-    pub(crate) fn delete_undead_state(
-        &mut self,
-        state_id: u32,
-    ) -> UndeadStateMutation {
-        let key = self.state_entries.iter::<UndeadState>()
-            .position(|state| state.state_id == state_id)
-            .and_then(|index| self.state_entries.key_at::<UndeadState>(index));
-        let Some(key) = key else {
-            return UndeadStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-                state_list_changed: false,
-            };
-        };
-        self.delete_undead_state_key(key)
-    }
-
-    pub(crate) fn delete_undead_state_key(&mut self, key: StateKey) -> UndeadStateMutation {
-        let Some(removed) = self.state_entries.take::<UndeadState>(key) else {
-            return UndeadStateMutation {
-                removed: Vec::new(),
-                added: None,
-                legacy_return: 0,
-                state_list_changed: false,
-            };
-        };
-        let legacy_return = removed.state_id;
-        self.remove_undead_state_serialized(&removed);
-        UndeadStateMutation {
-            removed: vec![removed],
-            added: None,
-            legacy_return,
-            state_list_changed: true,
-        }
-    }
 
     pub(crate) fn get_undead_state(&self, state_id: u32) -> u32 {
         self.state_entries.iter::<UndeadState>()
@@ -3591,20 +3368,6 @@ impl CMoveShape {
             .unwrap_or(0)
     }
 
-    fn remove_undead_state_serialized(&mut self, state: &UndeadState) {
-        let Some((offset, amount)) = state.serialized_span() else {
-            return;
-        };
-        if offset + amount > self.ex_states.len() {
-            return;
-        }
-        self.ex_states.drain(offset..offset + amount);
-        if self.ex_states.len() >= 4 {
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
-        }
-        self.shift_serialized_state_offsets_after(offset, amount);
-    }
 
 
 
@@ -4772,50 +4535,8 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::AddToByteArray_ForClient
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1779
-// RVA: 0x000CDD30
-// ADDRESS: 004cdd30
-// PROTOTYPE: bool __thiscall AddToByteArray_ForClient(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Реализовано выше: CShape prefix, died-byte, ordered state triples и special
-// CTeamState name-tail. Неизвестный legacy record безопасно блокирует snapshot,
-// потому что его недоказанный размер не позволяет вычислить следующий offset.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::DelUndeadState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1950
-// RVA: 0x000CDE80
-// ADDRESS: 004cde80
-// PROTOTYPE: uint __thiscall DelUndeadState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::GetUndeadState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1971
-// RVA: 0x000CDEF0
-// ADDRESS: 004cdef0
-// PROTOTYPE: uint __thiscall GetUndeadState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 
 // StartAllStates 0x004CE050 (moveshape.cpp:2234) перенесён в общий
@@ -5162,19 +4883,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::AddUndeadState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1862
-// RVA: 0x000D1780
-// ADDRESS: 004d1780
-// PROTOTYPE: uint __thiscall AddUndeadState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::DecodeExStatesFromByteArray

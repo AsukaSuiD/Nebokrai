@@ -6,6 +6,8 @@
 //! Чистые Ex/Undead/Ride-формулы читают owning payload по ссылке без callbacks.
 //! CHBY Begin/End не дублируются в Player mutation-wrapper: их mode/hotkeys
 //! и общий AddSkill/DelSkill выполняет единственный state-owner через CGame.
+//! Undead/Appellation также устанавливается и завершается через общий
+//! lifecycle CMoveShape; Player не хранит промежуточную пачку копий состояний.
 //! OnLost (0x0044183B..0x00441894, player.cpp:1780) проходит живые позиции:
 //! для очередного CHBY ставит has_changed_region=false/online=true и при
 //! !restore_online сразу отправляет исходный BF806 и вызывает End. Следующий
@@ -3694,11 +3696,9 @@ impl CPlayer {
     ) -> Option<Vec<u8>> {
         const VISIBLE_EQUIPMENT: [u32; 11] = [0, 1, 2, 3, 4, 9, 10, 12, 13, 14, 15];
 
-        let now_ms = now_milliseconds();
         let mut payload = self.move_shape.encode_client_snapshot_with_team_count(
             false,
             self.is_dead(),
-            now_ms,
             team_member_count,
             &mut now_milliseconds,
         )?;
@@ -3763,7 +3763,6 @@ impl CPlayer {
         team_member_count: usize,
         loan_time_limit: u32,
         ci_qing_quest_id: u32,
-        now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         const SKILL_USAGE_MP_COST: u32 = 2;
@@ -3775,7 +3774,6 @@ impl CPlayer {
         let mut payload = self.move_shape.encode_client_snapshot_with_team_count(
             true,
             self.is_dead(),
-            now_ms,
             team_member_count,
             timed_state_now_milliseconds,
         )?;
@@ -4775,31 +4773,6 @@ impl CPlayer {
         self.attempt_appellation_id = appellation_id;
     }
 
-    pub(crate) fn add_appellation_state<Now>(
-        &mut self,
-        state_id: u32,
-        factory: &CSkillFactory,
-        now_ms: Now,
-    ) -> super::moveshape::UndeadStateMutation
-    where
-        Now: FnOnce() -> u32,
-    {
-        self.move_shape.add_undead_state(state_id, factory, now_ms)
-    }
-
-    pub(crate) fn delete_appellation_state(
-        &mut self,
-        state_id: u32,
-    ) -> super::moveshape::UndeadStateMutation {
-        self.move_shape.delete_undead_state(state_id)
-    }
-
-    pub(crate) fn delete_appellation_state_key(
-        &mut self,
-        key: super::moveshape::StateKey,
-    ) -> super::moveshape::UndeadStateMutation {
-        self.move_shape.delete_undead_state_key(key)
-    }
 
     pub(crate) const fn jjc_pk_state(&self) -> bool {
         self.jjc_pk_state

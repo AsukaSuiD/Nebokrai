@@ -288,13 +288,11 @@ impl CBuild {
     pub(crate) fn encode_client_snapshot(
         &self,
         include_child: bool,
-        now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         let mut payload = self.move_shape.encode_client_snapshot(
             include_child,
             self.hp == 0,
-            now_ms,
             timed_state_now_milliseconds,
         )?;
         let mut writer = LegacyWriter::new(&mut payload);

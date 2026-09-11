@@ -648,13 +648,11 @@ impl CMonster {
         &self,
         property: &MonsterProperties,
         master_name: &[u8],
-        now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         let mut payload = self.move_shape.encode_client_snapshot(
             true,
             self.hit_points == 0,
-            now_ms,
             timed_state_now_milliseconds,
         )?;
         self.append_client_snapshot_tail(&mut payload, property, master_name);
@@ -718,13 +716,11 @@ impl CMonster {
         &self,
         property: &MonsterProperties,
         master_name: &[u8],
-        now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<CMessage> {
         let payload = self.encode_client_snapshot(
             property,
             master_name,
-            now_ms,
             timed_state_now_milliseconds,
         )?;
         let identity = self.move_shape.shape().identity();

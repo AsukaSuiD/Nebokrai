@@ -5428,13 +5428,14 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let Some(player_id) = script_player_id else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
-            let now_ms = runtime.now_milliseconds();
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_UNDEAD_STATE => {
-                    game.add_script_appellation_state(player_id, state_id, now_ms)
+                    game.add_script_appellation_state(
+                        player_id, state_id, &mut || runtime.now_milliseconds(),
+                    )
                 }
                 SCRIPT_FUNCTION_DELETE_UNDEAD_STATE => {
-                    game.delete_script_appellation_state(player_id, state_id, now_ms)
+                    game.delete_script_appellation_state(player_id, state_id)
                 }
                 SCRIPT_FUNCTION_GET_UNDEAD_STATE => game
                     .find_player(player_id)
@@ -8641,13 +8642,14 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         ) else {
             return ScriptFunctionDispatchOutcome::Invalid;
         };
-        let now_ms = runtime.now_milliseconds();
         let legacy_return = match function_id {
             SCRIPT_FUNCTION_ADD_APPELLATION_STATE => {
-                game.add_script_appellation_state(player_id, state_id as u32, now_ms)
+                game.add_script_appellation_state(
+                    player_id, state_id as u32, &mut || runtime.now_milliseconds(),
+                )
             }
             SCRIPT_FUNCTION_DEL_APPELLATION_STATE => {
-                game.delete_script_appellation_state(player_id, state_id as u32, now_ms)
+                game.delete_script_appellation_state(player_id, state_id as u32)
             }
             SCRIPT_FUNCTION_GET_APPELLATION_STATE => game
                 .get_script_appellation_state(player_id, state_id as u32)
