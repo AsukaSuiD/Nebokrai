@@ -19,6 +19,13 @@
 //! тот же хвост. Particular/Team/Extended/Undead (0x005FD420) отправляют
 //! visual до RemoveState, Ride (0x004F8D10) между ними снимает fight-lock,
 //! CHBY (0x005DA240) восстанавливает mode/hotkeys и удаляет пять навыков.
+//! Его End проверяет visual-ресурс/visual.ended, разрешает actual sufferer
+//! и не пишет state.ended. Сначала player.mode=0, затем state.mode=0;
+//! каждый из 12 hotkeys восстанавливается и отправляется до следующего.
+//! DelSkill читает пять параметрических ID по живому ключу, не накопленный
+//! Begin-вектор. SetRegion CHBY (0x005DAB80) меняет только user-region;
+//! GS1146 и End адресуют GetSufferer. NULL/non-player unchecked CPlayer
+//! хвост EXE безопасно прерывается, а не считается определённым native no-op.
 //! Script6 (0x005D5B80) ставит base ended до Remove без visual; AutoProtect
 //! (0x005D44E0) не ставит ended и ничего не меняет при отказе Player/GM gate.
 //! Restore End (0x005EEBA0) только RemoveState. Его virtual UpdateProperty
@@ -98,6 +105,10 @@
 //! и единственного сохранённого Move. ClearAllStates(true) и последующий
 //! prison_check связаны с общим state-owner сразу после action 6; частичная
 //! Cure и поздний OnDied не заменяют эту синхронную границу.
+//! Вход OnDied (0x0044D850..0x0044D8C6, player.cpp:3306) после проверки
+//! региона сразу достигает nation callback. Поздние дополнительные циклы
+//! CHBY/AutoProtect перед ним отсутствуют в EXE и здесь устранены; выбор
+//! сохраняющихся при смерти состояний принадлежит ClearAllStates(true).
 //! Player Run следует CBaseAI::Run (0x004C7D10): OnSchedule/Begin до фона,
 //! затем passive и active. Первый AI не вызывается из Begin; фон может
 //! завершить навык, а passive — прервать Attack до его первого исполнения.
@@ -28671,19 +28682,25 @@ impl CGame {
         true
     }
 
-    /// CHBY virtual SetRegion (0x005DAB80), вызывается только общим живым обходом.
+    /// CHBY SetRegion 0x005DAB80: user-region записывается во всех ветвях,
+    /// а sufferer-region сохраняется. Первый вход лишь ставит bIsChangeReg;
+    /// запрещённый повторный переход уведомляет actual sufferer и вызывает End.
     pub(crate) fn set_change_body_state_region(
         &mut self, region_id: i32, holder: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
     ) {
-        let should_end = resolve_state_move_shape_mut(self, region_id, holder)
-            .and_then(|shape| shape.applied_state_mut::<ChangeBodyState>(key))
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return };
+        if shape.applied_state::<ChangeBodyState>(key).is_none() { return; }
+        shape.set_applied_state_user_region(key, region_id);
+        let should_end = shape.applied_state_mut::<ChangeBodyState>(key)
             .is_some_and(ChangeBodyState::on_change_region);
         if should_end {
-            if holder.object_type == PLAYER_TYPE {
-                let text = self.get_string_by_id(b"GS1146");
-                let _ = colored_player_notice_message(0xffff_ffff, 0, text).send_to_player(self.net_server(), holder.id);
-            }
+            let Some((_, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+                self, region_id, holder, key,
+            ) else { return };
+            if target.object_type != PLAYER_TYPE { return; }
+            let text = self.get_string_by_id(b"GS1146");
+            let _ = colored_player_notice_message(0xffff_ffff, 0, text).send_to_player(self.net_server(), target.id);
             self.end_move_shape_change_body_state(region_id, holder, key);
         }
     }
@@ -28942,41 +28959,54 @@ impl CGame {
         removed
     }
 
+    /// Script prefix (0x004B5FF2) проверяет ChangeBodyCheck до AddCHBYState.
+    /// Сам AddCHBY (0x004D2590) снимает параметры до End всех совпавших level;
+    /// каждая позиция перечитывается перед destructor. Новый Begin(this,this)
+    /// выполняет visual/hotkeys до append, а внешний Update есть только при успехе.
     pub(crate) fn add_script_change_body_state(
         &mut self,
         player_id: i32,
         state_id: u32,
-        now_ms: u32,
+        now: &mut dyn FnMut() -> u32,
     ) -> u32 {
+        use crate::gameserver::appserver::chbystate::begin_primary_change_body_state;
+        use crate::gameserver::appserver::moveshape::StateData;
+        use crate::gameserver::appserver::states::state::end_and_destroy_state_at;
+
         if self.script_change_body_check(player_id, false) == 0 {
             return 0;
         }
-        let mutation = {
-            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            let Some(player) = players.get_mut(&player_id) else {
+        if state_id == 0 { return 0; }
+        let Some(player) = self.find_player(player_id) else { return 0 };
+        let region_id = player.shape().get_region_id();
+        let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let Some(mut state) = ChangeBodyState::from_factory(state_id, &self.skill_factory)
+        else { return 0 };
+
+        let mut index = 0;
+        loop {
+            let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { return 0 };
+            if index >= shape.state_slot_count() { break; }
+            let selected = shape.state_at(index).is_some_and(|(_, data)| {
+                matches!(data, StateData::ChangeBody(previous) if previous.level == state_id)
+            });
+            if selected && end_and_destroy_state_at(self, region_id, holder, index).is_none() {
                 return 0;
-            };
-            player.add_change_body_state(state_id, skill_factory, now_ms)
-        };
-        if let Some(removed) = mutation.removed.as_ref() {
-            self.send_change_body_visual(player_id, removed, false);
+            }
+            index += 1;
         }
-        let Some(added) = mutation.added.as_ref() else {
-            return mutation.legacy_return;
-        };
-        self.send_change_body_visual(player_id, added, true);
-        self.send_change_body_hotkeys(
-            player_id,
-            added
-                .skills
-                .iter()
-                .enumerate()
-                .filter_map(|(index, (skill_id, _))| (*skill_id != 0).then_some(index + 12))
-                .chain(std::iter::once(17)),
-        );
-        self.refresh_script_change_body_properties(player_id);
-        self.send_script_player_state_changed(player_id);
-        mutation.legacy_return
+
+        let Some((begin_region, participant)) = begin_primary_change_body_state(
+            self, region_id, holder, &mut state, now,
+        ) else { return 0 };
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return 0 };
+        let record = state.encoded_for_install();
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some((begin_region, participant)));
+        shape.set_applied_state_sufferer(key, Some((begin_region, participant)));
+        let _ = self.update_move_shape_properties(begin_region, participant);
+        1
     }
 
     pub(crate) fn delete_script_change_body_state(
@@ -28988,8 +29018,9 @@ impl CGame {
             return 0;
         };
         let shape = player.move_shape();
-        let Some(key) = shape.applied_state_keys::<ChangeBodyState>().into_iter().find(|&key| {
-            shape.applied_state::<ChangeBodyState>(key).is_some_and(|state| state.level == state_id)
+        let Some((_, key)) = shape.find_state_position(|state| {
+            matches!(state, crate::gameserver::appserver::moveshape::StateData::ChangeBody(state)
+                if state.level == state_id)
         }) else {
             return 0;
         };
@@ -29014,38 +29045,6 @@ impl CGame {
         Some(state_id)
     }
 
-    fn end_change_body_state(
-        &mut self,
-        player_id: i32,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        notice_id: Option<&[u8]>,
-    ) -> bool {
-        let Some(player) = self.find_player(player_id) else {
-            return false;
-        };
-        if player.move_shape().applied_state::<ChangeBodyState>(key).is_none() {
-            return false;
-        }
-        let region_id = player.shape().get_region_id();
-        let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
-        if let Some(notice_id) = notice_id {
-            let text = self.get_string_by_id(notice_id);
-            let _ = colored_player_notice_message(0xffff_ffff, 0, text)
-                .send_to_player(self.net_server(), player_id);
-        }
-        self.end_move_shape_change_body_state(region_id, identity, key)
-    }
-
-    fn end_change_body_states(
-        &mut self,
-        player_id: i32,
-        state_keys: Vec<crate::gameserver::appserver::moveshape::StateKey>,
-        notice_id: Option<&[u8]>,
-    ) {
-        for key in state_keys {
-            let _ = self.end_change_body_state(player_id, key, notice_id);
-        }
-    }
 
     pub(crate) fn update_move_shape_change_body_state<Runtime: GameMainLoopRuntime>(
         &mut self,
@@ -29067,64 +29066,92 @@ impl CGame {
         if !expired {
             return 0;
         }
-        if identity.object_type == PLAYER_TYPE {
+        if let Some((_, sufferer)) =
+            crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+                self, region_id, identity, key,
+            )
+            && sufferer.object_type == PLAYER_TYPE
+        {
             let text = self.get_string_by_id(b"GS1145");
             let _ = colored_player_notice_message(0xffff_ffff, 0, text)
-                .send_to_player(self.net_server(), identity.id);
+                .send_to_player(self.net_server(), sufferer.id);
         }
         usize::from(self.end_move_shape_change_body_state(region_id, identity, key))
     }
 
+    /// CHBY End 0x005DA240: visual → GetSufferer → player/state mode=0 →
+    /// 12 restore/send hotkeys → пять параметрических DelSkill → RemoveState.
+    /// Базовый End и самостоятельный Update здесь не вызываются. Каждый
+    /// owning DelSkill завершается до чтения следующего поля живого экземпляра.
     pub(crate) fn end_move_shape_change_body_state(
         &mut self,
         region_id: i32,
         identity: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
     ) -> bool {
-        let Some(state) = resolve_state_move_shape(self, region_id, identity)
-            .and_then(|shape| shape.applied_state::<ChangeBodyState>(key)).cloned()
-        else {
+        if resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<ChangeBodyState>(key)).is_none() {
             return false;
-        };
-        let mut message = CMessage::new(0x0b_fe04);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(0x37);
-        message.add_long(0);
-        message.add_ulong(state.level);
-        for (skill_id, _) in state.skills {
-            message.base_mut().add_short(skill_id as i16);
         }
-        let _ = self.send_move_shape_around(region_id, identity, &message);
+        if let Some(ended) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state_visual_ended(key)) {
+            if !ended
+                && let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+                    self, region_id, identity, key,
+                ) {
+                let message = resolve_state_move_shape(self, region_id, identity)
+                    .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+                    .map(|state| {
+                        let mut message = CMessage::new(0x0b_fe04);
+                        message.add_long(target.object_type);
+                        message.add_long(target.id);
+                        message.add_ulong(crate::gameserver::appserver::chbystate::CHANGE_BODY_STATE_ID);
+                        message.add_long(0);
+                        message.add_ulong(state.level);
+                        for (skill_id, _) in state.skills {
+                            message.base_mut().add_short(skill_id as i16);
+                        }
+                        message
+                    });
+                if let Some(message) = message {
+                    let _ = self.send_move_shape_around(target_region, target, &message);
+                }
+            }
+            update_applied_state_visual_base(self, region_id, identity, key);
+        }
+        let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+            self, region_id, identity, key,
+        ) else { return false };
+        if target.object_type != PLAYER_TYPE { return false; }
+        let Some(player) = self.find_player_mut(target.id) else { return false };
+        let (head, face, _) = player.appearance_and_mode();
+        player.restore_appearance_and_mode(head, face, 0);
         let Some(live) = resolve_state_move_shape_mut(self, region_id, identity)
             .and_then(|shape| shape.applied_state_mut::<ChangeBodyState>(key))
         else {
             return false;
         };
         live.mode = 0;
-        if identity.object_type == PLAYER_TYPE {
-            if let Some(player) = self.find_player_mut(identity.id) {
-                let (head, face, _) = player.appearance_and_mode();
-                player.restore_appearance_and_mode(head, face, 0);
-            }
-            for (index, value) in state.old_hotkeys.iter().copied().enumerate() {
-                if let Some(player) = self.find_player_mut(identity.id) {
-                    let _ = player.set_hotkey((index + 12) as u8, value);
-                }
-                self.send_change_body_hotkeys(identity.id, std::iter::once(index + 12));
-            }
+        for index in 0..12 {
+            let Some(value) = resolve_state_move_shape(self, region_id, identity)
+                .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+                .map(|state| state.old_hotkeys[index])
+            else { return false };
+            self.set_script_player_hotkey(target.id, (index + 12) as u8, value);
         }
-        for (skill_id, _) in state.skills {
+        for index in 0..5 {
+            let Some(skill_id) = resolve_state_move_shape(self, region_id, identity)
+                .and_then(|shape| shape.applied_state::<ChangeBodyState>(key))
+                .map(|state| state.skills[index].0)
+            else { return false };
             if skill_id != 0 {
-                let _ = self.delete_move_shape_skill(region_id, identity, u32::from(skill_id));
+                let _ = self.delete_move_shape_skill(target_region, target, u32::from(skill_id));
             }
         }
-        let removed = resolve_state_move_shape_mut(self, region_id, identity)
-            .is_some_and(|shape| shape.delete_change_body_state_key(key).removed.is_some());
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
-        }
-        removed
+        crate::gameserver::appserver::states::state::remove_applied_state_from(
+            self, region_id, identity, key, (target_region, target),
+            crate::gameserver::appserver::chbystate::CHANGE_BODY_STATE_BYTES,
+        )
     }
 
     pub(crate) fn update_move_shape_team_recruitment_state<Runtime: GameMainLoopRuntime>(
@@ -29519,22 +29546,36 @@ impl CGame {
 
 
     pub(crate) fn change_body_after_player_lost(&mut self, player_id: i32) -> usize {
-        let state_ids = self
-            .find_player_mut(player_id)
-            .map(CPlayer::change_body_player_lost_end_keys)
-            .unwrap_or_default();
-        let ended = state_ids.len();
-        self.end_change_body_states(player_id, state_ids, None);
+        let Some(player) = self.find_player(player_id) else { return 0 };
+        let region_id = player.shape().get_region_id();
+        let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let mut index = 0;
+        let mut ended = 0;
+        loop {
+            let Some(shape) = resolve_state_move_shape(self, region_id, holder) else { break };
+            if index >= shape.state_slot_count() { break; }
+            let selected = shape.state_at(index).and_then(|(key, _)| {
+                shape.applied_state::<ChangeBodyState>(key).map(|_| key)
+            });
+            if let Some(key) = selected {
+                let should_end = resolve_state_move_shape_mut(self, region_id, holder)
+                    .and_then(|shape| shape.applied_state_mut::<ChangeBodyState>(key))
+                    .is_some_and(ChangeBodyState::on_player_lost);
+                if should_end {
+                    // OnLost 0x0044187A: исходные байты литерала 0x0064DE28,
+                    // а не строковый ID и не перевод wire-текста.
+                    let _ = colored_player_notice_message(0xffff_ffff, 0,
+                        b"\xcd\xcb\xb3\xf6\xd3\xce\xcf\xb7\xa3\xac\xb1\xe4\xc9\xed\xbd\xe1\xca\xf8",
+                    ).send_to_player(self.net_server(), player_id);
+                    let _ = self.end_move_shape_change_body_state(region_id, holder, key);
+                    ended += 1;
+                }
+            }
+            index += 1;
+        }
         ended
     }
 
-    fn change_body_after_player_death(&mut self, player_id: i32) {
-        let state_ids = self
-            .find_player(player_id)
-            .map(CPlayer::change_body_death_end_keys)
-            .unwrap_or_default();
-        self.end_change_body_states(player_id, state_ids, None);
-    }
 
     fn refresh_script_change_body_properties(&mut self, player_id: i32) {
         let Some(properties) = self.recompute_player_properties_for_update(player_id) else {
@@ -29543,21 +29584,6 @@ impl CGame {
         self.apply_player_state_properties(player_id, properties);
     }
 
-    fn send_change_body_hotkeys(&self, player_id: i32, slots: impl IntoIterator<Item = usize>) {
-        let Some(player) = self.find_player(player_id) else {
-            return;
-        };
-        for slot in slots {
-            let Some(value) = player.hotkey(slot as u8) else {
-                continue;
-            };
-            let mut message = CMessage::new(0x0b_f908);
-            message.add_byte(b'-');
-            message.add_byte(slot as u8);
-            message.add_ulong(value);
-            let _ = message.send_to_player(self.net_server(), player_id);
-        }
-    }
 
     /// Exact selector `2560`: slot проверяется до mutation, skill type `1`
     /// кодируется старшим битом, затем тот же `0xBF908` подтверждает значение.
@@ -29575,27 +29601,6 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    fn send_change_body_visual(&mut self, player_id: i32, state: &ChangeBodyState, begin: bool) {
-        let Some(player) = self.find_player(player_id) else { return };
-        let holder = player.shape().identity();
-        let region_id = player.shape().get_region_id();
-        if begin {
-            crate::gameserver::appserver::chbystate::send_change_body_state_begin_visual(
-                self, region_id, holder, state, &mut game_tick_milliseconds,
-            );
-            return;
-        }
-        let mut message = CMessage::new(0x0b_fe04);
-        message.add_long(holder.object_type);
-        message.add_long(player_id);
-        message.add_long(0x37);
-        message.add_long(0);
-        message.add_ulong(state.level);
-        for (skill_id, _) in state.skills {
-            message.base_mut().add_short(skill_id as i16);
-        }
-        let _ = self.send_player_shape_around(player_id, None, &message);
-    }
 
     /// Reached `AddJingJieBuff` tail: hidden skill и max-HP/max-MP mutation
     /// принадлежат realm owner-у, а изменившийся property snapshot публикуется
@@ -42100,10 +42105,6 @@ impl CGame {
             .get_security(tile_x, tile_y)
             .ok()?;
 
-        while self.end_script_auto_protect_state(blow.victim_id) {
-            let _ = self.publish_player_states(blow.victim_id);
-        }
-        self.change_body_after_player_death(blow.victim_id);
         let nation = self.player_died_in_nation_region(blow.victim_id, runtime);
         tracing::trace!(
             victim_id = blow.victim_id,

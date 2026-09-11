@@ -4,12 +4,16 @@
 //! исходным owner-ом `appserver/other states/chbystate.cpp`. Реализация хранит
 //! byte-exact 120-байтовый `tagCHBYState`, время, пять временных навыков и
 //! сохранённые hotkey 12..23. Системный wrapping tick передаётся caller-ом;
-//! Rust-владение заменяет raw `CState*`. Сохранённый ниже псевдокод служит
-//! локальным provenance для реализованного owner-а и не входит в runtime.
+//! Rust-владение заменяет raw `CState*`. Ниже сохранены ещё не полностью
+//! перенесённые конструктор/перегрузки Begin; их RAW не входит в runtime.
 //! Доступ к little-endian полям делегирован общему legacy codec поверх `bytes`.
 //! `Serialize` записывает остаток обратно в keeptime без перезапуска clock;
-//! клиентский снимок этого не делает. `AI` (0x005daaa0) завершает состояние
-//! только после абсолютного wrapping deadline, а не на его границе.
+//! клиентский снимок этого не делает. AI0x005DAAA0 при keep=0 не читает часы;
+//! иначе один clock и строгое unsigned сравнение wrapping deadline < now.
+//! После срока GetSufferer(+18) определяет адресата GS1145, затем вызывается
+//! End(+1C), независимо от хранения строки уведомления. Holder не заменяет
+//! адресата. Native unchecked CPlayer-получатель вне живого player подавляет
+//! только небезопасную отправку адаптера; достигнутый End остаётся отдельным.
 //! Payload принадлежит общей арене CMoveShape; decode_at читает одну
 //! фабрично подтверждённую запись и сохраняет её точный offset, без byte-scan.
 //! restart_change_body_state переносит object Begin0x005DB000 после смерти
@@ -25,8 +29,31 @@
 //! шесть ULONG0; missing skill/properties не создаёт placeholder. Клиентское
 //! время0x005DA030 читает часы1/2/3 раза; Unserialize выставляет online=true.
 //! Чистый visual-снимок не копирует накопленный m_vskill и не владеет состоянием.
-//! Текущий runtime-install создаёт уже начатое состояние через from_factory,
-//! поэтому его список заранее содержит пять ID; decode оставляет список пустым.
+//! Конструктор 0x005DAC90 не читает часы и оставляет m_vskill пустым.
+//! Destructor0x005DAA30 освобождает вектор, затем всегда вызывает базовый
+//! destructor; Vec/арена владеют тем же ресурсным хвостом без End/пакетов.
+//! Произвольный User и флаг0 в Begin(U,S,flag)0x005DADB0 пока не перенесены;
+//! реализован только достигнутый restart(NULL,player,1), RAW overload сохранён.
+//! Первичный object Begin0x005DB000 проверяет sufferer/CPlayer и при User=self
+//! читает один base clock. До append выполняются ClearEmotion/mode, loop1
+//! visual Update0 с пятью AddSkill, накопление ID и hotkeys. Единственный
+//! подготовленный payload остаётся вне арены через эти callbacks, как native;
+//! его копия не регистрируется раньше Begin. Caller после успеха переносит
+//! payload в арену и связывает User/Sufferer с сохранённой в базе identity.
+//! Loop1 visual не меняет ended в base tail; его итоговое владение создаёт
+//! существующий каталог арены при append, без повторной отправки Begin.
+//! Новый cache-record кодируется после Begin без Serialize и без часов.
+//! Writer по общему span обновляет все поля, включая mode/old_hotkeys,
+//! сохраняя padding загруженных tagCHBYState по смещениям +1 и +70..71.
+//! End0x005DA240 реализован в CGame::end_move_shape_change_body_state:
+//! visual Update1 при наличии ресурса, свежий Sufferer, обнуление режима
+//! игрока и payload, двенадцать восстановленных hotkeys/BF908, пять DelSkill
+//! по параметрам (не по накопленному вектору), затем RemoveState. Base End
+//! и запись state.ended здесь отсутствуют. Visual ended/NULL S подавляют
+//! пакет, но не base visual tail; unsafe native non-player tail не эмулируется.
+//! OnChangeRegion0x005DAB80 в CGame::set_change_body_state_region пишет только
+//! User-region перед флагами и возможным notice/End; Sufferer не меняется.
+//! Выделение длинной строки уведомления не отменяет последующий End.
 //! OnUpdateProperties0x005DA0F0 требует sufferer, но не user/Begin; для игрока
 //! сначала присваивает ненулевой mode, затем ненулевые добавки с DWORD wrapping
 //! до ограничения INT_MAX и WORD wrapping. Этот callback не вызывает visual
@@ -43,10 +70,12 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 pub(crate) const CHANGE_BODY_STATE_ID: u32 = 0x37;
 pub(crate) const CHANGE_BODY_SKILL_TYPE: u32 = 55;
 const CHANGE_BODY_PARAMETER_BYTES: usize = 120;
+pub(crate) const CHANGE_BODY_STATE_BYTES: usize = 4 + CHANGE_BODY_PARAMETER_BYTES;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ChangeBodyState {
@@ -75,19 +104,13 @@ pub(crate) struct ChangeBodyState {
     serialized_offset: Option<usize>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ChangeBodyMutation {
-    pub(crate) removed: Option<ChangeBodyState>,
-    pub(crate) added: Option<ChangeBodyState>,
-    pub(crate) legacy_return: u32,
-}
 
 impl ChangeBodyState {
     pub(crate) fn from_factory(
         level: u32,
         factory: &CSkillFactory,
-        started_ms: u32,
     ) -> Option<Self> {
+        if level == 0 { return None }
         let properties =
             factory.query_skill_base_properties(CHANGE_BODY_SKILL_TYPE, level as i32)?;
         let get = |usage| Some(properties.query_property(usage));
@@ -118,9 +141,9 @@ impl ChangeBodyState {
             blast_attack: get(125)? as u16,
             blast_element_attack: get(126)? as u16,
             skills,
-            begun_skill_ids: skills.into_iter().map(|(id, _)| id).collect(),
+            begun_skill_ids: Vec::new(),
             old_hotkeys: [0; 12],
-            started_ms,
+            started_ms: 0,
             serialized_offset: None,
         })
     }
@@ -182,31 +205,29 @@ impl ChangeBodyState {
         })
     }
 
-    pub(crate) fn remove_serialized(&self, payload: &mut Vec<u8>) {
-        let Some(offset) = self.serialized_offset else {
-            return;
-        };
-        if offset + 4 + CHANGE_BODY_PARAMETER_BYTES > payload.len() {
-            return;
-        }
-        payload.drain(offset..offset + 4 + CHANGE_BODY_PARAMETER_BYTES);
-        if let Some(count) = read_u32(payload, 0) {
-            write_u32(payload, 0, count.saturating_sub(1));
-        }
-    }
 
     pub(crate) fn serialized_span(&self) -> Option<(usize, usize)> {
         self.serialized_offset
             .map(|offset| (offset, 4 + CHANGE_BODY_PARAMETER_BYTES))
     }
 
-    pub(crate) fn write_serialized(&mut self, payload: &mut [u8], offset: usize) {
+    pub(crate) fn encoded_for_install(&self) -> [u8; CHANGE_BODY_STATE_BYTES] {
+        let mut record = [0; CHANGE_BODY_STATE_BYTES];
+        self.update_serialized_record(&mut record, 0, self.keep_time_ms);
+        record
+    }
+
+
+    pub(crate) fn update_serialized_record(&self, payload: &mut [u8], offset: usize, remaining: u32) {
+        if offset.checked_add(CHANGE_BODY_STATE_BYTES).is_none_or(|end| end > payload.len()) {
+            return;
+        }
         let base = offset + 4;
         write_u32(payload, offset, CHANGE_BODY_STATE_ID);
         payload[base] = u8::from(self.has_changed_region);
         write_u16(payload, base + 2, self.visual_effect);
         write_u32(payload, base + 4, self.level);
-        write_u32(payload, base + 8, self.keep_time_ms);
+        write_u32(payload, base + 8, remaining);
         write_u32(payload, base + 12, self.mode);
         payload[base + 16] = u8::from(self.change_region);
         payload[base + 17] = u8::from(self.restore_online);
@@ -228,7 +249,6 @@ impl ChangeBodyState {
         for (index, hotkey) in self.old_hotkeys.iter().copied().enumerate() {
             write_u32(payload, base + 72 + index * 4, hotkey);
         }
-        self.serialized_offset = Some(offset);
     }
 
 
@@ -262,18 +282,6 @@ impl ChangeBodyState {
         !self.restore_online
     }
 
-    pub(crate) fn update_serialized_runtime(&self, payload: &mut [u8], now_ms: u32) {
-        let Some(offset) = self.serialized_offset else {
-            return;
-        };
-        let base = offset + 4;
-        if base + CHANGE_BODY_PARAMETER_BYTES > payload.len() {
-            return;
-        }
-        payload[base] = u8::from(self.has_changed_region);
-        write_u32(payload, base + 8, self.remaining_time_ms(now_ms));
-        payload[base + 19] = u8::from(self.online);
-    }
 
     pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
         if let Some(offset) = &mut self.serialized_offset {
@@ -322,6 +330,48 @@ pub(crate) fn update_change_body_state_properties(
     let Some(player) = game.find_player_mut(target.id) else { return false };
     player.update_state_combat_properties(|_| properties);
     true
+}
+
+/// Достигнутый AddCHBY вызывает object Begin(self, self) до append.
+/// Возвращается адрес, записанный базой до visual/skill callbacks, а не
+/// повторно снятый регион после возможных побочных действий этих callbacks.
+pub(crate) fn begin_primary_change_body_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    state: &mut ChangeBodyState,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<(i32, ShapeIdentity)> {
+    if holder.object_type != 400 || game.find_player(holder.id).is_none() {
+        return None;
+    }
+    state.started_ms = now();
+    let player = game.find_player_mut(holder.id)?;
+    let participant = (
+        player.shape().get_region_id(),
+        ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() },
+    );
+    player.clear_emotion_state();
+    let (head, face, _) = player.appearance_and_mode();
+    player.restore_appearance_and_mode(head, face, state.mode);
+
+    let _ = send_change_body_begin_visual(game, region_id, holder, (&*state).into(), None, now);
+    state.begun_skill_ids.extend(state.skills.iter().map(|(id, _)| *id));
+    if !state.online {
+        let Some(player) = game.find_player_mut(holder.id) else { return Some(participant) };
+        for index in 0..12 {
+            state.old_hotkeys[index] = player.hotkey((index + 12) as u8).unwrap_or_default();
+            let _ = player.set_hotkey((index + 12) as u8, 0);
+        }
+    }
+    for index in 0..5 {
+        let Some(skill_id) = state.begun_skill_ids.get(index).copied() else { break };
+        if skill_id != 0 {
+            game.set_script_player_hotkey(holder.id, (index + 12) as u8, u32::from(skill_id) | 0x8000_0000);
+        }
+    }
+    game.set_script_player_hotkey(holder.id, 17, 0x8000_031f);
+    Some(participant)
 }
 
 pub(crate) fn restart_change_body_state(
@@ -408,15 +458,6 @@ impl From<&ChangeBodyState> for ChangeBodyBeginVisualSnapshot {
     }
 }
 
-pub(crate) fn send_change_body_state_begin_visual(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    state: &ChangeBodyState,
-    now: &mut dyn FnMut() -> u32,
-) {
-    let _ = send_change_body_begin_visual(game, region_id, holder, state.into(), None, now);
-}
 
 fn send_change_body_begin_visual(
     game: &mut CGame,
@@ -494,118 +535,14 @@ fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp
 
-// ============================================================================
-// FUNCTION: CHBYState::GetRemainedTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:61
-// RVA: 0x001DA030
-// ADDRESS: 005da030
-// PROTOTYPE: ulong __thiscall GetRemainedTime(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHBYState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:454
-// RVA: 0x001DA080
-// ADDRESS: 005da080
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 
-// ============================================================================
-// FUNCTION: CHBYState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:370
-// RVA: 0x001DA240
-// ADDRESS: 005da240
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CCHBYStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:482
-// RVA: 0x001DA390
-// ADDRESS: 005da390
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CHBYState::~CHBYState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:57
-// RVA: 0x001DAA30
-// ADDRESS: 005daa30
-// PROTOTYPE: void __thiscall ~CHBYState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CHBYState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:412
-// RVA: 0x001DAAA0
-// ADDRESS: 005daaa0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CHBYState::OnChangeRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:425
-// RVA: 0x001DAB80
-// ADDRESS: 005dab80
-// PROTOTYPE: void __thiscall OnChangeRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CHBYState::CHBYState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\chbystate.cpp:37
-// RVA: 0x001DAC90
-// ADDRESS: 005dac90
-// PROTOTYPE: undefined __thiscall CHBYState(tagCHBYState * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+
 
 // ============================================================================
 // FUNCTION: CHBYState::CHBYState

@@ -12,6 +12,12 @@
 //! не получает фиктивный offset, а сохранение не зависит от способа установки.
 //! Обновление remaining сохраняет исходные padding-байты загруженного Ex,
 //! не пересоздавая всю запись из полей, которых нет в игровом контракте.
+//! AddCHBYState (0x004D2590) также использует общую арену: параметры снимаются
+//! до End/destructor всех совпавших уровней, object Begin выполняется до append.
+//! DelCHBYState (0x004CEBD0) завершает лишь первое совпадение и отдельно
+//! вызывает UpdateProperty; GetCHBYState (0x004CEC40) не вызывает callbacks.
+//! CHBY-кодек пишет актуальные mode/hotkeys/flags/remaining по общему span,
+//! сохраняя исходный padding; отдельный owning ChangeBodyMutation устранён.
 //! Немедленный background-owner сохраняет признак End у навыка до следующего
 //! OnExecuteBackStageSkills (0x004C88E0): сначала проверка IsEnded, затем AI.
 //! Запись не извлекается перед callback; следующий проход ставит SKILL_UNKNOW,
@@ -209,7 +215,7 @@ use std::ops::{Deref, DerefMut};
 use slotmap::{SlotMap, new_key_type};
 
 use super::ai::baseai::CBaseAI;
-use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
+use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyState};
 use super::exstate::{
     EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind,
 };
@@ -1639,7 +1645,11 @@ impl CMoveShape {
             // однозначной DB-пары запрещает запись, но не добавляет type-pass.
             let encoded = match state {
                 StateData::ChangeBody(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
+                    if let Some(record_index) = record_index {
+                        state.update_serialized_record(
+                            &mut payload, spans[record_index].0, state.remaining_time_ms(now_ms),
+                        );
+                    }
                     None
                 }
                 StateData::Extended(state) => {
@@ -3660,80 +3670,6 @@ impl CMoveShape {
         (false, None)
     }
 
-    pub(crate) fn add_change_body_state(
-        &mut self,
-        state_id: u32,
-        factory: &CSkillFactory,
-        now_ms: u32,
-        old_hotkeys: [u32; 12],
-    ) -> ChangeBodyMutation {
-        let Some(mut added) = ChangeBodyState::from_factory(state_id, factory, now_ms) else {
-            return ChangeBodyMutation {
-                removed: None,
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        added.old_hotkeys = old_hotkeys;
-        let previous_position = self
-            .state_entries.iter::<ChangeBodyState>()
-            .position(|state| state.level == state_id);
-        let removed = previous_position.map(|index| {
-                let removed = self.state_entries.take_nth::<ChangeBodyState>(index).expect("семейная позиция проверена до удаления");
-                self.remove_change_body_state_serialized(&removed);
-                removed
-            });
-        if self.ex_states.len() < 4 {
-            self.ex_states.clear();
-            LegacyWriter::new(&mut self.ex_states).write_u32(0);
-        }
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        let offset = self.ex_states.len();
-        LegacyWriter::new(&mut self.ex_states).write_u32(super::chbystate::CHANGE_BODY_STATE_ID);
-        self.ex_states.resize(offset + 124, 0);
-        added.write_serialized(&mut self.ex_states, offset);
-        self.state_entries.append(added.clone());
-        ChangeBodyMutation {
-            removed,
-            added: Some(added),
-            legacy_return: 1,
-        }
-    }
-
-    pub(crate) fn delete_change_body_state(
-        &mut self,
-        state_id: u32,
-    ) -> ChangeBodyMutation {
-        let key = self.state_entries.iter::<ChangeBodyState>()
-            .position(|state| state.level == state_id)
-            .and_then(|index| self.state_entries.key_at::<ChangeBodyState>(index));
-        let Some(key) = key else {
-            return ChangeBodyMutation {
-                removed: None,
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        self.delete_change_body_state_key(key)
-    }
-
-    pub(crate) fn delete_change_body_state_key(&mut self, key: StateKey) -> ChangeBodyMutation {
-        let Some(removed) = self.state_entries.take::<ChangeBodyState>(key) else {
-            return ChangeBodyMutation {
-                removed: None,
-                added: None,
-                legacy_return: 0,
-            };
-        };
-        let legacy_return = removed.level;
-        self.remove_change_body_state_serialized(&removed);
-        ChangeBodyMutation {
-            removed: Some(removed),
-            added: None,
-            legacy_return,
-        }
-    }
 
     pub(crate) fn get_change_body_state(&self, state_id: u32) -> u32 {
         self.state_entries.iter::<ChangeBodyState>()
@@ -3742,13 +3678,6 @@ impl CMoveShape {
             .unwrap_or_default()
     }
 
-    fn remove_change_body_state_serialized(&mut self, state: &ChangeBodyState) {
-        let span = state.serialized_span();
-        state.remove_serialized(&mut self.ex_states);
-        if let Some((offset, amount)) = span {
-            self.shift_serialized_state_offsets_after(offset, amount);
-        }
-    }
 
     pub(crate) fn active_change_body_state(&self) -> Option<&ChangeBodyState> {
         self.state_entries.iter::<ChangeBodyState>().last()
@@ -3761,44 +3690,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn change_body_region_transition_end_keys(&mut self) -> Vec<StateKey> {
-        let mut ended = Vec::new();
-        let storage = &mut self.state_storage;
-        for key in storage.state_entries.keys::<ChangeBodyState>() {
-            let Some(state) = storage.state_entries.get_mut(key).and_then(ChangeBodyState::as_data_mut) else {
-                continue;
-            };
-            if state.on_change_region() {
-                ended.push(key);
-            } else {
-                state.update_serialized_runtime(&mut storage.ex_states, state.started_ms);
-            }
-        }
-        ended
-    }
-
-    pub(crate) fn change_body_player_lost_end_keys(&mut self) -> Vec<StateKey> {
-        let mut ended = Vec::new();
-        let storage = &mut self.state_storage;
-        for key in storage.state_entries.keys::<ChangeBodyState>() {
-            let Some(state) = storage.state_entries.get_mut(key).and_then(ChangeBodyState::as_data_mut) else {
-                continue;
-            };
-            if state.on_player_lost() {
-                ended.push(key);
-            } else {
-                state.update_serialized_runtime(&mut storage.ex_states, state.started_ms);
-            }
-        }
-        ended
-    }
-
-    pub(crate) fn change_body_death_end_keys(&self) -> Vec<StateKey> {
-        self.state_entries.keys::<ChangeBodyState>().into_iter()
-            .filter(|key| self.state_entries.get(*key).and_then(ChangeBodyState::as_data_ref)
-                .is_some_and(|state| !state.continue_after_death))
-            .collect()
-    }
 
     pub(crate) fn skill(&self, skill_id: u32, factory: &CSkillFactory) -> Option<&MoveShapeSkill> {
         self.skill_at(self.skill_slot(skill_id, factory)?)
@@ -4995,33 +4886,7 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::DelCHBYState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3603
-// RVA: 0x000CEBD0
-// ADDRESS: 004cebd0
-// PROTOTYPE: uint __thiscall DelCHBYState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
-// ============================================================================
-// FUNCTION: CMoveShape::GetCHBYState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3625
-// RVA: 0x000CEC40
-// ADDRESS: 004cec40
-// PROTOTYPE: uint __thiscall GetCHBYState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::SetCurrentSkill
@@ -5347,19 +5212,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 // реализован CGame::check_move_shape_prison: fresh victim-region, tamed master,
 // PrisonConf::operator[], GS0126 и существующий ChangeRegion после очистки.
 
-// ============================================================================
-// FUNCTION: CMoveShape::AddCHBYState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3523
-// RVA: 0x000D2590
-// ADDRESS: 004d2590
-// PROTOTYPE: uint __thiscall AddCHBYState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::OnBeenAttacked

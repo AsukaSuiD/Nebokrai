@@ -4,6 +4,13 @@
 //! общий живой CMoveShape-проход. Промежуточные tagProperty видны следующему
 //! callback; копии списка, фильтр «последний CHBY» и очередь visuals сняты.
 //! Чистые Ex/Undead/Ride-формулы читают owning payload по ссылке без callbacks.
+//! CHBY Begin/End не дублируются в Player mutation-wrapper: их mode/hotkeys
+//! и общий AddSkill/DelSkill выполняет единственный state-owner через CGame.
+//! OnLost (0x0044183B..0x00441894, player.cpp:1780) проходит живые позиции:
+//! для очередного CHBY ставит has_changed_region=false/online=true и при
+//! !restore_online сразу отправляет исходный BF806 и вызывает End. Следующий
+//! индекс/размер читается после callback, без предварительной пачки ключей,
+//! принудительного destructor, дополнительных часов или UpdateProperty.
 //! SelfTarget — объектная перегрузка Attack с самим игроком: обычный запрос
 //! вызывает virtual +0x78 в 0x00488E20, item — в 0x00489109/0x00489547,
 //! WarSoul — в 0x0048953D/0x00489547. Он имеет ту же цель type=400/id игрока,
@@ -4890,72 +4897,6 @@ impl CPlayer {
         self.move_shape.active_change_body_state().is_some()
     }
 
-    pub(crate) fn add_change_body_state(
-        &mut self,
-        state_id: u32,
-        factory: &CSkillFactory,
-        now_ms: u32,
-    ) -> super::chbystate::ChangeBodyMutation {
-        let old_hotkeys = std::array::from_fn(|index| self.base_properties.hotkeys[index + 12]);
-        let mutation =
-            self.move_shape
-                .add_change_body_state(state_id, factory, now_ms, old_hotkeys);
-        let Some(state) = mutation.added.as_ref() else {
-            return mutation;
-        };
-        self.clear_emotion_state();
-        self.base_properties.mode = state.mode;
-        for slot in 12..24 {
-            self.base_properties.hotkeys[slot] = 0;
-        }
-        for (index, (skill_id, level)) in state.skills.iter().copied().enumerate() {
-            if skill_id != 0 {
-                let _ = self
-                    .move_shape
-                    .add_skill(u32::from(skill_id), i32::from(level), factory);
-                self.base_properties.hotkeys[index + 12] = u32::from(skill_id) | 0x8000_0000;
-            }
-        }
-        self.base_properties.hotkeys[17] = 0x8000_031f;
-        mutation
-    }
-
-    pub(crate) fn delete_change_body_state(
-        &mut self,
-        state_id: u32,
-        factory: &CSkillFactory,
-    ) -> super::chbystate::ChangeBodyMutation {
-        let mutation = self.move_shape.delete_change_body_state(state_id);
-        self.finish_change_body_state_removal(mutation, factory)
-    }
-
-    pub(crate) fn delete_change_body_state_key(
-        &mut self,
-        key: super::moveshape::StateKey,
-        factory: &CSkillFactory,
-    ) -> super::chbystate::ChangeBodyMutation {
-        let mutation = self.move_shape.delete_change_body_state_key(key);
-        self.finish_change_body_state_removal(mutation, factory)
-    }
-
-    fn finish_change_body_state_removal(
-        &mut self,
-        mutation: super::chbystate::ChangeBodyMutation,
-        factory: &CSkillFactory,
-    ) -> super::chbystate::ChangeBodyMutation {
-        if let Some(state) = mutation.removed.as_ref() {
-            self.base_properties.mode = 0;
-            for (index, hotkey) in state.old_hotkeys.iter().copied().enumerate() {
-                self.base_properties.hotkeys[index + 12] = hotkey;
-            }
-            for (skill_id, _) in state.skills {
-                if skill_id != 0 {
-                    let _ = self.move_shape.delete_skill(u32::from(skill_id), factory);
-                }
-            }
-        }
-        mutation
-    }
 
     pub(crate) fn get_change_body_state(&self, state_id: u32) -> u32 {
         self.move_shape.get_change_body_state(state_id)
@@ -4968,13 +4909,6 @@ impl CPlayer {
 
 
 
-    pub(crate) fn change_body_player_lost_end_keys(&mut self) -> Vec<super::moveshape::StateKey> {
-        self.move_shape.change_body_player_lost_end_keys()
-    }
-
-    pub(crate) fn change_body_death_end_keys(&self) -> Vec<super::moveshape::StateKey> {
-        self.move_shape.change_body_death_end_keys()
-    }
 
     pub(crate) fn is_rider(&self) -> bool {
         self.move_shape.has_ride_state()

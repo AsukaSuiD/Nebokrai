@@ -5513,8 +5513,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE => {
-                    let now_ms = runtime.now_milliseconds();
-                    game.add_script_change_body_state(player_id, state_id, now_ms)
+                    game.add_script_change_body_state(
+                        player_id, state_id, &mut || runtime.now_milliseconds(),
+                    )
                 }
                 SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE => {
                     game.delete_script_change_body_state(player_id, state_id)
