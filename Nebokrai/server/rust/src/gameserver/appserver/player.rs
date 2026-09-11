@@ -17,6 +17,15 @@
 //! с отдельным clock и общая регистрация. Нулевой срок не означает мгновенное
 //! лечение; повторные состояния сохраняются, внешнего UpdateProperty нет.
 //! HP/MP-mutation wrappers устранены: AI обращается к тому же живому payload.
+//! Particular: OnObjectAdded (0x004451A0) вызывает общий Begin синхронно
+//! после container commit и GoodsAI, до следующего товара; собственный equipment-listener
+//! (0x004EF6C0) сначала публикует skills/properties/BF720/PackExpand.
+//! OnEnterRegion (0x0045A410) собирает только ordered unique additional-значения;
+//! packet-вектор отбрасывается, GUID-listener дополняется экипировкой.
+//! Packet Add (0x004DE6E0) регистрирует GoodsAI до player-listener;
+//! ComputeTicket (0x0043E820) читает wall-clock только после life/ticket/type/start gates.
+//! Packet Swap проходит тот же синхронный Add, включая восстановление displaced
+//! при отказе; storage-алгоритм и его конечный garbage-collect остаются общими.
 //! Ride AI (0x004F9110, other states/ridestate.cpp) проверяет packet actual
 //! Sufferer через существующий property-listener: сначала GAP_MOUNT_TYPE != 0,
 //! затем GUID lookup и сравнение type/level. Проверка read-only, без cached GUID,
@@ -435,7 +444,7 @@ use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlo
 use super::container::cjifen::CJiFen;
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsCodecError,
-    VolumeGoodsRemoveOutcome,
+    VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome,
 };
 use super::container::cwallet::{
     CWallet, CurrencyCodecError, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome,
@@ -488,7 +497,6 @@ use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts,
     MoveShapeSkill, SKILL_BASE_DEFENSE,
 };
-use super::particularstate::ParticularState;
 use super::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
@@ -841,7 +849,6 @@ pub(crate) struct PlayerEquipmentAddRuntimeFacts {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerEquipmentAddEffect {
-    ParticularStateBegun(ParticularState),
     WarSoulSkillAttached {
         skill_id: u32,
         level: i32,
@@ -859,12 +866,11 @@ pub(crate) enum PlayerEquipmentAddEffect {
     },
 }
 
-#[must_use = "equipment add report сохраняет partial mutations и player/network tail"]
+#[must_use = "equipment add report сохраняет исход частичных изменений контейнера"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerEquipmentAddReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentAddOutcome,
-    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1625,11 +1631,10 @@ pub(crate) struct HotkeyHandTransferReport {
     pub(crate) outcome: HotkeyHandTransferOutcome,
 }
 
-#[must_use = "packet add содержит немедленное состояние предмета для доставки owner-ом"]
+#[must_use = "packet add сохраняет исход передачи предмета контейнеру"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerPacketAddOutcome {
     pub(crate) outcome: VolumeGoodsAddOutcome,
-    pub(crate) particular_state: Option<ParticularState>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8323,23 +8328,13 @@ impl CPlayer {
         incoming: &mut Option<CGoods>,
         factory: &CGoodsFactory,
         owner_progress_allows: bool,
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
     ) -> PlayerPacketAddOutcome {
         let outcome =
             self.packet
                 .add_goods_at(position, incoming, factory, owner_progress_allows);
-        let particular_state = match (self.entered_region, &outcome) {
-            (true, VolumeGoodsAddOutcome::Added(added)) => self
-                .packet
-                .base()
-                .find(added.identity.ex_id)
-                .and_then(|goods| Self::particular_state_from_goods(goods, factory))
-                .and_then(|state| self.move_shape.add_particular_state(state)),
-            _ => None,
-        };
-        PlayerPacketAddOutcome {
-            outcome,
-            particular_state,
-        }
+        self.notify_packet_goods_added(&outcome, factory, on_goods_added);
+        PlayerPacketAddOutcome { outcome }
     }
 
     pub(crate) fn add_packet_goods(
@@ -8347,22 +8342,71 @@ impl CPlayer {
         incoming: &mut Option<CGoods>,
         factory: &CGoodsFactory,
         owner_progress_allows: bool,
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
     ) -> PlayerPacketAddOutcome {
         let outcome = self
             .packet
             .add_goods(incoming, factory, owner_progress_allows);
-        let particular_state = match (self.entered_region, &outcome) {
-            (true, VolumeGoodsAddOutcome::Added(added)) => self
-                .packet
-                .base()
-                .find(added.identity.ex_id)
-                .and_then(|goods| Self::particular_state_from_goods(goods, factory))
-                .and_then(|state| self.move_shape.add_particular_state(state)),
-            _ => None,
+        self.notify_packet_goods_added(&outcome, factory, on_goods_added);
+        PlayerPacketAddOutcome { outcome }
+    }
+
+    pub(crate) fn swap_packet_goods(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> Option<VolumeGoodsSwapOutcome> {
+        CVolumeLimitGoodsContainer::swap_goods_with_owner(
+            self,
+            position,
+            incoming,
+            owner_progress_allows,
+            |player| &mut player.packet,
+            |player, position, incoming, owner_progress_allows| {
+                player
+                    .add_packet_goods_at(
+                        position,
+                        incoming,
+                        factory,
+                        owner_progress_allows,
+                        on_goods_added,
+                    )
+                    .outcome
+            },
+        )
+    }
+
+    fn notify_packet_goods_added(
+        &mut self,
+        outcome: &VolumeGoodsAddOutcome,
+        factory: &CGoodsFactory,
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) {
+        let VolumeGoodsAddOutcome::Added(added) = outcome else {
+            return;
         };
-        PlayerPacketAddOutcome {
-            outcome,
-            particular_state,
+        let current_ticket = self.current_ticket;
+        let registration = self
+            .packet
+            .base_mut()
+            .find_mut(added.identity.ex_id)
+            .and_then(|goods| {
+                Self::prepare_goods_ai_registration_with_clock(
+                    current_ticket,
+                    goods,
+                    factory,
+                    &mut crate::gameserver::gameserver::game::game_wall_time_seconds,
+                )
+            });
+        if let Some((ticket, goods_id)) = registration {
+            self.record_goods_ai_registration(ticket, goods_id);
+        }
+        if let Some(goods) = self.packet.base().find(added.identity.ex_id) {
+            let additional = goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
+            on_goods_added(self, additional);
         }
     }
 
@@ -8373,13 +8417,15 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
         let owner_progress_allows = self.current_progress == PlayerProgress::None;
         self.add_goods_to_packet_with_progress(
             goods,
             factory,
             encode_old_client,
             owner_progress_allows,
+            on_goods_added,
         )
     }
 
@@ -8391,8 +8437,11 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
-        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(
+            goods, factory, encode_old_client, true, on_goods_added,
+        )
     }
 
     /// Script `2249` выполняется при занятом script progress, но native owner
@@ -8402,8 +8451,11 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
-        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(
+            goods, factory, encode_old_client, true, on_goods_added,
+        )
     }
 
     /// `GetPreciousItem` исполняется внутри script progress, но native owner
@@ -8413,8 +8465,11 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
-        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(
+            goods, factory, encode_old_client, true, on_goods_added,
+        )
     }
 
     /// `CTrader::Trade` добавляет contrary goods при
@@ -8425,8 +8480,11 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
-        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(
+            goods, factory, encode_old_client, true, on_goods_added,
+        )
     }
 
     /// NPC shop добавляет batch напрямую при `PROGRESS_SHOPPING`.
@@ -8435,8 +8493,11 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
-        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(
+            goods, factory, encode_old_client, true, on_goods_added,
+        )
     }
 
     /// Обратная половина `CTrader::RollBack`: отменяет уже выполненный
@@ -8500,19 +8561,17 @@ impl CPlayer {
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         owner_progress_allows: bool,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
         let player_id = self.player_id();
         let mut additions = Vec::new();
         let mut remaining = Vec::new();
-        let mut begun_states = Vec::new();
         for goods in goods {
             let source = goods.identity();
             let mut incoming = Some(goods);
-            let packet_add =
-                self.add_packet_goods(&mut incoming, factory, owner_progress_allows);
-            if let Some(state) = packet_add.particular_state {
-                begun_states.push(state);
-            }
+            let packet_add = self.add_packet_goods(
+                &mut incoming, factory, owner_progress_allows, on_goods_added,
+            );
             let outcome = packet_add.outcome;
             let (old_client_payload, resulting_amount) = match &outcome {
                 VolumeGoodsAddOutcome::Added(added) => {
@@ -8559,7 +8618,7 @@ impl CPlayer {
                 remaining.push(goods);
             }
         }
-        (additions, remaining, begun_states)
+        (additions, remaining)
     }
 
     pub(crate) fn ci_qing_compose_goods(&self, position: u32) -> Option<&CGoods> {
@@ -8803,6 +8862,7 @@ impl CPlayer {
     pub(crate) fn return_hotkey_hand_goods(
         &mut self,
         factory: &CGoodsFactory,
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
     ) -> HotkeyHandTransferReport {
         let (source_container_extend_id, source_position) = self.last_operated_goods();
         let mut report = HotkeyHandTransferReport {
@@ -8853,12 +8913,14 @@ impl CPlayer {
                 &mut incoming,
                 factory,
                 owner_progress_allows,
+                on_goods_added,
             ));
             if incoming.is_some() {
                 report.packet_adds.push(self.add_packet_goods(
                     &mut incoming,
                     factory,
                     owner_progress_allows,
+                    on_goods_added,
                 ));
             }
         } else if source_container_extend_id == 3 {
@@ -10930,8 +10992,9 @@ impl CPlayer {
         factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
         runtime: PlayerEquipmentAddRuntimeFacts,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
         recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerPropertyRecompute,
+        publish_effect: &mut dyn FnMut(&CPlayer, PlayerEquipmentAddEffect),
+        on_goods_added: &mut dyn FnMut(&mut CPlayer, u32),
     ) -> PlayerEquipmentAddReport {
         let player_id = self.player_id();
         let previous_expanded_package_num = self.equipment.expanded_package_num();
@@ -10943,36 +11006,45 @@ impl CPlayer {
             pack_add_enabled: runtime.pack_add_enabled,
             now: runtime.now,
         };
-        let outcome = if position == u32::MAX {
-            self.equipment.add_preferred(
-                incoming,
-                factory,
-                container_runtime,
-                register_with_goods_ai,
-            )
-        } else {
-            self.equipment.add_at(
-                position,
-                incoming,
-                factory,
-                container_runtime,
-                register_with_goods_ai,
-            )
+        let outcome = {
+            let current_ticket = self.current_ticket;
+            let goods_ai_tree = &mut self.goods_ai_tree;
+            let goods_ai_delete_queue = &mut self.goods_ai_delete_queue;
+            let mut register_with_goods_ai = |goods: &mut CGoods| {
+                if let Some((ticket, goods_id)) = Self::prepare_goods_ai_registration_with_clock(
+                    current_ticket,
+                    goods,
+                    factory,
+                    &mut crate::gameserver::gameserver::game::game_wall_time_seconds,
+                ) {
+                    Self::record_goods_ai_registration_in(
+                        current_ticket,
+                        goods_ai_tree,
+                        goods_ai_delete_queue,
+                        ticket,
+                        goods_id,
+                    );
+                }
+            };
+            if position == u32::MAX {
+                self.equipment.add_preferred(
+                    incoming,
+                    factory,
+                    container_runtime,
+                    &mut register_with_goods_ai,
+                )
+            } else {
+                self.equipment.add_at(
+                    position,
+                    incoming,
+                    factory,
+                    container_runtime,
+                    &mut register_with_goods_ai,
+                )
+            }
         };
-        let mut effects = Vec::new();
         if matches!(&outcome, EquipmentAddOutcome::Added(_)) {
             self.equipment_changed = true;
-        }
-        if self.entered_region && let EquipmentAddOutcome::Added(added) = &outcome {
-            let state = self
-                .equipment
-                .get_goods(added.column.position())
-                .and_then(|goods| Self::particular_state_from_goods(goods, factory));
-            if let Some(state) =
-                state.and_then(|state| self.move_shape.add_particular_state(state))
-            {
-                effects.push(PlayerEquipmentAddEffect::ParticularStateBegun(state));
-            }
         }
         if let EquipmentAddOutcome::Added(added) = &outcome
             && let Some(player_effects) = added.player_effects
@@ -10986,42 +11058,56 @@ impl CPlayer {
             {
                 for (skill_id, level) in war_soul_skill_entries_from_goods(goods, factory) {
                     let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
-                    effects
-                        .push(PlayerEquipmentAddEffect::WarSoulSkillAttached { skill_id, level });
+                    publish_effect(
+                        self,
+                        PlayerEquipmentAddEffect::WarSoulSkillAttached { skill_id, level },
+                    );
                     if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
-                        effects.push(PlayerEquipmentAddEffect::SkillAdded(
-                            battle_fairy_skill_snapshot(player_id, skill, skill_factory),
-                        ));
+                        publish_effect(
+                            self,
+                            PlayerEquipmentAddEffect::SkillAdded(
+                                battle_fairy_skill_snapshot(player_id, skill, skill_factory),
+                            ),
+                        );
                     }
                 }
             }
             if player_effects.recompute_properties {
                 let recompute = recompute_properties(self);
                 self.apply_recomputed_combat_properties(recompute.properties, factory);
-                effects.push(PlayerEquipmentAddEffect::PropertiesChanged {
-                    combat_properties: self.combat_properties,
-                    ci_qing_result_values: recompute.ci_qing_result_values,
-                });
+                publish_effect(
+                    self,
+                    PlayerEquipmentAddEffect::PropertiesChanged {
+                        combat_properties: self.combat_properties,
+                        ci_qing_result_values: recompute.ci_qing_result_values,
+                    },
+                );
             }
-            effects.push(PlayerEquipmentAddEffect::AroundUpdate(
-                player_effects.around_update,
-            ));
+            publish_effect(
+                self,
+                PlayerEquipmentAddEffect::AroundUpdate(player_effects.around_update),
+            );
             if added.package_extension_applied {
                 self.equipment.set_expanded_package_num_snapshot(
                     previous_expanded_package_num.wrapping_add(added.package_extension_delta),
                 );
-                effects.push(PlayerEquipmentAddEffect::PackageExtensionLogged {
-                    category: "PackExpand",
-                    string_id: "KR002",
-                    expanded_package_num: self.equipment.expanded_package_num(),
-                });
+                publish_effect(
+                    self,
+                    PlayerEquipmentAddEffect::PackageExtensionLogged {
+                        category: "PackExpand",
+                        string_id: "KR002",
+                        expanded_package_num: self.equipment.expanded_package_num(),
+                    },
+                );
             }
         }
-        PlayerEquipmentAddReport {
-            player_id,
-            outcome,
-            effects: effects.into_iter().collect(),
+        if let EquipmentAddOutcome::Added(added) = &outcome
+            && let Some(goods) = self.equipment.get_goods(added.column.position())
+        {
+            let additional = goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
+            on_goods_added(self, additional);
         }
+        PlayerEquipmentAddReport { player_id, outcome }
     }
 
     /// Завершает принадлежащий `CGame` хвост области: `spatial_applied`
@@ -11224,6 +11310,17 @@ impl CPlayer {
         factory: &CGoodsFactory,
         now_seconds: u64,
     ) -> Option<(u32, CGuid)> {
+        Self::prepare_goods_ai_registration_with_clock(
+            current_ticket, goods, factory, &mut || now_seconds,
+        )
+    }
+
+    fn prepare_goods_ai_registration_with_clock(
+        current_ticket: u32,
+        goods: &mut CGoods,
+        factory: &CGoodsFactory,
+        now_seconds: &mut dyn FnMut() -> u64,
+    ) -> Option<(u32, CGuid)> {
         if !goods.query_attribute(GAP_GOODS_LIFE_TYPE) || goods.add_ticket() != 0 {
             return None;
         }
@@ -11232,6 +11329,7 @@ impl CPlayer {
         if !matches!(time_type, 1 | 3) && (!matches!(time_type, 2 | 4) || start == 0) {
             return None;
         }
+        let now_seconds = now_seconds();
         if start == 0 {
             goods.set_start_point(now_seconds);
             start = now_seconds;
@@ -11255,14 +11353,26 @@ impl CPlayer {
     }
 
     pub(crate) fn record_goods_ai_registration(&mut self, ticket: u32, goods_id: CGuid) {
-        if ticket <= self.current_ticket {
-            self.goods_ai_delete_queue
-                .push_back(BTreeSet::from([goods_id]));
+        Self::record_goods_ai_registration_in(
+            self.current_ticket,
+            &mut self.goods_ai_tree,
+            &mut self.goods_ai_delete_queue,
+            ticket,
+            goods_id,
+        );
+    }
+
+    fn record_goods_ai_registration_in(
+        current_ticket: u32,
+        goods_ai_tree: &mut BTreeMap<u32, BTreeSet<CGuid>>,
+        goods_ai_delete_queue: &mut VecDeque<BTreeSet<CGuid>>,
+        ticket: u32,
+        goods_id: CGuid,
+    ) {
+        if ticket <= current_ticket {
+            goods_ai_delete_queue.push_back(BTreeSet::from([goods_id]));
         } else {
-            self.goods_ai_tree
-                .entry(ticket)
-                .or_default()
-                .insert(goods_id);
+            goods_ai_tree.entry(ticket).or_default().insert(goods_id);
         }
     }
 
@@ -13736,50 +13846,61 @@ impl CPlayer {
         additional_data: u32,
         factory: &CGoodsFactory,
     ) -> bool {
-        self.packet
-            .base()
-            .traversing_goods()
-            .chain(
-                self.equipment
-                    .traversing_goods()
-                    .into_iter()
-                    .map(|(_, goods)| goods),
-            )
-            .any(|goods| {
+        let mut listener = GoodsParticularPropertyListener::new(GAP_EXCEPTION_STATE);
+        for goods in self.packet.base().traversing_goods() {
+            listener.visit(factory, goods);
+        }
+        if listener.goods_ids().iter().any(|goods_id| {
+            self.packet.base().find(*goods_id).is_some_and(|goods| {
                 goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32
                     == additional_data
             })
+        }) {
+            return true;
+        }
+        for (_, goods) in self.equipment.traversing_goods() {
+            listener.visit(factory, goods);
+        }
+        listener.goods_ids().iter().any(|goods_id| {
+            self.equipment.find(*goods_id).is_some_and(|goods| {
+                goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32
+                    == additional_data
+            })
+        })
     }
 
-    fn particular_state_from_goods(
-        goods: &CGoods,
+    /// OnEnterRegion отбрасывает packet-значения, но дополняет тот же GUID-listener
+    /// экипировкой. Уникальность относится к значениям, не к живым состояниям.
+    pub(crate) fn equipment_particular_state_values(
+        &self,
         factory: &CGoodsFactory,
-    ) -> Option<ParticularState> {
-        let additional_data =
-            goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
-        ParticularState::new(additional_data)
-    }
-
-    /// Вторая goods-listener половина `CPlayer::OnEnterRegion`: packet
-    /// listener оригинала только собирает значения, а состояния создаются из
-    /// equipment в его traversal order с подавлением duplicate additional ID.
-    pub(crate) fn restore_equipment_particular_states(
-        &mut self,
-        factory: &CGoodsFactory,
-    ) -> Vec<ParticularState> {
-        let states = self
-            .equipment
-            .traversing_goods()
-            .into_iter()
-            .filter_map(|(_, goods)| Self::particular_state_from_goods(goods, factory))
-            .collect::<Vec<_>>();
-        let mut begun = Vec::new();
-        for state in states {
-            if let Some(state) = self.move_shape.add_particular_state(state) {
-                begun.push(state);
+    ) -> Vec<u32> {
+        let mut listener = GoodsParticularPropertyListener::new(GAP_EXCEPTION_STATE);
+        for goods in self.packet.base().traversing_goods() {
+            listener.visit(factory, goods);
+        }
+        let mut values = Vec::new();
+        for goods_id in listener.goods_ids() {
+            if let Some(goods) = self.packet.base().find(*goods_id) {
+                let additional = goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
+                if additional != 0 && !values.contains(&additional) {
+                    values.push(additional);
+                }
             }
         }
-        begun
+        values.clear();
+        for (_, goods) in self.equipment.traversing_goods() {
+            listener.visit(factory, goods);
+        }
+        for goods_id in listener.goods_ids() {
+            if let Some(goods) = self.equipment.find(*goods_id) {
+                let additional = goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
+                if additional != 0 && !values.contains(&additional) {
+                    values.push(additional);
+                }
+            }
+        }
+        values
     }
 
     pub(crate) fn automatic_restore_needs_clock(&self, key: crate::gameserver::appserver::moveshape::StateKey) -> bool {

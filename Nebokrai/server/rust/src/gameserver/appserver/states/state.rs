@@ -1011,12 +1011,13 @@ state_callbacks! {
     ),
     StateData::Particular(_); client = |state, _team, _now| { StateClientRecord { time: state.client_state_time(), additional: state.additional_data(), team_name: None } } => (
         |game, region, target, key, runtime| {
-            game.update_move_shape_particular_state(region, target, key, runtime);
+            crate::gameserver::appserver::particularstate::update_particular_state(game, region, target, key, runtime);
         },
-        CGame::end_move_shape_particular_state,
+        crate::gameserver::appserver::particularstate::end_particular_state,
         crate::gameserver::appserver::particularstate::restart_particular_state,
-        |_, _, _, _, _| true
-    ),
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
+    ); visual = |_state| Some((1, true)),
     StateData::Team(_); client = |state, team, _now| { StateClientRecord { time: state.client_state_time(), additional: state.additional_data(team), team_name: Some(state.team_name()) } } => (
         |game, region, target, key, runtime| {
             game.update_move_shape_team_recruitment_state(region, target, key, runtime);

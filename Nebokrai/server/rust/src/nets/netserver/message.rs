@@ -50,6 +50,9 @@
 //! Синхронные callback-и временно извлечённого региона используют тот же
 //! sender через recipient/spatial snapshot: сохраняются area order и team-tail,
 //! но owning объекты с навыками и visual-ресурсами не клонируются.
+//! Если callback временно извлёк только игрока, around-runtime заимствует его:
+//! точный ID разрешается в этот живой объект и для area, и для main/team, и для
+//! владельца plug; остальные игроки по-прежнему берутся из `CGame`.
 //! Положительные глобальные `AREA_WIDTH/HEIGHT` выражены проверяемой concrete
 //! runtime-границей. `SendAll` oversized-log читает неинициализированное
 //! constructor-ом `CMySocket::m_lIndexID`; Rust не подставляет значение и
@@ -68,6 +71,7 @@
 use std::fmt;
 
 use crate::gameserver::appserver::area::CArea;
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionRecipientsSnapshot};
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeCoordinateBlock};
@@ -201,6 +205,7 @@ pub(crate) enum GameMessageRoute {
 pub(crate) struct GameServerAroundRuntime<'a> {
     game: &'a CGame,
     sessions: &'a CSessionFactory,
+    player: Option<&'a CPlayer>,
     area_width: i32,
     area_height: i32,
 }
@@ -216,9 +221,21 @@ impl<'a> GameServerAroundRuntime<'a> {
         (area_width > 0 && area_height > 0).then_some(Self {
             game,
             sessions,
+            player: None,
             area_width,
             area_height,
         })
+    }
+
+    pub(crate) fn with_player(mut self, player: &'a CPlayer) -> Self {
+        self.player = Some(player);
+        self
+    }
+
+    fn resolve_player(&self, player_id: i32) -> Option<&CPlayer> {
+        self.player
+            .filter(|player| player.player_id() == player_id)
+            .or_else(|| self.game.find_player(player_id))
     }
 }
 
@@ -658,7 +675,7 @@ impl CMessage {
         }
 
         for player_id in around_player_ids {
-            let Some(player) = runtime.game.find_player(player_id) else {
+            let Some(player) = runtime.resolve_player(player_id) else {
                 continue;
             };
             if excluded_player_id == Some(player.player_id()) {
@@ -672,7 +689,7 @@ impl CMessage {
 
         let Some(main_player) = main_shape
             .filter(|shape| shape.identity().object_type == PLAYER_TYPE)
-            .and_then(|shape| runtime.game.find_player(shape.identity().id))
+            .and_then(|shape| runtime.resolve_player(shape.identity().id))
         else {
             return 1;
         };
@@ -692,7 +709,8 @@ impl CMessage {
             let Some(player) = runtime
                 .sessions
                 .query_plug(*plug_id)
-                .and_then(|plug| plug.get_owner(runtime.game))
+                .filter(|plug| plug.has_owner(PLAYER_TYPE, plug.owner_id()))
+                .and_then(|plug| runtime.resolve_player(plug.owner_id()))
             else {
                 continue;
             };

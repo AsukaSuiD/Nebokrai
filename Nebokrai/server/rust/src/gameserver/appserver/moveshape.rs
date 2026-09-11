@@ -27,6 +27,8 @@
 //! копию результата и не завершает payload отдельно от общего End/RemoveState.
 //! Variable DB-span нового Ride задаётся общей регистрацией; loaded offset
 //! остаётся лишь fallback-кодеком, а не условием удаления живого экземпляра.
+//! Particular также использует общий Begin/append/End; дополнительный код
+//! предмета проверяет native caller, storage не подавляет повторные записи.
 //! Клиентский AddToByteArray_ForClient (0x004CDD30, moveshape.cpp:1779)
 //! считает непустые позиции общей арены, затем пишет ID/+30/+38 и Team-name
 //! в том же порядке. DB Serialize и его offsets здесь не используются;
@@ -246,7 +248,7 @@ use super::ai::baseai::CBaseAI;
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyState};
 use super::exstate::{ExtendedState, ExtendedStateKind};
 use super::legacycodec::{LegacyReader, LegacyWriter};
-use super::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
+use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreState};
@@ -1761,28 +1763,6 @@ impl CMoveShape {
 
     pub(crate) fn particular_states(&self) -> impl Iterator<Item = &ParticularState> {
         self.state_entries.iter::<ParticularState>()
-    }
-
-    pub(crate) fn add_particular_state(
-        &mut self,
-        state: ParticularState,
-    ) -> Option<ParticularState> {
-        if self
-            .state_entries.iter::<ParticularState>()
-            .any(|stored| stored.additional_data() == state.additional_data())
-        {
-            return None;
-        }
-        self.append_serialized_state_record(&state.encoded());
-        self.state_entries.append(state);
-        Some(state)
-    }
-
-    pub(crate) fn remove_particular_state_key(
-        &mut self,
-        key: StateKey,
-    ) -> Option<ParticularState> {
-        self.remove_applied_state_record::<ParticularState>(key, PARTICULAR_STATE_BYTES)
     }
 
     pub(crate) fn team_recruitment_states(&self) -> impl Iterator<Item = &CTeamState> {

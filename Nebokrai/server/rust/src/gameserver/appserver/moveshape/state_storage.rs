@@ -148,7 +148,7 @@ applied_states! {
     WuXing(WuXingState) => |state| state.skill_id(),
     AutomaticRestore(AutomaticRestoreState) => |state| state.state_id(),
     ConsumableRestore(ConsumableRestoreState) => |state| state.state_id(),
-    Particular(ParticularState) => |_state| PARTICULAR_STATE_ID,
+    Particular(ParticularState) => |state| state.state_id(),
     Team(CTeamState) => |_state| TEAM_STATE_ID,
     BattleFairyAttribute(BattleFairyAttributeState) => |state| state.skill_id(),
     TianShenXiaFan(TianShenXiaFanState) => |state| state.state_id(),

@@ -17,7 +17,9 @@
 //!
 //! Add/remove/swap сохраняют player facts как явный runtime-вход, partial
 //! timed/AI/package effects, typed skill/property/message callbacks и rollback
-//! loss. Ordinary/battle-fairy growth замкнут через свойства `CGoods`, включая
+//! loss. Timed-prefix передаёт изменяемый товар в GoodsAI до проверки equip-place и
+//! захвата слота; назначенный ticket сохраняется и при последующем отказе.
+//! Ordinary/battle-fairy growth замкнут через свойства `CGoods`, включая
 //! old-client update и необратимый delete/add transition; конкретный goods
 //! payload codec и player dispatcher остаются callback-границами связанных
 //! owners. Add-report отдельно хранит факт применения package-extension, так
@@ -626,7 +628,7 @@ impl CEquipmentContainer {
         runtime: EquipmentFairyExpRuntimeFacts,
         fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
         create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> Result<EquipmentFairyExpOutcome, EquipmentFairyExpBlock> {
         let mut remaining = experience;
@@ -733,7 +735,7 @@ impl CEquipmentContainer {
         runtime: EquipmentBattleFairyExpRuntimeFacts,
         battle_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
         create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> Result<EquipmentBattleFairyExpOutcome, EquipmentBattleFairyExpBlock> {
         let mut remaining = experience;
@@ -850,7 +852,7 @@ impl CEquipmentContainer {
         factory: &CGoodsFactory,
         remove_runtime: EquipmentRemoveRuntimeFacts,
         add_runtime: EquipmentAddRuntimeFacts,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> EquipmentFairyTransition {
         let replacement_identity = replacement.identity();
@@ -936,7 +938,7 @@ impl CEquipmentContainer {
         incoming: &mut Option<CGoods>,
         factory: &CGoodsFactory,
         runtime: EquipmentAddRuntimeFacts,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
     ) -> EquipmentAddOutcome {
         let Some(goods) = incoming.as_mut() else {
             return Self::blocked_add(EquipmentAddBlock::MissingGoods, Default::default());
@@ -1066,7 +1068,7 @@ impl CEquipmentContainer {
         incoming: &mut Option<CGoods>,
         factory: &CGoodsFactory,
         runtime: EquipmentAddRuntimeFacts,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
     ) -> EquipmentAddOutcome {
         let Some(goods) = incoming.as_ref() else {
             return Self::blocked_add(EquipmentAddBlock::MissingGoods, Default::default());
@@ -1249,7 +1251,7 @@ impl CEquipmentContainer {
         incoming: &mut Option<CGoods>,
         factory: &CGoodsFactory,
         runtime: EquipmentSwapRuntimeFacts,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
     ) -> EquipmentSwapOutcome {
         let Some(incoming_goods) = incoming.as_ref() else {
             return EquipmentSwapOutcome::Blocked(EquipmentSwapBlock::MissingIncoming);
@@ -1383,7 +1385,7 @@ impl CEquipmentContainer {
         to_add_enabled: bool,
         mut decode_goods: Decode,
         mut runtime_for_goods: Runtime,
-        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        register_with_goods_ai: &mut dyn FnMut(&mut CGoods),
         on_cleared: &mut dyn FnMut(EquipmentColumn, &CGoods, &[ContainerListenerHandle]),
     ) -> Result<EquipmentUnserializeReport, EquipmentUnserializeFailure>
     where

@@ -16,6 +16,8 @@
 //! packet expansion достигнуты общим GameSave owner-ом. Auction-scale mutation
 //! связана с `CPlayer::TellClientScale`; listener messages и clone ниже
 //! остаются RAW до замыкания соответствующих owners.
+//! Swap использует единый remove→Add→rollback-алгоритм; packet-owner подставляет
+//! синхронный Add с GoodsAI/player-listener и для основной, и для обратной попытки.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsCodecError,
@@ -446,12 +448,33 @@ impl CVolumeLimitGoodsContainer {
         factory: &CGoodsFactory,
         owner_progress_allows: bool,
     ) -> Option<VolumeGoodsSwapOutcome> {
+        Self::swap_goods_with_owner(
+            self,
+            position,
+            incoming,
+            owner_progress_allows,
+            |container| container,
+            |container, position, incoming, owner_progress_allows| {
+                container.add_goods_at(position, incoming, factory, owner_progress_allows)
+            },
+        )
+    }
+
+    pub(crate) fn swap_goods_with_owner<Owner>(
+        owner: &mut Owner,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        owner_progress_allows: bool,
+        container: impl Fn(&mut Owner) -> &mut Self,
+        mut add_at: impl FnMut(&mut Owner, u32, &mut Option<CGoods>, bool) -> VolumeGoodsAddOutcome,
+    ) -> Option<VolumeGoodsSwapOutcome> {
         let incoming_id = incoming.as_ref()?.identity().ex_id;
-        if self.base.find(incoming_id).is_some() {
+        if container(owner).base.find(incoming_id).is_some() {
             return None;
         }
-        let displaced_id = self.get_goods(position)?.identity().ex_id;
-        let VolumeGoodsRemoveOutcome::Removed(removed) = self.remove_goods(displaced_id)? else {
+        let displaced_id = container(owner).get_goods(position)?.identity().ex_id;
+        let VolumeGoodsRemoveOutcome::Removed(removed) = container(owner).remove_goods(displaced_id)?
+        else {
             return None;
         };
         let AmountLimitGoodsTaken::Removed(removed_goods) = removed else {
@@ -467,7 +490,7 @@ impl CVolumeLimitGoodsContainer {
             listeners: removed_goods.listeners,
         };
         let mut outgoing = Some(removed_goods.goods);
-        let added = self.add_goods_at(position, incoming, factory, owner_progress_allows);
+        let added = add_at(owner, position, incoming, owner_progress_allows);
         if let VolumeGoodsAddOutcome::Added(added) = added {
             return Some(VolumeGoodsSwapOutcome::Swapped {
                 outgoing: outgoing.take().expect("displaced goods сохранён"),
@@ -477,7 +500,7 @@ impl CVolumeLimitGoodsContainer {
         }
 
         let rejected = added;
-        let rollback = self.add_goods_at(position, &mut outgoing, factory, true);
+        let rollback = add_at(owner, position, &mut outgoing, true);
         if outgoing.is_none() {
             return Some(VolumeGoodsSwapOutcome::RejectedAndRestored {
                 incoming: rejected,

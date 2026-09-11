@@ -16,7 +16,7 @@ use super::player::{
     BattleFairyCombineEffect, BattleFairyEquipmentMutationEffect, BattleFairyFollowEffect,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetEffect,
     BattleFairySkillDispatch, BattleFairySkillResetEffect, BattleFairySummonEffect,
-    BattleFairyUpgradeEffect, PlayerEquipmentAddEffect, PlayerEquipmentRemoveEffect,
+    BattleFairyUpgradeEffect, PlayerEquipmentRemoveEffect,
     PlayerSkillDispatch,
 };
 use super::goods::fairyproperties::FairyGrowLog;
@@ -67,7 +67,6 @@ pub(crate) enum GameEffect {
     BattleFairySummon(BattleFairySummonEffect),
     BattleFairyFollow(BattleFairyFollowEffect),
     PlayerEquipmentRemove(PlayerEquipmentRemoveEffect),
-    PlayerEquipmentAdd(PlayerEquipmentAddEffect),
     BattleFairyEquipmentMutation(BattleFairyEquipmentMutationEffect),
     BattleFairyPotentialAllocation(BattleFairyPotentialAllocationEffect),
     BattleFairyUpgrade(BattleFairyUpgradeEffect),
@@ -90,7 +89,6 @@ game_effect_conversion!(BattleFairyCombineEffect, BattleFairyCombine);
 game_effect_conversion!(BattleFairySummonEffect, BattleFairySummon);
 game_effect_conversion!(BattleFairyFollowEffect, BattleFairyFollow);
 game_effect_conversion!(PlayerEquipmentRemoveEffect, PlayerEquipmentRemove);
-game_effect_conversion!(PlayerEquipmentAddEffect, PlayerEquipmentAdd);
 game_effect_conversion!(
     BattleFairyEquipmentMutationEffect,
     BattleFairyEquipmentMutation
