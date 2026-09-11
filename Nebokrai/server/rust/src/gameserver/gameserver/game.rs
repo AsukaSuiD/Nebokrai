@@ -20,6 +20,14 @@
 //! visual заново разрешает sufferer и RemoveState(pointer), не ставя ended.
 //! AI/use_item (0x005D7C80/0x005D7B20) расходуют packet actual sufferer;
 //! чтения keep/item/record clock предшествуют этому owning callback.
+//! Mount0x00444E20 выполняет prepared Ride Begin до append/metadata общей арены,
+//! без собственного Update и без запрета дубликатов. NULL name отказывает;
+//! fight-state отправляет GS0154/BF806 и возвращает native 1 без установки.
+//! Ride End0x004F8D10 вызывает optional visual, заново разрешает Sufferer,
+//! снимает его fight-lock и удаляет именно этот экземпляр через общий Remove.
+//! AI0x004F9110 после одного clock проверяет packet фактического Sufferer:
+//! полный listener-pass и lookup GUID заменяют неподтверждённый goods-cache.
+//! Ненулевой mount-type обязателен; name/role limit и запись timestamp в AI нет.
 //! Direct state End (+0x1C) девяти специальных семейств имеет отдельный
 //! exact-key вход без таймера; AI и явные DelUndead/DelEx/DelCHBY используют
 //! тот же хвост. Particular/Team/Extended/Undead (0x005FD420) отправляют
@@ -924,7 +932,7 @@ use crate::gameserver::appserver::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint,
     RegionSecurity,
 };
-use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
+use crate::gameserver::appserver::ridestate::RideState;
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, resolve_state_move_shape_mut,
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -28695,22 +28703,18 @@ impl CGame {
         key: crate::gameserver::appserver::moveshape::StateKey,
         _after_death: bool, _now: &mut dyn FnMut() -> u32,
     ) -> bool {
-        let Some(state) = resolve_state_move_shape(self, region_id, holder)
-            .and_then(|shape| shape.applied_state::<RideState>(key)).cloned() else { return false };
-        begin_base_applied_state(self, region_id, holder, key);
-        begin_applied_state_visual(self, region_id, holder, key, 1);
-        let mut message = CMessage::new(0x0b_fe03);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_ulong(RIDE_STATE_ID);
-        message.add_long(state.client_state_time());
-        message.add_ulong(state.additional_data());
-        let _ = self.send_move_shape_around(region_id, holder, &message);
-        update_applied_state_visual_base(self, region_id, holder, key);
-        if let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) {
-            shape.set_fightable(false);
-            if let Some(state) = shape.applied_state_mut::<RideState>(key) { state.reset_goods_check(); }
+        if resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state::<RideState>(key)).is_none()
+            || !begin_base_applied_state(self, region_id, holder, key)
+        {
+            return false;
         }
+        begin_applied_state_visual(self, region_id, holder, key, 1);
+        self.update_move_shape_ride_visual(region_id, holder, key, true);
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return false };
+        shape.set_fightable(false);
+        let Some(state) = shape.applied_state_mut::<RideState>(key) else { return false };
+        state.reset_goods_check();
         true
     }
 
@@ -28906,37 +28910,57 @@ impl CGame {
         removed
     }
 
-    fn send_ride_visual(&mut self, player_id: i32, state: &RideState, begin: bool) {
-        let Some(player) = self.find_player(player_id) else {
-            return;
-        };
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
-        message.add_long(identity.object_type);
-        message.add_long(player_id);
-        message.add_long(RIDE_STATE_ID as i32);
-        if begin {
-            message.add_long(state.client_state_time());
-            message.add_ulong(state.additional_data());
+    fn update_move_shape_ride_visual(
+        &mut self, region_id: i32, holder: ShapeIdentity,
+        key: crate::gameserver::appserver::moveshape::StateKey, begin: bool,
+    ) {
+        let Some(ended) = resolve_state_move_shape(self, region_id, holder)
+            .and_then(|shape| shape.applied_state_visual_ended(key)) else { return };
+        if !ended
+            && let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+                self, region_id, holder, key,
+            )
+            && let Some(state) = resolve_state_move_shape(self, region_id, holder)
+                .and_then(|shape| shape.applied_state::<RideState>(key))
+        {
+            let message = crate::gameserver::appserver::ridestate::ride_state_visual_message(target, state, begin);
+            let _ = self.send_move_shape_around(target_region, target, &message);
         }
-        let _ = self.send_player_shape_around(player_id, None, &message);
+        update_applied_state_visual_base(self, region_id, holder, key);
     }
 
+    /// Mount0x00444E20: NULL name возвращает 0; fight-state уведомляет и
+    /// возвращает 1 без создания состояния. Успешный Begin предшествует append;
+    /// проверка уже существующего Ride и внешний Update принадлежат item caller-у.
     pub(crate) fn begin_player_ride(
         &mut self,
         player_id: i32,
         mount_type: u32,
         level: u32,
         role_limit: u32,
-        goods_name: &[u8],
+        goods_name: Option<&[u8]>,
+        now: &mut dyn FnMut() -> u32,
     ) -> bool {
-        let Some(state) = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.begin_ride_state(mount_type, level, role_limit, goods_name))
-        else {
-            return false;
-        };
-        self.send_ride_visual(player_id, &state, true);
+        let Some(goods_name) = goods_name else { return false };
+        let Some(player) = self.find_player(player_id) else { return false };
+        if player.fight_state_count() != 0 {
+            let message = colored_player_notice_message(0xffff_0000, 0xffff_ffff, self.get_string_by_id(b"GS0154"));
+            let _ = message.send_to_player(self.net_server(), player_id);
+            return true;
+        }
+        let region_id = player.shape().get_region_id();
+        let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
+        let name_end = goods_name.iter().position(|&byte| byte == 0).unwrap_or(goods_name.len());
+        let mut state = RideState::new(mount_type, level, role_limit, &goods_name[..name_end]);
+        let Some((begin_region, participant)) = crate::gameserver::appserver::ridestate::begin_primary_ride_state(
+            self, region_id, holder, &mut state, now,
+        ) else { return false };
+        let Some(shape) = resolve_state_move_shape_mut(self, region_id, holder) else { return false };
+        let record = state.encoded_for_install();
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some((begin_region, participant)));
+        shape.set_applied_state_sufferer(key, Some((begin_region, participant)));
         true
     }
 
@@ -28967,20 +28991,22 @@ impl CGame {
         key: crate::gameserver::appserver::moveshape::StateKey,
         runtime: &mut Runtime,
     ) -> bool {
-        let now_ms = runtime.now_milliseconds();
-        let due = resolve_state_move_shape(self, region_id, identity)
+        let Some(state) = resolve_state_move_shape(self, region_id, identity)
             .and_then(|shape| shape.applied_state::<RideState>(key))
-            .is_some_and(|state| state.goods_check_due(now_ms));
-        if !due {
+        else { return false };
+        if !state.goods_check_due(runtime.now_milliseconds()) {
             return false;
         }
-        if identity.object_type == PLAYER_TYPE {
-            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-            if players.get_mut(&identity.id)
-                .is_some_and(|player| player.refresh_ride_goods_cache(key, goods_factory))
-            {
-                return false;
-            }
+        let (mount_type, level) = (state.mount_type(), state.level());
+        if let Some((_, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+            self, region_id, identity, key,
+        )
+            && target.object_type == PLAYER_TYPE
+            && self.find_player(target.id).is_some_and(|player| {
+                player.has_ride_goods(mount_type, level, &self.goods_factory)
+            })
+        {
+            return false;
         }
         self.end_move_shape_ride_state(region_id, identity, key)
     }
@@ -28991,23 +29017,23 @@ impl CGame {
         identity: ShapeIdentity,
         key: crate::gameserver::appserver::moveshape::StateKey,
     ) -> bool {
-        let Some(shape) = resolve_state_move_shape(self, region_id, identity) else {
-            return false;
-        };
-        if shape.applied_state::<RideState>(key).is_none() {
+        if resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<RideState>(key)).is_none()
+        {
             return false;
         }
-        let mut message = CMessage::new(0x0b_fe04);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(RIDE_STATE_ID as i32);
-        let _ = self.send_move_shape_around(region_id, identity, &message);
-        let removed = resolve_state_move_shape_mut(self, region_id, identity)
-            .and_then(|shape| shape.end_ride_state_key(key)).is_some();
-        if removed {
-            let _ = self.update_move_shape_properties(region_id, identity);
-        }
-        removed
+        self.update_move_shape_ride_visual(region_id, identity, key, false);
+        let Some((target_region, target)) = crate::gameserver::appserver::states::state::resolve_applied_state_sufferer(
+            self, region_id, identity, key,
+        ) else { return false };
+        let Some(shape) = resolve_state_move_shape_mut(self, target_region, target) else { return false };
+        shape.set_fightable(true);
+        let Some(bytes) = resolve_state_move_shape(self, region_id, identity)
+            .and_then(|shape| shape.applied_state::<RideState>(key))
+            .map(RideState::serialized_size) else { return false };
+        crate::gameserver::appserver::states::state::remove_applied_state_from(
+            self, region_id, identity, key, (target_region, target), bytes,
+        )
     }
 
     /// Script prefix (0x004B5FF2) проверяет ChangeBodyCheck до AddCHBYState.

@@ -6,8 +6,16 @@
 //! Чистые Ex/Undead/Ride-формулы читают owning payload по ссылке без callbacks.
 //! CHBY Begin/End не дублируются в Player mutation-wrapper: их mode/hotkeys
 //! и общий AddSkill/DelSkill выполняет единственный state-owner через CGame.
+//! Mount0x00444E20 представлен CGame::begin_player_ride: C-string name перед
+//! constructor/Begin/append, fight-state GS0154 с native return1 без установки.
+//! Технический отказ allocator не эмулируется; время и actual participants
+//! принадлежат этому Begin, а внешний Update остаётся в ветке UseItem.
 //! Undead/Appellation также устанавливается и завершается через общий
 //! lifecycle CMoveShape; Player не хранит промежуточную пачку копий состояний.
+//! Ride AI (0x004F9110, other states/ridestate.cpp) проверяет packet actual
+//! Sufferer через существующий property-listener: сначала GAP_MOUNT_TYPE != 0,
+//! затем GUID lookup и сравнение type/level. Проверка read-only, без cached GUID,
+//! локального state-key и часов; поиск по goods-name оставлен только формуле.
 //! OnLost (0x0044183B..0x00441894, player.cpp:1780) проходит живые позиции:
 //! для очередного CHBY ставит has_changed_region=false/online=true и при
 //! !restore_online сразу отправляет исходный BF806 и вызывает End. Следующий
@@ -162,7 +170,13 @@
 //! общий PK policy ниже по цепочке по-прежнему использует security клетки.
 //! `UseItem` материализует точные коды требований, принадлежащее игроку
 //! изучение навыков, расход предметов в рюкзаке и четыре заменяемых боевых
-//! `tagExpendableEffect`. Проверки и состояния ездового животного и
+//! `tagExpendableEffect`. Эффекты 0x4A..4D читают часы внутри своего case,
+//! не в общем UseItem.
+//! Новая запись: value1 для owner → clock → value2 → отдельное value1 для
+//! прибавления свойства → append. Замена: снять old → value1/прибавить →
+//! clock/timestamp → value2/duration → повторное value1/owner.value.
+//! Эти чтения не объединяются; WORD/DWORD wrapping остаётся исходным.
+//! Проверки и состояния ездового животного и
 //! `ChangeBody` замкнуты на владельцах игрока и игры. Возврат предметами
 //! сохраняет порядок рюкзак → экипировка → рука и передаёт `CGame` только
 //! последовательное удаление предметов и смену региона; временные `CState`
@@ -464,6 +478,7 @@ use super::goods::cgoodsbaseproperties::{
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::legacycodec::{LegacyReader, LegacyWriter};
+use super::listener::cgoodsparticularpropertylistener::GoodsParticularPropertyListener;
 use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts,
     MoveShapeSkill, SKILL_BASE_DEFENSE,
@@ -6201,78 +6216,26 @@ impl CPlayer {
         self.lost_time_stamp_ms != 0
     }
 
-    pub(crate) fn begin_ride_state(
-        &mut self,
+    /// CRideState::AI (0x004F9110): listener сначала обходит весь packet
+    /// с GAP_MOUNT_TYPE != 0, затем первый совпавший type/level завершает поиск.
+    /// Имя, role limit, предыдущий GUID и локальный StateKey здесь не участвуют.
+    pub(crate) fn has_ride_goods(
+        &self,
         mount_type: u32,
         level: u32,
-        role_limit: u32,
-        goods_name: &[u8],
-    ) -> Option<super::ridestate::RideState> {
-        self.move_shape
-            .begin_ride_state(super::ridestate::RideState::new(
-                mount_type, level, role_limit, goods_name,
-            ))
-    }
-
-    pub(crate) fn end_ride_state(&mut self) -> Option<super::ridestate::RideState> {
-        self.move_shape.end_ride_state()
-    }
-
-    pub(crate) fn end_ride_state_key(
-        &mut self,
-        key: super::moveshape::StateKey,
-    ) -> Option<super::ridestate::RideState> {
-        self.move_shape.end_ride_state_key(key)
-    }
-
-
-    pub(crate) fn ride_goods_check_due(
-        &self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> bool {
-        self.move_shape
-            .applied_state::<super::ridestate::RideState>(key)
-            .is_some_and(|state| state.goods_check_due(now_ms))
-    }
-
-    /// Exact `CRideState::AI` packet scan: имя здесь не участвует, только
-    /// addon mount type/level. Успех обновляет безопасный GUID cache вместо
-    /// старого сырого `CGoods*`, но timestamp намеренно не меняется.
-    pub(crate) fn refresh_ride_goods_cache(
-        &mut self,
-        key: super::moveshape::StateKey,
         factory: &CGoodsFactory,
     ) -> bool {
-        let Some(state) = self.move_shape.applied_state::<super::ridestate::RideState>(key) else {
-            return false;
-        };
-        let (mount_type, level, cached_id) =
-            (state.mount_type(), state.level(), state.cached_goods_id());
-        let matches = |goods: &CGoods| {
-            goods.addon_property_value(factory, GAP_MOUNT_TYPE, 1) == mount_type as i32
-                && goods.addon_property_value(factory, GAP_MOUNT_LEVEL, 1) == level as i32
-        };
-        let found = self
-            .packet
-            .base()
-            .find(cached_id)
-            .filter(|goods| matches(goods))
-            .or_else(|| {
-                self.packet
-                    .base()
-                    .traversing_goods()
-                    .find(|goods| matches(goods))
-            })
-            .map(|goods| goods.identity().ex_id);
-        if let Some(state) = self.move_shape.applied_state_mut::<super::ridestate::RideState>(key) {
-            if let Some(goods_id) = found {
-                state.set_cached_goods_id(goods_id);
-            } else {
-                state.clear_cached_goods_id();
-            }
+        let packet = self.packet.base();
+        let mut listener = GoodsParticularPropertyListener::new(GAP_MOUNT_TYPE);
+        for goods in packet.traversing_goods() {
+            listener.visit(factory, goods);
         }
-        found.is_some()
+        listener.goods_ids().iter().any(|goods_id| {
+            packet.find(*goods_id).is_some_and(|goods| {
+                goods.addon_property_value(factory, GAP_MOUNT_TYPE, 1) as u32 == mount_type
+                    && goods.addon_property_value(factory, GAP_MOUNT_LEVEL, 1) as u32 == level
+            })
+        })
     }
 
     fn ride_goods(
@@ -7243,59 +7206,76 @@ impl CPlayer {
         self.remove_packet_goods_by_id(goods.identity().ex_id, amount)
     }
 
-    /// Owned tail четырёх `tagExpendableEffect` case-ов. Повторное применение
-    /// сначала снимает прежнее значение, затем заменяет timer/value entry.
+    /// UseItem, tagExpendableEffect 0x4A..4D: часы новой записи находятся в
+    /// 0x4545F4/45473B/454887/4549CE, замены — 0x4546BC/454808/45494F/454A8D.
+    /// Два value(1) обслуживают разные native reads: payload и live property.
     pub(crate) fn apply_expendable_item_effect(
         &mut self,
         property_type: i32,
-        value: i32,
-        start_time_ms: u32,
-        effect_time_ms: u32,
+        mut value: impl FnMut(u32) -> i32,
+        mut now: impl FnMut() -> u32,
     ) -> i32 {
-        let previous = self
-            .expendable_effects
-            .get(&property_type)
-            .map_or(0, |effect| effect.value);
-        match property_type {
-            0x4a => {
-                self.combat_properties.maximum_attack = self
-                    .combat_properties
-                    .maximum_attack
-                    .wrapping_sub(previous as u32)
-                    .wrapping_add(value as u32);
-            }
-            0x4b => {
-                self.combat_properties.attack_speed = self
-                    .combat_properties
-                    .attack_speed
-                    .wrapping_sub(previous as u16)
-                    .wrapping_add(value as u16);
-            }
-            0x4c => {
-                self.combat_properties.defense = self
-                    .combat_properties
-                    .defense
-                    .wrapping_sub(previous as u32)
-                    .wrapping_add(value as u32);
-            }
-            0x4d => {
-                self.combat_properties.element_modify = self
-                    .combat_properties
-                    .element_modify
-                    .wrapping_sub(previous)
-                    .wrapping_add(value);
-            }
-            _ => return 0,
+        if !matches!(property_type, 0x4a..=0x4d) {
+            return 0;
         }
-        self.expendable_effects.insert(
-            property_type,
-            PlayerExpendableEffect {
+        let previous = self.expendable_effects.get(&property_type).copied();
+        let mut adjust_property = |amount: i32, subtract: bool| {
+            match property_type {
+                0x4a => {
+                    let current = self.combat_properties.maximum_attack;
+                    self.combat_properties.maximum_attack = if subtract {
+                        current.wrapping_sub(amount as u32)
+                    } else {
+                        current.wrapping_add(amount as u32)
+                    };
+                }
+                0x4b => {
+                    let current = self.combat_properties.attack_speed;
+                    self.combat_properties.attack_speed = if subtract {
+                        current.wrapping_sub(amount as u16)
+                    } else {
+                        current.wrapping_add(amount as u16)
+                    };
+                }
+                0x4c => {
+                    let current = self.combat_properties.defense;
+                    self.combat_properties.defense = if subtract {
+                        current.wrapping_sub(amount as u32)
+                    } else {
+                        current.wrapping_add(amount as u32)
+                    };
+                }
+                0x4d => {
+                    let current = self.combat_properties.element_modify;
+                    self.combat_properties.element_modify = if subtract {
+                        current.wrapping_sub(amount)
+                    } else {
+                        current.wrapping_add(amount)
+                    };
+                }
+                _ => unreachable!("поддержанный expendable property проверен до чтения значений"),
+            }
+        };
+        if let Some(previous) = previous {
+            adjust_property(previous.value, true);
+            adjust_property(value(1), false);
+            let effect = self.expendable_effects.get_mut(&property_type)
+                .expect("замена сохраняет найденный expendable effect");
+            effect.start_time_ms = now();
+            effect.effect_time_ms = value(2) as u32;
+            effect.value = value(1);
+        } else {
+            let stored_value = value(1);
+            let start_time_ms = now();
+            let effect_time_ms = value(2) as u32;
+            adjust_property(value(1), false);
+            self.expendable_effects.insert(property_type, PlayerExpendableEffect {
                 property_type,
-                value,
+                value: stored_value,
                 start_time_ms,
                 effect_time_ms,
-            },
-        );
+            });
+        }
         match property_type {
             0x4a => LegacyWriter::write_u32_at(
                 &mut self.combat_property_wire,
@@ -16616,19 +16596,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::Mount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:8513
-// RVA: 0x00044E20
-// ADDRESS: 00444e20
-// PROTOTYPE: int __thiscall Mount(ulong param_1, ulong param_2, ulong param_3, char * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // IMPLEMENTED: `CPlayer::OnObjectAdded` связан с packet/equipment add и
 // particular-state owner-ом; покрытый raw-блок удалён.

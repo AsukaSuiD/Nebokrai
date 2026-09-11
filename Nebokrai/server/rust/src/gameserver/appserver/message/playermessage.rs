@@ -20,6 +20,13 @@
 //! включая current End(0), затем AddSkill (0x004D1C70); только успешная
 //! регистрация получает SetItemPos и packet. Равный уровень не отменяет
 //! обязательное пересоздание экземпляра в этой предметной ветви.
+//! Ride-ветка UseItem0x00453C21..00453D12 читает текущие состояние/fight/progress:
+//! первый Ride получает один End и отдельный Update; новый Mount вызывается
+//! только после gates, а Update/consume остаются у caller-а. Раннего clock
+//! в общем прологе нет: часы принадлежат Begin и конкретным timed-item веткам.
+//! ReUseSkillItem0x00433610 ищет timestamp по QueryGoodsIDByName(goods.name);
+//! trigger0 и отсутствующий ключ часов не читают. Существующий ключ требует
+//! raw DWORD reuse, затем одного clock и wrapping now-last > reuse.
 //! Процентный HP recovery сохраняет промежуточный `float`, процентный MP —
 //! x87-произведение без такого сохранения; оба результата усекаются к нулю.
 //! `0x8FA06/07/0B/0C` сохраняют границы частичных изменений сессии обмена.
@@ -105,9 +112,7 @@ impl<T> GamePlayerMessageRuntime for T where
 pub(crate) struct PlayerItemUseFacts {
     pub(crate) blocking_skill_state: bool,
     pub(crate) fight_state_count: i32,
-    pub(crate) mount_state_exists: bool,
     pub(crate) forbid_return_level: i32,
-    pub(crate) tick_ms: u32,
 }
 
 /// Наблюдаемый результат virtual `CancelContendByPlayerID`, вызываемого перед
@@ -574,7 +579,6 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             }
-            let tick_ms = runtime.now_milliseconds();
             let facts = game
                 .find_player(player_id)
                 .map(|player| PlayerItemUseFacts {
@@ -583,9 +587,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                         .copied()
                         .any(|state_id| player.has_state_by_skill_id(state_id)),
                     fight_state_count: player.fight_state_count(),
-                    mount_state_exists: player.is_rider(),
                     forbid_return_level: game.globe_setup().forbid_return_level(),
-                    tick_ms,
                 })
                 .unwrap_or_default();
             if facts.blocking_skill_state {
@@ -753,7 +755,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let mount_type = goods.addon_property_value(game.goods_factory(), GAP_MOUNT_TYPE, 1);
             if mount_type != 0 {
                 consume = false;
-                if facts.mount_state_exists {
+                if game.find_player(player_id).is_some_and(|player| player.is_rider()) {
                     let _ended = game.end_player_ride(player_id);
                     let properties = game
                         .recompute_player_properties_for_update(player_id)
@@ -761,7 +763,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     game.apply_player_state_properties(player_id, properties);
                 } else if game.find_player(player_id).is_some_and(|player| {
                     player.current_progress() != PlayerProgress::OpenStall
-                        && facts.fight_state_count == 0
+                        && player.fight_state_count() == 0
                         && player.appearance_and_mode().2 == 0
                 }) {
                     let applied = game.begin_player_ride(
@@ -773,7 +775,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             GAP_MOUNT_PLAYER_ROLE_LIMIT,
                             1,
                         ) as u32,
-                        &original_name,
+                        Some(&original_name),
+                        &mut || runtime.now_milliseconds(),
                     );
                     if applied {
                         let properties = game
@@ -976,9 +979,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .expect("expendable-effect player сохранён")
                                 .apply_expendable_item_effect(
                                     property,
-                                    value(1),
-                                    facts.tick_ms,
-                                    value(2) as u32,
+                                    value,
+                                    || runtime.now_milliseconds(),
                                 );
                             let mut update = CMessage::new(0x000b_f70a);
                             if property == 0x4b {
@@ -1000,17 +1002,18 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 GAP_SKILL_LEVEL,
                                 1,
                             );
-                            let reuse_time = goods
-                                .addon_property_value(game.goods_factory(), GAP_REUSE_TIME, 1)
-                                .max(0) as u32;
-                            let last_used = game
-                                .find_player(player_id)
-                                .and_then(|player| player.last_skill_item_use_ms(base_index));
+                            let item_index = game.goods_factory()
+                                .query_goods_id_by_name(Some(goods.name()));
                             let reusable = goods.addon_property_value(
                                 game.goods_factory(), GAP_TRIGGER_SKILL, 1,
                             ) != 0
-                                && last_used.is_none_or(|last_used| {
-                                    facts.tick_ms.wrapping_sub(last_used) > reuse_time
+                                && game.find_player(player_id).is_some_and(|player| {
+                                    player.last_skill_item_use_ms(item_index).is_none_or(|last_used| {
+                                        let reuse_time = goods.addon_property_value(
+                                            game.goods_factory(), GAP_REUSE_TIME, 1,
+                                        ) as u32;
+                                        runtime.now_milliseconds().wrapping_sub(last_used) > reuse_time
+                                    })
                                 });
                             if reusable {
                                 let holder = game

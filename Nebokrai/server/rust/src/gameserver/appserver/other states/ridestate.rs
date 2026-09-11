@@ -5,20 +5,52 @@
 //! wire `ID/type/level/roleLimit/goodsName\0`, additional-data packing и
 //! десятисекундный goods-check gate подтверждены EXE. Важный legacy quirk:
 //! `AI` не обновляет `m_dwCheckGoodsTimeStamp`, поэтому после первого gate
-//! проверяет packet каждый последующий AI turn. Общая арена CMoveShape заменяет
-//! `CState*`, остальные safe payload заменяют cached raw goods pointer; gameplay
-//! ordering, GUID cache invalidation и wrapping DWORD compare сохранены.
-//! Wire-примитивы делегированы общему legacy codec поверх `bytes`.
+//! проверяет packet каждый последующий AI turn. В AI0x004F9110 нет cached goods:
+//! каждый проход получает GUID-список listener-а и заново проверяет type/level.
+//! Общая арена CMoveShape заменяет `CState*`; имя хранит Vec<u8>, а wire-примитивы
+//! делегированы общему legacy codec поверх `bytes`.
 //! decode_at читает одну запись с заданного фабрикой offset; он сохраняет
 //! исходный нулевой check timestamp и не ищет похожий ID внутри данных.
+//! SetGoodName0x00438CA0 копирует std::string целиком, без ограничения длины.
+//! Только safe Unserialize0x004F93B0 требует NUL в пределах native buffer256:
+//! запись, которая переполнила бы стек C++, отклоняется, а не обрезается.
+//! Serialize0x004F8F60 пишет четыре DWORD и C-string, без часов и мутации.
+//! Cache-размер учитывает первый NUL, границы самой записи задаёт общий span.
+//! Первичный object Begin0x004F8D60 требует nonnull sufferer, затем выполняет
+//! base Begin(self,self), loop1 visual Update(0), SetFightable(false), check=0.
+//! Единственный base clock поглощается на своём месте; base timestamp в Ride
+//! не имеет достигнутых потребителей и не подменяет check timestamp.
+//! Helper не регистрирует payload: caller после успеха сохраняет actual User/S
+//! и остаточное loop1 visual-состояние в общей арене без повторного пакета.
+//! Visual0x004F8E20 публикует BFE03(type,id,100004,0,type<<16|level)
+//! либо BFE04(type,id,100004) через actual sufferer. Pure message-helper
+//! не подменяет optional/ended/target gates и base visual tail владельца.
+//! Общий CGame-вход visual выполняет base tail даже при NULL sufferer/ended,
+//! но не при отсутствующем ресурсе. Повторный Begin(NULL,holder) сохраняет User
+//! и не читает base clock: после visual ставит fight-lock и check=0.
+//! End0x004F8D10: optional visual Update(1), свежий GetSufferer,
+//! SetFightable(true), RemoveState у этой цели. Base End, запись ended,
+//! принудительное удаление из holder и отдельный внешний Update отсутствуют.
+//! Только фактическое RemoveState выполняет обычный property callback.
+//! Destructor0x004F8FC0 освобождает имя и безусловно переходит в CState dtor
+//! 0x005DBD40 (tail-jump0x004F8FED): освобождение visual, без End и пакетов.
+//! Rust освобождает ресурсы безопасно; отказ native allocator не эмулируется,
+//! исчезнувший после доставки target даёт отказ Begin перед fight-lock вместо
+//! доступа по stale pointer; уже отправленный визуал не откатывается.
 //! OnUpdateProperties0x004F9000 разрешает sufferer как CPlayer и ищет первый
 //! live packet goods через original-name index именно этого экземпляра.
-//! Он не использует и не меняет cached goods AI, не вызывает visual/часы.
+//! Он не использует goods-список AI и не вызывает visual/часы.
 //! CPlayer::apply_ride_state_properties заимствует state и goods, затем
 //! выполняет общий MountEquipRide(true) → MountEquipRide(false)0x0043C5E0.
+//! Недостигнутые coordinate/typed-target перегрузки Begin сохранены ниже в RAW.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::states::state::default_client_state_time;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    default_client_state_time, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 pub(crate) const RIDE_STATE_ID: u32 = 100_004;
@@ -32,24 +64,17 @@ pub(crate) struct RideState {
     level: u32,
     role_limit: u32,
     goods_name: Vec<u8>,
-    cached_goods_id: CGuid,
     check_goods_timestamp_ms: u32,
     serialized_offset: Option<usize>,
 }
 
 impl RideState {
     pub(crate) fn new(mount_type: u32, level: u32, role_limit: u32, goods_name: &[u8]) -> Self {
-        let prefix = goods_name
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(goods_name.len())
-            .min(RIDE_GOODS_NAME_CAPACITY - 1);
         Self {
             mount_type,
             level,
             role_limit,
-            goods_name: goods_name[..prefix].to_vec(),
-            cached_goods_id: CGuid::GUID_INVALID,
+            goods_name: goods_name.to_vec(),
             check_goods_timestamp_ms: 0,
             serialized_offset: None,
         }
@@ -71,19 +96,7 @@ impl RideState {
         &self.goods_name
     }
 
-    pub(crate) const fn cached_goods_id(&self) -> CGuid {
-        self.cached_goods_id
-    }
-
-    pub(crate) const fn set_cached_goods_id(&mut self, goods_id: CGuid) {
-        self.cached_goods_id = goods_id;
-    }
-
-    pub(crate) const fn clear_cached_goods_id(&mut self) {
-        self.cached_goods_id = CGuid::GUID_INVALID;
-    }
-
-    /// Хвост объектного Begin 0x004F8D60; cached goods не сбрасывается.
+    /// Хвост объектного Begin 0x004F8D60, после визуала и fight-lock.
     pub(crate) const fn reset_goods_check(&mut self) {
         self.check_goods_timestamp_ms = 0;
     }
@@ -126,26 +139,31 @@ impl RideState {
             level: read_u32(payload, offset + 8)?,
             role_limit: read_u32(payload, offset + 12)?,
             goods_name: payload[name_start..name_start + name_length].to_vec(),
-            cached_goods_id: CGuid::GUID_INVALID,
             check_goods_timestamp_ms: 0,
             serialized_offset: Some(offset),
         })
     }
 
-    pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>) {
-        let offset = payload.len();
-        let mut writer = LegacyWriter::new(payload);
+    pub(crate) fn encoded_for_install(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.serialized_size());
+        let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(RIDE_STATE_ID);
         writer.write_u32(self.mount_type);
         writer.write_u32(self.level);
         writer.write_u32(self.role_limit);
         writer.write_c_string(&self.goods_name);
-        self.serialized_offset = Some(offset);
+        bytes
+    }
+
+    pub(crate) fn serialized_size(&self) -> usize {
+        let name_length = self.goods_name.iter().position(|byte| *byte == 0)
+            .unwrap_or(self.goods_name.len());
+        RIDE_STATE_FIXED_BYTES + name_length + 1
     }
 
     pub(crate) fn serialized_span(&self) -> Option<(usize, usize)> {
         self.serialized_offset
-            .map(|offset| (offset, RIDE_STATE_FIXED_BYTES + self.goods_name.len() + 1))
+            .map(|offset| (offset, self.serialized_size()))
     }
 
     pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
@@ -166,6 +184,44 @@ impl RideState {
     }
 }
 
+pub(crate) fn ride_state_visual_message(
+    target: ShapeIdentity,
+    state: &RideState,
+    begin: bool,
+) -> CMessage {
+    let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
+    message.add_long(target.object_type);
+    message.add_long(target.id);
+    message.add_ulong(RIDE_STATE_ID);
+    if begin {
+        message.add_long(state.client_state_time());
+        message.add_ulong(state.additional_data());
+    }
+    message
+}
+
+pub(crate) fn begin_primary_ride_state(
+    game: &mut CGame,
+    region_id: i32,
+    holder: ShapeIdentity,
+    state: &mut RideState,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<(i32, ShapeIdentity)> {
+    resolve_state_move_shape(game, region_id, holder)?;
+    let _base_timestamp = now();
+    let shape = resolve_state_move_shape(game, region_id, holder)?.shape();
+    let participant = (
+        shape.get_region_id(),
+        ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() },
+    );
+    let message = ride_state_visual_message(participant.1, state, true);
+    let _ = game.send_move_shape_around(participant.0, participant.1, &message);
+    let sufferer = resolve_state_move_shape_mut(game, participant.0, participant.1)?;
+    sufferer.set_fightable(false);
+    state.reset_goods_check();
+    Some(participant)
+}
+
 fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
     LegacyReader::at(payload, offset).ok()?.read_u32().ok()
 }
@@ -177,19 +233,6 @@ fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.h
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp
 
-// ============================================================================
-// FUNCTION: CRideState::SetGoodName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.h:24
-// RVA: 0x00038CA0
-// ADDRESS: 00438ca0
-// PROTOTYPE: void __thiscall SetGoodName(basic_string<char,std::char_traits<char>,std::allocator<char>_> param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CRideState::Begin
@@ -214,146 +257,6 @@ fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
 // RVA: 0x000F8C30
 // ADDRESS: 004f8c30
 // PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:107
-// RVA: 0x000F8D10
-// ADDRESS: 004f8d10
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::GetAdditionalData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:252
-// RVA: 0x000F8D50
-// ADDRESS: 004f8d50
-// PROTOTYPE: ulong __thiscall GetAdditionalData(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:48
-// RVA: 0x000F8D60
-// ADDRESS: 004f8d60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:259
-// RVA: 0x000F8E20
-// ADDRESS: 004f8e20
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:216
-// RVA: 0x000F8F60
-// ADDRESS: 004f8f60
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::~CRideState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:44
-// RVA: 0x000F8FC0
-// ADDRESS: 004f8fc0
-// PROTOTYPE: void __thiscall ~CRideState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:149
-// RVA: 0x000F9110
-// ADDRESS: 004f9110
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::CRideState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:17
-// RVA: 0x000F9280
-// ADDRESS: 004f9280
-// PROTOTYPE: undefined __thiscall CRideState(ulong param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::CRideState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:31
-// RVA: 0x000F9320
-// ADDRESS: 004f9320
-// PROTOTYPE: undefined __thiscall CRideState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRideState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\ridestate.cpp:229
-// RVA: 0x000F93B0
-// ADDRESS: 004f93b0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

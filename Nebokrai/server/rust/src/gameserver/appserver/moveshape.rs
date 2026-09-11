@@ -23,6 +23,10 @@
 //! object Begin выполняется до append, без заранее снятых часов и пачки
 //! removed/added. DelUndeadState (0x004CDE80) завершает первое совпадение,
 //! отдельно пересчитывает свойства и возвращает запрошенный ID.
+//! Ride также проходит Begin до append: CMoveShape больше не создаёт owning
+//! копию результата и не завершает payload отдельно от общего End/RemoveState.
+//! Variable DB-span нового Ride задаётся общей регистрацией; loaded offset
+//! остаётся лишь fallback-кодеком, а не условием удаления живого экземпляра.
 //! Клиентский AddToByteArray_ForClient (0x004CDD30, moveshape.cpp:1779)
 //! считает непустые позиции общей арены, затем пишет ID/+30/+38 и Team-name
 //! в том же порядке. DB Serialize и его offsets здесь не используются;
@@ -1688,10 +1692,6 @@ impl CMoveShape {
         self.state_entries.first::<RideState>()
     }
 
-    pub(crate) fn ride_state_mut(&mut self) -> Option<&mut RideState> {
-        self.state_entries.first_mut::<RideState>()
-    }
-
     /// Scalar-prefix CMoveShape::OnEnterRegion; конкретные Begin заново
     /// устанавливают свои запреты после этого сброса в общем живом проходе.
     pub(crate) const fn reset_region_entry_control(&mut self) {
@@ -3319,44 +3319,6 @@ impl CMoveShape {
 
 
 
-
-    pub(crate) fn begin_ride_state(&mut self, mut state: RideState) -> Option<RideState> {
-        if self.state_entries.first::<RideState>().is_some() {
-            return None;
-        }
-        if self.ex_states.len() < 4 {
-            self.ex_states.clear();
-            LegacyWriter::new(&mut self.ex_states).write_u32(0);
-        }
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        state.append_serialized(&mut self.ex_states);
-        self.set_fightable(false);
-        self.state_entries.append(state.clone());
-        Some(state)
-    }
-
-    pub(crate) fn end_ride_state(&mut self) -> Option<RideState> {
-        let key = self.state_entries.first_key::<RideState>()?;
-        self.end_ride_state_key(key)
-    }
-
-    pub(crate) fn end_ride_state_key(&mut self, key: StateKey) -> Option<RideState> {
-        self.applied_state::<RideState>(key)?;
-        self.set_fightable(true);
-        let state = self.state_entries.take::<RideState>(key)?;
-        if let Some((offset, amount)) = state.serialized_span()
-            && offset + amount <= self.ex_states.len()
-        {
-            self.ex_states.drain(offset..offset + amount);
-            if self.ex_states.len() >= 4 {
-                let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-                write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
-            }
-            self.shift_serialized_state_offsets_after(offset, amount);
-        }
-        Some(state)
-    }
 
 
 
