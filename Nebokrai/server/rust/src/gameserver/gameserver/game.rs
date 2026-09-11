@@ -1539,7 +1539,6 @@ use crate::gameserver::appserver::skills::spiderpoison::{
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
-use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{
     LeafCutState,
 };
@@ -40129,40 +40128,6 @@ impl CGame {
                 .map(CMonster::display_name)
                 .unwrap_or_default(),
             _ => &[],
-        }
-    }
-
-    pub(crate) fn replace_blood_loss_state(
-        &mut self,
-        region_id: i32,
-        target: ShapeIdentity,
-        state: BloodLossState,
-    ) -> Option<(Option<BloodLossState>, ShapeIdentity, i32, i32)> {
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self.find_player_mut(target.id)?;
-                let identity = player.shape().identity();
-                let x = player.shape().get_tile_x().ok()?;
-                let y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_blood_loss_state(state);
-                Some((previous, identity, x, y))
-            }
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner
-                    .base_mut()
-                    .find_monster_by_id_mut(target.id)
-                    .and_then(|monster| {
-                        let identity = monster.move_shape().shape().identity();
-                        let x = monster.move_shape().shape().get_tile_x().ok()?;
-                        let y = monster.move_shape().shape().get_tile_y().ok()?;
-                        let previous = monster.move_shape_mut().replace_blood_loss_state(state);
-                        Some((previous, identity, x, y))
-                    });
-                self.restore_region_owner(owner);
-                result
-            }
-            _ => None,
         }
     }
 

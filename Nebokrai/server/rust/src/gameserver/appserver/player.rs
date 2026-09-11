@@ -5965,13 +5965,6 @@ impl CPlayer {
         self.move_shape.blind_state_order()
     }
 
-    pub(crate) fn replace_blood_loss_state(
-        &mut self,
-        state: super::skills::bloodlossstate::BloodLossState,
-    ) -> Option<super::skills::bloodlossstate::BloodLossState> {
-        self.move_shape.replace_blood_loss_state(state)
-    }
-
     pub(crate) fn replace_leaf_cut_state(
         &mut self,
         state: super::skills::leafcutstate::LeafCutState,

@@ -352,7 +352,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         super::bloodloss::BLOOD_LOSS_SKILL_ID => StateRecordLayout::typed(
             BLOOD_LOSS_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::bloodlossstate::BloodLossState::decode(payload, offset, _now()).ok().map(StateData::BloodLoss)
+                super::bloodlossstate::BloodLossState::decode(payload, offset, _now).ok().map(StateData::BloodLoss)
             },
         ),
         BOSS_BLUE_FURY_STATE_ID => StateRecordLayout::typed(

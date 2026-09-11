@@ -361,9 +361,7 @@ use crate::gameserver::appserver::skills::swordshipstate::{
     SWORDSHIP_STATE_BYTES, SwordshipState,
 };
 use crate::gameserver::appserver::skills::strikestate::StrikeState;
-use crate::gameserver::appserver::skills::bloodlossstate::{
-    BloodLossState, BLOOD_LOSS_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES};
 use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_BYTES};
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES};
@@ -1612,7 +1610,7 @@ impl CMoveShape {
                 StateData::LeafCut2(state) => Some(state.encoded(now_ms)),
                 StateData::Rush2(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::Agility2(state) => Some(state.encoded(now_ms).to_vec()),
-                StateData::BloodLoss(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::BloodLoss(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
                 StateData::Callosity(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::BossBlueFury(state) => Some(state.encoded(now_ms).to_vec()),
@@ -2928,17 +2926,6 @@ impl CMoveShape {
     pub(crate) fn blind_state_instances(&self) -> Vec<(StateKey, u32)> {
         self.state_entries.entries().filter(|(_, state)| state.is_blind())
             .map(|(key, state)| (key, state.state_id())).collect()
-    }
-
-    pub(crate) fn replace_blood_loss_state(
-        &mut self,
-        state: BloodLossState,
-    ) -> Option<BloodLossState> {
-        let previous = self.state_entries.first_key::<BloodLossState>()
-            .and_then(|key| self.remove_applied_state_record::<BloodLossState>(key, BLOOD_LOSS_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
     }
 
 

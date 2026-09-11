@@ -33,6 +33,8 @@
 //! signed wrapping MP-gate, запись и BF918 даже при отказе SerializeForOldClient.
 //! После пакета CAN_BE_BREAKED записывается в базовую available перед mode0,
 //! отдельно от derived допуска AI.
+//! Начальные часы задаёт общий Begin расписания; CheckCast 0x00519750
+//! читает часы только для reuse и выбирает первый запрещающий state по позиции.
 
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -140,17 +142,21 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"ZHGS0045");
             return reject_before_ai(game);
         }
-        if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
-            || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B)
-        {
-            game.send_skill_system_info(player_id, b"ZHGS0046");
+        let denied_state = resolve_state_move_shape(game, region_id, target).and_then(|shape| {
+            let (_, key) = shape.find_state_position(|state| {
+                matches!(state.state_id(), DENIED_STATE_A | DENIED_STATE_B | DENIED_STATE_C)
+            })?;
+            Some(shape.applied_state_data(key)?.state_id())
+        });
+        if let Some(state_id) = denied_state {
+            game.send_skill_system_info(
+                player_id, if state_id == DENIED_STATE_C { b"ZHGS0047" } else { b"ZHGS0046" },
+            );
             return reject_before_ai(game);
         }
-        if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C) {
-            game.send_skill_system_info(player_id, b"ZHGS0047");
-            return reject_before_ai(game);
-        }
-        let started_at_ms = runtime.now_milliseconds();
+        let started_at_ms = game.player_skill_lifecycle(player_id, POISON_ARROW_SKILL_ID)
+            .expect("общий Begin расписания сохранил базу отравленной стрелы")
+            .started_at_ms();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
             game.battle_fairy_skill_last_used_ms(player_id, POISON_ARROW_SKILL_ID),

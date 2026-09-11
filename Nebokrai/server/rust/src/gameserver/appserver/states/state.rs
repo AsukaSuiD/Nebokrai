@@ -778,8 +778,8 @@ state_callbacks! {
         |game, region, target, key, runtime| {
             super::poison::update_poison_state::<0x21e, _>(game, region, target, key, runtime);
         },
-        super::poison::end_poison_state::<0x21e>,
-        super::poison::restart_poison_state::<0x21e>,
+        super::periodicattack::end_periodic_attack_state::<skills::poisonarrowstate::PoisonArrowState>,
+        super::periodicattack::restart_periodic_attack_state::<skills::poisonarrowstate::PoisonArrowState>,
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
@@ -787,8 +787,8 @@ state_callbacks! {
         |game, region, target, key, runtime| {
             super::poison::update_poison_state::<0x191, _>(game, region, target, key, runtime);
         },
-        super::poison::end_poison_state::<0x191>,
-        super::poison::restart_poison_state::<0x191>,
+        super::periodicattack::end_periodic_attack_state::<skills::spiderpoisonstate::SpiderPoisonState>,
+        super::periodicattack::restart_periodic_attack_state::<skills::spiderpoisonstate::SpiderPoisonState>,
         |_, _, _, _, _| true,
         set_state_sufferer_region
     ),
@@ -806,15 +806,12 @@ state_callbacks! {
     ),
     StateData::BloodLoss(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::bloodlossstate::update_player_blood_loss_state(game, target.id, key, runtime); }
-                600 => { skills::bloodlossstate::update_monster_blood_loss_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            skills::bloodlossstate::update_blood_loss_state(game, region, target, key, runtime);
         },
-        skills::bloodlossstate::end_blood_loss_state,
-        skills::bloodlossstate::restart_blood_loss_state,
-        |_, _, _, _, _| true
+        super::periodicattack::end_periodic_attack_state::<skills::bloodlossstate::BloodLossState>,
+        super::periodicattack::restart_periodic_attack_state::<skills::bloodlossstate::BloodLossState>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::LeafCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
