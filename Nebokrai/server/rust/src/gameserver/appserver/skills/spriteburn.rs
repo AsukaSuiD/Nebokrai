@@ -1,48 +1,38 @@
-//! Огненная область `CSpriteBurn` (`0x1a6`) для игрока и монстра.
-//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
-//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
+//! Область навыка SpriteBurn: допуск, визуальный эффект и наложение яда.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/spriteburn.cpp`. Владелец сохраняет повторную проверку и
-//! расход MP игрока, восстановление навыка, задержку и точные пакеты начала и
-//! срабатывания. После задержки навык читает текущую клетку владельца, обходит
-//! подтверждённую маску 7×7 в порядке X → Y и живой порядок объектов каждой
-//! клетки, исключает мёртвые и недоступные цели с `CureState`, затем атомарно
-//! заменяет их канонический `SpriteBurnState` (`0x1a6`). Состояние создаётся
-//! с отдельным чтением часов для каждой цели. `CGame` только разрешает
-//! независимых владельцев региона и цели и выполняет фактическую доставку.
-//! Player `End` возвращает движение и выполняет `CSummonSkill::End(1)`;
-//! установленное состояние цели живёт независимо от завершённого cast. Player
-//! и monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
-//! и срок состояния остаются elapsed.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/spriteburn.cpp.
+//! Визуальный ресурс принадлежит зарегистрированному навыку; наложенные
+//! состояния хранятся независимо в общей арене цели. Синхронные callbacks
+//! работают с опубликованными владельцами региона и ИИ, без их копирования.
 
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
+};
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
-use super::monsterattack::{
-    monster_attack_cell_candidates, owned_monster_attackable,
-    resolve_owned_monster_attack_target,
-};
-use super::monsterrangeattack::range_attack_scope_cells;
+use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoison::target_has_cure;
-use super::spriteburnstate::{SpriteBurnState, install_sprite_burn_state};
+use super::spiderpoison::SPIDER_POISON_SKILL_ID;
+use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
 use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
+    MonsterSkillCallOutcome, MonsterTraceTarget, approach_attack_range,
+    finish_monster_skill_call, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::skillfactory::SkillOwner;
+use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::skills::kernel::{
     skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    QueuedSkillExecutionState, ServerRegionOwner,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -88,52 +78,50 @@ pub(crate) const fn is_sprite_burn_dispatch(dispatch: PlayerSkillDispatch) -> bo
     }
 }
 
-fn send_player_failure(game: &CGame, player_id: i32, action: u8) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
-}
-
-fn send_player_start(game: &mut CGame, player_id: i32, level: i32) {
-    let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
+pub(crate) fn publish_sprite_burn_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    if skill.owner() != SkillOwner::CSpriteBurn
+        || skill.visual_effect().is_none_or(|effect| {
+            effect.kind() != SkillVisualEffectKind::SpriteBurn || effect.is_ended()
+        })
+    { return; }
+    let (region_id, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region_id, identity) else { return; };
+    let source = source.shape();
+    let identity = source.identity();
     let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(1);
-    message.add_long(SPRITE_BURN_SKILL_ID as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    message.add_long(direction);
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn send_player_fire(game: &mut CGame, player_id: i32, level: i32, tile_x: i32, tile_y: i32) {
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(2);
-    message.add_long(SPRITE_BURN_SKILL_ID as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_long(tile_x);
-    message.add_long(tile_y);
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn finish_player_sprite_burn<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    runtime: &mut Runtime,
-) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
+    if matches!(mode, 2 | 7 | 10 | 11 | 13 | 15) {
+        if identity.object_type == PLAYER_TYPE {
+            message.add_byte(0);
+            message.add_byte(mode as u8);
+            let _ = message.send_to_player(game.net_server(), identity.id);
+        }
+        return;
     }
-    finish_summon_skill(game, player_id, SPRITE_BURN_SKILL_ID, runtime);
+    let action = match mode { 0 => 1, 1 => 2, _ => return };
+    message.add_byte(action);
+    message.add_long(skill.id() as i32);
+    message.add_short(skill.level() as i16);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    if action == 1 {
+        message.add_long(source.get_direction());
+    } else {
+        let (Ok(x), Ok(y)) = (source.get_tile_x(), source.get_tile_y()) else { return; };
+        message.add_long(0);
+        message.add_long(0);
+        message.add_long(x);
+        message.add_long(y);
+    }
+    if let Some(region) = game.find_region(source.get_region_id()) {
+        let _ = game.send_game_shape_around(region.base(), source, None, &message);
+    }
 }
 
 pub(crate) fn cancel_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = game
         .player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID)
@@ -141,45 +129,77 @@ pub(crate) fn cancel_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    finish_player_sprite_burn(game, player_id, runtime);
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
-fn apply_player_scope<Runtime: GameMainLoopRuntime>(
+fn add_sprite_burn_poison(
     game: &mut CGame,
-    player_id: i32,
     region_id: i32,
-    center_x: i32,
-    center_y: i32,
-    lifetime_ms: u32,
-    frequency_ms: u32,
-    constant: u32,
-    runtime: &mut Runtime,
+    address: RegisteredSkill,
+    target: ShapeIdentity,
+    now: &mut dyn FnMut() -> u32,
 ) {
-    for (offset_x, offset_y) in range_attack_scope_cells() {
-        let tile_x = center_x.wrapping_add(offset_x);
-        let tile_y = center_y.wrapping_add(offset_y);
-        for view in cell_views(game, region_id, tile_x, tile_y) {
-            let target = view.identity;
-            if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) {
-                continue;
+    let Some(skill) = game.registered_skill(address) else { return; };
+    let (user_region, source) = skill.lifecycle().user();
+    let Some(user) = resolve_state_move_shape(game, user_region, source)
+        .map(|shape| (shape.shape().get_region_id(), shape.shape().identity()))
+    else { return; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return; };
+    let Some(sufferer) = resolve_state_move_shape(game, region_id, target)
+        .map(|shape| (shape.shape().get_region_id(), shape.shape().identity()))
+    else { return; };
+    let mut master = if source.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(source.id) else { return; };
+        master_info(player)
+    } else {
+        MasterInfo { master_type: source.object_type, master_id: source.id, ..MasterInfo::default() }
+    };
+    master.master_country_id = 0;
+    let hp_loss = properties.query_property(SKILL_USAGE_CONST);
+    let frequency = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
+    let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    // SpriteBurn накладывает паучий яд 0x191, а не одноимённое состояние
+    // 0x1a6. Новый payload создаётся до callbacks завершения старого яда.
+    let state = SpiderPoisonState::new(master, keep, frequency, hp_loss);
+    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return; };
+    let selected = shape.find_state_position(|state| state.state_id() == SPIDER_POISON_SKILL_ID);
+    let placement = if let Some((position, key)) = selected {
+        let Some(location) = shape.applied_state_replacement_location(key) else { return; };
+        let _ = end_and_destroy_state_at(game, region_id, target, position);
+        Some(location)
+    } else { None };
+    let _ = begin_primary_spider_poison_state(
+        game, region_id, target, Some(user), Some(sufferer), state, placement, now,
+    );
+}
+
+
+fn apply_scope(
+    game: &mut CGame,
+    region_id: i32,
+    source: ShapeIdentity,
+    address: RegisteredSkill,
+    center: (i32, i32),
+    now: &mut dyn FnMut() -> u32,
+) {
+    // Источник не исключается из квадрата: решение оставлено правам цели,
+    // которые, в частности, допускают некоторые случаи осиротевших питомцев.
+    for offset_x in -1_i32..=1 {
+        for offset_y in -1_i32..=1 {
+            let tile_x = center.0.wrapping_add(offset_x);
+            let tile_y = center.1.wrapping_add(offset_y);
+            for view in cell_views(game, region_id, tile_x, tile_y) {
+                let target = view.identity;
+                if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                    || game.periodic_state_target_dead(region_id, target)
+                    || !game.live_skill_target_attackable(region_id, source, target)
+                {
+                    continue;
+                }
+                let Some(shape) = resolve_state_move_shape(game, region_id, target) else { continue; };
+                if shape.has_state_by_skill_id(0x131) { continue; }
+                add_sprite_burn_poison(game, region_id, address, target, now);
             }
-            let Some(master) = game.find_player(player_id).map(master_info) else { return };
-            if !game.owned_player_skill_target_attackable(master, target, region_id) {
-                continue;
-            }
-            let Some(mut owner) = game.take_region_owner(region_id) else { return };
-            if !target_has_cure(game, owner.base(), target) {
-                let now_ms = runtime.now_milliseconds();
-                install_sprite_burn_state(
-                    game,
-                    owner.base_mut(),
-                    target,
-                    SpriteBurnState::new(master, now_ms, lifetime_ms, frequency_ms, constant),
-                    now_ms,
-                );
-            }
-            game.restore_region_owner(owner);
         }
     }
 }
@@ -188,138 +208,118 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_sprite_burn_dispatch(dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| {
-        Some((
-            player.server_region_id()?,
-            player.learned_skill_level(SPRITE_BURN_SKILL_ID, game.skill_factory()),
-            player.mana(),
-        ))
-    }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(level) = game.find_player(player_id)
+        .map(|player| player.learned_skill_level(SPRITE_BURN_SKILL_ID, game.skill_factory()))
+    else { return player_terminal(QueuedSkillExecutionState::Rejected); };
+    let beginning = game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID).is_none();
+    if beginning {
+        game.replace_player_skill_visual_effect(
+            player_id, SPRITE_BURN_SKILL_ID,
+            SkillVisualEffect::new(SkillVisualEffectKind::SpriteBurn, 1),
+        );
+    }
     let Some(properties) = game.skill_base_properties(SPRITE_BURN_SKILL_ID, level) else {
-        if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID).is_some() {
-            finish_player_sprite_burn(game, player_id, runtime);
-        }
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let lifetime_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let frequency_ms = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
-    let constant = properties.query_property(SKILL_USAGE_CONST);
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-
-    if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID).is_none() {
-        let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, SPRITE_BURN_SKILL_ID), reuse_delay_ms, now_ms) {
-            send_player_failure(game, player_id, 0x0d);
+    if beginning {
+        let started_at_ms = game.player_skill_lifecycle(player_id, SPRITE_BURN_SKILL_ID)
+            .expect("общий Begin расписания сохранил базу SpriteBurn").started_at_ms();
+        let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if !skill_is_restored(
+            game.player_skill_last_used_ms(player_id, SPRITE_BURN_SKILL_ID), reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
+            game.update_player_skill_visual(player_id, SPRITE_BURN_SKILL_ID, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        if (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_player_failure(game, player_id, 7);
+        let Some(mana) = game.find_player(player_id).map(CPlayer::mana) else {
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            game.update_player_skill_visual(player_id, SPRITE_BURN_SKILL_ID, 7);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(SPRITE_BURN_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, SpriteBurnExecutionState::begin(dispatch, now_ms));
+        game.begin_player_skill_execution(
+            player_id, SpriteBurnExecutionState::begin(dispatch, started_at_ms),
+        );
         return player_terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID).is_none_or(|state| state.kernel().dispatch() != dispatch) {
+    }
+    if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID)
+        .is_none_or(|state| state.kernel().dispatch() != dispatch)
+    {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-
-    if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID).is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+    if game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID)
+        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
+    {
+        let Some(mana) = game.find_player(player_id).map(CPlayer::mana) else {
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_player_failure(game, player_id, 7);
-            finish_player_sprite_burn(game, player_id, runtime);
+            game.update_player_skill_visual(player_id, SPRITE_BURN_SKILL_ID, 7);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_mana(mana.wrapping_sub(mp_loss));
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        send_player_start(game, player_id, level);
+        let Some(can_be_breaked) = game.skill_base_properties(SPRITE_BURN_SKILL_ID, level)
+            .map(|properties| properties.query_property(SKILL_USAGE_CAN_BE_BREAKED))
+        else { return player_terminal(QueuedSkillExecutionState::Rejected); };
+        if let Some(state) = game.player_skill_state_mut::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID) {
+            state.kernel_mut().lifecycle_mut().set_available(can_be_breaked != 0);
+        }
+        game.update_player_skill_visual(player_id, SPRITE_BURN_SKILL_ID, 0);
         if let Some(state) = game.player_skill_state_mut::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID) {
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-
-    let started_at_ms = game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID)
+    let Some(delay_ms) = game.skill_base_properties(SPRITE_BURN_SKILL_ID, level)
+        .map(|properties| properties.query_property(SKILL_USAGE_DELAY_TIME))
+    else { return player_terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(started_at_ms) = game.player_skill_state::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID)
         .map(|state| state.kernel().started_at_ms())
-        .expect("выполнение огненной области хранит время начала");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    else { return player_terminal(QueuedSkillExecutionState::Rejected); };
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return player_terminal(QueuedSkillExecutionState::Pending);
     }
-    let Some((center_x, center_y)) = game.find_player(player_id).and_then(|player| {
-        Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-    }) else {
-        finish_player_sprite_burn(game, player_id, runtime);
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
-    send_player_fire(game, player_id, level, center_x, center_y);
+    game.update_player_skill_visual(player_id, SPRITE_BURN_SKILL_ID, 1);
     if let Some(state) = game.player_skill_state_mut::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
     }
-    apply_player_scope(
-        game, player_id, region_id, center_x, center_y, lifetime_ms, frequency_ms, constant, runtime,
-    );
+    let _ = game.with_published_player_ai(player_id, player_ai, |game| {
+        let Some(address) = game.registered_player_skill(player_id, SPRITE_BURN_SKILL_ID) else { return; };
+        let Some((region_id, source, center)) = game.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?, player.shape().identity(),
+                (player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?),
+            ))
+        }) else { return; };
+        apply_scope(game, region_id, source, address, center, &mut || runtime.now_milliseconds());
+    });
     if let Some(state) = game.player_skill_state_mut::<SpriteBurnExecutionState>(player_id, SPRITE_BURN_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_sprite_burn(game, player_id, runtime);
     player_terminal(QueuedSkillExecutionState::Completed)
-}
-
-fn send_start(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &CShape,
-    skill_level: u16,
-) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(1);
-    message.add_long(SPRITE_BURN_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(source.get_direction());
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
-
-fn send_fire(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &CShape,
-    skill_level: u16,
-    tile_x: i32,
-    tile_y: i32,
-) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(2);
-    message.add_long(SPRITE_BURN_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_long(tile_x);
-    message.add_long(tile_y);
-    let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт")]
 pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
@@ -327,152 +327,117 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((source, property, master, tamed, attack_interval_ms, cast, last_used_ms)) = region
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
+    let region_id = region.id;
+    let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                .clone();
-            let attack_interval_ms = monster
-                .is_tamed()
+            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
+            let attack_interval_ms = monster.is_tamed()
                 .then(|| monster.pet_attack_properties(&property))
                 .map_or(property.attack_speed, |pet| pet.attack_interval);
             Some((
-                monster.move_shape().shape().clone(),
-                property,
-                monster.master_info(),
-                monster.is_tamed(),
-                attack_interval_ms,
+                monster.move_shape().shape().identity(), property, attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(SPRITE_BURN_SKILL_ID, game.skill_factory()),
             ))
         })
-    else {
+    else { return false; };
+    if cast.is_some_and(|cast| cast.dispatch().skill_id != SPRITE_BURN_SKILL_ID) {
         return false;
-    };
-
+    }
     if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
-        else {
+        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target(game.skill_factory());
             }
             return true;
         };
         if !approach_attack_range(
-            game,
-            region,
-            monster_id,
-            MonsterTraceTarget::Shape(target.view),
-            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            runtime,
+            game, region, monster_id, MonsterTraceTarget::Shape(target.view),
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE), runtime,
         ) {
             return true;
         }
         if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
-        {
-            let attack_started = region
-                .find_monster_by_id_mut(monster_id)
-                .is_some_and(|monster| {
-                    monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
-                });
-            if !attack_started {
-                return true;
-            }
-        }
-        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
-                last_used_ms,
-                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
-                now_ms,
-            )
+            && !region.find_monster_by_id_mut(monster_id).is_some_and(|monster| {
+                monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
+            })
         {
             return true;
         }
         let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
+        let started_at_ms = runtime.now_milliseconds();
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.begin_base_attack_cast(
-                target_identity,
-                SPRITE_BURN_SKILL_ID,
-                skill_level,
-                now_ms,
-                target_object,
-                game.skill_factory(),
+            if !monster.prepare_base_attack_cast(
+                target_identity, SPRITE_BURN_SKILL_ID, skill_level, started_at_ms,
+                target_object, game.skill_factory(),
+            ) { return true; }
+            monster.move_shape_mut().replace_skill_visual_effect(
+                SPRITE_BURN_SKILL_ID, game.skill_factory(),
+                SkillVisualEffect::new(SkillVisualEffectKind::SpriteBurn, 1),
             );
         }
-        send_start(game, region, &source, skill_level);
-        return true;
-    }
-
-    let cast = cast.expect("выполнение огненной области проверено выше");
-    if cast.dispatch().skill_id != SPRITE_BURN_SKILL_ID {
-        return false;
-    }
-    if !time_reached(
-        now_ms,
-        cast.started_at_ms(),
-        properties.query_property(SKILL_USAGE_DELAY_TIME),
-    ) {
-        return true;
-    }
-    let (Ok(center_x), Ok(center_y)) = (source.get_tile_x(), source.get_tile_y()) else {
-        return true;
-    };
-    send_fire(game, region, &source, skill_level, center_x, center_y);
-
-    let state_master = MasterInfo {
-        master_type: MONSTER_TYPE,
-        master_id: monster_id,
-        ..MasterInfo::default()
-    };
-    for (offset_x, offset_y) in range_attack_scope_cells() {
-        let candidates = monster_attack_cell_candidates(
-            game,
-            region,
-            monster_id,
-            center_x.wrapping_add(offset_x),
-            center_y.wrapping_add(offset_y),
-        );
-        for identity in candidates {
-            let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
-                continue;
-            };
-            if target.dead
-                || target.god
-                || target.city_dead
-                || !owned_monster_attackable(
-                    game,
-                    region.id,
-                    &property,
-                    tamed,
-                    master,
-                    identity,
-                    &target,
-                )
-                || target_has_cure(game, region, identity)
-            {
-                continue;
+        let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if !skill_is_restored(last_used_ms, reuse, cooldown_now_ms) {
+            let _ = game.with_published_region(owner, |game| {
+                if let Some(address) = game.registered_move_shape_skill(region_id, source, SPRITE_BURN_SKILL_ID) {
+                    game.update_registered_skill_visual(address, 0x0d);
+                    let _ = game.end_registered_instance(
+                        address, 0, SkillTermination::Rejected, runtime,
+                    );
+                }
+            });
+            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+            return finish_monster_skill_call(
+                game, region, monster_id, MonsterSkillCallOutcome::BeginRejected, runtime,
+            );
+        }
+        let queued_at_ms = runtime.now_milliseconds();
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.enqueue_base_attack_cast(queued_at_ms);
+        }
+        let can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+        if let Some(lifecycle) = region.find_monster_by_id_mut(monster_id)
+            .and_then(|monster| monster.move_shape_mut().skill_lifecycle_mut(SPRITE_BURN_SKILL_ID, game.skill_factory()))
+        {
+            lifecycle.set_available(can_be_breaked != 0);
+        }
+        let _ = game.with_published_region(owner, |game| {
+            if let Some(address) = game.registered_move_shape_skill(region_id, source, SPRITE_BURN_SKILL_ID) {
+                game.update_registered_skill_visual(address, 0);
             }
-            let state_now_ms = runtime.now_milliseconds();
-            install_sprite_burn_state(
-                game,
-                region,
-                identity,
-                SpriteBurnState::new(
-                    state_master,
-                    state_now_ms,
-                    properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
-                    properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY),
-                    properties.query_property(SKILL_USAGE_CONST),
-                ),
-                state_now_ms,
+        });
+        if let Some(monster) = owner.as_mut().and_then(|owner| owner.base_mut().find_monster_by_id_mut(monster_id)) {
+            let _ = monster.advance_base_attack_cast(
+                SPRITE_BURN_SKILL_ID, SkillStage::Begin, SkillStage::Check, game.skill_factory(),
             );
         }
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SPRITE_BURN_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(SPRITE_BURN_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(SPRITE_BURN_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
-        let _ = monster.finish_base_attack_cast_with_clock(SPRITE_BURN_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
-    }
+    let Some(cast) = owner.as_ref().and_then(|owner| owner.base().find_monster_by_id(monster_id))
+        .and_then(|monster| monster.base_attack_cast(SPRITE_BURN_SKILL_ID, game.skill_factory()))
+    else { return true; };
+    if cast.dispatch().skill_id != SPRITE_BURN_SKILL_ID { return false; }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    if runtime.now_milliseconds() < cast.started_at_ms().wrapping_add(delay) { return true; }
+    let _ = game.with_published_region(owner, |game| {
+        let Some(address) = game.registered_move_shape_skill(region_id, source, SPRITE_BURN_SKILL_ID) else { return; };
+        game.update_registered_skill_visual(address, 1);
+        if let Some((source_region, center)) = resolve_state_move_shape(game, region_id, source)
+            .and_then(|shape| {
+                let shape = shape.shape();
+                Some((shape.get_region_id(), (shape.get_tile_x().ok()?, shape.get_tile_y().ok()?)))
+            })
+        {
+            apply_scope(
+                game, source_region, source, address, center,
+                &mut || runtime.now_milliseconds(),
+            );
+        }
+        let _ = game.end_registered_instance(address, 1, SkillTermination::Completed, runtime);
+    });
     true
 }

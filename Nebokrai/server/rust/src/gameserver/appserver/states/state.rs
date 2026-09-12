@@ -1,72 +1,21 @@
-//! Базовые контракты и общий virtual Begin/AI/End/OnUpdateProperties GameServer.
+//! Общие callbacks, доступ и клиентское представление состояний GameServer.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/states/state.h/.cpp
+//! и операции состояний appserver/moveshape.cpp.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходные owners
-//! `appserver/states/state.h/.cpp`. Vtable-аудит exact EXE подтверждает, что
-//! базовые `GetClientStateTime` и `GetAdditionalData` сведены линкером в одну
-//! функцию RVA `0x00201200`, возвращающую ноль. Конкретные state-классы могут
-//! переопределять каждый getter; поэтому здесь закреплены только базовые
-//! значения, а динамический remaining-time и additional-data остаются у
-//! конкретных владельцев. Стандартные визуальные пакеты состояния отправляются
-//! через уже заимствованного владельца региона, чтобы owner-проход не зависел от
-//! повторного поиска временно вынутого региона. Точные `GetUser/GetSufferer`
-//! разрешают player глобально, остальные identity типов
-//! `500/600/1100/1200` через регион, а координатная ветвь выбирает первый
-//! `CMoveShape` клетки. Базовый wire-префикс сохраняет четыре little-endian
-//! `long` в порядке user type/ID → sufferer type/ID. Остальной корпус сохранён
-//! ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
-//! Живое заимствование GetUser использует те же lookup-gates для чтения
-//! visual и изменения movement; исчезнувший источник не заменяется
-//! текущим держателем навыка. Эти адаптеры работают с опубликованным регионом,
-//! не создавая копий owning форм или их ресурсов.
-
-//! Общий UpdateAbnormality ниже повторяет CMoveShape::UpdateAbnormality
-//! (0x004CFD00): уплотнение в прологе, исходная длина после UpdateProperty,
-//! новое чтение позиции до каждого AI и контроль длины после callback.
-//! SlotMap удерживает идентичность, но не продлевает жизнь удалённого payload.
-//! Часы принадлежат конкретному AI; общий проход их не читает. End не вызывает
-//! уплотнения. GS0121/GS0122 используют исходные StringTable и 32-битные аргументы.
-//! Для постоянных Agility/Natural/Rapture, TaiJi, Enlarge*, Origin, MeteorArrow,
-//! EnergyHolding, SoulCollect, Swordship1–4 и WuXing exact vtable+0x0C указывает
-//! на 0x00485540 (ret), а не базовый CState::AI 0x005DBC90, вызывающий End.
-//! Прочие варианты перечислены явно: отсутствующий override не становится no-op.
-//! UpdateProperty (0x004CFB60) сбрасывает 25 LONG modifiers и вызывает +0x24
-//! в живом порядке с фиксированной входной длиной. Player применяет каждый
-//! callback непосредственно к tagProperty между MountAllEquip и OnChangeProperties
-//! (0x00459B82..0x00459B90); monster getters читают сохранённые modifiers.
-//! Visual вызывается на своём месте только при ненулевом ресурсе; его ended
-//! не равен state.ended. GetSufferer игрока доступен после регистрации даже
-//! при отказавшем Begin(NULL); GetUser загруженной записи остаётся NULL.
-//! ClearAllStates (0x004CF090) сохраняет три death-прохода, исходные исключения
-//! ID, прямой GetCell и строгий байт Undead==1. End и destructor-only хвост
-//! разделены; по окончании End перечитывается текущая позиция. Общий хвост
-//! использует также CastCure, без второго UpdateProperty и уплотнения.
-//! RemoveState(tagSkillID) (0x004CDB20) использует тот же End/destructor,
-//! но обходит все совпадения с живой длиной и после каждого отдельно вызывает
-//! UpdateProperty. Он не равен first-match удалению или RemoveState(pointer).
-//! StartAllStates (0x004CE050) использует живой индекс: SetRegion, повторное
-//! чтение позиции, затем object Begin(NULL, holder). Фильтр после смерти
-//! и специальный трёхаргументный CHBY Begin сохраняются отдельно. Отказ Begin
-//! не удаляет запись. NULL user не сбрасывает source/timestamp: часы загрузки
-//! читаются конкретным Unserialize. Общий CVisualEffect принадлежит экземпляру;
-//! новый Begin освобождает старый ресурс безопасно, без пакетов из Drop.
-//! User/Sufferer хранят NULL либо identity/region конкретного Begin; первичная
-//! установка GodBless/Fog/BF/Ex сохраняет конкретные стороны вызова Begin.
-//! Для ещё не перенесённых primary owners сохраняется прежняя holder-привязка.
-//! Базовый End разрешает настоящий User; локальный StateKey нельзя применить
-//! к другой арене даже при совпадении его численного представления.
-//! Первичная установка до регистрации и её replacement-callbacks ещё остаются
-//! у достигнутых конкретных владельцев; этот общий вход их не подменяет.
-//! Клиентский CMoveShape::AddToByteArray 0x004CDD30 вызывает у живой записи
-//! getter +0x30 (0x004CDE02), затем +0x38 (0x004CDE1D). Общий каталог ниже
-//! выбирает оба значения без Serialize, persisted-offset, ID-поиска и часов
-//! для базовых нулевых getters. BFE03 конкретного visual не всегда совпадает
-//! с этой проекцией: SoulCollect vtable0x0065EFE4 имеет time=0 и additional
-//! из +0x3C (число душ, увеличиваемое 0x005E1BCC..0x005E1BDC); у EnergyHolding
-//! 0x0065FDA4 оба слота ведут на ноль. Weak0x006621B4 читает время через
-//! 0x00605E10, additional=0; Cure0x0065FB0C читает 0x005F2CD0, additional=0.
-//! Их визуальные параметры и технические DB-поля здесь не подставляются.
-//! Lifetime DTO удерживает только имя Team до записи в клиентский буфер;
-//! экземпляр и его ресурсы не клонируются, ended не фильтрует getter.
+//! SlotMap сохраняет идентичность экземпляра, но не продлевает жизнь удалённого
+//! payload. После callback позиция разрешается заново; удаление не уплотняет
+//! контейнер. Часы и игровые правила принадлежат конкретному состоянию.
+//! User/Sufferer разрешаются независимо от держателя: игрок — глобально,
+//! остальные формы — через регион. Ключ нельзя применять к другой арене.
+//! В ещё не перенесённых первичных установках сохраняется прежняя привязка
+//! к держателю; общий restart не заменяет эти конкретные Begin.
+//!
+//! NULL-user restart сохраняет источник и timestamp; отказ Begin не удаляет
+//! запись. Visual имеет собственный ended и принадлежит экземпляру состояния.
+//! Клиентские getters читаются по порядку без Serialize и поиска записи по ID;
+//! их параметры могут отличаться от BFE03 конкретного визуального эффекта.
+//! Базовые getters возвращают ноль, а неизвестный AI не становится no-op.
+//! Неперенесённые контракты сохранены адресно в RAW ниже.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::{AppliedState, CMoveShape, StateData, StateKey};
@@ -794,15 +743,12 @@ state_callbacks! {
     ),
     StateData::SpriteBurn(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::spriteburnstate::update_player_sprite_burn_state(game, target.id, key, runtime); }
-                600 => { skills::spriteburnstate::update_monster_sprite_burn_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            super::poison::update_poison_state::<0x1a6, _>(game, region, target, key, runtime);
         },
-        skills::spriteburnstate::end_sprite_burn_state,
-        skills::spriteburnstate::restart_sprite_burn_state,
-        |_, _, _, _, _| true
+        super::periodicattack::end_periodic_attack_state::<skills::spriteburnstate::SpriteBurnState>,
+        super::periodicattack::restart_periodic_attack_state::<skills::spriteburnstate::SpriteBurnState>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::BloodLoss(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {

@@ -8,7 +8,7 @@
 //! состояния выполняет владелец исполнения, которому принадлежит раздельный
 //! доступ к игрокам, монстрам и региону. Исходное вычитание перекрытия направлено
 //! в отдельный `SKILL_POISON_FOG` (`0xC9`) и не подменяется самоперекрытием.
-//! AI0x005EB110 не заменяет уже существующий SpiderPoison: Cure/яд запрещают
+//! Уже существующий SpiderPoison не заменяется: Cure/яд запрещают
 //! наложение. Источник заново разрешается перед ctor; Begin(source,target)
 //! и visual исполняются до общего append в опубликованном регионе.
 //! До IsAttackAble проверяются смерть цели, Cure и SpiderPoison. Права берутся
@@ -16,7 +16,6 @@
 
 use super::spidermist::SPIDER_MIST_SKILL_ID;
 use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
-use super::monsterattack::{owned_monster_attackable, resolve_owned_monster_attack_target};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -212,7 +211,7 @@ pub(crate) fn apply_spider_mist_targets(
         {
             continue;
         }
-        if !spider_mist_target_attackable(game, region_id, source, candidate) { continue; }
+        if !game.live_skill_target_attackable(region_id, source, candidate) { continue; }
         if game.find_shape_in_region(region_id, source).is_none() { continue; }
         let Some(source_region) = resolve_state_move_shape(game, region_id, source)
             .map(|shape| shape.shape().get_region_id()) else { continue; };
@@ -229,59 +228,6 @@ pub(crate) fn apply_spider_mist_targets(
     applied
 }
 
-fn player_target_attackable(game: &CGame, source_id: i32, target_id: i32) -> bool {
-    if game.find_player(target_id).is_none_or(|player| player.city_war_died_state()) {
-        return false;
-    }
-    if let Some((text, limit)) = game.player_base_attack_level_block(source_id, target_id) {
-        game.send_base_attack_level_block(source_id, text, limit);
-        return false;
-    }
-    game.player_base_attackable(source_id, target_id)
-}
-
-fn spider_mist_target_attackable(
-    game: &CGame,
-    region_id: i32,
-    source: ShapeIdentity,
-    target: ShapeIdentity,
-) -> bool {
-    if !matches!(target.object_type, 400 | 600) { return false; }
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return false; };
-    match source.object_type {
-        400 => {
-            if target.object_type == 400 {
-                return player_target_attackable(game, source.id, target.id);
-            }
-            let Some(monster) = region.find_monster_by_id(target.id) else { return false; };
-            let Some(property) = monster.base_property_key()
-                .and_then(|name| game.find_monster_property_by_origin_name(name))
-            else { return false; };
-            let target_master = monster.master_info();
-            if (monster.is_tamed() || monster.is_carriage(property))
-                && target_master.master_type == 400 && target_master.master_id != 0
-            {
-                let Some(owner) = game.find_player(target_master.master_id) else { return true; };
-                if target_master.master_id == source.id { return owner.pk_permissions().criminal; }
-                return player_target_attackable(game, source.id, target_master.master_id);
-            }
-            game.monster_attackable_by_player(source.id, region_id, property)
-        }
-        600 => {
-            let Some(monster) = region.find_monster_by_id(source.id) else { return false; };
-            let Some(property) = monster.base_property_key()
-                .and_then(|name| game.find_monster_property_by_origin_name(name))
-            else { return false; };
-            let Some(target_snapshot) = resolve_owned_monster_attack_target(game, region, target)
-            else { return false; };
-            owned_monster_attackable(
-                game, region_id, property, monster.is_tamed(), monster.master_info(),
-                target, &target_snapshot,
-            )
-        }
-        _ => false,
-    }
-}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

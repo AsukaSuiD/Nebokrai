@@ -1,11 +1,8 @@
-//! CPoisonArrowState (0x21E) и CSpiderPoisonState (0x191),
-//! GameServer.exe/GameServer.pdb, owners skills/poisonarrowstate.cpp и
-//! skills/spiderpoisonstate.cpp. Общие Begin/AI/End/codec-prefix делегированы
-//! periodicattack.rs; типовые ID сохраняют два существующих варианта арены.
-//! Хвост Save56 — один DWORD HP. CalculateAttackPower различается:
-//! Arrow 0x005E3690 обнуляет отрицательный signed HP, Spider 0x005E9610
-//! передаёт его без ограничения. Обе атаки имеют тип Poison и MP0.
-//! Конкретные адреса lifecycle и неизвестные overload — в owner-файлах.
+//! Общий payload состояний PoisonArrow, SpiderPoison и SpriteBurn.
+//! Источник: gameserver.exe/GameServer.pdb, одноимённые owners appserver/skills.
+//! Их запись содержит 56 байт и один DWORD урона HP. Тип урона всех трёх —
+//! Poison, включая SpriteBurn; MP не изменяется. Конкретный ID сохраняет
+//! отдельный вариант общей арены, без дополнительного хранилища.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -67,6 +64,9 @@ where Self: AppliedState,
 {
     const STATE_ID: u32 = ID;
     const RECORD_BYTES: usize = POISON_STATE_BYTES;
+    // SpriteBurn может ударить и после истечения срока: проверка времени
+    // следует за попыткой атаки, даже когда частота пропускает удар.
+    const CHECK_LIFETIME_AFTER_ATTACK: bool = ID == 0x1a6;
     type AttackSeed = u32;
 
     fn core(&self) -> &PeriodicAttackCore { &self.core }
@@ -84,6 +84,7 @@ where PoisonState<ID>: AppliedState,
         game, region_id, holder, key, runtime, |_game, _target, master, hp_loss| {
             periodic_attack_information(master, 1.0, false, AttackPower {
                 kind: AttackPowerType::Poison,
+                // Только PoisonArrow ограничивает отрицательный signed HP.
                 hp_damage: if ID == 0x21e { (hp_loss as i32).max(0) } else { hp_loss as i32 },
                 mp_damage: 0,
             })

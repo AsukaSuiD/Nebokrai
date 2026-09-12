@@ -1,18 +1,14 @@
-//! Общий lifecycle периодического урона GameServer.exe/GameServer.pdb:
-//! CPoisonArrowState, CSpiderPoisonState, CBloodLossState из appserver/skills.
-//! Begin/AI этих owners подтверждают один порядок: условные часы базы →
-//! фактические User/Sufferer → visual loop1 → сброс счётчика → регистрация.
-//! AI: clock → абсолютный wrapping deadline → S/IsDied → count → clock →
-//! абсолютная частота → count++ → расчёт → виртуальная атака. Формулы и RNG
-//! остаются у конкретного owner и выполняются после освобождения заимствования.
-//! End 0x005FD420 не пишет state.ended: optional visual1 → свежий S →
-//! RemoveState того же ключа и арены. NULL restart сохраняет User/start.
-//! Общий префикс записи — ID4/Master40/remaining4/frequency4; Load читает
-//! Master до clock, а Save не меняет payload. Размер и хвост задаёт owner:
-//! poison — 56 байт, BloodLoss — 64. Install-cache часов не читает.
-//! Это адаптер существующей SlotMap-арены и callback-каталога, не отдельный
-//! планировщик либо второе хранилище. Во время вложенного End исходный
-//! экземпляр остаётся доступен; только параметры удара передаются отдельно.
+//! Общий lifecycle периодического урона и его сериализация.
+//! Источник: gameserver.exe/GameServer.pdb, периодические состояния appserver/skills.
+//!
+//! Состояние принадлежит существующей SlotMap-арене; callbacks работают с тем
+//! же ключом и фактическими User/Sufferer. Отдельно передаются только параметры
+//! удара, чтобы освободить заимствование перед вложенными игровыми действиями.
+//! NULL-user restart сохраняет источник и начало срока. End отправляет visual,
+//! заново разрешает Sufferer и удаляет запись только из исходной арены.
+//! Общий префикс сохранения — ID4/Master40/remaining4/frequency4; хвост задаёт
+//! конкретный тип. Load читает Master до часов, Save не изменяет payload,
+//! а техническая запись при установке состояния не читает часы.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -100,6 +96,7 @@ impl PeriodicAttackCore {
 pub(crate) trait PeriodicAttackState: AppliedState {
     const STATE_ID: u32;
     const RECORD_BYTES: usize;
+    const CHECK_LIFETIME_AFTER_ATTACK: bool = false;
     type AttackSeed;
     fn core(&self) -> &PeriodicAttackCore;
     fn core_mut(&mut self) -> &mut PeriodicAttackCore;
@@ -248,14 +245,16 @@ pub(crate) fn update_periodic_attack_state<T: PeriodicAttackState, Runtime: Game
     runtime: &mut Runtime,
     calculate: impl FnOnce(&mut CGame, (i32, ShapeIdentity), MasterInfo, T::AttackSeed) -> AttackInformation,
 ) -> bool {
-    let lifetime_now_ms = runtime.now_milliseconds();
-    let Some(expired) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<T>(key))
-        .map(|state| state.core().expired(lifetime_now_ms))
-    else { return false; };
-    if expired {
-        end_periodic_attack_state::<T>(game, region_id, holder, key);
-        return true;
+    if !T::CHECK_LIFETIME_AFTER_ATTACK {
+        let lifetime_now_ms = runtime.now_milliseconds();
+        let Some(expired) = resolve_state_move_shape(game, region_id, holder)
+            .and_then(|shape| shape.applied_state::<T>(key))
+            .map(|state| state.core().expired(lifetime_now_ms))
+        else { return false; };
+        if expired {
+            end_periodic_attack_state::<T>(game, region_id, holder, key);
+            return true;
+        }
     }
     let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
     else {
@@ -271,7 +270,7 @@ pub(crate) fn update_periodic_attack_state<T: PeriodicAttackState, Runtime: Game
         .map(|state| state.core().attack_count)
     else { return false; };
     let frequency_now_ms = runtime.now_milliseconds();
-    let Some((master, seed)) = resolve_state_move_shape_mut(game, region_id, holder)
+    let prepared = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.applied_state_mut::<T>(key))
         .and_then(|state| {
             let core = state.core_mut();
@@ -279,16 +278,26 @@ pub(crate) fn update_periodic_attack_state<T: PeriodicAttackState, Runtime: Game
             if deadline >= frequency_now_ms { return None; }
             core.attack_count = count.wrapping_add(1);
             Some((core.master, state.attack_seed()))
-        })
-    else { return true; };
-    let attack = calculate(game, (target_region, target), master, seed);
-    if master.master_type == MONSTER_TYPE {
-        game.apply_monster_periodic_state_attack(master, target, target_region, attack, runtime);
-    } else {
-        match target.object_type {
-            400 => game.apply_owned_skill_attack_to_player(master, target.id, target_region, attack, runtime),
-            600 => game.apply_owned_skill_attack_to_monster(master, target.id, target_region, attack, runtime),
-            _ => {}
+        });
+    if let Some((master, seed)) = prepared {
+        let attack = calculate(game, (target_region, target), master, seed);
+        if master.master_type == MONSTER_TYPE {
+            game.apply_monster_periodic_state_attack(master, target, target_region, attack, runtime);
+        } else {
+            match target.object_type {
+                400 => game.apply_owned_skill_attack_to_player(master, target.id, target_region, attack, runtime),
+                600 => game.apply_owned_skill_attack_to_monster(master, target.id, target_region, attack, runtime),
+                _ => {}
+            }
+        }
+    }
+    if T::CHECK_LIFETIME_AFTER_ATTACK {
+        let lifetime_now_ms = runtime.now_milliseconds();
+        let expired = resolve_state_move_shape(game, region_id, holder)
+            .and_then(|shape| shape.applied_state::<T>(key))
+            .is_some_and(|state| state.core().expired(lifetime_now_ms));
+        if expired {
+            end_periodic_attack_state::<T>(game, region_id, holder, key);
         }
     }
     true

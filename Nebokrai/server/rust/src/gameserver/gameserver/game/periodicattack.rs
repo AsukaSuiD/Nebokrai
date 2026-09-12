@@ -14,10 +14,71 @@
 //! выполняет Nation-уведомление, затем регистрацию первого атакующего.
 //! Общий синхронный хвост после action 6 выполняет ClearAllStates(true) и
 //! prison_check; частичная Cure-очистка не заменяет эту границу смерти.
+//! Наложение состояний SpiderMist/SpriteBurn использует живой IsAttackAble,
+//! а не допуск рассчитанного урона:
+//! без god-фильтра, с текущими правами игрока и владельца питомца. Смерть,
+//! Cure и исключение самого источника остаются отдельными правилами caller-а.
 
 use super::*;
+use crate::gameserver::appserver::skills::monsterattack::{
+    owned_monster_attackable, resolve_owned_monster_attack_target,
+};
 
 impl CGame {
+    fn live_player_target_attackable(&self, source_id: i32, target_id: i32) -> bool {
+        if self.find_player(target_id).is_none_or(|player| player.city_war_died_state()) {
+            return false;
+        }
+        if let Some((text, limit)) = self.player_base_attack_level_block(source_id, target_id) {
+            self.send_base_attack_level_block(source_id, text, limit);
+            return false;
+        }
+        self.player_base_attackable(source_id, target_id)
+    }
+
+    pub(crate) fn live_skill_target_attackable(
+        &self,
+        region_id: i32,
+        source: ShapeIdentity,
+        target: ShapeIdentity,
+    ) -> bool {
+        if !matches!(target.object_type, 400 | 600) { return false; }
+        let Some(region) = self.find_region(region_id).map(|owner| owner.base()) else { return false; };
+        match source.object_type {
+            400 => {
+                if target.object_type == 400 {
+                    return self.live_player_target_attackable(source.id, target.id);
+                }
+                let Some(monster) = region.find_monster_by_id(target.id) else { return false; };
+                let Some(property) = monster.base_property_key()
+                    .and_then(|name| self.find_monster_property_by_origin_name(name))
+                else { return false; };
+                let target_master = monster.master_info();
+                if (monster.is_tamed() || monster.is_carriage(property))
+                    && target_master.master_type == 400 && target_master.master_id != 0
+                {
+                    let Some(owner) = self.find_player(target_master.master_id) else { return true; };
+                    if target_master.master_id == source.id { return owner.pk_permissions().criminal; }
+                    return self.live_player_target_attackable(source.id, target_master.master_id);
+                }
+                self.monster_attackable_by_player(source.id, region_id, property)
+            }
+            600 => {
+                let Some(monster) = region.find_monster_by_id(source.id) else { return false; };
+                let Some(property) = monster.base_property_key()
+                    .and_then(|name| self.find_monster_property_by_origin_name(name))
+                else { return false; };
+                let Some(target_snapshot) = resolve_owned_monster_attack_target(self, region, target)
+                else { return false; };
+                owned_monster_attackable(
+                    self, region_id, property, monster.is_tamed(), monster.master_info(),
+                    target, &target_snapshot,
+                )
+            }
+            _ => false,
+        }
+    }
+
     fn increase_owned_skill_attacker_rp(&mut self, player_id: i32, skill_id: u32) {
         // Range/Fast Attack (VA 0x005123e0/0x00513700/0x00530fb0) не вызывают
         // IncreaseRp после OnBeenAttacked; RP защищающейся стороны обычный.

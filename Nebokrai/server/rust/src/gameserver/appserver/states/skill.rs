@@ -1,58 +1,19 @@
-//! Общий End зарегистрированного навыка GameServer.
+//! Завершение и визуальные callbacks зарегистрированного навыка.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/states/skill.cpp,
+//! attackskill.cpp, stateskill.cpp, summonskill.cpp и appserver/moveshape.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
-//! `appserver/states/skill.cpp`, `attackskill.cpp`, `stateskill.cpp`,
-//! `summonskill.cpp`, `appserver/moveshape.cpp`. CSkill::End(int) (0x004D84C0) не проверяет IsEnded:
-//! GetUser/OnEndSkill предшествуют обнулению базы, удалению visual и ended=true.
-//! Native End-политика берётся из единственного каталога concrete владельцев.
-//! End(0) не вызывает AfterUse и не читает reuse-часы. Ненулевой End у
-//! attack/state/summon вызывает свой AfterUse, затем независимо от GetUser
-//! сохраняет свежие часы. Defense пропускает обе операции.
+//! Поколенческий ключ сохраняется через callbacks: удаление навыка не позволяет
+//! продолжению затронуть новый экземпляр с тем же ID. User/Sufferer разрешаются
+//! из текущей базы; держатель не подставляется вместо исчезнувшего источника.
+//! End не меняет FIFO или выбор current/background. Concrete command-tail и
+//! финализация payload остаются отдельными от общего завершения базы.
 //!
-//! Владельцем служит зарегистрированный экземпляр, а не AI/payload. Его
-//! поколенческий SlotMap-ключ сохраняется через callbacks: износ оружия может
-//! пересчитать TaoZhuang и удалить/заменить навыки. После такого удаления
-//! продолжение не касается нового экземпляра с тем же ID или индексом.
-//! Владельцы остаются опубликованными; источники и цели разрешаются отдельно
-//! по сохранённой базе. Сам End не меняет FIFO, current selection и background.
-//! Concrete payload не удаляется общим End: освобождаются только доказанные
-//! ресурсы/поля, HeartLessArrow может вместо End выпустить удерживаемую стрелу.
-//! Терминальные границы расписания и explicit End отдельно завершают payload
-//! по заранее захваченному ключу. Concrete command-tail не разрешает ID заново;
-//! уже снятая им команда не подавляет финализацию того же экземпляра.
-//!
-//! Rage, Knight и BattleFairy используют общий End вместе с owned visual.
-//! Собственные End(bool) феи вызывают свой visual-пролог отдельно от политики
-//! End(int); AfterUse/base и освобождение ресурса остаются общими.
-//! Пролог феи переводит concrete AI в Idle до visual и AfterUse, не трогая
-//! lifecycle.ended/source. FatalBlow здесь также обнуляет время полёта;
-//! BFBaseAttack сохраняет его. Общая int-политика Po/Yu/transfer не получает
-//! этого собственного bool-пролога и его сброса полей.
-//! StopAllSkills (0x004CDF50) обходит живой реестр держателя независимо от
-//! GetUser/IsEnded. Приручение вызывает его до назначения master. DelSkill
-//! (0x004CF320) завершает только разрешённый current и затем удаляет первое
-//! совпадение через Drop, без End остальных. Общий Add сохраняет implicit Del
-//! при повышении уровня. Remote/script, realm и item-reuse проходят эти границы.
-//! Вложенные equipment/war-soul мутации, callbacks извлечённого региона и
-//! смерть ещё требуют подключения в точном порядке частичных изменений.
-//! ClearSkills не заменяется StopAll: его native current-End и virtual
-//! SetCurrentSkill перед деструкторами пока остаются в доказательствах owner-а.
-//! Производные visual, кроме подключённых видов, не имитируются пустым пакетом.
-//! Нулевой End имеет вход без runtime: он использует тот же derived/base код,
-//! но не требует фиктивных часов или реализации износа для region-entry/recall.
-//! SpiderMist возвращает движение до CSummonSkill::End; самостоятельная
-//! phalanx не принадлежит cast. Его Begin не добавляет навык в m_vStates.
-//! CMoveShape::OnEnterRegion0x004CEF40 после StartAllStates обходит Attack,
-//! Defense, Summon с живой длиной, затем State с начальной длиной и вызывает
-//! virtual OnChangeRegion(+0x2C) каждого текущего экземпляра. Это не запись
-//! region в SkillLifecycle: подтверждённые overrides выполняют только
-//! End(0), End(1), условный End(0) или пустой ret4; выбор находится у SkillOwner.
-//! AfterUse получает только необходимые часы; износ оружия и его вложенные
-//! equipment/property callbacks целиком принадлежат CGame, без fake runtime.
-//! CHBY visual читает три virtual getter-а зарегистрированного навыка в
-//! порядке minimum range(+0x70), maximum range(+0x74), MP cost(+0x78).
-//! Каждый property-getter заново разрешает текущий ID/level; отсутствующие
-//! properties имеют доказанные defaults 1/0 и не удаляют поля wire.
+//! End не проверяет IsEnded. При нулевом аргументе нет AfterUse и reuse-часов;
+//! успешный attack/state/summon сначала вызывает AfterUse, затем читает часы
+//! независимо от наличия User. Defense пропускает обе операции.
+//! Политики владельцев выбираются одним фабричным каталогом. Собственный
+//! bool-End боевой феи сохраняет отдельный пролог, не заменяя общий int-End.
+//! Производные visual подключаются явно, без имитации отсутствующих эффектов.
 
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -269,7 +230,7 @@ impl CGame {
         }
     }
 
-    fn update_registered_skill_visual(&mut self, address: RegisteredSkill, mode: u32) {
+    pub(crate) fn update_registered_skill_visual(&mut self, address: RegisteredSkill, mode: u32) {
         let Some(skill) = self.registered_skill(address) else { return };
         let Some(effect) = skill.visual_effect() else { return };
         match effect.kind() {
@@ -279,6 +240,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::knightcut::publish_knight_cut_visual(self, skill, mode),
             SkillVisualEffectKind::BattleFairy =>
                 crate::gameserver::appserver::skills::battlefairyskill::publish_battle_fairy_visual(self, skill, mode),
+            SkillVisualEffectKind::SpriteBurn =>
+                crate::gameserver::appserver::skills::spriteburn::publish_sprite_burn_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

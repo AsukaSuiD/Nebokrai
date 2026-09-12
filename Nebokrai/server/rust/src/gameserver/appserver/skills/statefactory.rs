@@ -1,24 +1,13 @@
-//! Безопасная Rust-проекция `CStateFactory::Unserialize` GameServer.
+//! Декодирование последовательности состояний из GameSave.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/statefactory.cpp.
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
-//! `appserver/skills/statefactory.cpp`, RVA `0x001D7D00`. Native factory читает
-//! ID, создаёт concrete state и поручает ему потребить запись. Rust хранит
-//! concrete состояния у `CMoveShape`; этот owner сохраняет switch ID→layout и
-//! последовательное продвижение по GameSave wire. Неизвестный ID, переменная
-//! запись без терминатора и усечённый payload останавливают типизацию до
-//! спорной записи: исходный хвост остаётся в `LegacyStateCodec`.
-//! Каждая достигнутая ветвь одновременно задаёт layout и concrete decoder:
-//! один проход CMoveShape переносит записи в общую арену в wire-порядке,
-//! включая повторные ID. Отдельных decoder-проходов по семействам нет.
-//! CTianShenXiaFanState::Unserialize (0x00605C20) потребляет 10 байт вместе с ID,
-//! Serialize (0x006059C0) пишет 12. Factory продвигает исходный курсор только
-//! на 10; дополнительные два байта не используются для поиска следующего ID.
-//! Успешный payload получает отдельную 12-байтовую cache-проекцию без часов.
-//! Нераспознанный tail сохраняется отдельно, включая остаток declared count;
-//! его побайтовое сохранение — техническая страховка, не доказанный native
-//! round-trip повреждённого либо ещё не реконструированного GameSave.
-//!
-//! CRT allocation, RTTI, vtable и exception plumbing не воспроизводятся.
+//! Единая запись каталога связывает ID, layout и decoder. Состояния передаются
+//! CMoveShape в исходном порядке, включая повторные ID. Неизвестная или
+//! усечённая запись останавливает типизацию до спорного участка: исходный хвост
+//! и остаток declared count сохраняются в LegacyStateCodec. Это техническая
+//! страховка, а не обещание native round-trip повреждённого GameSave.
+//! Размер чтения и размер cache-проекции могут различаться; продвижение
+//! исходного курсора определяется только читаемым layout.
 
 use crate::gameserver::appserver::chbystate::CHANGE_BODY_STATE_ID;
 use crate::gameserver::appserver::exstate::{EX_STATE_ID, EX_STATE_NEW_ID};
@@ -237,7 +226,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         SPRITE_BURN_SKILL_ID => StateRecordLayout::typed(
             SPRITE_BURN_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::spriteburnstate::SpriteBurnState::decode(payload, offset, _now()).ok().map(StateData::SpriteBurn)
+                super::spriteburnstate::SpriteBurnState::decode(payload, offset, _now).ok().map(StateData::SpriteBurn)
             },
         ),
         SPIDER_POISON_SKILL_ID => StateRecordLayout::typed(
@@ -365,6 +354,8 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
                 super::battlefairyattributestate::BattleFairyAttributeState::decode(payload, offset, _now()).ok().map(StateData::BattleFairyAttribute)
             },
         ),
+        // Исходный Load читает 10 байт, а Save пишет 12. Два дополнительных
+        // байта cache не должны сдвигать чтение следующего ID во входе.
         TIAN_SHEN_XIA_FAN_STATE_ID => StateRecordLayout {
             bytes: TIAN_SHEN_XIA_FAN_STATE_BYTES,
             unserialize_bytes: 10,

@@ -1546,7 +1546,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_sprite_burn(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,

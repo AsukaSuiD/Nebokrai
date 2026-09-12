@@ -348,9 +348,7 @@ use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
-use crate::gameserver::appserver::skills::spriteburnstate::{
-    SPRITE_BURN_STATE_BYTES, SpriteBurnState,
-};
+use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
 use crate::gameserver::appserver::skills::spiderwebstate::{
     SPIDER_WEB_STATE_BYTES, SpiderWebState,
 };
@@ -2609,16 +2607,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn replace_sprite_burn_state(
-        &mut self,
-        state: SpriteBurnState,
-    ) -> Option<SpriteBurnState> {
-        let previous = self.state_entries.first_key::<SpriteBurnState>()
-            .and_then(|key| self.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
 
 
 
@@ -2628,11 +2616,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn take_sprite_burn_state(&mut self) -> Option<SpriteBurnState> {
-        let key = self.state_entries.first_key::<SpriteBurnState>()?;
-        let state = self.remove_applied_state_record::<SpriteBurnState>(key, SPRITE_BURN_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn replace_spider_web_state(
         &mut self,

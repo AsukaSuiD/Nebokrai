@@ -1927,22 +1927,54 @@ impl CMonster {
         target_object: Option<(i32, ShapeIdentity)>,
         factory: &CSkillFactory,
     ) {
-        if self.selected_base_ai().is_none() { return; }
+        let now_ms = execution.started_at_ms();
+        if self.install_base_attack_execution(execution, target_object, factory) {
+            self.enqueue_base_attack_cast(now_ms);
+        }
+    }
+
+    /// Регистрирует ресурс до проверки Begin, не ставя Attack в очередь.
+    /// При отказе тот же экземпляр должен получить End(0).
+    pub(crate) fn prepare_base_attack_cast(
+        &mut self,
+        target: ShapeIdentity,
+        skill_id: u32,
+        skill_level: u16,
+        now_ms: u32,
+        target_object: Option<(i32, ShapeIdentity)>,
+        factory: &CSkillFactory,
+    ) -> bool {
+        let execution = MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
+            target,
+            skill_id,
+            skill_level,
+        }, now_ms);
+        self.install_base_attack_execution(execution, target_object, factory)
+    }
+
+    fn install_base_attack_execution(
+        &mut self,
+        execution: MonsterBaseAttackCast,
+        target_object: Option<(i32, ShapeIdentity)>,
+        factory: &CSkillFactory,
+    ) -> bool {
+        if self.selected_base_ai().is_none() { return false; }
         let skill_id = execution.dispatch().skill_id;
         let now_ms = execution.started_at_ms();
         let source = self.move_shape.shape();
         let source_object = (source.get_region_id(), source.identity());
-        let Some(lifecycle) = self.move_shape.skill_lifecycle_mut(skill_id, factory) else { return; };
+        let Some(lifecycle) = self.move_shape.skill_lifecycle_mut(skill_id, factory) else { return false; };
         lifecycle.begin_objects(Some(source_object), target_object, || now_ms);
         let _ = lifecycle.finish_begin(true);
         let progress = self.move_shape.monster_skill_execution_mut(skill_id, factory)
             .and_then(|stored| stored.progress.take());
-        if !self.move_shape.install_monster_execution(MonsterSkillExecution {
+        self.move_shape.install_monster_execution(MonsterSkillExecution {
             kernel: execution,
             progress,
-        }, factory) {
-            return;
-        }
+        }, factory)
+    }
+
+    pub(crate) fn enqueue_base_attack_cast(&mut self, now_ms: u32) {
         if let Some(ai) = self.selected_base_ai_mut() {
             ai.add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);
         }
