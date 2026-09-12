@@ -1,190 +1,204 @@
-//! Боевой клич `CRoar` (`0x83`).
+//! Боевой клич CRoar (0x83).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/roar.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/roar.cpp`. Владелец сохраняет проверку меча, перезарядку,
-//! единственный расход MP, обход окна 5×5 сначала по X через одиночный
-//! `CServerRegion::GetShape`, PK-контакт от клетки заклинателя и замену
-//! `RoarState`. `CGame` только связывает владельцев, свойства и доставку.
-//! Успех, отказ после `Begin` и клиентская отмена используют подтверждённый
-//! `CSummonSkill::End(1)`: возврат движения, обновление свойств, очистку и cooldown.
-//! Восстановление использует абсолютный срок `CSkill::IsRestored`; установка
-//! состояния сохраняет elapsed-задержку.
-//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
-//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
-//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
+//! Общий Attack Begin сохраняет раннее время и visual loop1. Check получает
+//! исходного игрока, проверяет reuse, оружие категории 1 и signed MP;
+//! нулевая цена разрешена. Успех запрещает движение, отказ дополнительно
+//! отправляет visual2 перед End(0). AI каждый раз требует живого игрока,
+//! но не повторяет оружейную проверку. MP списывается до OnChangeStates,
+//! затем CAN, visual0 и condition; срок start+delay сравнивается unsigned.
+//!
+//! После visual1 NULL-регион оставляет исполнение ожидающим. Обход берёт
+//! живые X/Y источника и ограничивает окно 5×5 размерами региона включительно.
+//! X — внешний цикл, каждая клетка заново вызывает одиночный GetShape после
+//! предыдущего наложения. Нет общего снимка целей, дедупликации и начисления RP.
+//! Полный CMoveShape проходит self/death/live-admission до фильтра типа.
+//! Для пары игроков SAFE читается по свежим координатам U и S; OnFirstSkill
+//! ещё раз читает клетку U. Затем первый state ID83 заменяется с параметрами
+//! замороженной таблицы AI; Begin, порядок append/Update и DB у roarstate.
+//! End(1) вызывается после обхода даже без целей; отказы AI дают End(0).
+//! Общий End сбрасывает фазу до freshU Move1 и Attack End(actualarg).
+//! Kernel и арена сохраняют единственное каноническое исполнение.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
-use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::roarstate::RoarState;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use super::baseattack::SKILL_USAGE_DELAY_TIME;
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::playercast::execute_registered_player_cast;
+use super::roarstate::replace_roar_state;
+use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::region::RegionSecurity;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::resolve_state_move_shape;
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    RegionShapeResolver,
+};
 
 pub(crate) const ROAR_SKILL_ID: u32 = 0x83;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
-const TARGET_ATTACK_LOSE: u32 = 205;
-const TARGET_ELEMENT_MODIFY_LOSE: u32 = 215;
-const STATE_PERSIST_TIME: u32 = 10_002;
 
-pub(crate) const fn is_roar_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: ROAR_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: ROAR_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: ROAR_SKILL_ID, .. })
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
-
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
 
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
-    player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 1)
+    player.equipment().get_goods(2).is_some_and(|weapon| {
+        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 1
+    })
 }
 
-fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-    match code {
-        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        0x0e => game.send_skill_system_info(player_id, b"GS0287"),
-        _ => {}
-    }
+fn failure(game: &mut CGame, instance: RegisteredSkill, player_id: i32, code: u32) {
+    game.update_registered_skill_visual(instance, code);
+    let text: &[u8] = match code { 13 => b"GS0278", 14 => b"GS0287", _ => return };
+    game.send_skill_system_info(player_id, text);
 }
 
-fn send_visual(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(if apply { 2 } else { 1 });
-    message.add_long(ROAR_SKILL_ID as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if apply {
-        message.add_long(PLAYER_TYPE);
-        message.add_long(player_id);
-        message.add_long(player.shape().get_tile_x().unwrap_or_default());
-        message.add_long(player.shape().get_tile_y().unwrap_or_default());
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn finish_player_roar<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    runtime: &mut Runtime,
+fn mana_failure(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties,
 ) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-    finish_summon_skill(game, player_id, ROAR_SKILL_ID, runtime);
+    game.update_registered_skill_visual(instance, 7);
+    let loss = properties.query_property(USER_MP_LOSE);
+    game.send_skill_system_info_with_unsigned(player_id, b"GS0288", loss);
 }
 
-pub(crate) fn cancel_player_roar<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32, runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, ROAR_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
+    if game.find_player(player_id).is_none() { return false; }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        failure(game, instance, player_id, 13);
         return false;
-    };
-    finish_player_roar(game, player_id, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
+    }
+    let Some(player) = game.find_player(player_id) else { return false; };
+    if !weapon_is_valid(game, player) {
+        failure(game, instance, player_id, 14);
+        return false;
+    }
+    if properties.query_property(USER_MP_LOSE) != 0 {
+        let mana = player.mana();
+        let loss = properties.query_property(USER_MP_LOSE);
+        if (mana.wrapping_sub(loss) as i32) < 0 {
+            mana_failure(game, instance, player_id, &properties);
+            return false;
+        }
+    }
+    let Some(player) = game.find_player_mut(player_id) else { return false; };
+    player.set_skill_moveable(false);
+    true
 }
 
-fn reached_targets(game: &CGame, region_id: i32, source_x: i32, source_y: i32) -> Vec<ShapeIdentity> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+fn apply_cell<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, source: (i32, ShapeIdentity), region_id: i32,
+    cell: (i32, i32), properties: &CSkillBaseProperties, runtime: &mut Runtime,
+) {
     let (area_width, area_height) = game.area_dimensions();
-    let minimum_x = source_x.wrapping_sub(2).max(0);
-    let minimum_y = source_y.wrapping_sub(2).max(0);
-    let maximum_x = source_x.wrapping_add(2).min(region.region.width);
-    let maximum_y = source_y.wrapping_add(2).min(region.region.height);
-    let mut targets = Vec::new();
-    let mut x = minimum_x;
-    while x <= maximum_x {
-        let mut y = minimum_y;
-        while y <= maximum_y {
-            let Ok(shape) = region.get_shape(x, y, area_width, area_height, game) else { return targets };
-            if let Some(shape) = shape { targets.push(shape.identity); }
-            y = y.wrapping_add(1);
-        }
-        x = x.wrapping_add(1);
+    let target = game.find_region(region_id).and_then(|region| {
+        let resolver = RegionShapeResolver { game, owner: region };
+        region.base().get_shape(cell.0, cell.1, area_width, area_height, &resolver).ok().flatten()
+    }).and_then(|view| resolve_state_move_shape(game, region_id, view.identity))
+        .map(|target| (target.shape().get_region_id(), target.shape().identity()));
+    let Some(target) = target else { return; };
+    if target.1 == source.1
+        || game.move_shape_health(target.0, target.1).is_none_or(|health| health == 0)
+        || !game.live_skill_target_attackable(target.0, source.1, target.1)
+    { return; }
+    if source.1.object_type == PLAYER_TYPE && target.1.object_type == PLAYER_TYPE {
+        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
+        let source_y = user.shape().get_tile_y().unwrap_or(i32::MIN);
+        let source_x = user.shape().get_tile_x().unwrap_or(i32::MIN);
+        let Some(region) = game.find_region(region_id) else { return; };
+        if region.get_security(source_x, source_y).ok() == Some(RegionSecurity::SAFE) { return; }
+        let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return; };
+        let target_y = sufferer.shape().get_tile_y().unwrap_or(i32::MIN);
+        let target_x = sufferer.shape().get_tile_x().unwrap_or(i32::MIN);
+        if region.get_security(target_x, target_y).ok() == Some(RegionSecurity::SAFE) { return; }
+        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
+        let source_y = user.shape().get_tile_y().unwrap_or(i32::MIN);
+        let source_x = user.shape().get_tile_x().unwrap_or(i32::MIN);
+        let _ = game.player_on_first_skill_at_position(
+            source.1.id, target.1.id, region_id, source_x, source_y, runtime,
+        );
     }
-    targets
-}
-
-#[allow(clippy::too_many_arguments, reason = "аргументы сохраняют единый снимок свойств навыка")]
-fn apply_targets<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, source_x: i32, source_y: i32, keep_time_ms: u32, attack_loss: i32, element_loss: i32, runtime: &mut Runtime) {
-    let Some(master) = game.find_player(player_id).map(super::flash::master_info) else { return };
-    for target in reached_targets(game, region_id, source_x, source_y) {
-        if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue }
-        if target.object_type == PLAYER_TYPE {
-            let safe = game.find_region(region_id).is_none_or(|owner| {
-                let source_safe = owner.get_security(source_x, source_y).ok() == Some(RegionSecurity::SAFE);
-                let target_safe = game.find_player(target.id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))).is_none_or(|(x, y)| owner.get_security(x, y).ok() == Some(RegionSecurity::SAFE));
-                source_safe || target_safe
-            });
-            if safe { continue }
-            let _ = game.player_on_first_skill_at_position(player_id, target.id, region_id, source_x, source_y, runtime);
-        }
-        let now_ms = runtime.now_milliseconds();
-        let _ = game.install_roar_state(region_id, target, RoarState::new(now_ms, keep_time_ms, attack_loss, element_loss), runtime);
+    if matches!(target.1.object_type, 400 | 600 | 602) {
+        let _ = replace_roar_state(game, source, target, properties, &mut || runtime.now_milliseconds());
     }
 }
 
-pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    if !is_roar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, level, source_x, source_y, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(ROAR_SKILL_ID, game.skill_factory()), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(ROAR_SKILL_ID, level) else { if game.player_skill_execution(player_id, ROAR_SKILL_ID).is_some() { finish_player_roar(game, player_id, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
-    let mp_loss = properties.query_property(USER_MP_LOSE);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let keep_time_ms = properties.query_property(STATE_PERSIST_TIME);
-    let attack_loss = properties.query_property(TARGET_ATTACK_LOSE) as i32;
-    let element_loss = properties.query_property(TARGET_ELEMENT_MODIFY_LOSE) as i32;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-
-    if game.player_skill_execution(player_id, ROAR_SKILL_ID).is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, ROAR_SKILL_ID), reuse_delay_ms, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
-        let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
-        if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
-        if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(ROAR_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, ROAR_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-
-    if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
-        failure(game, player_id, 2, mp_loss);
-        finish_player_roar(game, player_id, runtime);
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let (region, identity) = skill.lifecycle().user();
+    let Some(user) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let source = (user.shape().get_region_id(), user.shape().identity());
+    if source.1.object_type != PLAYER_TYPE || game.find_player(source.1.id).is_none_or(CPlayer::is_dead) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-
-    if game.player_skill_execution(player_id, ROAR_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish_player_roar(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        send_visual(game, player_id, level, false);
-        if let Some(execution) = game.player_skill_execution_mut(player_id, ROAR_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+    if stage == SkillStage::Begin {
+        let Some(player) = game.find_player(source.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let mana = player.mana();
+        let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+        if (remaining as i32) < 0 {
+            mana_failure(game, instance, source.1.id, &properties);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(source.1.id) { player.set_mana(remaining); }
+        game.publish_player_states(source.1.id);
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = game.player_skill_execution(player_id, ROAR_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение боевого клича создано выше");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
-    send_visual(game, player_id, level, true);
-    apply_targets(game, player_id, region_id, source_x, source_y, keep_time_ms, attack_loss, element_loss, runtime);
-    if let Some(execution) = game.player_skill_execution_mut(player_id, ROAR_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
+    game.update_registered_skill_visual(instance, 1);
+    let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if !user.shape().is_assigned_to_server_region() { return terminal(QueuedSkillExecutionState::Pending); }
+    let region_id = user.shape().get_region_id();
+    let Some(region) = game.find_region(region_id) else { return terminal(QueuedSkillExecutionState::Pending); };
+    let source_x = user.shape().get_tile_x().unwrap_or(i32::MIN);
+    let source_y = user.shape().get_tile_y().unwrap_or(i32::MIN);
+    let minimum_x = source_x.wrapping_sub(2).max(0);
+    let minimum_y = source_y.wrapping_sub(2).max(0);
+    let maximum_x = source_x.wrapping_add(2).min(region.base().region.width);
+    let maximum_y = source_y.wrapping_add(2).min(region.base().region.height);
+    for x in minimum_x..=maximum_x {
+        for y in minimum_y..=maximum_y {
+            apply_cell(game, source, region_id, (x, y), &properties, runtime);
+        }
     }
-    finish_player_roar(game, player_id, runtime);
     terminal(QueuedSkillExecutionState::Completed)
+}
+
+pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if dispatch.skill_id() != ROAR_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
+        |game, instance, player_id, runtime| {
+            let accepted = check_cast(game, instance, player_id, runtime);
+            if !accepted { game.update_registered_skill_visual(instance, 2); }
+            accepted
+        },
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
+    )
 }

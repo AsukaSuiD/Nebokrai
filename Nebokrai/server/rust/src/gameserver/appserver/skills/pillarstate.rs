@@ -1,39 +1,28 @@
-//! Каноническое состояние стойки `CPillarState` (`0x74`).
-//! AI из vtable `0x00660834 +0x0c` (`0x005d60b0`) сравнивает абсолютный
-//! wrapping deadline строго с now, без особого исключения для нулевого срока.
+//! Защитная стойка CPillarState и её переключение повторным применением.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/pillarstate.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/pillarstate.cpp`. Состояние хранит коэффициент поздней
-//! защиты и строгий срок, публикует `0xBFE03/0xBFE04`. Проверка запрета рывков
-//! и `PostDefense` читают типизированный экземпляр из общей арены владельца.
-//! Общая с `CBossBlueFuryState` serializer-пара `0x005E7330/0x005D6190`
-//! сохраняет 12 байт: `ID + remaining time + IEEE-754 factor bits`;
-//! spatial login восстанавливает срок и вложенный запрет движения.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
-//! формул игрока не запрещают жизненный цикл региональных держателей.
-//! После visual владелец перечитывается; общий virtual UpdateProperty
-//! вызывается только при фактическом удалении этой записи.
-//! Exact End 0x005FB800: visual → GetSufferer → SetMoveable(true) → RemoveState.
-//! Загрузка добавляет вложенный запрет движения для каждого экземпляра.
-//! Прямой End и AI используют один exact-key хвост без чтения часов.
-
-//! Restart воспроизводит только Begin(NULL, holder) (0x005F4D30):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
-//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
-//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
-//! Запрет движения добавляется после начального visual для каждого экземпляра.
-
-//! Unserialize 0x005D6190 сохраняет один собственный clock в timestamp;
-//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
-
-//! Exact vtable 0x00660834 +0x24 указывает на 0x0047B150:
-//! OnUpdateProperties возвращает 1 без target lookup, visual, часов и формулы.
+//! Первый непустой ID74 снимается через End и destructor свежего остатка
+//! той же позиции; новый экземпляр при этом не создаётся. Без такого слота
+//! Begin(U,U) публикует loop1 visual, запрещает движение и лишь затем
+//! передаёт состояние общей SlotMap-арене. После попытки нового Begin
+//! вызывается UpdateProperty, но ветвь снятия не добавляет второй вызов.
+//! Само состояние не меняет свойства: коэффициент читает поздний PostDefense.
+//!
+//! End публикует снятие, заново разрешает S, снимает один запрет движения и
+//! удаляет именно этот объект из арены S. Он не записывает ended: чужой либо
+//! отсутствующий S оставляет запись до внешнего destructor. AI сравнивает
+//! unsigned wrapping start+keep строго с now, без особой ветви keep=0.
+//! NULL-user restart сохраняет начало срока и источник, создаёт новый visual
+//! и запрещает движение исходному S после публикации, не заменяя запись.
+//!
+//! DB: ID/remaining/IEEE-754 factor (12 байт). Load читает часы до двух полей,
+//! restart их не обновляет. Клиентский срок читает часы один либо два раза;
+//! additional равен нулю. SetRegion меняет только регион сохранённого U.
 
 use crate::gameserver::appserver::states::state::{
-    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
+    StatePropertyTarget, begin_base_applied_state, begin_applied_state_visual,
+    end_and_destroy_state_at, remove_applied_state_from, resolve_applied_state_sufferer,
+    update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
@@ -43,6 +32,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 pub(crate) const PILLAR_STATE_ID: u32 = 0x74;
 pub(crate) const PILLAR_STATE_BYTES: usize = 12;
@@ -51,8 +41,8 @@ pub(crate) const PILLAR_STATE_BYTES: usize = 12;
 pub(crate) struct PillarState { started_at_ms: u32, keep_time_ms: u32, damage_factor_bits: u32 }
 
 impl PillarState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, damage_factor: f32) -> Self {
-        Self { started_at_ms, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
+    pub(crate) const fn new(keep_time_ms: u32, damage_factor: f32) -> Self {
+        Self { started_at_ms: 0, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
     }
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
@@ -78,30 +68,42 @@ impl PillarState {
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
 }
 
-pub(crate) fn send_pillar_state_visual(
-    game: &mut CGame, region_id: i32, identity: ShapeIdentity,
-    tile_x: i32, tile_y: i32, state: PillarState, begin: bool, now_ms: u32,
-) {
-    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(identity.object_type); message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
-}
-
-pub(crate) fn replace_player_pillar_state(
-    game: &mut CGame, player_id: i32, state: PillarState, now_ms: u32,
+pub(crate) fn toggle_pillar_state(
+    game: &mut CGame, source: (i32, ShapeIdentity),
+    create: impl FnOnce(&CGame) -> Option<PillarState>, now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let installed = game.find_player_mut(player_id).and_then(|player| {
-        let context = (player.server_region_id()?, player.shape().identity(),
-            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?);
-        let old = player.replace_pillar_state(state);
-        if old.is_some() { player.set_skill_moveable(true); }
-        player.set_skill_moveable(false); Some((old, context))
-    });
-    let Some((old, (region_id, identity, tile_x, tile_y))) = installed else { return false };
-    if let Some(old) = old { send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, old, false, now_ms); }
-    send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms); true
+    let previous = resolve_state_move_shape(game, source.0, source.1)
+        .and_then(|shape| shape.find_state_position(|state| state.state_id() == PILLAR_STATE_ID));
+    if let Some((position, _)) = previous {
+        return end_and_destroy_state_at(game, source.0, source.1, position).is_some();
+    }
+    let Some(mut state) = create(game) else { return false; };
+    let begun = (|| {
+        resolve_state_move_shape(game, source.0, source.1)?;
+        state.started_at_ms = now();
+        let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
+        let participant = (shape.get_region_id(), ShapeIdentity {
+            ex_id: CGuid::GUID_INVALID, ..shape.identity()
+        });
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(shape.identity().object_type);
+        message.add_long(shape.identity().id);
+        message.add_ulong(PILLAR_STATE_ID);
+        message.add_long(state.client_time(&mut *now));
+        message.add_ulong(0);
+        let _ = game.send_move_shape_around(participant.0, participant.1, &message);
+        // Объектный Begin запрещает движение исходному param_2 после visual.
+        let shape = resolve_state_move_shape_mut(game, source.0, source.1)?;
+        shape.set_moveable(false);
+        let record = state.encoded_for_install();
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some(participant));
+        shape.set_applied_state_sufferer(key, Some(participant));
+        Some(())
+    })().is_some();
+    let _ = game.update_move_shape_properties(source.0, source.1);
+    begun
 }
 
 pub(crate) fn restart_pillar_state(
@@ -112,21 +114,16 @@ pub(crate) fn restart_pillar_state(
     _changing_region: bool,
     now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<PillarState>(key)).copied()
-        else { return false };
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PillarState>(key)).is_none() { return false; }
     if !begin_base_applied_state(game, region_id, holder, key) {
         return false;
     }
     if begin_applied_state_visual(game, region_id, holder, key, 1) {
-        let mut message = CMessage::new(0x000b_fe03);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        message.add_long(state.client_time(now));
-        message.add_long(0);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
-        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+        update_property_state_visual::<PillarState>(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+            |state, now| state.client_time(now) as u32,
+        );
     }
     if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
         shape.set_moveable(false);
@@ -155,22 +152,12 @@ pub(crate) fn end_pillar_state(
     holder: ShapeIdentity,
     key: StateKey,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<PillarState>(key))
-        .copied()
-        else { return false };
-    let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(state.skill_id() as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder).and_then(|shape| {
-        shape.applied_state::<PillarState>(key)?;
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PillarState>(key)).is_none() { return false; }
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key) else { return false; };
+    if let Some(shape) = resolve_state_move_shape_mut(game, target.0, target.1) {
         shape.set_moveable(true);
-        shape.remove_applied_state_record::<PillarState>(key, PILLAR_STATE_BYTES)
-    }).is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
     }
-    removed
+    remove_applied_state_from(game, region_id, holder, key, target, PILLAR_STATE_BYTES)
 }

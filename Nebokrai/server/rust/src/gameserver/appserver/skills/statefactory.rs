@@ -266,7 +266,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         ROAR_STATE_ID => StateRecordLayout::typed(
             ROAR_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::roarstate::RoarState::decode(payload, offset, _now()).ok().map(StateData::Roar)
+                super::roarstate::RoarState::decode(payload, offset, _now).ok().map(StateData::Roar)
             },
         ),
         PILLAR_STATE_ID => StateRecordLayout::typed(

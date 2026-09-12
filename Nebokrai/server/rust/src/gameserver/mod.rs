@@ -199,7 +199,7 @@ pub(crate) mod appserver {
         pub(crate) mod roar;
         pub(crate) mod roarstate;
         pub(crate) mod energyholding;
-        pub(crate) mod energyholdingvisual;
+        pub(crate) mod selfcastvisual;
         pub(crate) mod energyholdingstate;
         pub(crate) mod inversechopped;
         pub(crate) mod flash;

@@ -5688,7 +5688,6 @@ impl CPlayer {
     }
 
 
-    pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
 
 
     pub(crate) fn take_boss_blue_fury_state(
@@ -5750,18 +5749,6 @@ impl CPlayer {
         self.move_shape.pillar_state()
     }
 
-    pub(crate) fn replace_pillar_state(
-        &mut self, state: super::skills::pillarstate::PillarState,
-    ) -> Option<super::skills::pillarstate::PillarState> {
-        self.move_shape.replace_pillar_state(state)
-    }
-
-
-
-
-    pub(crate) fn take_pillar_state(&mut self) -> Option<super::skills::pillarstate::PillarState> {
-        self.move_shape.take_pillar_state()
-    }
 
 
     pub(crate) fn take_knock_out_state(

@@ -164,7 +164,7 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if dispatch.skill_id() != ENERGY_HOLDING_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
     execute_registered_player_cast(
-        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::EnergyHolding,
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
         check_cast, |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
     )
 }

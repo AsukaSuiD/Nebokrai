@@ -300,7 +300,7 @@ use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::{
-    ROAR_STATE_BYTES, RoarState,
+    RoarState,
 };
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState,
@@ -319,7 +319,7 @@ use crate::gameserver::appserver::skills::blindstate::BlindState;
 use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
 use crate::gameserver::appserver::skills::pillarstate::{
-    PILLAR_STATE_BYTES, PillarState,
+    PillarState,
 };
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState;
@@ -2530,16 +2530,6 @@ impl CMoveShape {
 
     pub(crate) fn god_bless_state(&self) -> Option<GodBlessState> { self.state_entries.first::<GodBlessState>().copied() }
 
-    pub(crate) fn roar_state(&self) -> Option<RoarState> { self.state_entries.first::<RoarState>().copied() }
-    pub(crate) fn replace_roar_state(&mut self, state: RoarState) -> Option<RoarState> {
-        self.remove_serialized_state_record(state.skill_id(), ROAR_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        {
-            let previous = self.state_entries.take_first::<RoarState>();
-            self.state_entries.append(state);
-            previous
-        }
-    }
 
 
     pub(crate) fn energy_holding_states(&self) -> impl Iterator<Item = &EnergyHoldingState> {
@@ -2613,23 +2603,6 @@ impl CMoveShape {
 
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.state_entries.first::<PillarState>().copied() }
 
-    pub(crate) fn replace_pillar_state(&mut self, state: PillarState) -> Option<PillarState> {
-        self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        {
-            let previous = self.state_entries.take_first::<PillarState>();
-            self.state_entries.append(state);
-            previous
-        }
-    }
-
-
-
-    pub(crate) fn take_pillar_state(&mut self) -> Option<PillarState> {
-        let state = self.state_entries.take_first::<PillarState>()?;
-        self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
-        Some(state)
-    }
 
 
     pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {

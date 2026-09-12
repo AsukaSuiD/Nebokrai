@@ -1,10 +1,12 @@
-//! Визуальный ресурс CEnergyHoldingEffect.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/energyholding.cpp.
+//! Общий визуальный ресурс EnergyHolding, Pillar и Roar.
+//! Источник: gameserver.exe/GameServer.pdb, одноимённые owners appserver/skills.
 //!
-//! Ресурс разрешает только свежего U, даже когда AI использует запасную S.
-//! Подготовка пишет направление, выпуск — повторные type/id U и его X/Y.
-//! Только ошибки 2/7/13 отправляют BYTE0/BYTEcode игроку; режим 14 и прочие
-//! не создают пакет. Общий владелец выполняет базовый visual-tail всегда.
+//! Подготовка передаёт направление свежего U, выпуск повторяет его type/id
+//! и X/Y. S и точка Begin не используются, даже когда AI допускает запасную S.
+//! Ошибки 2/7/13 общие; Roar добавляет 14, Pillar — 8. Только у Pillar ошибка
+//! 8 имеет LONG0/BYTE8 вместо BYTE0/BYTEcode. Другие режимы не создают пакет.
+//! Around требует действительной связи U с регионом; общий dispatcher
+//! сохраняет базовый visual-tail независимо от производной публикации.
 
 use super::skillfactory::SkillOwner;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
@@ -13,17 +15,20 @@ use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
-pub(crate) fn publish_energy_holding_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if skill.owner() != SkillOwner::CEnergyHolding
-        || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::EnergyHolding || effect.is_ended())
+pub(crate) fn publish_self_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    if !matches!(skill.owner(), SkillOwner::CEnergyHolding | SkillOwner::CPillar | SkillOwner::CRoar)
+        || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::SelfCast || effect.is_ended())
     { return; }
     let (region, identity) = skill.lifecycle().user();
     let Some(user) = resolve_state_move_shape(game, region, identity) else { return; };
     let source = user.shape();
     let mut message = CMessage::new(0x000b_fe01);
-    if matches!(mode, 2 | 7 | 13) {
+    let long_failure = skill.owner() == SkillOwner::CPillar && mode == 8;
+    if matches!(mode, 2 | 7 | 13) || long_failure
+        || (skill.owner() == SkillOwner::CRoar && mode == 14)
+    {
         if source.identity().object_type == 400 {
-            message.add_byte(0);
+            if long_failure { message.add_long(0); } else { message.add_byte(0); }
             message.add_byte(mode as u8);
             let _ = message.send_to_player(game.net_server(), source.identity().id);
         }

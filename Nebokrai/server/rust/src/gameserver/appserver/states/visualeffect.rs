@@ -26,7 +26,7 @@ pub(crate) enum SkillVisualEffectKind {
     SpriteBurn,
     LeafCut,
     FrontCellSword,
-    EnergyHolding,
+    SelfCast,
     Kerosene,
     Ignition,
     PoisonFog,

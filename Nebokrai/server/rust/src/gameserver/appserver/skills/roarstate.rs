@@ -1,53 +1,34 @@
-//! Каноническое состояние подавления `CRoarState` (`0x83`).
+//! Подавление атаки CRoarState и его первичная установка.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/roarstate.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/roarstate.cpp`. Состояние до строгого истечения срока
-//! уменьшает обе границы физической атаки и стихийный модификатор,
-//! ограничивая каждое уменьшение текущим значением. Визуальные сообщения
-//! сохраняют `0xBFE03/0xBFE04`; порядок относительно других достигнутых
-//! состояниями свойств принадлежит `CanonicalStateStorage`. Vtable exact EXE
-//! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0` и
-//! собственную serializer-пару `0x005F65F0/0x005ECC60`. Persisted-запись
-//! `ID + remaining time + attack loss + element attack loss` занимает 16 байт;
-//! spatial login восстанавливает срок до общего пересчёта свойств.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! Exact vtable 0x0065FE04: End 0x005FD420 выполняет visual →
-//! GetSufferer → RemoveState. Прямой End и AI используют один exact-key хвост,
-//! при этом только AI проверяет срок.
+//! Замена завершает первый ID83 и уничтожает остаток той же позиции до
+//! чтения параметров нового состояния. Begin(U,S) читает часы и публикует
+//! visual до append; UpdateProperty вызывается после публикации в арене.
+//! NULL-user restart сохраняет timestamp/user и обновляет Sufferer.
+//! End выполняет visual → свежий Sufferer → RemoveState без state.ended;
+//! отсутствие S не удаляет запись из другого держателя.
+//!
+//! AI проверяет строгий absolute wrapping deadline, затем смерть S.
+//! Пересчёт сначала обновляет visual, затем снижает MIN/MAX и element_modify
+//! игрока либо модификаторы монстра. Физические losses сравниваются unsigned,
+//! элементный loss игрока — signed. DB хранит ID/remaining/два loss (16 байт);
+//! Unserialize читает часы после трёх полей. SlotMap владеет экземплярами,
+//! общий visual сохраняет loop1, сообщения BFE03/BFE04 и порядок callbacks.
 
-//! Restart воспроизводит только Begin(NULL, holder) (0x005ECA00):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
-//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
-//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
-
-//! Unserialize 0x005ECC60 сохраняет один собственный clock в timestamp;
-//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
-//! Нативное чтение часов происходит после трёх полей записи.
-
-//! OnUpdateProperties 0x005ECAA0: GetSufferer → существующий visual Update(0)
-//! → type400/600/602 и RTTI. Физические player losses сравниваются как полные
-//! unsigned DWORD без WORD-маски; элементная ветвь вычитает signed minimum
-//! из element_modify (+0x3F0), НЕ add_element_attack (+0x3E8).
-//! Монстр сравнивает все losses unsigned и прибавляет отрицательные deltas
-//! к min/max/element modifiers. Исходный GetSufferer разрешает достигнутый
-//! региональный monster type600; проверка 602 не расширяет общий resolver.
-
-use crate::gameserver::appserver::states::state::{
-    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
-};
-use crate::gameserver::appserver::states::state::{
-    resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
-};
-use crate::gameserver::appserver::moveshape::StateKey;
-
+use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time};
+use crate::gameserver::appserver::states::state::{
+    begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at,
+    remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
+    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_end_visual,
+    update_property_state_visual, StatePropertyTarget,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 pub(crate) const ROAR_STATE_ID: u32 = 0x83;
 pub(crate) const ROAR_STATE_BYTES: usize = 16;
@@ -61,19 +42,27 @@ pub(crate) struct RoarState {
 }
 
 impl RoarState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, attack_loss: i32, element_attack_loss: i32) -> Self {
-        Self { started_at_ms, keep_time_ms, attack_loss, element_attack_loss }
+    pub(crate) const fn new(keep_time_ms: u32, attack_loss: i32, element_attack_loss: i32) -> Self {
+        Self { started_at_ms: 0, keep_time_ms, attack_loss, element_attack_loss }
     }
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+
+    pub(crate) fn decode(
+        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+    ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != ROAR_STATE_ID {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?, reader.read_i32()?))
+        let keep_time_ms = reader.read_u32()?;
+        let attack_loss = reader.read_i32()?;
+        let element_attack_loss = reader.read_i32()?;
+        Ok(Self { started_at_ms: now(), keep_time_ms, attack_loss, element_attack_loss })
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; ROAR_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
-    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; ROAR_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    pub(crate) fn encoded(self, now: impl FnMut() -> u32) -> [u8; ROAR_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now) as u32)
+    }
     fn encoded_with_remaining(self, remaining: u32) -> [u8; ROAR_STATE_BYTES] {
         let mut bytes = [0; ROAR_STATE_BYTES];
         bytes[..4].copy_from_slice(&ROAR_STATE_ID.to_le_bytes());
@@ -82,12 +71,13 @@ impl RoarState {
         bytes[12..].copy_from_slice(&self.element_attack_loss.to_le_bytes());
         bytes
     }
+
     pub(crate) const fn skill_id(self) -> u32 { ROAR_STATE_ID }
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
+    pub(crate) fn client_time(self, now: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now) as i32
     }
     pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
         let attack_loss = self.attack_loss as u32;
@@ -99,28 +89,48 @@ impl RoarState {
         properties.element_modify = properties.element_modify.wrapping_sub(element_loss);
         properties
     }
-
 }
 
-pub(crate) fn send_roar_state_visual(
-    game: &mut CGame,
-    region_id: i32,
-    identity: ShapeIdentity,
-    x: i32,
-    y: i32,
-    state: RoarState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(ROAR_STATE_ID as i32);
-    if begin {
-        message.add_long(state.client_time(now_milliseconds));
-        message.add_long(0);
+fn participant(game: &CGame, target: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
+    let shape = resolve_state_move_shape(game, target.0, target.1)?.shape();
+    Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
+}
+
+pub(super) fn replace_roar_state(
+    game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
+    properties: &CSkillBaseProperties, now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return false; };
+    let previous = shape.find_state_position(|state| state.state_id() == ROAR_STATE_ID);
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
     }
-    let _ = game.send_shape_position_around(region_id, x, y, &message);
+    let element_loss = properties.query_property(215) as i32;
+    let attack_loss = properties.query_property(205) as i32;
+    let keep_time = properties.query_property(10_002);
+    let mut state = RoarState::new(keep_time, attack_loss, element_loss);
+    state.started_at_ms = now();
+    let Some(user) = participant(game, source) else { return false; };
+    let Some(sufferer) = participant(game, target) else { return false; };
+    if resolve_state_move_shape(game, sufferer.0, sufferer.1).is_some() {
+        let mut message = CMessage::new(0x000b_fe03);
+        message.add_long(sufferer.1.object_type);
+        message.add_long(sufferer.1.id);
+        message.add_ulong(ROAR_STATE_ID);
+        message.add_long(state.client_time(&mut *now));
+        message.add_ulong(0);
+        let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
+    }
+    let record = state.encoded_for_install();
+    let Some(shape) = resolve_state_move_shape_mut(game, target.0, target.1) else { return false; };
+    let key = shape.append_applied_state_record(state, &record);
+    shape.begin_applied_state_visual(key, 1);
+    shape.update_applied_state_visual_base(key);
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, Some(user));
+    shape.set_applied_state_sufferer(key, Some(sufferer));
+    let _ = game.update_move_shape_properties(target.0, target.1);
+    true
 }
 
 pub(crate) fn update_roar_state_properties(
@@ -171,67 +181,46 @@ pub(crate) fn update_roar_state_properties(
 }
 
 pub(crate) fn restart_roar_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
-    _changing_region: bool,
-    now: &mut dyn FnMut() -> u32,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _changing_region: bool, now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<RoarState>(key)).copied()
-        else { return false };
-    if !begin_base_applied_state(game, region_id, holder, key) {
-        return false;
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<RoarState>(key)).is_none()
+    { return false; }
+    let Some(sufferer) = participant(game, (region_id, holder)) else { return false; };
+    if !begin_base_applied_state(game, region_id, holder, key) { return false; }
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_applied_state_sufferer(key, Some(sufferer));
     }
     if begin_applied_state_visual(game, region_id, holder, key, 1) {
-        let mut message = CMessage::new(0x000b_fe03);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        message.add_long(state.client_time(now));
-        message.add_long(0);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
-        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+        update_property_state_visual::<RoarState>(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+            |state, now| state.client_time(now) as u32,
+        );
     }
     true
 }
 
 pub(crate) fn update_roar_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
-    now_ms: u32,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey, now_ms: u32,
 ) -> bool {
-    if !resolve_state_move_shape(game, region_id, holder)
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<RoarState>(key))
-        .is_some_and(|state| state.expired(now_ms)) {
-        return false;
-    }
-    end_roar_state(game, region_id, holder, key)
+    else { return false; };
+    if state.expired(now_ms) { return end_roar_state(game, region_id, holder, key); }
+    let dead = resolve_applied_state_sufferer(game, region_id, holder, key)
+        .and_then(|target| game.move_shape_health(target.0, target.1))
+        .is_some_and(|health| health == 0);
+    dead && end_roar_state(game, region_id, holder, key)
 }
 
 pub(crate) fn end_roar_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<RoarState>(key)).copied()
-        else { return false };
-    let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(state.skill_id() as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| {
-            shape.remove_applied_state_record::<RoarState>(key, ROAR_STATE_BYTES)
-        }).is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<RoarState>(key)).is_none()
+    { return false; }
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key) else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, target, ROAR_STATE_BYTES)
 }

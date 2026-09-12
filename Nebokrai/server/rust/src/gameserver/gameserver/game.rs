@@ -729,7 +729,6 @@ mod thunderslash;
 mod rush;
 mod boalock;
 mod bossbluequake;
-mod roar;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -1180,12 +1179,8 @@ use crate::gameserver::appserver::skills::thunderslash::{
 use crate::gameserver::appserver::skills::thunderslashphalanx::{
     calculate_owned_thunder_slash_attack, thunder_slash_target, ThunderSlashPhalanxTick,
 };
-use crate::gameserver::appserver::skills::pillar::{
-    cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::roar::{
-    cancel_player_roar, execute_player_roar, is_roar_dispatch, ROAR_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::pillar::PILLAR_SKILL_ID;
+use crate::gameserver::appserver::skills::roar::ROAR_SKILL_ID;
 use crate::gameserver::appserver::skills::energyholding::ENERGY_HOLDING_SKILL_ID;
 use crate::gameserver::appserver::skills::firewall::{
     cancel_player_fire_wall, execute_player_fire_wall, is_fire_wall_target, FIRE_WALL_SKILL_ID,
@@ -39424,10 +39419,6 @@ impl CGame {
             ITEM_SKILL_2_ID => {
                 cancel_player_item_skill_2(self, player_id, &mut player_ai, runtime)
             }
-            PILLAR_SKILL_ID => {
-                cancel_player_pillar(self, player_id, &mut player_ai, runtime)
-            }
-            ROAR_SKILL_ID => cancel_player_roar(self, player_id, &mut player_ai, runtime),
             INFERNOL_SKILL_ID => {
                 cancel_player_infernol(self, player_id, &mut player_ai, runtime)
             }
@@ -39940,8 +39931,6 @@ impl CGame {
             _ if is_chain_lightning_dispatch(dispatch) => execute_player_chain_lightning,
             _ if is_thunder_blow_dispatch(dispatch) => execute_player_thunder_blow,
             _ if is_thunder_slash_dispatch(dispatch) => execute_player_thunder_slash,
-            _ if is_pillar_dispatch(dispatch) => execute_player_pillar,
-            _ if is_roar_dispatch(dispatch) => execute_player_roar,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,

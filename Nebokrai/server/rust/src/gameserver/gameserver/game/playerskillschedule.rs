@@ -238,8 +238,6 @@ impl CGame {
             | THUNDER_SLASH_SKILL_ID
             | CHAIN_LIGHTNING_SKILL_ID
             | THUNDER_BLOW_SKILL_ID
-            | PILLAR_SKILL_ID
-            | ROAR_SKILL_ID
             | INFERNOL_SKILL_ID
             | LITTLE_STAR_SKILL_ID
             | ENERGY_BOLT_SKILL_ID

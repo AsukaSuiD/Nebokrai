@@ -846,7 +846,8 @@ state_callbacks! {
         },
         skills::roarstate::end_roar_state,
         skills::roarstate::restart_roar_state,
-        skills::roarstate::update_roar_state_properties
+        skills::roarstate::update_roar_state_properties,
+        set_state_sufferer_region
     ),
     StateData::Weak(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
         |game, region, target, key, runtime| {
