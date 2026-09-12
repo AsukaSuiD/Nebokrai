@@ -122,8 +122,9 @@ pub(crate) mod appserver {
         pub(crate) mod agilitystate2;
         pub(crate) mod baseattack;
         pub(crate) mod archery;
-        pub(crate) mod archerycast;
-        pub(crate) mod monsterbasemagic;
+        pub(crate) mod baseprojectilecast;
+        pub(crate) mod baseprojectilecheck;
+        pub(crate) mod baseprojectilephalanx;
         pub(crate) mod archeryphalanx;
         pub(crate) mod basemagic;
         pub(crate) mod basemagicphalanx;

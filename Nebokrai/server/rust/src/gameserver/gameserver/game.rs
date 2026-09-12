@@ -726,7 +726,7 @@ mod summonshape;
 mod meteorarrow;
 mod rainarrow;
 mod heartlessarrow;
-mod archery;
+mod baseprojectile;
 mod thunderblow;
 mod thunderslash;
 mod rush;
@@ -1058,13 +1058,6 @@ use crate::gameserver::appserver::skills::wangsheng::{
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::skills::daubpoison::DAUB_POISON_SKILL_ID;
-use crate::gameserver::appserver::skills::basemagic::{
-    cancel_player_base_magic, execute_player_base_magic, is_base_magic_object_target_type,
-    BASE_MAGIC_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::basemagicphalanx::{
-    calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
-};
 use crate::gameserver::appserver::skills::firebolt::{
     cancel_player_fire_bolt, execute_player_fire_bolt, is_fire_bolt_target, FIRE_BOLT_SKILL_ID,
 };
@@ -38848,29 +38841,6 @@ impl CGame {
         self.next_summon_shape_id.take()
     }
 
-    pub(crate) fn add_base_magic_phalanx<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        region_id: i32,
-        phalanx: CBaseMagicPhalanx,
-        tile_x: i32,
-        tile_y: i32,
-        started_at_ms: u32,
-        runtime: &mut Runtime,
-    ) -> Option<Result<i32, RegionMembershipBlock>> {
-        let mut owner = self.take_region_owner(region_id)?;
-        let result = owner.base_mut().add_base_magic_phalanx(
-            phalanx,
-            tile_x,
-            tile_y,
-            self.area_width,
-            self.area_height,
-            started_at_ms,
-            runtime,
-        );
-        self.restore_region_owner(owner);
-        Some(result)
-    }
-
     pub(crate) fn spawn_heartless_arrow_phalanx<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -39158,9 +39128,6 @@ impl CGame {
             match skill_id {
             BASE_ATTACK_SKILL_ID => {
                 cancel_player_base_attack(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
-            }
-            BASE_MAGIC_SKILL_ID => {
-                cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
             }
             FIRE_BOLT_SKILL_ID => {
                 cancel_player_fire_bolt(self, player_id, &mut player_ai, runtime)
@@ -39596,13 +39563,6 @@ impl CGame {
                 }
             } => baseattackruntime::execute_player_base_attack,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
-            _ if match dispatch {
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == BASE_MAGIC_SKILL_ID
-                        && is_base_magic_object_target_type(target.object_type)
-                }
-                _ => false,
-            } => execute_player_base_magic,
             _ if is_fire_bolt_target(dispatch) => execute_player_fire_bolt,
             _ if is_fire_ball_dispatch(dispatch) => execute_player_fire_ball,
             _ if is_item_skill_2_dispatch(dispatch) => execute_player_item_skill_2,
@@ -43248,9 +43208,7 @@ impl CGame {
             SummonedSkillShape::LightingArrow(_) => None,
             SummonedSkillShape::MeteorArrow(_) => None,
             SummonedSkillShape::RainArrow(_) => None,
-            SummonedSkillShape::BaseMagic(phalanx) => {
-                calculate_owned_base_magic_attack(self, phalanx, target_level)
-            }
+            SummonedSkillShape::BaseMagic(_) => None,
             SummonedSkillShape::BattleFairyBaseMagic(phalanx) => {
                 calculate_owned_battle_fairy_base_magic_attack(self, phalanx)
             }
@@ -43471,9 +43429,9 @@ impl CGame {
     ) -> bool {
         if matches!(self.find_region(region_id)
             .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
-            Some(SummonedSkillShape::Archery(_)))
+            Some(SummonedSkillShape::Archery(_) | SummonedSkillShape::BaseMagic(_)))
         {
-            return self.run_archery_phalanx(region_id, phalanx_id, runtime);
+            return self.run_base_projectile(region_id, phalanx_id, runtime);
         }
         if matches!(self.find_region(region_id)
             .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
@@ -43520,16 +43478,7 @@ impl CGame {
                 SummonedSkillShape::LightingArrow(_) => Some(None),
                 SummonedSkillShape::MeteorArrow(_) => Some(None),
                 SummonedSkillShape::RainArrow(_) => Some(None),
-                SummonedSkillShape::BaseMagic(phalanx) => {
-                    match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
-                        BaseMagicPhalanxTick::Pending => Some(None),
-                        BaseMagicPhalanxTick::Attack {
-                            target,
-                            sampled_at_ms,
-                        } => Some(Some((target, sampled_at_ms))),
-                        BaseMagicPhalanxTick::Expired => None,
-                    }
-                }
+                SummonedSkillShape::BaseMagic(_) => Some(None),
                 SummonedSkillShape::BattleFairyBaseMagic(phalanx) => {
                     match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
                         BattleFairyPhalanxTick::Pending => Some(None),

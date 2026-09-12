@@ -15,15 +15,12 @@
 //! Серверный decoder ниже не имеет достигнутого caller-а.
 
 use super::archery::ARCHERY_SKILL_ID;
+use super::baseprojectilephalanx::BaseProjectileFlight;
 use super::weaponattack::{PlayerWeaponRoll, fill_ordinary_weapon_damage};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
-use crate::gameserver::appserver::summonshape::{
-    SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
-};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArcheryAttack {
@@ -33,11 +30,7 @@ pub(crate) struct ArcheryAttack {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CArcheryPhalanx {
-    shape: CShape,
-    started_at_ms: u32,
-    lifetime_ms: u32,
-    attack_delay_ms: u32,
-    target: ShapeIdentity,
+    flight: BaseProjectileFlight,
     attack: ArcheryAttack,
 }
 
@@ -46,42 +39,24 @@ impl CArcheryPhalanx {
         id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
         skill_level: i32, attack_delay_ms: u32, target: ShapeIdentity,
     ) -> Self {
-        let mut shape = CShape::with_constructor_defaults();
-        shape.set_identity(ShapeIdentity {
-            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
-        });
         Self {
-            shape, started_at_ms, lifetime_ms, attack_delay_ms,
-            target: ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..target },
+            flight: BaseProjectileFlight::new(id, started_at_ms, lifetime_ms, attack_delay_ms, target),
             attack: ArcheryAttack { master, skill_level },
         }
     }
 
-    pub(crate) const fn shape(&self) -> &CShape { &self.shape }
-    pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub(crate) const fn shape(&self) -> &CShape { self.flight.shape() }
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape { self.flight.shape_mut() }
     pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
-    pub(crate) const fn target(&self) -> ShapeIdentity { self.target }
+    pub(crate) const fn flight(&self) -> &BaseProjectileFlight { &self.flight }
+    pub(crate) const fn flight_mut(&mut self) -> &mut BaseProjectileFlight { &mut self.flight }
     pub(crate) const fn attack_snapshot(&self) -> ArcheryAttack { self.attack }
-
-    pub(crate) fn expired_at(&self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms
-    }
-
-    pub(crate) fn attack_due_at(&self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.attack_delay_ms) < now_ms
-    }
-
-    pub(crate) fn end(&mut self) {
-        self.shape.set_change_state(SHAPE_CHANGE_DELETE);
-    }
 
     pub(crate) fn encode_client_snapshot(
         &self, now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        encode_related_phalanx_snapshot(
-            &self.shape, ARCHERY_SKILL_ID as i32, self.attack.skill_level,
-            self.attack.master.master_type, self.attack.master.master_id,
-            self.started_at_ms, self.lifetime_ms, now_milliseconds,
+        self.flight.encode_client_snapshot(
+            ARCHERY_SKILL_ID, self.attack.skill_level, self.attack.master, now_milliseconds,
         )
     }
 }

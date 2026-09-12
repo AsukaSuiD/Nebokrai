@@ -1,12 +1,14 @@
-//! Проверки и визуальные сообщения базовой стрельбы CArchery.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/archery.cpp
-//! и унаследованные GetTargetPath из appserver/states/skill.cpp.
+//! Проверки и визуальные сообщения базовой стрельбы и магии.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/archery.cpp,
+//! basemagic.cpp и унаследованные GetTargetPath из appserver/states/skill.cpp.
 //! Check сохраняет исходного U и необязательного S, но строит свежий базовый
 //! путь. MAX0 не ограничивает дальность; ненулевой MAX читается повторно
-//! и допускает ещё одну клетку. Нет проверки NULL/self S, MP или Move0.
-//! Другой CMoveShape проходит без экипировки; игроку нужен лук либо арбалет.
-//! Reuse-отказ публикует только visual13. Текст BLOCK2 зависит от наличия
-//! visual-объекта, а ошибки оружия вызывают режим 14 без собственного пакета.
+//! и у Archery допускает ещё одну клетку. Magic отклоняет указательную
+//! самоцель до свойств, но допускает NULL S; Archery не проверяет самоцель.
+//! Только стрельба проверяет BLOCK2 и лук/арбалет игрока. Текст BLOCK2 зависит
+//! от наличия visual; оружейный режим 14 не имеет собственного пакета.
+//! У Magic отдельные сообщения самоцели, reuse и дальности. MP и Move0
+//! не входят в Check обоих владельцев.
 //!
 //! Visual1 сохраняет базовую точку и нулевые type/id при отсутствующем S;
 //! его время берётся из единственного опубликованного progress игрока/монстра.
@@ -16,8 +18,8 @@
 //! геометрии или снимка участников из предыдущего AI.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
+use super::baseprojectilecast::BaseProjectileKind;
 use super::kernel::skill_is_restored;
-use super::skillfactory::SkillOwner;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -30,28 +32,42 @@ use crate::nets::netserver::message::CMessage;
 const PLAYER_TYPE: i32 = 400;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 
-pub(super) fn check_archery_cast<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
+pub(super) fn check_base_projectile_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, kind: BaseProjectileKind,
+    original_user: Option<(i32, ShapeIdentity)>,
     original_target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
 ) -> bool {
     let Some(source) = original_user.and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
     else { return false; };
-    let source = (source.shape().get_region_id(), source.shape().identity());
-    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+    let player = (source.shape().identity().object_type == PLAYER_TYPE).then_some(source.shape().identity().id);
+    if kind == BaseProjectileKind::Magic && original_target
+        .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
+        .is_some_and(|target| std::ptr::eq(source, target))
+    {
+        game.update_registered_skill_visual(instance, 10);
+        if let Some(player) = player { game.send_skill_system_info(player, b"GS0286"); }
+        return false;
+    }
     let Some(skill) = game.registered_skill(instance) else { return false; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
         game.update_registered_skill_visual(instance, 13);
+        if kind == BaseProjectileKind::Magic && let Some(player) = player {
+            game.send_skill_system_info(player, b"GS0278");
+        }
         return false;
     }
     let path = game.skill_target_path(skill.lifecycle());
     if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0
-        && path.len() as u32 > properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE).wrapping_add(1)
+        && path.len() as u32 > properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE)
+            .wrapping_add(u32::from(kind == BaseProjectileKind::Archery))
     {
         game.update_registered_skill_visual(instance, 11);
         if let Some(player) = player {
-            if let Some(target) = original_target {
+            if kind == BaseProjectileKind::Magic {
+                game.send_skill_system_info(player, b"GS0290");
+            } else if let Some(target) = original_target {
                 if let Some(target) = resolve_state_move_shape(game, target.0, target.1) {
                     game.send_skill_system_info_with_text(player, b"GS0280", target.shape().base_object().get_name());
                 }
@@ -59,6 +75,7 @@ pub(super) fn check_archery_cast<Runtime: GameMainLoopRuntime>(
         }
         return false;
     }
+    if kind == BaseProjectileKind::Magic { return true; }
     if path.iter().any(|cell| cell.2 == 2) {
         if game.registered_skill(instance).is_some_and(|skill| skill.visual_effect().is_some()) {
             game.update_registered_skill_visual(instance, 15);
@@ -80,15 +97,16 @@ pub(super) fn check_archery_cast<Runtime: GameMainLoopRuntime>(
     true
 }
 
-pub(super) fn archery_attack_path(game: &CGame, instance: RegisteredSkill, length: u32) -> Vec<(i32, i32, u8)> {
+pub(super) fn base_projectile_attack_path(game: &CGame, instance: RegisteredSkill, length: u32) -> Vec<(i32, i32, u8)> {
     game.registered_skill(instance)
         .map(|skill| game.skill_target_path_with_length(skill.lifecycle(), length))
         .unwrap_or_default()
 }
 
-pub(crate) fn publish_archery_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if skill.owner() != SkillOwner::CArchery
-        || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::Archery || effect.is_ended())
+pub(crate) fn publish_base_projectile_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    let Some(kind) = BaseProjectileKind::from_skill_id(skill.id()) else { return; };
+    if skill.owner() != kind.owner()
+        || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::BaseProjectile || effect.is_ended())
     { return; }
     let (region, identity) = skill.lifecycle().user();
     let Some(user) = resolve_state_move_shape(game, region, identity) else { return; };
@@ -130,7 +148,7 @@ pub(crate) fn publish_archery_visual(game: &CGame, skill: &MoveShapeSkill, mode:
         message.add_long(target_id);
         message.add_long(x);
         message.add_long(y);
-        message.add_long(skill.archery_progress().map_or(0, |progress| progress.attack_time_ms()));
+        message.add_long(skill.base_projectile_progress().map_or(0, |progress| progress.attack_time_ms()));
     } else { message.add_long(source.get_direction()); }
     if source.is_assigned_to_server_region()
         && let Some(region) = game.find_region(source.get_region_id())

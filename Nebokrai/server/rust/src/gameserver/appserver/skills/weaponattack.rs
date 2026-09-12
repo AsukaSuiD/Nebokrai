@@ -30,6 +30,8 @@
 //! Strike меняет знак hit modifier сразу после запроса, до компонентов и RNG.
 //! HeartLessArrowPhalanx сохраняет MIN до RNG и использует знаковый CCH
 //! конструктора вместо повторного чтения текущего критического шанса.
+//! BaseMagicPhalanx использует только общий критический хвост: её сохранённый
+//! диапазон и единственный элементный компонент рассчитывает сам владелец.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -236,6 +238,12 @@ fn fill_weapon_damage(
             i32::from(chance as u16)
         }
     };
+    apply_weapon_critical(game, critical_chance, attack);
+}
+
+pub(super) fn apply_weapon_critical(
+    game: &mut CGame, critical_chance: i32, attack: &mut AttackInformation,
+) {
     if game.skill_random_below(100) < critical_chance {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();

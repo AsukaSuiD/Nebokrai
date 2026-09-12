@@ -257,7 +257,7 @@ macro_rules! skill_owners {
 skill_owners! {
     CBaseAttack: Attack, COMMON, Weapon, EndZero => 0x001,
     CArchery: Summon, USER_RESET_PHASE, Weapon => 0x002,
-    CBaseMagic: Summon, USER, Weapon => 0x003,
+    CBaseMagic: Summon, USER_RESET_PHASE, Weapon => 0x003,
     CFightDefense: Defense, COMMON, None => 0x00a,
     CMosou: Attack, USER_RESET_PHASE, Weapon => 0x065,
     CGhostCut: Attack, USER_RESET_PHASE, Weapon, EndZero => 0x066,

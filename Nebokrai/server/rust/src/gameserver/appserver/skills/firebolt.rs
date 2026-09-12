@@ -15,18 +15,20 @@
 //! движения, `AfterUseSkill`, очистку текущего навыка и фиксацию времени
 //! восстановления.
 //! Reuse использует exact `CSkill::IsRestored`; cast и phalanx flight — elapsed.
+//! Временные данные прежнего исполнителя теперь принадлежат этому owner-у,
+//! без зависимости от перенесённого зарегистрированного CBaseMagic.
 //! Координатная перегрузка `Begin` разрешает первый `CMoveShape` клетки через
 //! точный `CState::GetSufferer` без fallback к заклинателю.
 
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagic::{
-    BaseMagicExecutionState, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
     SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fireboltphalanx::CFireBoltPhalanx;
-use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -39,6 +41,47 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FireBoltExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    target: ShapeIdentity,
+    condition_checked: bool,
+}
+
+impl FireBoltExecutionState {
+    pub(crate) const fn begin(
+        dispatch: PlayerSkillDispatch,
+        target: ShapeIdentity,
+        started_at_ms: u32,
+    ) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+            target,
+            condition_checked: false,
+        }
+    }
+
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
+    }
+
+    pub(crate) const fn target(self) -> ShapeIdentity {
+        self.target
+    }
+
+    pub(crate) const fn condition_checked(self) -> bool {
+        self.condition_checked
+    }
+
+    pub(crate) fn mark_condition_checked(&mut self) {
+        self.condition_checked = true;
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
 
 pub(crate) const FIRE_BOLT_SKILL_ID: u32 = 0x132;
 
@@ -116,7 +159,7 @@ pub(crate) fn cancel_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_state::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
+    let Some(dispatch) = game.player_skill_state::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else {
         return false;
     };
     finish_player_fire_bolt(game, player_id, player_ai, runtime);
@@ -183,7 +226,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if game.player_skill_state::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().is_none() {
+    if game.player_skill_state::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if target.object_type == PLAYER_TYPE && target.id == player_id {
             send_failure(game, player_id, 10);
@@ -223,11 +266,11 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(FIRE_BOLT_SKILL_ID));
         }
-        game.begin_player_skill_execution(player_id, BaseMagicExecutionState::begin(
+        game.begin_player_skill_execution(player_id, FireBoltExecutionState::begin(
             dispatch, target, started_at_ms,
         ));
         return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_state::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+    } else if game.player_skill_state::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -237,7 +280,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         finish_player_fire_bolt(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if game.player_skill_state::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().is_some_and(|state| !state.condition_checked()) {
+    if game.player_skill_state::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied().is_some_and(|state| !state.condition_checked()) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -259,13 +302,13 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_start(game, player_id, level);
-        if let Some(state) = game.player_skill_state_mut::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID) {
+        if let Some(state) = game.player_skill_state_mut::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID) {
             state.mark_condition_checked();
             let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = game.player_skill_state::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied()
+    let started_at_ms = game.player_skill_state::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID).copied()
         .map(|state| state.kernel().started_at_ms())
         .expect("выполнение огненной стрелы создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -375,7 +418,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд огненной стрелы");
     }
 
-    if let Some(state) = game.player_skill_state_mut::<BaseMagicExecutionState>(player_id, FIRE_BOLT_SKILL_ID) {
+    if let Some(state) = game.player_skill_state_mut::<FireBoltExecutionState>(player_id, FIRE_BOLT_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);

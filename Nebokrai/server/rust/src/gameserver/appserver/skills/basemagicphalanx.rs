@@ -1,272 +1,119 @@
-//! Владелец снаряда базовой магической атаки GameServer.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/basemagicphalanx.cpp`. Объект типа `1000` принадлежит
-//! `CServerRegion`: первое чтение часов проверяет срок жизни строго через `>`,
-//! второе отдельное чтение проверяет задержку атаки тем же строгим правилом.
-//! После единственной попытки атаки объект отправляет exit и становится
-//! `SHAPE_CHANGE_DELETE`; цель может исчезнуть без побочного эффекта. Формула,
-//! wrapping и два исходных вызова RNG принадлежат этому owner-у; `CGame`
-//! передаёт только снимки владельцев и применяет рассчитанную атаку к цели.
-//! Exact `CalculateAttackPower` безусловно ищет attacker ID в player-map;
-//! созданный монстром снаряд поэтому остаётся визуальным без отдельной
-//! monster-формулы. Критический float-множитель усекается к нулю перед
-//! записью `int`: `0x006023EF..0x00602419` держит произведение в x87 до
-//! `FISTP`, без промежуточной записи в `float`.
+//! Прицельный региональный снаряд базовой магии BaseMagic.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/basemagicphalanx.cpp.
+//! Полёт, два абсолютных unsigned срока, поиск цели и тихий End общие с
+//! Archery. После задержки Attack проверяет смерть цели, фиксирует PK и
+//! доставляет сырой OnBeenAttacked без допуска, DaubPoison и RP.
+//! Calculate ищет игрока по attacker ID независимо от сохранённого типа.
+//! Отсутствующий игрок оставляет исходную пустую атаку, не отменяя контакт.
+//! Таблица навыка повторно не запрашивается: MIN/MAX/ELEMENT сохранены
+//! конструктором. Живой element_modify читается до уровня цели и weapon
+//! modifier; RNG получает abs(MAX-MIN)+1, затем читается живой AddElement.
+//! Единственный компонент Element использует signed wrapping и нижнюю
+//! границу ноль. CCH читается после компонента, критический множитель
+//! усекается в общем оружейном хвосте без промежуточного float.
+//! Клиентский снимок содержит master type/id, не цель. Общий серверный
+//! decoder не имеет достигнутого caller-а; его неизвестность сохранена
+//! у archeryphalanx, откуда происходит та же линкерная реализация.
 
+use super::basemagic::BASE_MAGIC_SKILL_ID;
+use super::baseprojectilephalanx::BaseProjectileFlight;
+use super::weaponattack::{SourceProperty, apply_weapon_critical, source_property};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::shape::{
-    CShape, SHAPE_CHANGE_DELETE, ShapeIdentity,
-};
-use crate::gameserver::appserver::states::attackpower::{
-    AttackInformation, AttackPower, AttackPowerType,
-};
-use crate::gameserver::appserver::skills::fightdefense::truncate_original;
-use crate::gameserver::appserver::summonshape::{
-    SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
-};
-use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BaseMagicPhalanxTick {
-    Pending,
-    Attack {
-        target: ShapeIdentity,
-        sampled_at_ms: u32,
-    },
-    Expired,
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CBaseMagicPhalanx {
-    shape: CShape,
+pub(crate) struct BaseMagicAttack {
     master: MasterInfo,
-    started_at_ms: u32,
-    lifetime_ms: u32,
     skill_level: i32,
     minimum_attack: i32,
     maximum_attack: i32,
     element_modifier: i32,
-    attack_delay_ms: u32,
-    target: ShapeIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CBaseMagicPhalanx {
+    flight: BaseProjectileFlight,
+    attack: BaseMagicAttack,
 }
 
 impl CBaseMagicPhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют constructor BaseMagicPhalanx")]
+    #[allow(clippy::too_many_arguments, reason = "снимок конструктора BaseMagicPhalanx")]
     pub(crate) fn new(
-        id: i32,
-        master: MasterInfo,
-        started_at_ms: u32,
-        lifetime_ms: u32,
-        skill_level: i32,
-        minimum_attack: i32,
-        maximum_attack: i32,
-        element_modifier: i32,
-        attack_delay_ms: u32,
-        target: ShapeIdentity,
+        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
+        skill_level: i32, minimum_attack: i32, maximum_attack: i32,
+        element_modifier: i32, attack_delay_ms: u32, target: ShapeIdentity,
     ) -> Self {
-        let mut shape = CShape::with_constructor_defaults();
-        shape.set_identity(ShapeIdentity {
-            object_type: SUMMON_SHAPE_TYPE,
-            id,
-            ex_id: CGuid::GUID_INVALID,
-        });
         Self {
-            shape,
-            master,
-            started_at_ms,
-            lifetime_ms,
-            skill_level,
-            minimum_attack,
-            maximum_attack,
-            element_modifier,
-            attack_delay_ms,
-            target,
+            flight: BaseProjectileFlight::new(id, started_at_ms, lifetime_ms, attack_delay_ms, target),
+            attack: BaseMagicAttack {
+                master, skill_level, minimum_attack, maximum_attack, element_modifier,
+            },
         }
     }
 
-    pub(crate) const fn shape(&self) -> &CShape {
-        &self.shape
-    }
+    pub(crate) const fn shape(&self) -> &CShape { self.flight.shape() }
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape { self.flight.shape_mut() }
+    pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
+    pub(crate) const fn flight(&self) -> &BaseProjectileFlight { &self.flight }
+    pub(crate) const fn flight_mut(&mut self) -> &mut BaseProjectileFlight { &mut self.flight }
+    pub(crate) const fn attack_snapshot(&self) -> BaseMagicAttack { self.attack }
 
-    pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
-        &mut self.shape
-    }
-
-    pub(crate) const fn master(&self) -> MasterInfo {
-        self.master
-    }
-
-    pub(crate) const fn skill_level(&self) -> i32 {
-        self.skill_level
-    }
-
-    pub(crate) const fn minimum_attack(&self) -> i32 {
-        self.minimum_attack
-    }
-
-    pub(crate) const fn maximum_attack(&self) -> i32 {
-        self.maximum_attack
-    }
-
-    pub(crate) const fn element_modifier(&self) -> i32 {
-        self.element_modifier
-    }
-
-    pub(crate) const fn target(&self) -> ShapeIdentity {
-        self.target
-    }
-
-    /// Точный клиентский `AddToByteArray` использует ту же сведённую линкером
-    /// машинную функцию, что снаряд базовой стрельбы и атака боевой феи.
     pub(crate) fn encode_client_snapshot(
-        &self,
-        now_milliseconds: impl FnMut() -> u32,
+        &self, now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        encode_related_phalanx_snapshot(
-            &self.shape,
-            super::basemagic::BASE_MAGIC_SKILL_ID as i32,
-            self.skill_level,
-            self.target.object_type,
-            self.target.id,
-            self.started_at_ms,
-            self.lifetime_ms,
-            now_milliseconds,
+        self.flight.encode_client_snapshot(
+            BASE_MAGIC_SKILL_ID, self.attack.skill_level, self.attack.master, now_milliseconds,
         )
     }
+}
 
-    pub(crate) fn tick(
-        &mut self,
-        lifetime_now_ms: u32,
-        get_attack_now_ms: impl FnOnce() -> u32,
-    ) -> BaseMagicPhalanxTick {
-        if lifetime_now_ms.wrapping_sub(self.started_at_ms) > self.lifetime_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
-            return BaseMagicPhalanxTick::Expired;
+impl BaseMagicAttack {
+    fn attack_master(self) -> MasterInfo {
+        if self.master.master_type == 400 { return self.master; }
+        MasterInfo {
+            master_type: self.master.master_type, master_id: self.master.master_id,
+            ..MasterInfo::default()
         }
-        let attack_now_ms = get_attack_now_ms();
-        if attack_now_ms.wrapping_sub(self.started_at_ms) > self.attack_delay_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
-            return BaseMagicPhalanxTick::Attack {
-                target: self.target,
-                sampled_at_ms: attack_now_ms,
-            };
-        }
-        BaseMagicPhalanxTick::Pending
     }
 }
 
-pub(crate) fn calculate_owned_base_magic_attack(
-    game: &mut CGame,
-    phalanx: &CBaseMagicPhalanx,
-    target_level: u8,
-) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let player = game.find_player(phalanx.master().master_id)?;
-    let combat = player.combat_properties();
-    let occupation = player.occupation();
-    let attacker_level = player.level();
-    let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
-    let damage_factor = player.weapon_modifier(
-        game.goods_factory(),
-        i32::from(target_level),
-        weapon_divisor,
-        weapon_minimum,
+fn calculate_base_magic_attack(
+    game: &mut CGame, snapshot: BaseMagicAttack, target: (i32, ShapeIdentity),
+    attack: &mut AttackInformation,
+) {
+    let Some(player) = game.find_player(attack.attacker_id) else { return; };
+    let element_modify = player.combat_properties().element_modify;
+    let source = (player.shape().get_region_id(), player.shape().identity());
+    attack.skill_id = BASE_MAGIC_SKILL_ID;
+    attack.skill_level = snapshot.skill_level as u8;
+    attack.damage_modifier = 0;
+    let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
+    let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
+    attack.damage_factor = player.weapon_modifier(
+        game.goods_factory(), i32::from(target_level), divisor, minimum_factor,
     );
-    let critical_rate = game.globe_setup().critical_rate();
-    let combat_scales = game.globe_setup().base_combat_scales();
-    calculate_base_magic_attack(
-        phalanx,
-        combat,
-        occupation,
-        attacker_level,
-        damage_factor,
-        critical_rate,
-        combat_scales,
-        |maximum| game.skill_random_below(maximum),
-    )
+    attack.hit_modifier = 100;
+
+    let element = snapshot.element_modifier.wrapping_mul(element_modify).wrapping_div(100);
+    let width = snapshot.maximum_attack.wrapping_sub(snapshot.minimum_attack)
+        .wrapping_abs().wrapping_add(1);
+    let rolled = game.skill_random_below(width).wrapping_add(snapshot.minimum_attack);
+    let Some(addition) = source_property(game, source, SourceProperty::Element) else { return; };
+    let damage = element.wrapping_add((addition as i32).wrapping_add(rolled)).max(0);
+    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 });
+    let Some(chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
+    apply_weapon_critical(game, i32::from(chance as u16), attack);
 }
 
-#[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]
-pub(crate) fn calculate_base_magic_attack(
-    phalanx: &CBaseMagicPhalanx,
-    mut combat: PlayerCombatProperties,
-    occupation: u8,
-    attacker_level: u8,
-    damage_factor: f32,
-    critical_rate: f32,
-    combat_scales: [f32; 5],
-    mut random_below: impl FnMut(i32) -> i32,
-) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let master = phalanx.master();
-    if master.master_type != 400 || master.master_id == 0 {
-        return None;
-    }
-    let width_delta = phalanx
-        .maximum_attack()
-        .wrapping_sub(phalanx.minimum_attack());
-    let width = if width_delta < 0 {
-        width_delta.wrapping_neg()
-    } else {
-        width_delta
-    }
-    .wrapping_add(1);
-    let random_damage = random_below(width);
-    let element_damage = phalanx
-        .element_modifier()
-        .wrapping_mul(combat.element_modify)
-        .wrapping_div(100)
-        .wrapping_add(combat.add_element_attack as i32)
-        .wrapping_add(random_damage)
-        .wrapping_add(phalanx.minimum_attack())
-        .max(0);
-    let mut attack = AttackInformation {
-        skill_id: super::basemagic::BASE_MAGIC_SKILL_ID,
-        skill_level: phalanx.skill_level() as u8,
-        attacker_type: master.master_type,
-        attacker_id: master.master_id,
-        attacker_team_id: master.master_team_id,
-        attacker_faction_id: master.master_guild_id,
-        attacker_union_id: master.master_union_id,
-        hit_modifier: 100,
-        damage_factor,
-        damage_modifier: 0,
-        critical: false,
-        blast_attack: false,
-        full_miss: 0,
-        damages: vec![AttackPower {
-            kind: AttackPowerType::Element,
-            hp_damage: element_damage,
-            mp_damage: 0,
-        }],
-    };
-    if random_below(100) < i32::from(combat.cch) {
-        attack.critical = true;
-        for power in &mut attack.damages {
-            power.hp_damage = truncate_original(
-                f64::from(power.hp_damage) * f64::from(critical_rate),
-            );
-        }
-    }
-    let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
-        combat_scales;
-    if combat.blast_attack_scale() < 1.0 {
-        combat.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
-    }
-    if combat.blast_defense_scale() < 0.01 {
-        combat.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
-    }
-    if combat.element_blast_attack_scale() < 1.0 {
-        combat.element_blast_attack_scale_bits = element_blast_attack.max(1.0).to_bits();
-    }
-    if combat.element_blast_defense_scale() < 0.01 {
-        combat.element_blast_defense_scale_bits = element_blast_defense.max(0.01).to_bits();
-    }
-    if combat.full_miss_scale() < 0.01 {
-        combat.full_miss_scale_bits = full_miss.max(0.01).to_bits();
-    }
-    if combat.critical_rate() < 1.0 {
-        combat.critical_rate_bits = critical_rate.max(1.0).to_bits();
-    }
-    Some((attack, combat, occupation, attacker_level))
+pub(crate) fn apply_base_magic_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, snapshot: BaseMagicAttack, target: (i32, ShapeIdentity),
+    runtime: &mut Runtime,
+) {
+    if game.move_shape_health(target.0, target.1).is_none_or(|hp| hp == 0) { return; }
+    let master = snapshot.attack_master();
+    let mut attack = AttackInformation::for_master(master);
+    calculate_base_magic_attack(game, snapshot, target, &mut attack);
+    game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
 }

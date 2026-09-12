@@ -7,7 +7,7 @@
 //! он отличается от обычного ForceMove CMoveShape.
 //! End сначала отмечает удаление, затем отправляет BF504(type,id,0) вокруг
 //! фактической формы; повторный End не подавляется по флагу удаления.
-//! Исключение Archery вызывает собственный End: только отметка удаления,
+//! Archery и BaseMagic вызывают свой общий End: только отметка удаления,
 //! без немедленного BF504.
 
 use super::*;
@@ -54,8 +54,8 @@ impl CGame {
     }
 
     pub(super) fn end_summoned_shape(&mut self, holder_region: i32, id: i32) {
-        if self.archery_phalanx(holder_region, id).is_some() {
-            self.end_archery_phalanx(holder_region, id);
+        if self.base_projectile_flight(holder_region, id).is_some() {
+            self.end_base_projectile(holder_region, id);
             return;
         }
         let Some(shape) = self.mark_damage_phalanx_deleted(holder_region, id) else { return; };

@@ -27,13 +27,13 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, Archery,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile,
 }
 
 impl RegisteredPlayerCastOwner {
     pub(crate) fn from_skill_id(id: u32) -> Option<Self> {
         Some(match id {
-            super::archery::ARCHERY_SKILL_ID => Self::Archery,
+            super::archery::ARCHERY_SKILL_ID | super::basemagic::BASE_MAGIC_SKILL_ID => Self::BaseProjectile,
             super::flash::FLASH_SKILL_ID => Self::Flash,
             super::littleflash::LITTLE_FLASH_SKILL_ID | super::littleflash2::LITTLE_FLASH_2_SKILL_ID => Self::LittleFlash,
             super::rush::RUSH_SKILL_ID => Self::Rush,
@@ -95,7 +95,7 @@ impl RegisteredPlayerCastOwner {
         dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
         let execute = match self {
-            Self::Archery => super::archery::execute_player_archery::<Runtime>,
+            Self::BaseProjectile => super::baseprojectilecast::execute_player_base_projectile::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,

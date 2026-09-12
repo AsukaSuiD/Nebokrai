@@ -79,9 +79,9 @@ use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkill
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
-use super::archery::ArcheryExecutionState;
+use super::baseprojectilecast::BaseProjectileExecutionState;
 use super::armybreak::ArmyBreakExecutionState;
-use super::basemagic::BaseMagicExecutionState;
+use super::firebolt::FireBoltExecutionState;
 use super::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use super::scopedarrowcast::ScopedArrowExecutionState;
 use super::boalock::BoaLockExecutionState;
@@ -215,7 +215,7 @@ player_skill_states! {
     DirectProjectile(PlayerDirectProjectileExecutionState),
     SummonCreature(PlayerSummonCreatureExecutionState),
     LordFastAttack(LordFastAttackExecutionState),
-    Archery(ArcheryExecutionState),
+    BaseProjectile(BaseProjectileExecutionState),
     HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end),
     LightingArrow(LightingArrowExecutionState) paths(clear_end_paths),
     LightingArrow2(LightingArrow2ExecutionState) paths(clear_end_paths),
@@ -224,7 +224,7 @@ player_skill_states! {
     Scorpion(ScorpionExecutionState) prepare(prepare_derived_end),
     BoaLock(BoaLockExecutionState) prepare(prepare_derived_end),
     TargetedProjectile(TargetedProjectileExecutionState) prepare(prepare_derived_end),
-    BaseMagic(BaseMagicExecutionState),
+    FireBolt(FireBoltExecutionState),
     ChainLightning(ChainLightningExecutionState),
     KnightCut(KnightCutExecutionState),
     Rage(RageExecutionState),

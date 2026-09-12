@@ -170,7 +170,6 @@ use super::build::BuildBlockUpdate;
 use super::country::countryparam::CCountryParam;
 use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
 use super::goods::cgoods::CGoods;
-use super::skills::basemagicphalanx::CBaseMagicPhalanx;
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
@@ -1528,36 +1527,9 @@ impl CServerRegion {
         self.owned_monsters.get_mut(&id)
     }
 
-    pub(crate) fn add_base_magic_phalanx<Context: ServerRegionMembershipContext>(
+    pub(crate) fn add_base_projectile<Context: ServerRegionMembershipContext>(
         &mut self,
-        mut phalanx: CBaseMagicPhalanx,
-        tile_x: i32,
-        tile_y: i32,
-        area_width: i32,
-        area_height: i32,
-        now_ms: u32,
-        context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
-            phalanx.shape_mut(),
-            ShapeRuntimeFacts::default(),
-            area_width,
-            area_height,
-            now_ms,
-            context,
-        )?;
-        let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes
-            .insert(id, SummonedSkillShape::BaseMagic(phalanx));
-        Ok(id)
-    }
-
-    pub(crate) fn add_archery_phalanx<Context: ServerRegionMembershipContext>(
-        &mut self,
-        mut phalanx: super::skills::archeryphalanx::CArcheryPhalanx,
+        mut phalanx: SummonedSkillShape,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
@@ -1572,8 +1544,7 @@ impl CServerRegion {
             context,
         )?;
         let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes
-            .insert(id, SummonedSkillShape::Archery(phalanx));
+        self.owned_skill_phalanxes.insert(id, phalanx);
         Ok(id)
     }
 

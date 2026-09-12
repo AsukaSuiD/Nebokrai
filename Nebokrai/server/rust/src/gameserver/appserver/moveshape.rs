@@ -1,5 +1,5 @@
 //! Реализованная часть `CMoveShape` исторического GameServer.
-//! Постоянные данные CArchery из gameserver.exe/PDB принадлежат экземпляру
+//! Постоянные данные CArchery/CBaseMagic из gameserver.exe/PDB принадлежат экземпляру
 //! навыка: att_time обнуляется конструктором, но не Begin/End или удалением
 //! исполнения команды. Игрок и монстр используют одно и то же хранение.
 //! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
@@ -442,13 +442,13 @@ impl RegisteredSkillExecution {
 #[derive(Debug, Eq, PartialEq)]
 enum SkillRetainedData {
     None,
-    Archery(super::skills::archery::ArcheryProgress),
+    BaseProjectile(super::skills::baseprojectilecast::BaseProjectileProgress),
 }
 
 impl SkillRetainedData {
     fn for_owner(owner: SkillOwner) -> Self {
         match owner {
-            SkillOwner::CArchery => Self::Archery(Default::default()),
+            SkillOwner::CArchery | SkillOwner::CBaseMagic => Self::BaseProjectile(Default::default()),
             _ => Self::None,
         }
     }
@@ -829,16 +829,16 @@ impl MoveShapeSkill {
         }
     }
 
-    pub(crate) fn archery_progress(&self) -> Option<&super::skills::archery::ArcheryProgress> {
+    pub(crate) fn base_projectile_progress(&self) -> Option<&super::skills::baseprojectilecast::BaseProjectileProgress> {
         match &self.retained_data {
-            SkillRetainedData::Archery(progress) => Some(progress),
+            SkillRetainedData::BaseProjectile(progress) => Some(progress),
             SkillRetainedData::None => None,
         }
     }
 
-    pub(crate) fn archery_progress_mut(&mut self) -> Option<&mut super::skills::archery::ArcheryProgress> {
+    pub(crate) fn base_projectile_progress_mut(&mut self) -> Option<&mut super::skills::baseprojectilecast::BaseProjectileProgress> {
         match &mut self.retained_data {
-            SkillRetainedData::Archery(progress) => Some(progress),
+            SkillRetainedData::BaseProjectile(progress) => Some(progress),
             SkillRetainedData::None => None,
         }
     }
