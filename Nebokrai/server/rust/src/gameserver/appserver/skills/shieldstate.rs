@@ -5,8 +5,9 @@
 //! до callbacks. End выполняет эффект, удаляет прежний ключ и обновляет свойства;
 //! Life сначала создаёт Cure, Machine/Mana отправляют End-пакет, Promotion — нет.
 //! AI Life/Mana/Machine проверяет deadline, signed life и смерть перед ресурсами.
-//! Их достигнутые creators/DB load требуют CPlayer; последующий unchecked MP/layout
-//! для иных holders не выдумывается. Promotion проверяет только собственный срок.
+//! Их ресурсная фаза требует CPlayer: чужой unchecked MP/layout не имитируется.
+//! Первичное наложение само по себе допускает полный CMoveShape.
+//! Promotion проверяет только собственный срок.
 //! Первичный Life/Mana/Machine Begin читает базовые часы при U, отправляет visual и
 //! добавляет состояние в арену; UpdateProperty остаётся caller-у. Restart после
 //! Unserialize использует Begin(NULL, holder) и сохраняет уже прочитанный старт.

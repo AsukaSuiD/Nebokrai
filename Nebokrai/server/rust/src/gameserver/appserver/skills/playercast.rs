@@ -24,7 +24,7 @@ use crate::gameserver::gameserver::game::{
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
-    AgilityFamily, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
+    SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
     PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile,
 }
 
@@ -55,7 +55,10 @@ impl RegisteredPlayerCastOwner {
             super::thunderslash::THUNDER_SLASH_SKILL_ID => Self::ThunderSlash,
             super::callosity::CALLOSITY_SKILL_ID | super::callosity2::CALLOSITY_2_SKILL_ID => Self::Callosity,
             super::agility::AGILITY_SKILL_ID | super::agility2::AGILITY_2_SKILL_ID
-                | super::natural::NATURAL_SKILL_ID | super::rapture::RAPTURE_SKILL_ID => Self::AgilityFamily,
+                | super::natural::NATURAL_SKILL_ID | super::rapture::RAPTURE_SKILL_ID
+                | super::daubpoison::DAUB_POISON_SKILL_ID
+                | super::manashield::MANA_SHIELD_SKILL_ID
+                | super::machineshield::MACHINE_SHIELD_SKILL_ID => Self::SelfState,
             super::lightingarrow::LIGHTING_ARROW_SKILL_ID => Self::LightingArrow,
             super::lightingarrow2::LIGHTING_ARROW_2_SKILL_ID => Self::LightingArrow2,
             super::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID => Self::MeteorArrowMass,
@@ -102,7 +105,7 @@ impl RegisteredPlayerCastOwner {
             Self::Roar => super::roar::execute_player_roar::<Runtime>,
             Self::ThunderSlash => super::thunderslash::execute_player_thunder_slash::<Runtime>,
             Self::Callosity => super::callosity::execute_player_callosity::<Runtime>,
-            Self::AgilityFamily => super::agility::execute_player_agility_family::<Runtime>,
+            Self::SelfState => super::selfstatecast::execute_player_self_state::<Runtime>,
             Self::LightingArrow => super::lightingarrow::execute_player_lighting_arrow::<Runtime>,
             Self::LightingArrow2 => super::lightingarrow2::execute_player_lighting_arrow_2::<Runtime>,
             Self::MeteorArrowMass => super::meteorarrowmass::execute_player_meteor_arrow_mass::<Runtime>,

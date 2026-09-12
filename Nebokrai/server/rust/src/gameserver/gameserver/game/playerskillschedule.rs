@@ -270,7 +270,6 @@ impl CGame {
             | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
             | SOUL_MIRROR_SKILL_ID
-            | DAUB_POISON_SKILL_ID
             | IGNITION_SKILL_ID
             | KEROSENE_SKILL_ID
             | BLIND_SKILL_ID
@@ -286,8 +285,6 @@ impl CGame {
             | PROMOTION_SKILL_ID
             | CURE_SKILL_ID
             | HEARTEN_SKILL_ID
-            | MACHINE_SHIELD_SKILL_ID
-            | MANA_SHIELD_SKILL_ID
             | FURY_SKILL_ID
             | RAGE_BREAK_SKILL_ID
             | PETS_CONTROL_SKILL_ID

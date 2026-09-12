@@ -1071,10 +1071,7 @@ use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     calculate_owned_heartless_arrow_attack,
 };
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
-use crate::gameserver::appserver::skills::daubpoison::{
-    cancel_player_daub_poison, complete_player_daub_poison, execute_player_daub_poison,
-    is_daub_poison_dispatch, DAUB_POISON_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::daubpoison::DAUB_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
@@ -1467,10 +1464,6 @@ use crate::gameserver::appserver::skills::tianhuophalanx::{
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::selfshield::{
-    cancel_player_self_shield_dispatch, execute_player_self_shield_dispatch,
-    is_self_shield_skill,
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
@@ -39052,12 +39045,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                DAUB_POISON_SKILL_ID => Some(complete_player_daub_poison(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 IGNITION_SKILL_ID => Some(complete_player_ignition(
                     self,
                     player_id,
@@ -39377,9 +39364,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            DAUB_POISON_SKILL_ID => {
-                cancel_player_daub_poison(self, player_id, &mut player_ai, runtime)
-            }
             IGNITION_SKILL_ID => {
                 cancel_player_ignition(self, player_id, &mut player_ai, runtime)
             }
@@ -39425,14 +39409,6 @@ impl CGame {
             _ if is_heal_skill(skill_id) => {
                 cancel_player_heal(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
-                self,
-                player_id,
-                skill_id,
-                &mut player_ai,
-                cause.uses_nonzero_end(),
-                runtime,
-            ),
                 _ => {
                     if let Some(player) = self.find_player_mut(player_id) {
                         player.restore_player_ai(player_ai);
@@ -39702,7 +39678,6 @@ impl CGame {
             _ if is_kerosene_dispatch(dispatch) => execute_player_kerosene,
             _ if is_ignition_dispatch(dispatch) => execute_player_ignition,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
-            _ if is_daub_poison_dispatch(dispatch) => execute_player_daub_poison,
             _ if match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == BASE_MAGIC_SKILL_ID
@@ -39783,13 +39758,6 @@ impl CGame {
             _ if is_soul_mirror_skill(dispatch) => execute_player_soul_mirror,
             _ if is_god_bless_skill(dispatch) => execute_player_god_bless,
             _ if is_cure_target(dispatch) => execute_player_cure,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    is_self_shield_skill(skill_id)
-                }
-            } => execute_player_self_shield_dispatch,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }

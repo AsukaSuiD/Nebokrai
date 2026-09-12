@@ -312,7 +312,7 @@ skill_owners! {
     CNatural: State, USER_RESET_PHASE, Weapon => 0x0dc,
     CStrike: Attack, USER_RESET_PHASE, Weapon, EndZero => 0x0dd,
     CMachineShield: State, USER_RESET_PHASE, Weapon => 0x0de,
-    CDaubPoison: State, USER, Weapon => 0x0df,
+    CDaubPoison: State, USER_RESET_PHASE, Weapon => 0x0df,
     CSwordship2: State, COMMON, Weapon => 0x0e0,
     CExplosiveArrow2: Attack, USER_RESET_PHASE, Weapon => 0x0e1,
     CExplosiveArrow3: Attack, USER_RESET_PHASE, Weapon => 0x0e2,

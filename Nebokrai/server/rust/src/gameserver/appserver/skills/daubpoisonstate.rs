@@ -14,6 +14,9 @@
 //! повторно только при положительном остатке. Save: ID/remaining, 8 байт;
 //! Unserialize0x005EAAC0 читает clock до keep. Список/свойства после удаления
 //! обслуживает общий lifecycle; первичный append сам UpdateProperty не вызывает.
+//! Первичное Begin(U,U) и append принадлежат захваченному CMoveShape, не
+//! только игроку. После часов отдельно сохраняются стороны U/S; свежий S
+//! обслуживает visual. Player-only проверка переноса яда принадлежит ударам.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
@@ -21,7 +24,8 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
     remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
-    timed_client_state_time, update_applied_state_end_visual, update_property_state_visual,
+    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_end_visual,
+    update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -67,31 +71,37 @@ impl DaubPoisonState {
 
 pub(crate) fn begin_primary_daub_poison_state(
     game: &mut CGame,
-    player_id: i32,
+    source: (i32, ShapeIdentity),
     keep_time_ms: u32,
     now: &mut dyn FnMut() -> u32,
 ) -> Option<StateKey> {
     let mut state = DaubPoisonState::new(keep_time_ms);
-    game.find_player(player_id)?;
+    resolve_state_move_shape(game, source.0, source.1)?;
     state.started_at_ms = now();
-    let player = game.find_player(player_id)?;
-    let participant = (
-        player.shape().get_region_id(),
-        ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() },
-    );
-    let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
-    message.add_long(participant.1.object_type);
-    message.add_long(participant.1.id);
-    message.add_ulong(state.skill_id());
-    message.add_long(state.client_time(now));
-    message.add_ulong(0);
-    let _ = game.send_move_shape_around(participant.0, participant.1, &message);
+    let participant = |source: (i32, ShapeIdentity)| {
+        let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
+        Some((shape.get_region_id(), ShapeIdentity {
+            ex_id: CGuid::GUID_INVALID, ..shape.identity()
+        }))
+    };
+    let user = participant(source)?;
+    let sufferer = participant(source)?;
+    if let Some(shape) = resolve_state_move_shape(game, sufferer.0, sufferer.1) {
+        let target = (shape.shape().get_region_id(), shape.shape().identity());
+        let mut message = CMessage::new(STATE_BEGIN_MESSAGE);
+        message.add_long(target.1.object_type);
+        message.add_long(target.1.id);
+        message.add_ulong(state.skill_id());
+        message.add_long(state.client_time(now));
+        message.add_ulong(0);
+        let _ = game.send_move_shape_around(target.0, target.1, &message);
+    }
     let record = state.encoded_for_install();
-    let shape = game.find_player_mut(player_id)?.move_shape_mut();
+    let shape = resolve_state_move_shape_mut(game, source.0, source.1)?;
     let key = shape.append_applied_state_record(state, &record);
     shape.mark_applied_state_begun(key);
-    shape.set_applied_state_user(key, Some(participant));
-    shape.set_applied_state_sufferer(key, Some(participant));
+    shape.set_applied_state_user(key, Some(user));
+    shape.set_applied_state_sufferer(key, Some(sufferer));
     Some(key)
 }
 

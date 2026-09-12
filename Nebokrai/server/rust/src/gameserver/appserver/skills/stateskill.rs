@@ -36,7 +36,6 @@ pub(crate) enum StateSkillVisualTarget {
     Sufferer,
     SuffererOrUser,
     User,
-    UserOnly,
 }
 
 /// Аргумент конкретного Begin живёт только на стеке вызова. NULL объект
@@ -120,7 +119,6 @@ pub(crate) fn publish_state_skill_visual<Skill: RegisteredStateSkill>(
     let target = match mode {
         0 => None,
         1 if matches!(Skill::VISUAL_TARGET, StateSkillVisualTarget::User) => Some(source),
-        1 if matches!(Skill::VISUAL_TARGET, StateSkillVisualTarget::UserOnly) => None,
         1 => {
             let target = resolve_skill_sufferer(game, skill.lifecycle())
                 .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
@@ -147,13 +145,8 @@ pub(crate) fn publish_state_skill_visual<Skill: RegisteredStateSkill>(
         if let Some(flight_time) = Skill::visual_flight_time(skill) {
             message.add_ulong(flight_time);
         }
-    } else if mode == 0 {
-        message.add_long(source.get_direction());
     } else {
-        // Щиты адресованы источнику; их пакет заканчивается двумя нулями,
-        // не содержит повторной identity и вообще не вызывает GetSufferer.
-        message.add_long(0);
-        message.add_long(0);
+        message.add_long(source.get_direction());
     }
     if let Some(region) = game.find_region(source.get_region_id()) {
         let _ = game.send_game_shape_around(region.base(), source, None, &message);

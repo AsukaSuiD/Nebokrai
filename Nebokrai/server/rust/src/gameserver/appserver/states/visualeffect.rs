@@ -50,8 +50,6 @@ pub(crate) enum SkillVisualEffectKind {
     Promotion,
     Cure,
     Hearten,
-    ManaShield,
-    MachineShield,
     Fury,
     RageBreak,
 }

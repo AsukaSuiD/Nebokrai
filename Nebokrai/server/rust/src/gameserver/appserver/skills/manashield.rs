@@ -1,12 +1,11 @@
 //! CManaShield, gameserver.exe + GameServer.pdb, appserver/skills/manashield.cpp.
-//! Check/AI и lifecycle общие с MachineShield в selfshield/stateskill;
+//! Check/AI и lifecycle общие с семейством selfstatecast;
 //! этот owner добавляет физическую и стихийную защиту к payload мана-щита.
 
 use super::manashieldstate::ManaShieldState;
 use super::selfshield::SelfShieldOwner;
 use super::shieldstate::DefenseShieldState;
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 
 pub(crate) const MANA_SHIELD_SKILL_ID: u32 = 321;
 
@@ -14,7 +13,6 @@ pub(crate) struct ManaShieldOwner;
 
 impl SelfShieldOwner for ManaShieldOwner {
     const SKILL_ID: u32 = MANA_SHIELD_SKILL_ID;
-    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::ManaShield;
 
     fn create_state(properties: &CSkillBaseProperties) -> DefenseShieldState {
         let mp_factor = properties.query_property(20_025) as u16;
