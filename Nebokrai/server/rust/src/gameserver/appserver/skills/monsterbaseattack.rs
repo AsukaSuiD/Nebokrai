@@ -163,8 +163,11 @@
 //! только успех изнашивает оружие и фиксирует reuse. Формула player-урона
 //! общая с MonsterFastAttack, включая личный критический множитель; защита,
 //! RP, смерть и сообщения используют существующий владелец применения атаки.
-//! Постройки и ворота проходят существующие war/camp-проверки, защиту,
-//! изменение HP, death-script и wire стационарного owner-а; NPC не атакуются.
+//! Постройки и ворота проходят war/camp-проверки до расчёта, затем общий
+//! OnBeenAttacked формы без отдельного сценария постройки. RP источнику начисляется
+//! после возврата из попадания независимо от отказа защиты; NPC не атакуются.
+//! Рассчитанный AttackInformation сохраняет конструкторские UNKNOWN/уровень 1,
+//! поэтому wire-id не определяет начисление RP конкретного навыка.
 //! У NPC нулевой combat HP: общая IsDied-проверка даёт failure 2 и End(1)
 //! до начала анимации, а не пустую атаку по истечении delay.
 //! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
@@ -461,13 +464,15 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         } else {
             game.owned_player_skill_target_attackable(master, identity, region_id)
         })
-        && let Some((master, attack)) = calculate_attack(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level, hit_modifier)
+        && let Some((master, mut attack)) = calculate_attack(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level, hit_modifier)
     {
-        match identity.object_type {
-            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, identity.id, region_id, attack, runtime)),
-            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, identity.id, region_id, attack, runtime)),
-            1100 | 1200 => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, identity, attack, runtime)),
-            _ => {}
+        if matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE | 1100 | 1200) {
+            attack.skill_id = super::skillfactory::UNKNOWN_SKILL_ID;
+            attack.skill_level = 1;
+            game.with_published_player_ai(player_id, player_ai, |game| {
+                game.apply_owned_skill_contact(master, identity, region_id, attack, runtime);
+                game.increase_owned_player_rp(player_id, true, 0);
+            });
         }
     }
     if let Some(kernel) = game.player_skill_execution_mut(player_id, MONSTER_BASE_ATTACK_SKILL_ID) {

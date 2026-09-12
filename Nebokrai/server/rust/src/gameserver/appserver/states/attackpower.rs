@@ -50,6 +50,25 @@ pub(crate) struct FinalAttackDamage {
 }
 
 impl AttackInformation {
+    pub(crate) fn for_master(master: super::super::masterinfo::MasterInfo) -> Self {
+        Self {
+            skill_id: super::super::skills::skillfactory::UNKNOWN_SKILL_ID,
+            skill_level: 1,
+            attacker_type: master.master_type,
+            attacker_id: master.master_id,
+            attacker_team_id: master.master_team_id,
+            attacker_faction_id: master.master_guild_id,
+            attacker_union_id: master.master_union_id,
+            hit_modifier: 0,
+            damage_factor: 1.0,
+            damage_modifier: 0,
+            critical: false,
+            blast_attack: false,
+            full_miss: 0,
+            damages: Vec::new(),
+        }
+    }
+
     /// CMoveShape::ApplyFinalDamage: компоненты читаются как DWORD по порядку,
     /// затем применяется modifier. SetHP игрока ограничивает каждый результат
     /// текущим максимумом; у остальных владельцев передаётся u32::MAX.

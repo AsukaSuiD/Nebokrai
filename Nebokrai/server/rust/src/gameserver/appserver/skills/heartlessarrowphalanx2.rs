@@ -110,12 +110,6 @@ impl CHeartlessArrowPhalanx {
         self.shape.set_change_state(SHAPE_CHANGE_DELETE);
     }
 
-    pub(crate) fn accepts_candidate(&self, target: ShapeIdentity) -> bool {
-        matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-            && target != self.shape.identity()
-            && (target.object_type != self.master.master_type || target.id != self.master.master_id)
-    }
-
     pub(crate) fn prepare_target(
         &self,
         game: &mut CGame,
@@ -137,35 +131,37 @@ pub(crate) fn calculate_owned_heartless_arrow_attack(
     game: &mut CGame,
     phalanx: &CHeartlessArrowPhalanx,
 ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let player = game.find_player(phalanx.master.master_id)?;
-    let combat = player.combat_properties();
-    let occupation = player.occupation();
-    let level = player.level();
+    let (combat, occupation, level) = game.find_player(phalanx.master.master_id)
+        .map(|player| (player.combat_properties(), player.occupation(), player.level()))
+        .unwrap_or_default();
+    let mut attack = AttackInformation::for_master(phalanx.master);
+    attack.skill_id = phalanx.skill_id;
+    attack.skill_level = phalanx.skill_level as u8;
+    attack.damage_factor = (f64::from(phalanx.damage_factor) * f64::from(0.01_f32)) as f32;
     let minimum = combat.minimum_attack as i32;
     let maximum = combat.maximum_attack as i32;
     let delta = maximum.wrapping_sub(minimum);
     let width = if delta < 0 { delta.wrapping_neg() } else { delta }.wrapping_add(1);
     let physical = minimum.wrapping_add(game.skill_random_below(width));
-    let mut attack = AttackInformation {
-        skill_id: phalanx.skill_id,
-        skill_level: phalanx.skill_level as u8,
-        attacker_type: phalanx.master.master_type,
-        attacker_id: phalanx.master.master_id,
-        attacker_team_id: phalanx.master.master_team_id,
-        attacker_faction_id: phalanx.master.master_guild_id,
-        attacker_union_id: phalanx.master.master_union_id,
-        hit_modifier: 0,
-        damage_factor: (f64::from(phalanx.damage_factor) * f64::from(0.01_f32)) as f32,
-        damage_modifier: 0,
-        critical: false,
-        blast_attack: false,
-        full_miss: 0,
-        damages: vec![
-            AttackPower { kind: AttackPowerType::Physical, hp_damage: physical.max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 },
-        ],
+    attack.damages.push(AttackPower {
+        kind: AttackPowerType::Physical, hp_damage: physical.max(0), mp_damage: 0,
+    });
+    let player = game.find_player(phalanx.master.master_id);
+    let element = player.map_or(0, |player| player.combat_properties().add_element_attack as i32);
+    attack.damages.push(AttackPower {
+        kind: AttackPowerType::Element, hp_damage: element.max(0), mp_damage: 0,
+    });
+    let Some(player) = player else {
+        // Оригинальный soul-getter безусловно разыменовывал NULL-источник.
+        // Безопасный выход сохраняет уже рассчитанные записи и не добавляет
+        // ни выдуманный soul-урон, ни недостигнутый критический RNG.
+        return Some((attack, combat, occupation, level));
     };
+    attack.damages.push(AttackPower {
+        kind: AttackPowerType::Soul,
+        hp_damage: i32::from(player.combat_properties().add_soul_attack),
+        mp_damage: 0,
+    });
     if game.skill_random_below(100) < phalanx.critical_chance {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();

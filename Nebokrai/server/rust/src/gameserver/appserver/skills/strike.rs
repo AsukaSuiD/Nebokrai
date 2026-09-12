@@ -2,7 +2,9 @@
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/strike.cpp.
 //! Зарегистрированный навык хранит подготовку и фоновый полёт; прямой удар
 //! принадлежит OnBeenAttacked цели, а последующее оглушение — Rush2State (0x7C).
-//! Общий End завершает навык и единожды выполняет унаследованный AfterUseSkill.
+//! Каждый terminal явно вызывает зарегистрированный End по исходному ключу:
+//! End(1) выполняет AfterUseSkill, End(0) — без износа и reuse. Очередь затем
+//! освобождает команду; уже завершённый callback-ом экземпляр не получает End снова.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -61,21 +63,30 @@ pub(crate) const fn is_strike_dispatch(dispatch: PlayerSkillDispatch) -> bool {
 }
 
 pub(crate) fn complete_player_strike<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, STRIKE_SKILL_ID)
-        .map(SkillExecutionKernel::dispatch)
-    else { return false; };
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
+    finish_strike(game, player_id, ai, 1, SkillTermination::Completed, runtime)
 }
 
 pub(crate) fn cancel_player_strike<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, nonzero_end: bool, runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, STRIKE_SKILL_ID)
-        .map(SkillExecutionKernel::dispatch)
+    finish_strike(game, player_id, ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime)
+}
+
+fn finish_strike<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, argument: i32,
+    termination: SkillTermination, runtime: &mut Runtime,
+) -> bool {
+    let Some(instance) = game.registered_player_skill(player_id, STRIKE_SKILL_ID) else { return false; };
+    let Some(dispatch) = game.registered_skill(instance).and_then(MoveShapeSkill::player_dispatch)
     else { return false; };
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
+    if game.registered_skill(instance).is_some_and(|skill| !skill.lifecycle().is_ended()) {
+        game.with_published_player_ai(player_id, ai, |game| {
+            let _ = game.end_registered_instance(instance, argument, termination, runtime);
+        });
+    }
+    game.finish_player_skill(player_id, ai, dispatch, termination)
 }
 
 fn target(game: &CGame, player_id: i32) -> Option<(i32, ShapeIdentity)> {
@@ -295,6 +306,29 @@ pub(crate) fn execute_player_strike<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_strike_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
+    let instance = game.registered_player_skill(player_id, STRIKE_SKILL_ID);
+    let result = execute_stage(game, player_id, dispatch, ai, runtime);
+    let end = match result.state {
+        QueuedSkillExecutionState::Begun | QueuedSkillExecutionState::Pending => None,
+        QueuedSkillExecutionState::Completed => Some((1, SkillTermination::Completed)),
+        QueuedSkillExecutionState::Rejected => Some((0, SkillTermination::Rejected)),
+        QueuedSkillExecutionState::RejectedAfterUse => Some((1, SkillTermination::Rejected)),
+    };
+    // Begin уже отправил свой visual 2; End(0) закрывает отказ до возврата
+    // в расписание. После damage callbacks нельзя искать замену навыка по ID.
+    if let Some((instance, (argument, termination))) = instance.zip(end)
+        && game.registered_skill(instance).is_some_and(|skill| !skill.lifecycle().is_ended())
+    {
+        game.with_published_player_ai(player_id, ai, |game| {
+            let _ = game.end_registered_instance(instance, argument, termination, runtime);
+        });
+    }
+    result
+}
+
+fn execute_stage<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
     if game.player_skill_execution(player_id, STRIKE_SKILL_ID).is_none() {
         return begin_strike(game, player_id, dispatch, runtime);
     }

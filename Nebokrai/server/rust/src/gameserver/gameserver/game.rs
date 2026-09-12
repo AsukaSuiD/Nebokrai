@@ -728,7 +728,7 @@ mod godbless;
 mod periodicattack;
 mod playerskillschedule;
 #[path = "../appserver/skills/baseattackruntime.rs"]
-mod baseattackruntime;
+pub(crate) mod baseattackruntime;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -1027,7 +1027,7 @@ use crate::gameserver::appserver::shape::{
 };
 use crate::gameserver::appserver::skills::baseattack::{
     cancel_player_base_attack,
-    finish_player_base_attack, BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
+    BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
     SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     real_distance,
@@ -1145,19 +1145,19 @@ use crate::gameserver::appserver::skills::fireball::{
     cancel_player_fire_ball, execute_player_fire_ball, is_fire_ball_dispatch, FIRE_BALL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::fireballphalanx::{
-    calculate_owned_fire_ball_attack, fire_ball_targets, FireBallPhalanxTick,
+    calculate_owned_fire_ball_attack, FireBallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::itemskill2::{
     cancel_player_item_skill_2, execute_player_item_skill_2, is_item_skill_2_dispatch,
     ITEM_SKILL_2_ID,
 };
-use crate::gameserver::appserver::skills::thunderfirephalanx::{calculate_owned_thunder_fire_attack, thunder_fire_targets, ThunderFirePhalanxTick};
+use crate::gameserver::appserver::skills::thunderfirephalanx::{calculate_owned_thunder_fire_attack, ThunderFirePhalanxTick};
 use crate::gameserver::appserver::skills::thunderblow::{
     cancel_player_thunder_blow, execute_player_thunder_blow, is_thunder_blow_dispatch,
     THUNDER_BLOW_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::thunderblowphalanx::{
-    calculate_owned_thunder_blow_attack, thunder_blow_targets, ThunderBlowPhalanxTick,
+    calculate_owned_thunder_blow_attack, ThunderBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunderslash::{
     cancel_player_thunder_slash, execute_player_thunder_slash, is_thunder_slash_dispatch,
@@ -1190,7 +1190,7 @@ use crate::gameserver::appserver::skills::firewall::{
     cancel_player_fire_wall, execute_player_fire_wall, is_fire_wall_target, FIRE_WALL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::firewallphalanx::{
-    calculate_owned_fire_wall_attack, fire_wall_targets, FireWallPhalanxTick,
+    calculate_owned_fire_wall_attack, FireWallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::poisonfog::{
     cancel_player_poison_fog, complete_player_poison_fog, execute_player_poison_fog,
@@ -1357,7 +1357,7 @@ use crate::gameserver::appserver::skills::littleflash::{
 };
 use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
-    calculate_owned_chaos_sphere_attack, chaos_sphere_targets, ChaosSpherePhalanxTick,
+    calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
 };
 use crate::gameserver::appserver::skills::lightning::{
     cancel_player_lightning, complete_player_lightning, execute_player_lightning,
@@ -1452,7 +1452,7 @@ use crate::gameserver::appserver::skills::snowstorm::{
 };
 use crate::gameserver::appserver::skills::snowstormphalanx::{
     calculate_owned_snow_storm_attack, execute_owned_monster_snow_storm_target,
-    snow_storm_targets, CSnowStormPhalanx, SnowStormPhalanxTick,
+    CSnowStormPhalanx, SnowStormPhalanxTick,
 };
 use crate::gameserver::appserver::skills::weak::{
     cancel_player_weak, complete_player_weak, execute_player_weak, is_weak_target, WEAK_SKILL_ID,
@@ -1466,7 +1466,7 @@ use crate::gameserver::appserver::skills::yinyang2::{
     execute_player_yin_yang_2, is_yin_yang_2_target, YIN_YANG_2_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::yinyangphalanx::{
-    calculate_owned_yin_yang_attack, yin_yang_targets, YinYangPhalanxTick,
+    calculate_owned_yin_yang_attack, YinYangPhalanxTick,
 };
 use crate::gameserver::appserver::skills::godpunishment::{
     cancel_player_god_punishment, complete_player_god_punishment,
@@ -1488,14 +1488,14 @@ use crate::gameserver::appserver::skills::soulmirror::{
     execute_player_soul_mirror, is_soul_mirror_skill, SOUL_MIRROR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::godpunishmentphalanx::{
-    calculate_owned_god_punishment_attack, god_punishment_targets,
+    calculate_owned_god_punishment_attack,
     GodPunishmentPhalanxTick,
 };
 use crate::gameserver::appserver::skills::godthunderphalanx::{
-    calculate_owned_god_thunder_attack, god_thunder_targets, GodThunderPhalanxTick,
+    calculate_owned_god_thunder_attack, GodThunderPhalanxTick,
 };
 use crate::gameserver::appserver::skills::godthunderphalanx2::{
-    calculate_owned_god_thunder_2_attack, god_thunder_2_targets, GodThunder2PhalanxTick,
+    calculate_owned_god_thunder_2_attack, GodThunder2PhalanxTick,
 };
 use crate::gameserver::appserver::skills::godbless::{
     cancel_player_god_bless, complete_player_god_bless, execute_player_god_bless,
@@ -1561,20 +1561,20 @@ use crate::gameserver::appserver::skills::thunder::{
     THUNDER_SKILL_ID, execute_battle_fairy_thunder,
 };
 use crate::gameserver::appserver::skills::thunderphalanx::{
-    calculate_owned_thunder_attack, thunder_targets, CThunderPhalanx, ThunderPhalanxTick,
+    calculate_owned_thunder_attack, CThunderPhalanx, ThunderPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunder2::{
     LEIMING2_SKILL_ID, execute_battle_fairy_leiming2,
 };
 use crate::gameserver::appserver::skills::thunder2phalanx::{
-    calculate_owned_leiming2_attack, leiming2_targets, CLeimingPhalanx2,
+    calculate_owned_leiming2_attack, CLeimingPhalanx2,
     Leiming2PhalanxTick,
 };
 use crate::gameserver::appserver::skills::tianhuo::{
     TIANHUO_SKILL_ID, execute_battle_fairy_tianhuo,
 };
 use crate::gameserver::appserver::skills::tianhuophalanx::{
-    calculate_owned_tianhuo_attack, tianhuo_targets, CTianhuoPhalanx,
+    calculate_owned_tianhuo_attack, CTianhuoPhalanx,
     TianhuoPhalanxTick,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
@@ -4753,13 +4753,6 @@ pub(crate) struct BuildCombatSnapshot {
     pub(crate) hp: u32,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BuildCombatMutation {
-    pub(crate) current_hp: u32,
-    pub(crate) died: bool,
-    pub(crate) script: Vec<u8>,
 }
 
 struct KnownCountryCamp {
@@ -39689,7 +39682,7 @@ impl CGame {
         } else {
             match skill_id {
             BASE_ATTACK_SKILL_ID => {
-                cancel_player_base_attack(self, player_id, &mut player_ai, runtime)
+                cancel_player_base_attack(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             BASE_MAGIC_SKILL_ID => {
                 cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
@@ -39921,7 +39914,7 @@ impl CGame {
                 cancel_player_explosive_arrow(self, player_id, skill_id, &mut player_ai, runtime)
             }
             STRIKE_SKILL_ID => {
-                cancel_player_strike(self, player_id, &mut player_ai, runtime)
+                cancel_player_strike(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             YAKSHA_SLASH_SKILL_ID => {
                 cancel_player_yaksha_slash(self, player_id, &mut player_ai, runtime)
@@ -43023,137 +43016,6 @@ impl CGame {
             })
     }
 
-    pub(crate) fn apply_stationary_build_damage(
-        &mut self,
-        player_id: i32,
-        region_id: i32,
-        identity: ShapeIdentity,
-        damage: u32,
-    ) -> Option<BuildCombatMutation> {
-        self.find_player(player_id)?;
-        let mut owner = self.take_region_owner(region_id)?;
-        let mutation = owner.stationary_build_mut(identity).map(|build| {
-            // `CCityGate` заменяет inherited `CBuild::OnDied` пустым virtual
-            // slot-ом; script запускается только для обычного `CBuild`.
-            let script = if identity.object_type == BUILD_OBJECT_TYPE as i32 {
-                build.script.clone()
-            } else {
-                Vec::new()
-            };
-            build.apply_combat_damage(damage);
-            (build.hp(), build.hp() == 0, script)
-        });
-        let Some((current_hp, died, script)) = mutation else {
-            self.restore_region_owner(owner);
-            return None;
-        };
-        // `CBuild::OnDied` вызывает region-vtable `+0x68`, но у
-        // `ServerCountryRegion` этот слот остаётся пустым
-        // `CServerRegion::OnSymbolDestroy`. Победный `OnFlagDestroy` приходит
-        // отдельным сообщением `0x7FF22` владельцу `CountryWarSys`.
-        self.restore_region_owner(owner);
-        Some(BuildCombatMutation {
-            current_hp,
-            died,
-            script,
-        })
-    }
-
-    /// Общий достигнутый хвост `CFightDefense::Defense` для стационарной
-    /// постройки: применяет уже защищённую атаку, сохраняет порядок death
-    /// script -> `0xBF60B` -> action/block и формирует тот же damage wire для
-    /// базовой атаки и снаряда базовой магии.
-    pub(crate) fn apply_defended_player_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        region_id: i32,
-        identity: ShapeIdentity,
-        target_x: i32,
-        target_y: i32,
-        attack: &AttackInformation,
-        runtime: &mut Runtime,
-    ) -> bool {
-        let Some(target) = self.stationary_build_combat_snapshot(region_id, identity) else {
-            return false;
-        };
-        let damage = attack.hp_damage().min(target.hp);
-        if damage == 0 {
-            if attack.full_miss != 0 {
-                let mut missed = CMessage::new(0x000b_f612);
-                missed.add_byte(attack.full_miss);
-                missed.add_long(identity.object_type);
-                missed.add_long(identity.id);
-                let _ = self.send_shape_position_around(region_id, target_x, target_y, &missed);
-            }
-            return true;
-        }
-        let Some(mutation) = self.apply_stationary_build_damage(
-            player_id,
-            region_id,
-            identity,
-            damage,
-        ) else {
-            return false;
-        };
-
-        if mutation.died {
-            if !mutation.script.is_empty() {
-                let _ = self.run_script_file(
-                    &mutation.script,
-                    ScriptExecutionContext {
-                        player_id: Some(player_id),
-                        region_id: Some(region_id),
-                        ..ScriptExecutionContext::default()
-                    },
-                    runtime,
-                );
-            }
-            let mut died = CMessage::new(0x000b_f60b);
-            died.add_long(PLAYER_TYPE);
-            died.add_long(player_id);
-            died.add_long(identity.object_type);
-            died.add_long(identity.id);
-            // `CMoveShape::ApplyFinalDamage` для build агрегирует фактически
-            // снятый HP в единственный `tagDamage` типа `0`.
-            died.add_ulong(damage);
-            died.base_mut().add_char(1);
-            Self::append_base_attack_tail(&mut died, attack);
-            let _ = self.send_shape_position_around(region_id, target_x, target_y, &died);
-            return self.finish_stationary_build_death(region_id, identity);
-        }
-
-        if attack.full_miss != 0 {
-            let mut missed = CMessage::new(0x000b_f612);
-            missed.add_byte(attack.full_miss);
-            missed.add_long(identity.object_type);
-            missed.add_long(identity.id);
-            let _ = self.send_shape_position_around(region_id, target_x, target_y, &missed);
-            return true;
-        }
-
-        let mut hurt = CMessage::new(0x000b_f60a);
-        hurt.add_long(PLAYER_TYPE);
-        hurt.add_long(player_id);
-        hurt.add_long(identity.object_type);
-        hurt.add_long(identity.id);
-        hurt.add_byte(1);
-        hurt.add_byte(0);
-        hurt.add_ulong(damage);
-        hurt.add_ulong(mutation.current_hp);
-        Self::append_base_attack_tail(&mut hurt, attack);
-        let _ = self.send_shape_position_around(region_id, target_x, target_y, &hurt);
-        if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
-            // Exact `CBuild::OnBeenAttacked`: derived callback `+0x180`
-            // исполняется только после завершённого `SendToAround`.
-            let _ = self.city_gate_on_been_hurted(
-                region_id,
-                identity.id,
-                PLAYER_TYPE,
-                player_id,
-            );
-        }
-        true
-    }
 
     pub(crate) fn finish_stationary_build_death(
         &mut self,
@@ -44285,577 +44147,146 @@ impl CGame {
         }
     }
 
-    fn apply_summoned_skill_to_player<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        phalanx: &SummonedSkillShape,
-        target_id: i32,
-        region_id: i32,
-        war_soul_hit: bool,
-        runtime: &mut Runtime,
-    ) -> bool {
-        let master = phalanx.master();
-        let Some((
-            target_properties,
-            target_level,
-            target_health,
-            target_mana,
-            target_war_soul_mana,
-        )) = self
-            .find_player(target_id)
-            .filter(|target| !target.is_dead() && target.server_region_id() == Some(region_id))
-            .map(|target| {
-                (
-                    target.combat_properties(),
-                    target.level(),
-                    target.health(),
-                    target.mana(),
-                    target.war_soul_mana(&self.goods_factory),
-                )
-            })
-        else {
-            return false;
-        };
-        if !self.player_base_attackable(master.master_id, target_id) {
-            self.enter_player_combat_state(master.master_id);
-            return false;
-        }
-        let _ = self.player_on_first_skill(master.master_id, target_id, Some(region_id), runtime);
-        if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
-            heartless.prepare_target(
-                self,
-                region_id,
-                ShapeIdentity { object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID },
-                &mut || runtime.now_milliseconds(),
-            );
-        }
-        let Some((mut attack, mut attacker_properties, attacker_occupation, _)) =
-            self.calculate_summoned_skill_attack(phalanx, target_level)
-        else {
-            return true;
-        };
-        let mut restored_war_soul_scales = None;
-        if let Some((properties, _, restored)) =
-            self.war_soul_defense_projection(master.master_id, attack.skill_id)
-        {
-            attacker_properties = properties;
-            restored_war_soul_scales = Some(restored);
-        }
-        if war_soul_hit {
-            let raw_damage = attack.damages.iter().fold(0i32, |total, power| total.wrapping_add(power.hp_damage));
-            let da_kong_key = self.globe_setup.da_kong_key();
-            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-            let outcome = players
-                .get_mut(&target_id)
-                .and_then(|target| target.apply_war_soul_hit(raw_damage, goods_factory, da_kong_key));
-            if let Some(outcome) = outcome {
-                if outcome.broken {
-                    let mut broken = CMessage::new(0x000b_f92f);
-                    broken.add_long(PLAYER_TYPE);
-                    broken.add_long(target_id);
-                    let _ = self.send_player_shape_around(target_id, None, &broken);
-                }
-                if outcome.broadcast_previous_status {
-                    let mut status = CMessage::new(0x000b_f930);
-                    status.add_long(PLAYER_TYPE);
-                    status.add_long(target_id);
-                    let _ = self.send_player_shape_around(target_id, None, &status);
-                }
-                let _ = self.send_battle_fairy_goods_update(&outcome.update);
-            }
-        } else {
-            let pillar_damage_factor = self.find_player(target_id)
-                .and_then(CPlayer::pillar_state).map(|state| state.damage_factor());
-            let mut defense_shields = self
-                .find_player_mut(target_id)
-                .map(CPlayer::take_defense_shields)
-                .unwrap_or_default();
-            let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-            defend_player_base_attack(
-                &mut attack,
-                attacker_properties,
-                attacker_occupation,
-                target_properties,
-                target_mana,
-                target_war_soul_mana,
-                &self.globe_setup,
-                &mut random,
-                defense_shields.as_mut_slice(),
-                pillar_damage_factor,
-            );
-            if let Some(target) = self.find_player_mut(target_id) {
-                target.restore_defense_shields(defense_shields);
-            }
-            self.restore_war_soul_defense_projection(
-                master.master_id,
-                restored_war_soul_scales,
-            );
-        }
-        let (damage, mana_damage) =
-            Self::applied_attack_damage(&attack, target_health, target_mana);
-        if damage == 0 && mana_damage == 0 {
-            if attack.full_miss != 0 {
-                let mut missed = CMessage::new(0x000b_f612);
-                missed.add_byte(attack.full_miss);
-                missed.add_long(PLAYER_TYPE);
-                missed.add_long(target_id);
-                let _ = self.send_player_shape_around(target_id, None, &missed);
-            }
-            self.increase_owned_player_rp(master.master_id, true, 0);
-            return true;
-        }
-        let current_health = target_health - damage;
-        if let Some(target) = self.find_player_mut(target_id) {
-            target.set_health(current_health);
-            target.set_mana(target_mana - mana_damage);
-            if current_health != 0 && attack.full_miss == 0 {
-                target
-                    .movement_shape_mut()
-                    .set_action(5);
-            }
-        }
-        if damage != 0 {
-            self.increase_owned_player_rp(target_id, false, damage as u16);
-        }
-        if current_health != 0 && attack.full_miss == 0 {
-            let _ = self.queue_player_hurt_ai(target_id, damage, runtime);
-            let _ = self.retarget_passive_pets_after_player_hurt(
-                target_id,
-                ShapeIdentity {
-                    object_type: master.master_type,
-                    id: master.master_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-            );
-            let _ = self.notify_country_after_player_hurt(
-                target_id,
-                ShapeIdentity {
-                    object_type: master.master_type,
-                    id: master.master_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                runtime,
-            );
-            let _ = finish_player_blind_states_on_defense(self, target_id, 0);
-        }
-        if current_health == 0 {
-            let victim = ShapeIdentity { object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
-            let attacker = KillingAttackIdentity::from(&attack);
-            self.begin_move_shape_death(region_id, victim, attacker, runtime);
-            let mut died = CMessage::new(0x000b_f60b);
-            died.add_long(master.master_type);
-            died.add_long(master.master_id);
-            died.add_long(PLAYER_TYPE);
-            died.add_long(target_id);
-            died.add_ulong(damage);
-            died.base_mut().add_char(1);
-            Self::append_base_attack_tail(&mut died, &attack);
-            let _ = self.send_player_shape_around(target_id, None, &died);
-            self.record_move_shape_death(region_id, victim, attacker, runtime);
-        } else if attack.full_miss != 0 {
-            let mut missed = CMessage::new(0x000b_f612);
-            missed.add_byte(attack.full_miss);
-            missed.add_long(PLAYER_TYPE);
-            missed.add_long(target_id);
-            let _ = self.send_player_shape_around(target_id, None, &missed);
-        } else {
-            let mut hurt = CMessage::new(0x000b_f60a);
-            hurt.add_long(master.master_type);
-            hurt.add_long(master.master_id);
-            hurt.add_long(PLAYER_TYPE);
-            hurt.add_long(target_id);
-            Self::append_hurt_damage_records(&mut hurt, damage, mana_damage);
-            hurt.add_ulong(current_health);
-            Self::append_base_attack_tail(&mut hurt, &attack);
-            let _ = self.send_player_shape_around(target_id, None, &hurt);
-            self.damage_player_armor(target_id);
-        }
-        self.increase_owned_player_rp(master.master_id, true, 0);
-        true
-    }
-
-    fn apply_summoned_skill_to_monster<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        phalanx: &SummonedSkillShape,
-        target_id: i32,
-        region_id: i32,
-        now_ms: u32,
-        runtime: &mut Runtime,
-    ) -> bool {
-        use crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi;
-
-        let master = phalanx.master();
-        let attacker = ShapeIdentity {
-            object_type: master.master_type,
-            id: master.master_id,
-            ex_id: CGuid::GUID_INVALID,
-        };
-        let Some(property) = self
-            .find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target_id))
-            .and_then(CMonster::base_property_key)
-            .and_then(|key| self.find_monster_property_by_origin_name(key))
-            .cloned()
-        else {
-            return false;
-        };
-        let Some((target_properties, target_health, tamed, carriage, god, target_master, x, y)) =
-            self.find_region(region_id).and_then(|owner| {
-                let monster = owner.base().find_monster_by_id(target_id)?;
-                let shape = monster.move_shape().shape();
-                Some((
-                    monster.combat_properties(&property),
-                    monster.hit_points(),
-                    monster.is_tamed(),
-                    monster.is_carriage(&property),
-                    monster.move_shape().is_god(),
-                    monster.master_info(),
-                    shape.get_tile_x().ok()?,
-                    shape.get_tile_y().ok()?,
-                ))
-            })
-        else {
-            return false;
-        };
-        if target_health == 0 || god || !self.monster_attackable_by_player(master.master_id, region_id, &property) {
-            return false;
-        }
-        let owned_target_player = ((tamed || carriage)
-            && target_master.master_type == PLAYER_TYPE
-            && target_master.master_id != 0)
-            .then_some(target_master.master_id);
-        if let Some(owner_id) = owned_target_player {
-            let permitted = if owner_id == master.master_id {
-                master.permitted_to_kill_criminal != 0
-            } else {
-                self.player_base_attackable(master.master_id, owner_id)
-            };
-            if !permitted {
-                self.enter_player_combat_state(master.master_id);
-                return false;
-            }
-            let _ = self.player_on_first_skill(master.master_id, owner_id, Some(region_id), runtime);
-        }
-        self.apply_guard_monster_first_attack(master.master_id, region_id, &property, runtime);
-        if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
-            heartless.prepare_target(
-                self,
-                region_id,
-                ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID },
-                &mut || runtime.now_milliseconds(),
-            );
-        }
-        let Some((mut attack, attacker_properties, attacker_occupation, attacker_level)) =
-            self.calculate_summoned_skill_attack(phalanx, target_properties.level)
-        else {
-            return true;
-        };
-        let (attacker_properties, attacker_level, restored_war_soul_scales) =
-            if let Some((properties, level, restored)) =
-                self.war_soul_defense_projection(master.master_id, attack.skill_id)
-            {
-                (properties, level, Some(restored))
-            } else {
-                (attacker_properties, attacker_level, None)
-            };
-        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        defend_monster_base_attack(
-            &mut attack,
-            attacker_properties,
-            attacker_occupation,
-            attacker_level,
-            target_properties,
-            &self.globe_setup,
-            &mut random,
-        );
-        self.restore_war_soul_defense_projection(master.master_id, restored_war_soul_scales);
-        let damage = attack.hp_damage().min(target_health);
-        let current_health = target_health - damage;
-        let (primary_ai, pet_ai) = self.find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target_id))
-            .map(|monster| (
-                monster.active_primary_ai_type(),
-                matches!(monster.active_ai(), Some(ActiveMonsterAi::Pet)),
-            ))
-            .unwrap_or((None, false));
-        let lord_hurt_plan = (primary_ai == Some(19)
-            && attack.full_miss == 0
-            && damage != 0
-            && current_health != 0)
-            .then(|| {
-                crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
-                    self,
-                    region_id,
-                    target_id,
-                    &property,
-                )
-            });
-        let stiffen_setup = self.globe_setup.stiffen_setup();
-        let mut stiffen_delay = 0;
-        if let Some(mut owner) = self.take_region_owner(region_id) {
-            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
-                if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                    stiffen_delay = monster.roll_stiffen(
-                        damage,
-                        &property,
-                        stiffen_setup,
-                        || runtime.now_milliseconds(),
-                        |maximum| game_legacy_random(&mut self.random_state, maximum),
-                    );
-                }
-                monster.set_hit_points(current_health);
-                if damage != 0 && attack.full_miss == 0 && current_health != 0 {
-                    monster.move_shape_mut().shape_mut().set_action(5);
-                    if pet_ai {
-                        monster.when_pet_been_hurted_by(attacker, now_ms);
-                    } else if primary_ai == Some(1) {
-                        monster.when_passive_gladiator_hurted_by(
-                            attacker,
-                            now_ms,
-                            false,
-                        );
-                    } else if primary_ai == Some(2) {
-                        // Владелец AI2 применит реакцию после освобождения
-                        // изменяемого заимствования монстра.
-                    } else if primary_ai == Some(13) {
-                        // Поиск AI13 выполняется после освобождения изменяемого
-                        // заимствования монстра.
-                    } else if primary_ai == Some(11) {
-                        // Поиск AI11 выполняется после освобождения изменяемого
-                        // заимствования монстра.
-                    } else if primary_ai == Some(20) {
-                        // AI20 разрешает владельца призыва и связывает
-                        // близнеца после освобождения изменяемого заимствования.
-                    } else if primary_ai == Some(19) {
-                        // AI19 применяет Defense, spatial-step и выбор цели
-                        // после освобождения заимствования монстра.
-                    } else if matches!(primary_ai, Some(8 | 17 | 100 | 101)) {
-                        monster.when_been_hurted(now_ms);
-                    } else {
-                        monster.when_been_hurted_by(
-                            attacker,
-                            false,
-                            now_ms,
-                        );
-                    }
-                }
-            }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && primary_ai == Some(2)
-            {
-                crate::gameserver::appserver::ai::smartgladiator::apply_player_hurt_response(
-                    self,
-                    owner.base_mut(),
-                    target_id,
-                    &property,
-                    master.master_id,
-                    runtime,
-                );
-            }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && primary_ai == Some(11)
-            {
-                crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt(
-                    self,
-                    owner.base_mut(),
-                    target_id,
-                    &property,
-                    now_ms,
-                );
-            }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && primary_ai == Some(13)
-            {
-                crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt(
-                    self,
-                    owner.base_mut(),
-                    target_id,
-                    &property,
-                    now_ms,
-                );
-            }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && primary_ai == Some(20)
-            {
-                let _ = retarget_jiumai_after_hurt(
-                    self,
-                    owner.base_mut(),
-                    target_id,
-                    attacker,
-                    runtime,
-                );
-            }
-            if let Some(plan) = lord_hurt_plan {
-                let _ = crate::gameserver::appserver::ai::lord::apply_lord_hurt_response(
-                    self,
-                    owner.base_mut(),
-                    target_id,
-                    attacker,
-                    || runtime.now_milliseconds(),
-                    plan,
-                );
-            }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && matches!(primary_ai, Some(8 | 17 | 100 | 101))
-            {
-                crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
-                    self,
-                    owner.base_mut(),
-                    target_id,
-                    &property,
-                );
-            }
-            if stiffen_delay != 0
-                && let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id)
-            {
-                monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
-            }
-            self.restore_region_owner(owner);
-            if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                let _ = finish_blind_states_on_defense(
-                    self,
-                    region_id,
-                    ShapeIdentity {
-                        object_type: MONSTER_TYPE,
-                        id: target_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    now_ms,
-                );
-            }
-        }
-        if attack.full_miss != 0 && current_health != 0 {
-            let mut missed = CMessage::new(0x000b_f612);
-            missed.add_byte(attack.full_miss);
-            missed.add_long(MONSTER_TYPE);
-            missed.add_long(target_id);
-            let _ = self.send_shape_position_around(region_id, x, y, &missed);
-            self.increase_owned_player_rp(master.master_id, true, 0);
-            return true;
-        }
-        if damage == 0 {
-            self.increase_owned_player_rp(master.master_id, true, 0);
-            return true;
-        }
-        if current_health != 0 {
-            let mut hurt = CMessage::new(0x000b_f60a);
-            hurt.add_long(master.master_type);
-            hurt.add_long(master.master_id);
-            hurt.add_long(MONSTER_TYPE);
-            hurt.add_long(target_id);
-            hurt.add_byte(1);
-            hurt.add_byte(0);
-            hurt.add_ulong(damage);
-            hurt.add_ulong(current_health);
-            Self::append_base_attack_tail(&mut hurt, &attack);
-            let _ = self.send_shape_position_around(region_id, x, y, &hurt);
-            let _ = self.monster_on_been_hurted(
-                region_id,
-                target_id,
-                master.master_type,
-                master.master_id,
-                runtime,
-            );
-            self.increase_owned_player_rp(master.master_id, true, 0);
-            return true;
-        }
-
-        let victim = ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
-        let killing_attacker = KillingAttackIdentity::from(&attack);
-        self.begin_move_shape_death(region_id, victim, killing_attacker, runtime);
-        let mut died = CMessage::new(0x000b_f60b);
-        died.add_long(master.master_type);
-        died.add_long(master.master_id);
-        died.add_long(MONSTER_TYPE);
-        died.add_long(target_id);
-        died.add_ulong(damage);
-        died.base_mut().add_char(1);
-        Self::append_base_attack_tail(&mut died, &attack);
-        let _ = self.send_move_shape_around(region_id, victim, &died);
-        self.record_move_shape_death(region_id, victim, killing_attacker, runtime);
-        self.increase_owned_player_rp(master.master_id, true, 0);
-        true
-    }
-
-    /// Точная ветвь трёх базовых projectile-owner-ов для `CBuild/CCityGate`.
-    /// Оригинальный virtual `GetLevel` обеих построек возвращает `1`; магия
-    /// боевой феи уровень не запрашивает. Каждый снаряд затем передаёт свою
-    /// рассчитанную атаку общему `CFightDefense::Defense`.
-    fn apply_player_projectile_to_stationary_build<Runtime: GameMainLoopRuntime>(
+    /// Caller-половина phalanx Attack: проверка живой цели, Calculate и +15C.
+    /// Защита, PK-пролог, AI и смерть остаются у общего приёмника попадания.
+    fn apply_summoned_skill_to_target<Runtime: GameMainLoopRuntime>(
         &mut self,
         phalanx: &SummonedSkillShape,
         target: ShapeIdentity,
         region_id: i32,
+        war_soul_hit: bool,
         runtime: &mut Runtime,
     ) -> bool {
-        if !matches!(
-            phalanx,
-            SummonedSkillShape::BaseMagic(_)
-                | SummonedSkillShape::Archery(_)
-                | SummonedSkillShape::BattleFairyBaseMagic(_)
-        ) {
+        if self.base_magic_target_dead(region_id, target) {
             return false;
         }
         let master = phalanx.master();
-        if master.master_type != PLAYER_TYPE
-            || !self.stationary_build_attackable_by_player(
-                master.master_id,
-                region_id,
-                target,
-            )
+        let thunder_slash_source = if matches!(phalanx, SummonedSkillShape::ThunderSlash(_)) {
+            self.find_player(master.master_id).map(|player| player.shape().identity())
+        } else { None };
+        // Только ThunderSlash проверяет IsAttackAble внутри Attack. Остальные
+        // caller-ы проверяют допуск при сканировании либо вовсе не проверяют его.
+        if let Some(source) = thunder_slash_source
+            && !self.live_skill_target_attackable(region_id, source, target)
         {
             return false;
         }
-        let Some(snapshot) = self.stationary_build_combat_snapshot(region_id, target) else {
-            return false;
-        };
-        if snapshot.hp == 0 {
-            return false;
+        if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
+            heartless.prepare_target(self, region_id, target, &mut || runtime.now_milliseconds());
         }
-        let Some(view) = self
-            .find_region(region_id)
-            .and_then(|owner| owner.stationary_shape_view(target))
-        else {
-            return false;
-        };
-        let Some((mut attack, attacker, occupation, _)) =
-            self.calculate_summoned_skill_attack(phalanx, 1)
-        else {
-            return true;
-        };
-        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        defend_build_base_attack(
-            &mut attack,
-            attacker,
-            occupation,
-            snapshot.defense,
-            snapshot.element_resistance,
-            &self.globe_setup,
-            &mut random,
-        );
-        let applied = self.apply_defended_player_attack_to_stationary_build(
-            master.master_id,
-            region_id,
-            target,
-            view.tile_x,
-            view.tile_y,
-            &attack,
-            runtime,
-        );
-        if applied {
-            self.increase_owned_player_rp(master.master_id, true, 0);
+        if let SummonedSkillShape::LightingArrow(arrow) = phalanx {
+            crate::gameserver::appserver::skills::heartlessarrow::apply_daub_poison(self, arrow.master().master_id, region_id, target,
+                &mut || runtime.now_milliseconds());
         }
-        applied
+        let target_level = self.move_shape_level(region_id, target).unwrap_or(1);
+        // Calculate оригинала возвращает void. Отсутствие источника/свойств
+        // не отменяет получение пустой атаки; частичные записи сохраняет owner.
+        let attack = self.calculate_summoned_skill_attack(phalanx, target_level)
+            .map(|(attack, _, _, _)| attack)
+            .unwrap_or_else(|| AttackInformation::for_master(master));
+        match target.object_type {
+            PLAYER_TYPE => self.receive_player_skill_attack(
+                master, target.id, region_id, attack, war_soul_hit, runtime,
+            ),
+            MONSTER_TYPE => self.receive_monster_skill_attack(
+                master, target.id, region_id, attack, runtime,
+            ),
+            1100 | 1200 => self.apply_direct_player_skill_attack_to_stationary_build(
+                master.master_id, region_id, target, attack, runtime,
+            ),
+            _ => return false,
+        }
+        if let Some(source) = thunder_slash_source {
+            self.increase_owned_player_rp(source.id, true, 0);
+        }
+        true
     }
+
+    /// Обход области считает попытки Attack, а не принятый целью урон.
+    /// Боевые феи не попадают в body-dedup и не останавливают FireBall.
+    fn apply_scanned_summoned_skill_to_target<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        phalanx: &SummonedSkillShape,
+        target: ShapeIdentity,
+        region_id: i32,
+        war_soul_hit: bool,
+        attacked: &mut Vec<ShapeIdentity>,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let deduplicate = matches!(phalanx,
+            SummonedSkillShape::FireBall(_) | SummonedSkillShape::ChaosSphere(_)
+            | SummonedSkillShape::ThunderFire(_) | SummonedSkillShape::FireWall(_)
+            | SummonedSkillShape::YinYang(_) | SummonedSkillShape::Leiming2(_)
+            | SummonedSkillShape::Thunder(_)
+        );
+        if !war_soul_hit && deduplicate && attacked.contains(&target) { return false; }
+        if war_soul_hit {
+            let Some(source) = self.find_player(phalanx.master().master_id)
+                .map(|player| player.shape().identity()) else { return false; };
+            if self.find_player(target.id).is_none_or(|player| {
+                player.shape().get_action() == 6 || player.is_dead()
+            }) || !self.live_skill_target_attackable(region_id, source, target) {
+                return false;
+            }
+        } else if !self.summoned_skill_scan_target_allowed(region_id, phalanx.master(), target) {
+            return false;
+        }
+        self.apply_summoned_skill_to_target(phalanx, target, region_id, war_soul_hit, runtime);
+        if !war_soul_hit && deduplicate { attacked.push(target); }
+        if matches!(phalanx, SummonedSkillShape::HeartlessArrow(_) | SummonedSkillShape::ThunderBlow(_)
+            | SummonedSkillShape::Tianhuo(_) | SummonedSkillShape::GodPunishment(_))
+        {
+            self.end_damage_phalanx(region_id, phalanx.shape().identity().id);
+        }
+        !war_soul_hit
+    }
+
+    fn end_damage_phalanx(&mut self, region_id: i32, phalanx_id: i32) {
+        let shape = {
+            let Some(phalanx) = self.find_region_mut(region_id)
+                .and_then(|owner| owner.base_mut().find_skill_phalanx_mut(phalanx_id))
+            else { return; };
+            phalanx.shape_mut().set_change_state(SHAPE_CHANGE_DELETE);
+            phalanx.shape().clone()
+        };
+        if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+            let _ = self.send_shape_exit_around(region, &shape);
+        }
+    }
+
+    /// GetShape каждой клетки выполняется после попаданий по её боевым феям
+    /// и после всех callbacks предыдущей клетки. Снимок принадлежит только
+    /// текущему body-обходу; допуск проверяется непосредственно перед Attack.
+    fn apply_summoned_skill_cell<Runtime: GameMainLoopRuntime>(
+        &mut self, phalanx: &SummonedSkillShape, region_id: i32, x: i32, y: i32,
+        attacked: &mut Vec<ShapeIdentity>, runtime: &mut Runtime,
+    ) -> bool {
+        if matches!(phalanx, SummonedSkillShape::FireBall(_) | SummonedSkillShape::ChaosSphere(_)
+            | SummonedSkillShape::GodThunder2(_))
+        {
+            let players: Vec<_> = self.find_region(region_id)
+                .map(|region| region.base().war_souls_at(x, y).keys().copied().collect())
+                .unwrap_or_default();
+            for id in players {
+                if id as i32 == phalanx.master().master_id { continue; }
+                let target = ShapeIdentity { object_type: PLAYER_TYPE, id: id as i32, ex_id: CGuid::GUID_INVALID };
+                self.apply_scanned_summoned_skill_to_target(phalanx, target, region_id, true, attacked, runtime);
+            }
+        }
+        let mut shapes = Vec::new();
+        if let Some(region) = self.find_region(region_id) {
+            let _ = region.base().get_shapes(x, y, self.area_width, self.area_height, self, &mut shapes);
+        }
+        let mut attempted = false;
+        for shape in shapes {
+            if shape.identity == phalanx.shape().identity() { continue; }
+            attempted |= self.apply_scanned_summoned_skill_to_target(
+                phalanx, shape.identity, region_id, false, attacked, runtime,
+            );
+        }
+        attempted
+    }
+
 
     fn run_owned_skill_phalanx<Runtime: GameMainLoopRuntime>(
         &mut self,
@@ -45060,76 +44491,20 @@ impl CGame {
             }
             return true;
         }
-        let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
+        let (Some(tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
-        if let (Some(heartless_arrow_tick), SummonedSkillShape::HeartlessArrow(heartless)) =
+        let mut attacked_targets = Vec::new();
+        if let (Some(tick), SummonedSkillShape::HeartlessArrow(heartless)) =
             (heartless_arrow_tick, &phalanx)
         {
-            match heartless_arrow_tick {
+            match tick {
                 HeartlessArrowPhalanxTick::Scan => {
-                    let (Ok(tile_x), Ok(tile_y)) =
-                        (heartless.shape().get_tile_x(), heartless.shape().get_tile_y())
-                    else {
-                        return true;
-                    };
-                    let mut candidates = Vec::new();
-                    if let Some(region) = self.find_region(region_id) {
-                        let _ = region.base().get_shapes(
-                            tile_x,
-                            tile_y,
-                            self.area_width,
-                            self.area_height,
-                            self,
-                            &mut candidates,
-                        );
-                    }
-                    let mut applied = false;
-                    for candidate in candidates {
-                        let target = candidate.identity;
-                        if !heartless.accepts_candidate(target) {
-                            continue;
-                        }
-                        applied = match target.object_type {
-                            PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                                &phalanx,
-                                target.id,
-                                region_id,
-                                false,
-                                runtime,
-                            ),
-                            MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                                &phalanx,
-                                target.id,
-                                region_id,
-                                lifetime_now_ms,
-                                runtime,
-                            ),
-                            _ => false,
-                        };
-                        if applied {
-                            break;
-                        }
-                    }
-                    if applied {
-                        if let Some(mut owner) = self.take_region_owner(region_id) {
-                            if let Some(SummonedSkillShape::HeartlessArrow(heartless)) =
-                                owner.base_mut().find_skill_phalanx_mut(phalanx_id)
-                            {
-                                heartless.finish();
-                            }
-                            self.restore_region_owner(owner);
-                        }
-                        if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                            let _ = self.send_shape_exit_around(region, phalanx.shape());
-                        }
+                    if let (Ok(x), Ok(y)) = (heartless.shape().get_tile_x(), heartless.shape().get_tile_y()) {
+                        self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
                     }
                 }
-                HeartlessArrowPhalanxTick::Expired => {
-                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                        let _ = self.send_shape_exit_around(region, phalanx.shape());
-                    }
-                }
+                HeartlessArrowPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
             }
             return true;
         }
@@ -45160,109 +44535,59 @@ impl CGame {
             }
             return true;
         }
-        if let (Some(fire_ball_tick), SummonedSkillShape::FireBall(fire_ball)) =
-            (fire_ball_tick, &phalanx)
-        {
-            match fire_ball_tick {
+        if let (Some(tick), SummonedSkillShape::FireBall(_)) = (fire_ball_tick, &phalanx) {
+            match tick {
                 FireBallPhalanxTick::Pending => {}
                 FireBallPhalanxTick::Active { force_move, scan } => {
-                    if let Some((center_x, center_y, sampled_at_ms)) = scan
-                        && self.find_region(region_id)
-                            .is_some_and(|owner| owner.base().block_at(center_x, center_y) == Some(3))
+                    if let Some((x, y, _)) = scan
+                        && self.find_region(region_id).is_some_and(|owner| owner.base().block_at(x, y) == Some(3))
                     {
-                        let mut applied = false;
-                        for (target, war_soul_hit) in
-                            fire_ball_targets(self, region_id, fire_ball, center_x, center_y)
-                        {
-                            applied |= match target.object_type {
-                                PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                                    &phalanx, target.id, region_id, war_soul_hit, runtime,
-                                ),
-                                MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                                    &phalanx, target.id, region_id, sampled_at_ms, runtime,
-                                ),
-                                _ => false,
-                            };
+                        let mut attempted = false;
+                        for (x, y) in crate::gameserver::appserver::skills::fireballphalanx::CFireBallPhalanx::scope_cells(x, y) {
+                            attempted |= self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
                         }
-                        if applied
-                            && let Some(mut owner) = self.take_region_owner(region_id)
-                        {
-                            if let Some(SummonedSkillShape::FireBall(fire_ball)) =
-                                owner.base_mut().find_skill_phalanx_mut(phalanx_id)
-                            {
-                                fire_ball.finish();
-                            }
-                            self.restore_region_owner(owner);
-                        }
+                        if attempted { self.end_damage_phalanx(region_id, phalanx_id); }
                     }
-                    if let Some((destination_x, destination_y, duration_ms)) = force_move {
-                        let _ = self.force_move_fire_ball(
-                            region_id, phalanx_id, destination_x, destination_y, duration_ms,
-                        );
+                    if let Some((x, y, duration)) = force_move {
+                        self.force_move_fire_ball(region_id, phalanx_id, x, y, duration);
                     }
                 }
-                FireBallPhalanxTick::Expired => {
-                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                        let _ = self.send_shape_exit_around(region, phalanx.shape());
-                    }
-                }
+                FireBallPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
             }
             return true;
         }
-        if let (Some(thunder_fire_tick), SummonedSkillShape::ThunderFire(thunder_fire)) = (thunder_fire_tick, &phalanx) {
-            match thunder_fire_tick {
+        if let (Some(tick), SummonedSkillShape::ThunderFire(_)) = (thunder_fire_tick, &phalanx) {
+            match tick {
                 ThunderFirePhalanxTick::Pending => {}
                 ThunderFirePhalanxTick::Active { force_move, scan } => {
-                    if let Some((center_x, center_y, sampled_at_ms)) = scan
-                        && self.find_region(region_id).is_some_and(|owner| owner.base().block_at(center_x, center_y) == Some(3))
+                    if let Some((x, y, _)) = scan
+                        && self.find_region(region_id).is_some_and(|owner| owner.base().block_at(x, y) == Some(3))
+                        && self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime)
                     {
-                        let mut applied = false;
-                        for (target, war_soul_hit) in thunder_fire_targets(self, region_id, thunder_fire, center_x, center_y) {
-                            applied |= match target.object_type {
-                                PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, war_soul_hit, runtime),
-                                MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
-                                _ => false,
-                            };
-                        }
-                        if applied && let Some(mut owner) = self.take_region_owner(region_id) {
-                            if let Some(SummonedSkillShape::ThunderFire(owner)) = owner.base_mut().find_skill_phalanx_mut(phalanx_id) { owner.finish(); }
-                            self.restore_region_owner(owner);
-                        }
+                        self.end_damage_phalanx(region_id, phalanx_id);
                     }
-                    if let Some((x, y, duration)) = force_move { let _ = self.force_move_thunder_fire(region_id, phalanx_id, x, y, duration); }
+                    if let Some((x, y, duration)) = force_move {
+                        self.force_move_thunder_fire(region_id, phalanx_id, x, y, duration);
+                    }
                 }
-                ThunderFirePhalanxTick::Expired => {
-                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) { let _ = self.send_shape_exit_around(region, phalanx.shape()); }
-                }
+                ThunderFirePhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
             }
             return true;
         }
-        if let (Some(chaos_tick), SummonedSkillShape::ChaosSphere(chaos)) = (chaos_tick, &phalanx) {
-            match chaos_tick {
+        if let (Some(tick), SummonedSkillShape::ChaosSphere(_)) = (chaos_tick, &phalanx) {
+            match tick {
                 ChaosSpherePhalanxTick::Pending => {}
                 ChaosSpherePhalanxTick::Active { force_move, scan } => {
-                    if let Some((destination_x, destination_y, duration_ms)) = force_move {
-                        let _ = self.force_move_chaos_sphere(region_id, phalanx_id, destination_x, destination_y, duration_ms);
+                    if let Some((x, y, duration)) = force_move {
+                        self.force_move_chaos_sphere(region_id, phalanx_id, x, y, duration);
                     }
-                    if let Some((center_x, center_y, sampled_at_ms)) = scan {
-                        for (target, war_soul_hit) in chaos_sphere_targets(self, region_id, chaos, center_x, center_y) {
-                            match target.object_type {
-                                PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                                    &phalanx, target.id, region_id, war_soul_hit, runtime,
-                                ),
-                                MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                                    &phalanx, target.id, region_id, sampled_at_ms, runtime,
-                                ),
-                                _ => false,
-                            };
+                    if let Some((x, y, _)) = scan {
+                        for (x, y) in crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalanx::scope_cells(x, y) {
+                            self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
                         }
                     }
                 }
-                ChaosSpherePhalanxTick::Expired => {
-                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                        let _ = self.send_shape_exit_around(region, phalanx.shape());
-                    }
-                }
+                ChaosSpherePhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
             }
             return true;
         }
@@ -45278,286 +44603,116 @@ impl CGame {
             tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
             return true;
         }
-        if let (
-            Some(Some((target, _))),
-            SummonedSkillShape::FatalBlow(fatal_blow),
-        ) = (tick, &phalanx)
-        {
-            match self.fatal_blow_attack_ready(fatal_blow, target, region_id) {
-                Some(true) => self.finish_fatal_blow_phalanx(region_id, phalanx_id),
+        if let (Some(Some((target, _))), SummonedSkillShape::FatalBlow(fatal)) = (tick, &phalanx) {
+            match self.fatal_blow_attack_ready(fatal, target, region_id) {
                 Some(false) => return true,
-                None => {
-                    self.finish_fatal_blow_phalanx(region_id, phalanx_id);
-                    tick = None;
+                Some(true) => {
+                    self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+                    self.end_damage_phalanx(region_id, phalanx_id);
                 }
-            }
-        }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::FireWall(fire_wall),
-        ) = (tick, &phalanx)
-        {
-            for target in fire_wall_targets(self, region_id, fire_wall) {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        false,
-                        runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        sampled_at_ms,
-                        runtime,
-                    ),
-                    _ => false,
-                };
+                None => self.end_damage_phalanx(region_id, phalanx_id),
             }
             return true;
         }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::Thunder(thunder),
-        ) = (tick, &phalanx)
-        {
-            for target in thunder_targets(self, region_id, thunder) {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        false,
-                        runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        sampled_at_ms,
-                        runtime,
-                    ),
-                    _ => false,
-                };
+        if let (Some(Some(_)), SummonedSkillShape::FireWall(wall)) = (tick, &phalanx) {
+            for (x, y) in wall.active_cells() {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
             return true;
         }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::ThunderBlow(thunder_blow),
-        ) = (tick, &phalanx)
-        {
-            let targets = thunder_blow_targets(self, region_id, thunder_blow);
-            for target in &targets {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx, target.id, region_id, false, runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx, target.id, region_id, sampled_at_ms, runtime,
-                    ),
-                    _ => false,
-                };
+        if let (Some(Some(_)), SummonedSkillShape::Thunder(thunder)) = (tick, &phalanx) {
+            for (x, y) in thunder.attack_cells() {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
-            if !targets.is_empty()
-                && let Some(mut owner) = self.take_region_owner(region_id)
-            {
-                if let Some(SummonedSkillShape::ThunderBlow(thunder_blow)) =
-                    owner.base_mut().find_skill_phalanx_mut(phalanx_id)
-                {
-                    thunder_blow.finish();
+            return true;
+        }
+        if let (Some(Some(_)), SummonedSkillShape::ThunderBlow(thunder)) = (tick, &phalanx) {
+            if let (Ok(x), Ok(y)) = (thunder.shape().get_tile_x(), thunder.shape().get_tile_y()) {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
+            }
+            return true;
+        }
+        if let (Some(Some(_)), SummonedSkillShape::ThunderSlash(thunder)) = (tick, &phalanx) {
+            if let Some(target) = thunder_slash_target(self, region_id, thunder) {
+                self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+            }
+            return true;
+        }
+        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::SnowStorm(snow)) = (tick, &phalanx) {
+            for (x, y) in snow.current_cells() {
+                let mut shapes = Vec::new();
+                if let Some(region) = self.find_region(region_id) {
+                    let _ = region.base().get_shapes(x, y, self.area_width, self.area_height, self, &mut shapes);
                 }
-                self.restore_region_owner(owner);
-            }
-            return true;
-        }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::ThunderSlash(thunder_slash),
-        ) = (tick, &phalanx)
-        {
-            let Some(target) = thunder_slash_target(self, region_id, thunder_slash) else { return true };
-            match target.object_type {
-                PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
-                MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
-                _ => false,
-            };
-            return true;
-        }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::SnowStorm(snow_storm),
-        ) = (tick, &phalanx)
-        {
-            for target in snow_storm_targets(self, region_id, snow_storm) {
-                if snow_storm.master().master_type == MONSTER_TYPE {
-                    let Some(owner) = self.take_region_owner(region_id) else { break };
-                    let mut owner = Some(owner);
-                    let _ = execute_owned_monster_snow_storm_target(self, &mut owner, snow_storm, target, sampled_at_ms, runtime);
-                    let Some(owner) = owner else { break };
-                    self.restore_region_owner(owner);
-                    continue;
-                }
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        false,
-                        runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        sampled_at_ms,
-                        runtime,
-                    ),
-                    _ => false,
-                };
-            }
-            return true;
-        }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::Leiming2(leiming2),
-        ) = (tick, &phalanx)
-        {
-            for target in leiming2_targets(self, region_id, leiming2) {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        false,
-                        runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        sampled_at_ms,
-                        runtime,
-                    ),
-                    _ => false,
-                };
-            }
-            if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                let _ = self.send_shape_exit_around(region, phalanx.shape());
-            }
-            return true;
-        }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::Tianhuo(tianhuo),
-        ) = (tick, &phalanx)
-        {
-            for target in tianhuo_targets(self, region_id, tianhuo) {
-                let applied = match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        false,
-                        runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        sampled_at_ms,
-                        runtime,
-                    ),
-                    _ => false,
-                };
-                if applied {
-                    if let Some(mut owner) = self.take_region_owner(region_id) {
-                        owner.base_mut().finish_tianhuo_phalanx(phalanx_id);
+                for shape in shapes {
+                    let target = shape.identity;
+                    if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                        || (target.object_type == snow.master().master_type && target.id == snow.master().master_id)
+                    { continue; }
+                    if snow.master().master_type == MONSTER_TYPE {
+                        let Some(owner) = self.take_region_owner(region_id) else { break; };
+                        let mut owner = Some(owner);
+                        let _ = execute_owned_monster_snow_storm_target(
+                            self, &mut owner, snow, target, sampled_at_ms, runtime,
+                        );
+                        let Some(owner) = owner else { break; };
                         self.restore_region_owner(owner);
-                    }
-                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                        let _ = self.send_shape_exit_around(region, phalanx.shape());
+                    } else {
+                        self.apply_scanned_summoned_skill_to_target(
+                            &phalanx, target, region_id, false, &mut attacked_targets, runtime,
+                        );
                     }
                 }
             }
             return true;
         }
-        if let (
-            Some(Some((_, sampled_at_ms))),
-            SummonedSkillShape::YinYang(yin_yang),
-        ) = (tick, &phalanx)
-        {
-            for target in yin_yang_targets(self, region_id, yin_yang) {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
-                    _ => false,
-                };
+        if let (Some(Some(_)), SummonedSkillShape::Leiming2(leiming)) = (tick, &phalanx) {
+            if leiming.scope_active()
+                && let (Ok(x), Ok(y)) = (leiming.shape().get_tile_x(), leiming.shape().get_tile_y())
+            {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
-            if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                let _ = self.send_shape_exit_around(region, phalanx.shape());
+            self.end_damage_phalanx(region_id, phalanx_id);
+            return true;
+        }
+        if let (Some(Some(_)), SummonedSkillShape::Tianhuo(tianhuo)) = (tick, &phalanx) {
+            if let (Ok(x), Ok(y)) = (tianhuo.shape().get_tile_x(), tianhuo.shape().get_tile_y()) {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
             return true;
         }
-        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodPunishment(god)) = (tick, &phalanx) {
-            let mut applied = false;
-            for target in god_punishment_targets(self, region_id, god) {
-                applied |= match target.object_type { PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime), MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime), _ => false };
+        if let (Some(Some(_)), SummonedSkillShape::YinYang(yin_yang)) = (tick, &phalanx) {
+            for (x, y) in yin_yang.active_cells() {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
-            if applied { if let Some(mut owner) = self.take_region_owner(region_id) { if let Some(SummonedSkillShape::GodPunishment(god)) = owner.base_mut().find_skill_phalanx_mut(phalanx_id) { god.finish(); } self.restore_region_owner(owner); } }
+            self.end_damage_phalanx(region_id, phalanx_id);
             return true;
         }
-        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodThunder(god)) = (tick, &phalanx) {
-            for target in god_thunder_targets(self, region_id, god) {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
-                    _ => false,
-                };
+        if let (Some(Some(_)), SummonedSkillShape::GodPunishment(god)) = (tick, &phalanx) {
+            if let (Ok(x), Ok(y)) = (god.shape().get_tile_x(), god.shape().get_tile_y()) {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
             return true;
         }
-        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodThunder2(god)) = (tick, &phalanx) {
-            for (target, war_soul_hit) in god_thunder_2_targets(self, region_id, god) {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, war_soul_hit, runtime),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
-                    _ => false,
-                };
+        if let (Some(Some(_)), SummonedSkillShape::GodThunder(god)) = (tick, &phalanx) {
+            for (x, y) in god.attack_cells() {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
+            }
+            return true;
+        }
+        if let (Some(Some(_)), SummonedSkillShape::GodThunder2(god)) = (tick, &phalanx) {
+            for (x, y) in god.attack_cells() {
+                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
             return true;
         }
         match tick {
             Some(None) => return true,
             None => {}
-            Some(Some((target, sampled_at_ms))) => {
-                match target.object_type {
-                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        false,
-                        runtime,
-                    ),
-                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
-                        &phalanx,
-                        target.id,
-                        region_id,
-                        sampled_at_ms,
-                        runtime,
-                    ),
-                    kind if kind == BUILD_OBJECT_TYPE as i32
-                        || kind == CITY_GATE_OBJECT_TYPE as i32 => self
-                        .apply_player_projectile_to_stationary_build(
-                            &phalanx,
-                            target,
-                            region_id,
-                            runtime,
-                        ),
-                    _ => false,
-                };
+            Some(Some((target, _))) => {
+                if self.find_shape_in_region(region_id, target).is_some() {
+                    self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+                }
             }
         }
         if !matches!(&phalanx, SummonedSkillShape::Archery(_) | SummonedSkillShape::MeteorArrow(_) | SummonedSkillShape::RainArrow(_))

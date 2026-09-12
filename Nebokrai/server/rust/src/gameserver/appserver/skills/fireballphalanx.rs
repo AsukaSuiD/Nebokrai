@@ -48,30 +48,6 @@ pub(crate) struct CFireBallPhalanx {
     force_moved: bool,
 }
 
-pub(crate) fn fire_ball_targets(game: &CGame, region_id: i32, phalanx: &CFireBallPhalanx, center_x: i32, center_y: i32) -> Vec<(ShapeIdentity, bool)> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
-    let (area_width, area_height) = game.area_dimensions();
-    let mut targets = Vec::new();
-    let mut ordinary = Vec::new();
-    for (tile_x, tile_y) in CFireBallPhalanx::scope_cells(center_x, center_y) {
-        for (&player_id, _) in &region.war_souls_at(tile_x, tile_y) {
-            let player_id = player_id as i32;
-            if player_id != phalanx.master().master_id && game.find_player(player_id).is_some_and(|player| !player.is_dead()) && game.player_base_attackable(phalanx.master().master_id, player_id) {
-                targets.push((ShapeIdentity { object_type: 400, id: player_id, ex_id: CGuid::GUID_INVALID }, true));
-            }
-        }
-        let mut shapes = Vec::new();
-        if region.get_shapes(tile_x, tile_y, area_width, area_height, game, &mut shapes).is_err() { continue }
-        for shape in shapes {
-            let identity = shape.identity;
-            if identity == phalanx.shape().identity() || (identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id) || !matches!(identity.object_type, 400 | 600) || ordinary.contains(&identity) { continue }
-            if phalanx.master().master_type == 400 && identity.object_type == 400 && !game.player_base_attackable(phalanx.master().master_id, identity.id) { continue }
-            ordinary.push(identity);
-            targets.push((identity, false));
-        }
-    }
-    targets
-}
 
 impl CFireBallPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]

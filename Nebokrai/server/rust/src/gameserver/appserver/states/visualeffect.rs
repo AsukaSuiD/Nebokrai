@@ -16,6 +16,7 @@
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkillVisualEffectKind {
+    BaseAttack,
     Rage,
     KnightCut,
     BattleFairy,

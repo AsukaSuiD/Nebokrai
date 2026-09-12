@@ -67,24 +67,6 @@ pub(crate) struct CThunderPhalanx {
     cells: Vec<(i32, i32)>,
 }
 
-pub(crate) fn thunder_targets(game: &CGame, region_id: i32, phalanx: &CThunderPhalanx) -> Vec<ShapeIdentity> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
-    let (area_width, area_height) = game.area_dimensions();
-    let mut targets = Vec::new();
-    for (cell_x, cell_y) in phalanx.attack_cells() {
-        let mut shapes = Vec::new();
-        if region.get_shapes(cell_x, cell_y, area_width, area_height, game, &mut shapes).is_err() { continue }
-        for shape in shapes {
-            if shape.identity == phalanx.shape().identity()
-                || (shape.identity.object_type == phalanx.master().master_type && shape.identity.id == phalanx.master().master_id)
-                || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                || !game.owned_player_skill_target_attackable(phalanx.master(), shape.identity, region_id)
-            { continue }
-            targets.push(shape.identity);
-        }
-    }
-    targets
-}
 
 pub(crate) fn calculate_owned_thunder_attack(game: &mut CGame, phalanx: &CThunderPhalanx, target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let master = phalanx.master();

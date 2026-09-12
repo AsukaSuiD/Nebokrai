@@ -66,57 +66,16 @@ impl CGame {
         target: ShapeIdentity,
         region_id: i32,
     ) -> Option<bool> {
+        self.find_shape_in_region(region_id, target)?;
+        crate::gameserver::appserver::states::state::resolve_state_move_shape(
+            self, region_id, target,
+        )?;
         let master = phalanx.master();
-        if self.find_player(master.master_id).is_none() {
-            return Some(false);
-        }
-        match target.object_type {
-            PLAYER_TYPE => {
-                let target = self.find_player(target.id)?;
-                Some(
-                    !target.is_dead()
-                        && target.server_region_id() == Some(region_id)
-                        && self.player_base_attackable(master.master_id, target.player_id()),
-                )
-            }
-            MONSTER_TYPE => {
-                let monster = self
-                    .find_region(region_id)?
-                    .base()
-                    .find_monster_by_id(target.id)?;
-                let property = monster
-                    .base_property_key()
-                    .and_then(|key| self.find_monster_property_by_origin_name(key));
-                let Some(property) = property else {
-                    return Some(false);
-                };
-                if monster.hit_points() == 0
-                    || monster.move_shape().is_god()
-                    || !self.monster_attackable_by_player(master.master_id, region_id, property)
-                {
-                    return Some(false);
-                }
-                if !monster.is_tamed() && !monster.is_carriage(property) {
-                    return Some(true);
-                }
-                let owner = monster.master_info();
-                if owner.master_type != PLAYER_TYPE || owner.master_id == 0 {
-                    return Some(true);
-                }
-                Some(if owner.master_id == master.master_id {
-                    master.permitted_to_kill_criminal != 0
-                } else {
-                    self.player_base_attackable(master.master_id, owner.master_id)
-                })
-            }
-            _ => None,
-        }
+        if master.master_type != PLAYER_TYPE { return Some(true); }
+        let Some(source) = self.find_player(master.master_id).map(|player| player.shape().identity())
+        else { return Some(false); };
+        // В отличие от сканирования области FatalBlow не исключает самого master.
+        Some(self.live_skill_target_attackable(region_id, source, target))
     }
 
-    pub(super) fn finish_fatal_blow_phalanx(&mut self, region_id: i32, phalanx_id: i32) {
-        if let Some(mut owner) = self.take_region_owner(region_id) {
-            owner.base_mut().finish_fatal_blow_phalanx(phalanx_id);
-            self.restore_region_owner(owner);
-        }
-    }
 }

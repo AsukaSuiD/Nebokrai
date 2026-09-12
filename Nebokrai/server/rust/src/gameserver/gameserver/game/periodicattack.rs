@@ -113,37 +113,29 @@ impl CGame {
     }
 
     fn increase_owned_skill_attacker_rp(&mut self, player_id: i32, skill_id: u32) {
-        // Периодические состояния с конструкторским skill-id и перечисленные
-        // прямые удары не начисляют RP атакующему после OnBeenAttacked.
-        // Изменение RP защищающейся стороны остаётся внутри обработки попадания.
-        if !matches!(skill_id,
-            crate::gameserver::appserver::skills::skillfactory::UNKNOWN_SKILL_ID
-            | MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID
-            | LORD_FAST_ATTACK_SKILL_ID | MACHINERY_STOMP_SKILL_ID
-            | LORD_WIDERANGING_ATTACK_SKILL_ID | IGNITION_SKILL_ID | STRIKE_SKILL_ID
+        // Только эти Attack вызывают IncreaseRp после возврата OnBeenAttacked.
+        // Отказ цели и Clear внутри Defense не отменяют caller-хвост.
+        if matches!(skill_id,
+            ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID | BOSS_BLUE_QUAKE_SKILL_ID
+            | CHAIN_LIGHTNING_SKILL_ID | FLASH_SKILL_ID | JU_CUT_SKILL_ID
+            | LITTLE_FLASH_SKILL_ID | LIGHTNING_SWORD_SKILL_ID | MOSOU_SKILL_ID
+            | LITTLE_FLASH_2_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
+            | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
+            | SWALLOW_SKILL_ID | GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID
+            | GHOST_CUT_3_SKILL_ID
         ) {
             self.increase_owned_player_rp(player_id, true, 0);
         }
     }
-    /// Рассчитанная атака навыка проходит ту же защиту `CBuild/CCityGate`,
-    /// что базовая атака; death-script и wire остаются у общего build-owner-а.
+    /// Эти навыки вызывают общий OnBeenAttacked здания без начисления RP.
+    /// Проверка допустимости остаётся перед расчётом у конкретного caller-а.
     pub(crate) fn apply_owned_skill_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
         &mut self, player_id: i32, region_id: i32, identity: ShapeIdentity,
-        mut attack: AttackInformation, runtime: &mut Runtime,
+        attack: AttackInformation, runtime: &mut Runtime,
     ) {
-        if !self.stationary_build_attackable_by_player(player_id, region_id, identity) {
-            return;
-        }
-        let Some(target) = self.stationary_build_combat_snapshot(region_id, identity) else { return };
-        let Some(view) = self.base_magic_target_view(region_id, identity) else { return };
-        let Some((properties, occupation)) = self.find_player(player_id)
-            .map(|player| (player.combat_properties(), player.occupation())) else { return };
-        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        defend_build_base_attack(&mut attack, properties, occupation, target.defense,
-            target.element_resistance, &self.globe_setup, &mut random);
-        self.apply_defended_player_attack_to_stationary_build(player_id, region_id, identity,
-            view.tile_x, view.tile_y, &attack, runtime);
-        self.increase_owned_skill_attacker_rp(player_id, attack.skill_id);
+        self.apply_direct_player_skill_attack_to_stationary_build(
+            player_id, region_id, identity, attack, runtime,
+        );
     }
 
     /// Общий CMoveShape::OnBeenAttacked у здания — другой virtual slot, чем
@@ -419,9 +411,11 @@ impl CGame {
         attack: AttackInformation,
         runtime: &mut Runtime,
     ) {
-        self.apply_owned_skill_attack_to_player_kind(
+        let skill_id = attack.skill_id;
+        self.receive_player_skill_attack(
             master, target_id, region_id, attack, false, runtime,
         );
+        self.increase_owned_skill_attacker_rp(master.master_id, skill_id);
     }
 
     /// Замыкает virtual `CPlayer::IncreaseRp -> PropertiesChanged` на
@@ -454,12 +448,12 @@ impl CGame {
         attack: AttackInformation,
         runtime: &mut Runtime,
     ) {
-        self.apply_owned_skill_attack_to_player_kind(
+        self.receive_player_skill_attack(
             master, target_id, region_id, attack, true, runtime,
         );
     }
 
-    fn apply_owned_skill_attack_to_player_kind<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn receive_player_skill_attack<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -594,7 +588,6 @@ impl CGame {
                 // хотя hurt-пакета и реакции AI в этой ветке нет.
                 self.damage_player_armor(target_id);
             }
-            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         if current_health != 0 && attack.full_miss == 0 {
@@ -646,7 +639,6 @@ impl CGame {
             let _ = self.retarget_passive_pets_after_player_hurt(target_id, attacker);
             let _ = self.notify_country_after_player_hurt(target_id, attacker, runtime);
         }
-        self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }
 
     pub(crate) fn apply_monster_periodic_state_attack<Runtime: GameMainLoopRuntime>(
@@ -829,6 +821,19 @@ impl CGame {
     }
 
     pub(crate) fn apply_owned_skill_attack_to_monster<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target_id: i32,
+        region_id: i32,
+        attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        let skill_id = attack.skill_id;
+        self.receive_monster_skill_attack(master, target_id, region_id, attack, runtime);
+        self.increase_owned_skill_attacker_rp(master.master_id, skill_id);
+    }
+
+    pub(crate) fn receive_monster_skill_attack<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -1063,11 +1068,9 @@ impl CGame {
             missed.add_long(MONSTER_TYPE);
             missed.add_long(target_id);
             let _ = self.send_move_shape_around(region_id, identity, &missed);
-            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         if damage == 0 && current_health != 0 {
-            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         if current_health != 0 {
@@ -1092,7 +1095,6 @@ impl CGame {
                 master.master_id,
                 runtime,
             );
-            self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
 
@@ -1113,7 +1115,6 @@ impl CGame {
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_move_shape_around(region_id, victim, &died);
         self.record_move_shape_death(region_id, victim, attacker, runtime);
-        self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }
 
 }

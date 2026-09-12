@@ -4,14 +4,18 @@
 //! `appserver/skills/fatalblowphalanx.cpp`. Снаряд хранит снимок владельца,
 //! цель, уровень и коэффициент навыка. На первом AI-проходе после создания он
 //! рассчитывает один физический удар и удаляется; до этого проверка срока жизни
-//! имеет приоритет. Формула выполняет ровно один вызов `legacy MSVCRT RNG`.
+//! имеет приоритет. При наличии боевого духа и таблицы свойств формула
+//! выполняет один вызов `legacy MSVCRT RNG`; иначе сохраняется атака без
+//! составляющих урона, но с уже записанными идентификатором и коэффициентом навыка.
 //! Поиск цели, проверка `IsAttackAble`, защита и сетевые последствия остаются
 //! у исполняющего владельца, которому требуется доступ к нескольким сущностям.
 //! Атака боевого духа усекается через исходный `i64` с чтением младших 32 бит;
 //! процентный damage factor сохраняется в `f32` только после x87-умножения.
 
+use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use super::fatalblow::FATAL_BLOW_SKILL_ID;
 use super::thunder::scaled_battle_fairy_sprite;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_ATTACK;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -48,16 +52,33 @@ pub(crate) fn calculate_owned_fatal_blow_attack(
     phalanx: &CFatalBlowPhalanx,
 ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let master = phalanx.master();
-    if master.master_type != 400 || master.master_id == 0 { return None }
     let player = game.find_player(master.master_id)?;
-    let battle_fairy_attack =
-        scaled_battle_fairy_sprite(player.war_soul_attack(game.goods_factory())?);
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let attack = phalanx.calculate_attack(battle_fairy_attack, &mut |maximum| {
-        game.skill_random_below(maximum)
-    });
+    let mut attack = AttackInformation::for_master(master);
+    attack.skill_id = FATAL_BLOW_SKILL_ID;
+    attack.skill_level = phalanx.skill_level as u8;
+    attack.damage_factor = (f64::from(phalanx.damage_factor) * f64::from(0.01_f32)) as f32;
+    let goods = player.war_soul_goods(game.goods_factory());
+    let properties = game.skill_base_properties(FATAL_BLOW_SKILL_ID, phalanx.skill_level);
+    if let (Some(goods), Some(properties)) = (goods, properties) {
+        let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+        let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+        let fairy_attack = scaled_battle_fairy_sprite(
+            goods.addon_property_value(game.goods_factory(), GAP_BF_ATTACK, 1),
+        );
+        let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
+        let damage = fairy_attack
+            .wrapping_add(game.skill_random_below(width))
+            .wrapping_add(minimum)
+            .max(0);
+        attack.damages.push(AttackPower {
+            kind: AttackPowerType::Physical,
+            hp_damage: damage,
+            mp_damage: 0,
+        });
+    }
     Some((attack, combat, occupation, attacker_level))
 }
 
@@ -136,44 +157,6 @@ impl CFatalBlowPhalanx {
             self.lifetime_ms,
             now_milliseconds,
         )
-    }
-
-    pub(crate) fn calculate_attack(
-        &self,
-        battle_fairy_attack: i32,
-        random_below: &mut dyn FnMut(i32) -> i32,
-    ) -> AttackInformation {
-        let delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
-        let width = if delta < 0 {
-            delta.wrapping_neg()
-        } else {
-            delta
-        }
-        .wrapping_add(1);
-        let damage = battle_fairy_attack
-            .wrapping_add(random_below(width))
-            .wrapping_add(self.minimum_attack)
-            .max(0);
-        AttackInformation {
-            skill_id: FATAL_BLOW_SKILL_ID,
-            skill_level: self.skill_level as u8,
-            attacker_type: self.master.master_type,
-            attacker_id: self.master.master_id,
-            attacker_team_id: self.master.master_team_id,
-            attacker_faction_id: self.master.master_guild_id,
-            attacker_union_id: self.master.master_union_id,
-            hit_modifier: 0,
-            damage_factor: (f64::from(self.damage_factor) * f64::from(0.01_f32)) as f32,
-            damage_modifier: 0,
-            critical: false,
-            blast_attack: false,
-            full_miss: 0,
-            damages: vec![AttackPower {
-                kind: AttackPowerType::Physical,
-                hp_damage: damage,
-                mp_damage: 0,
-            }],
-        }
     }
 }
 

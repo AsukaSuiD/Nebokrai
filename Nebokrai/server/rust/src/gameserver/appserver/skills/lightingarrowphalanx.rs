@@ -46,14 +46,6 @@ pub(crate) fn lighting_arrow_targets(game: &CGame, region_id: i32, phalanx: &CLi
     shapes.into_iter().map(|view| view.identity).filter(|identity| {
         *identity != phalanx.shape().identity()
             && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
-            && matches!(identity.object_type, 400 | 600)
-            && !phalanx.was_attacked(*identity)
-            && match identity.object_type {
-                400 => game.find_player(identity.id).is_some_and(|player| !player.is_dead())
-                    && (phalanx.master().master_type != 400 || game.player_base_attackable(phalanx.master().master_id, identity.id)),
-                600 => game.lighting_arrow_monster_attackable(region_id, phalanx.master(), identity.id),
-                _ => false,
-            }
     }).collect()
 }
 

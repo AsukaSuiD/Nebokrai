@@ -1,51 +1,15 @@
-//! Базовая атака GameServer (`SKILL_BASE_ATTACK == 1`).
-//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
-//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
-//! callback CPlayer +0x158 (0x00485540).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/baseattack.cpp`. Первый такт AI проверяет дальность,
-//! поворачивает игрока и публикует действие 0; после
-//! `SKILL_USAGE_DELAY_TIME` действие 1 предшествует расчёту атаки. Мёртвая
-//! цель завершает навык кодом 2, удалённая цель — кодом `0x0b`.
-//! `SkillExecutionKernel` хранится в зарегистрированном экземпляре `CMoveShape`
-//! и переживает задержку между тактами; `CPlayerAI` сохраняет только команду.
-//! Формулы PvP, RNG и построение пакетов находятся в соседнем
-//! модуле исполнения навыка; `CGame` разрешает владельцев и применяет урон.
-//! Общий хвост подтверждённых `CAttackSkill::End` сохраняет восстановление
-//! движения, `AfterUseSkill`, время восстановления и очистку исполнения;
-//! конкретный владелец явно выбирает задержанный или немедленный вариант.
-//! Хвост получает ID завершённого навыка явно: reuse записывается в тот же
-//! зарегистрированный экземпляр, независимо от смены выбранной команды AI.
-//! CSkill::End (0x004D84C0) вызывает virtual +0x158, у CPlayer это пустой
-//! 0x00485540, а не UpdateProperty. Дополнительного пересчёта свойств нет;
-//! изменения от износа оружия обслуживает сам OnWeaponDamaged (0x00441D50).
-//! Luvinia EndSkill освобождает CBaseModule нового движка: этот lifecycle
-//! не является соответствием нашим CSkill/AfterUseSkill.
-//! При входе в другой регион исходный `OnChangeRegion` выполняет `End(false)`:
-//! движение возвращается и исполнение освобождается без износа оружия и фиксации
-//! времени восстановления. Этот отдельный caller сохраняет ключ экземпляра,
-//! поскольку не проходит общий materialized-End dispatcher.
-//! Координатный `Begin` разрешает первый `CMoveShape`
-//! клетки через точный `CState::GetSufferer` без fallback к заклинателю.
-//! Объектное исполнение навыка монстром проходит `monsterbaseattack`: ID `1`
-//! сохраняется, физический разброс исключает верхнюю границу, а critical-roll
-//! выполняется и при нулевом monster `GetCCH`. Это не подмена навыком `0x2bd`.
-//! CheckCastCondition (0x005B2E40) требует только источник и свойства,
-//! не проверяя reuse. Monster Begin сохраняет Begin-фазу без поворота/пакета.
-//! Первый AI (0x005B39B0) проверяет unsigned RealDistance, при отказе
-//! выполняет End(0), иначе поворачивает и публикует старт до delay.
-//! Расписание сохраняет отдельный GetAttackSpeed; пропуск reuse навыка
-//! не пропускает этот таймер. AI (0x005B39B0) завершает мёртвую цель
-//! через End(1); failure 2 message-owner-а адресован только player-источнику.
-//! При исчезновении объекта использует нулевой fallback CState::Begin:
-//! первый AI проверяет его дальность, после delay отправляет fire с нулевой
-//! identity/координатами (CBaseAttackEffect, 0x005B3100) и выполняет End(1)
-//! без RNG/Attack. Эти ветви не отменяют AI-цель или движение. Для живой
-//! цели Attack проверяет self/IsAttackAble после fire, перед RNG; отказ
-//! оставляет AI-цель и движение, но не отменяет последующий End(1).
-//! Разрешение цели и политика отношений переиспользуют общий monsterattack;
-//! NPC не входят в его боевой снимок и у исходного Attack исключены отдельно.
+//! Базовая атака CBaseAttack (1) и сохраняемые общие хвосты снарядов.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/baseattack.cpp.
+//! Player Begin/AI/Attack/visual находятся в baseattackruntime; каждый terminal
+//! явно вызывает зарегистрированный End, затем очередь освобождает команду.
+//! End(1) единожды изнашивает оружие и фиксирует reuse; End(0) этого не делает.
+//! Выбранный навык меняет AI, а не пустой callback OnEndSkill.
+//! Monster-origin использует соседний monsterbaseattack и приведённые ниже
+//! адаптеры. Его ещё не сверенный общий Calculate/Attack/AI сохранён в RAW.
+//! Общие delayed/immediate helpers остаются у не переведённых на полный End
+//! caller-ов; базовая атака игрока их больше не вызывает.
+//! Достижимость отдельного Restart (0x00513E00) из текущего расписания
+//! не подтверждена: повторный Begin не считается его реализацией.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -192,9 +156,8 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
     real_distance_between_points(source_x, source_y, target_x, target_y)
 }
 
-/// End(0) не вызывает AfterUseSkill. Projectile-варианты (0x005AE7A0)
-/// возвращают движение до CSummonSkill::End; CBaseAttack (0x005B3010) — нет.
-/// Освобождение kernel выполняет общий хвост очереди после возврата результата.
+/// Отказ ещё не переведённых projectile-caller-ов восстанавливает движение
+/// без AfterUse. Сам kernel освобождает общий хвост очереди.
 pub(crate) fn finish_failed_base_attack(game: &mut CGame, player_id: i32, restore_movement: bool) {
     if let Some(player) = game.find_player_mut(player_id) {
         if restore_movement {
@@ -203,11 +166,8 @@ pub(crate) fn finish_failed_base_attack(game: &mut CGame, player_id: i32, restor
     }
 }
 
-/// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
-/// `CArchery::End`: износ оружия
-/// предшествует фиксации времени восстановления; CSkill::End не сбрасывает
-/// выбранный навык игрока (его +0x158 — пустой ret 0x00485540);
-/// задержанные варианты сначала возвращают движение.
+/// Частичный хвост ещё не переведённых caller-ов: восстановление движения
+/// при необходимости, затем износ оружия и reuse. Это не полный End.
 fn finish_base_attack_owner<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -241,25 +201,24 @@ pub(crate) fn finish_immediate_base_attack<Runtime: GameMainLoopRuntime>(
     finish_base_attack_owner(game, player_id, skill_id, runtime, false);
 }
 
-pub(crate) fn finish_player_base_attack<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) {
-    finish_immediate_base_attack(game, player_id, BASE_ATTACK_SKILL_ID, runtime);
-}
-
 pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
+    nonzero_end: bool,
     runtime: &mut Runtime,
 ) -> bool {
+    let Some(instance) = game.registered_player_skill(player_id, BASE_ATTACK_SKILL_ID) else {
+        return false;
+    };
     let Some(dispatch) = game.player_skill_execution(player_id, BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    finish_player_base_attack(game, player_id, player_ai, runtime);
+    if game.registered_skill(instance).is_some_and(|skill| !skill.lifecycle().is_ended()) {
+        game.with_published_player_ai(player_id, player_ai, |game| {
+            let _ = game.end_registered_instance(instance, i32::from(nonzero_end), SkillTermination::Cancelled, runtime);
+        });
+    }
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
@@ -275,20 +234,17 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    if let Some(instance) = instance {
+        let _ = game.end_registered_instance_without_after_use(instance, SkillTermination::Cancelled);
+    }
     game.finish_registered_player_command(instance, player_ai, dispatch, SkillTermination::Cancelled)
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp
 
 // ============================================================================
 // FUNCTION: CBaseAttack::Restart
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// ARTIFACT: GameServer
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:110
 // RVA: 0x00113E00
 // ADDRESS: 00513e00
@@ -298,95 +254,12 @@ pub(crate) fn abort_player_base_attack_on_region_change(
 //
 //
 
-// ============================================================================
-// FUNCTION: CBaseAttack::CBaseAttack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:18
-// RVA: 0x001B2DB0
-// ADDRESS: 005b2db0
-// PROTOTYPE: undefined __thiscall CBaseAttack(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::~CBaseAttack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:26
-// RVA: 0x001B2E20
-// ADDRESS: 005b2e20
-// PROTOTYPE: void __thiscall ~CBaseAttack(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:33
-// RVA: 0x001B2E40
-// ADDRESS: 005b2e40
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:81
-// RVA: 0x001B2F40
-// ADDRESS: 005b2f40
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:48
-// RVA: 0x001B3040
-// ADDRESS: 005b3040
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttackEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:346
-// RVA: 0x001B3100
-// ADDRESS: 005b3100
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// Сохраняется для ещё не сверенного исполнения исходным monster-owner.
 // ============================================================================
 // FUNCTION: CBaseAttack::CalculateAttackPower
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// ARTIFACT: GameServer
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:279
 // RVA: 0x001B3600
 // ADDRESS: 005b3600
@@ -400,7 +273,7 @@ pub(crate) fn abort_player_base_attack_on_region_change(
 // FUNCTION: CBaseAttack::Attack
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// ARTIFACT: GameServer
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:248
 // RVA: 0x001B3860
 // ADDRESS: 005b3860
@@ -414,7 +287,7 @@ pub(crate) fn abort_player_base_attack_on_region_change(
 // FUNCTION: CBaseAttack::AI
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// ARTIFACT: GameServer
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:123
 // RVA: 0x001B39B0
 // ADDRESS: 005b39b0
@@ -423,5 +296,3 @@ pub(crate) fn abort_player_base_attack_on_region_change(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// COMPONENT_VARIANT_END: GameServer

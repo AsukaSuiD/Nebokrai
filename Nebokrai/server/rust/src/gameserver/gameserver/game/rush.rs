@@ -19,10 +19,10 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         match target.object_type {
-            PLAYER_TYPE => self.apply_owned_skill_attack_to_player(
-                master, target.id, region_id, attack, runtime,
+            PLAYER_TYPE => self.receive_player_skill_attack(
+                master, target.id, region_id, attack, false, runtime,
             ),
-            MONSTER_TYPE => self.apply_owned_skill_attack_to_monster(
+            MONSTER_TYPE => self.receive_monster_skill_attack(
                 master, target.id, region_id, attack, runtime,
             ),
             1100 | 1200 => self.apply_direct_player_skill_attack_to_stationary_build(

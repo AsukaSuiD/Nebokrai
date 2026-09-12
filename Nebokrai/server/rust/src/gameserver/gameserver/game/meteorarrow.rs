@@ -30,29 +30,17 @@ impl CGame {
     }
 
     pub(super) fn apply_meteor_arrow_cell<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32,
-        phalanx_id: i32, tile_x: i32, tile_y: i32, sampled_at_ms: u32, runtime: &mut Runtime) {
+        phalanx_id: i32, tile_x: i32, tile_y: i32, _sampled_at_ms: u32, runtime: &mut Runtime) {
         let Some(phalanx) = self.find_region(region_id).and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)).cloned() else { return };
         let SummonedSkillShape::MeteorArrow(snapshot) = &phalanx else { return };
-        if snapshot.master().master_type == PLAYER_TYPE && self.find_player(snapshot.master().master_id).is_none() { return }
         let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else { return };
         let mut shapes = Vec::new();
         if region.get_shapes(tile_x, tile_y, self.area_width, self.area_height, self, &mut shapes).is_err() { return }
-        let targets: Vec<_> = shapes.into_iter().map(|view| view.identity).filter(|identity| {
-            *identity != snapshot.shape().identity()
-                && !(identity.object_type == snapshot.master().master_type && identity.id == snapshot.master().master_id)
-                && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                && match identity.object_type {
-                    PLAYER_TYPE => self.find_player(identity.id).is_some_and(|player| !player.is_dead())
-                        && (snapshot.master().master_type != PLAYER_TYPE
-                            || self.player_base_attackable(snapshot.master().master_id, identity.id)),
-                    MONSTER_TYPE => self.lighting_arrow_monster_attackable(region_id, snapshot.master(), identity.id),
-                    _ => false,
-                }
-        }).collect();
-        for target in targets { match target.object_type {
-            PLAYER_TYPE => { self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime); }
-            MONSTER_TYPE => { self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime); }
-            _ => {}
-        }}
+        for target in shapes.into_iter().map(|view| view.identity) {
+            if target == snapshot.shape().identity()
+                || !self.summoned_skill_scan_target_allowed(region_id, snapshot.master(), target)
+            { continue }
+            self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+        }
     }
 }

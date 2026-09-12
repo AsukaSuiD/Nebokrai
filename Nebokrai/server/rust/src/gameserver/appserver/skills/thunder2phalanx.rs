@@ -4,14 +4,16 @@
 //! `appserver/skills/thunder2phalanx.cpp`. Все три подтверждённые маски и их
 //! размеры равны одной активной ячейке. По истечении срока область обходит
 //! эту ячейку, поражает каждую найденную цель один раз и удаляется. Формула
-//! урона делает ровно один вызов legacy RNG. Поиск целей и применение атаки
-//! к независимым владельцам остаются у `CGame`. Виртуальный
+//! урона делает один вызов legacy RNG лишь при наличии боевого духа и таблицы
+//! свойств; их отсутствие оставляет заполненные метаданные без составляющих урона.
+//! Поиск целей и применение атаки к независимым владельцам остаются у `CGame`. Виртуальный
 //! `ReplaceAffectRegion` вызывается региональным owner-ом после успешного
 //! добавления новой формы и до её публикации: поскольку все level-маски 1×1,
 //! совпавшая клетка старой области становится неактивной.
 //! Базовый урон использует общий с `CThunderPhalanx` расширенный порядок x87,
 //! усечение в `i64` и чтение младших 32 бит.
 
+use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use super::thunder::thunder_base_damage;
 use super::thunder2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
@@ -63,35 +65,37 @@ pub(crate) struct CLeimingPhalanx2 {
     scope_active: bool,
 }
 
-pub(crate) fn leiming2_targets(game: &CGame, region_id: i32, phalanx: &CLeimingPhalanx2) -> Vec<ShapeIdentity> {
-    if !phalanx.scope_active() { return Vec::new() }
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
-    let (Ok(tile_x), Ok(tile_y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
-    let (area_width, area_height) = game.area_dimensions();
-    let mut shapes = Vec::new();
-    if region.get_shapes(tile_x, tile_y, area_width, area_height, game, &mut shapes).is_err() { return Vec::new() }
-    let mut targets = Vec::new();
-    for shape in shapes {
-        if shape.identity == phalanx.shape().identity()
-            || (shape.identity.object_type == phalanx.master().master_type && shape.identity.id == phalanx.master().master_id)
-            || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-            || targets.contains(&shape.identity)
-        { continue }
-        targets.push(shape.identity);
-    }
-    targets
-}
 
 pub(crate) fn calculate_owned_leiming2_attack(game: &mut CGame, phalanx: &CLeimingPhalanx2) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let master = phalanx.master();
-    if master.master_type != PLAYER_TYPE || master.master_id == 0 { return None }
     let player = game.find_player(master.master_id)?;
-    let sprite = player.war_soul_goods(game.goods_factory())?.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let target_damage_factor = game.skill_base_properties(LEIMING2_SKILL_ID, phalanx.skill_level())?.query_property(LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY);
-    Some(phalanx.calculate_attack(sprite, combat, occupation, attacker_level, target_damage_factor, &mut |maximum| game.skill_random_below(maximum)))
+    let mut attack = AttackInformation::for_master(master);
+    attack.skill_id = LEIMING2_SKILL_ID;
+    attack.skill_level = phalanx.skill_level as u8;
+    attack.hit_modifier = 100;
+    let goods = player.war_soul_goods(game.goods_factory());
+    let properties = game.skill_base_properties(LEIMING2_SKILL_ID, phalanx.skill_level);
+    if let (Some(goods), Some(properties)) = (goods, properties) {
+        let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+        let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+        let sprite = goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
+        let target_damage_factor = properties.query_property(LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY);
+        let base_damage = thunder_base_damage(target_damage_factor, sprite);
+        let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
+        let damage = base_damage
+            .wrapping_add(game.skill_random_below(width))
+            .wrapping_add(minimum)
+            .max(0);
+        attack.damages.push(AttackPower {
+            kind: AttackPowerType::Element,
+            hp_damage: damage,
+            mp_damage: 0,
+        });
+    }
+    Some((attack, combat, occupation, attacker_level))
 }
 
 impl CLeimingPhalanx2 {
@@ -175,48 +179,5 @@ impl CLeimingPhalanx2 {
         self.shape
             .add_to_byte_array(&mut payload, true)
             .then_some(payload)
-    }
-
-    pub(crate) fn calculate_attack(
-        &self,
-        sprite: i32,
-        combat: PlayerCombatProperties,
-        occupation: u8,
-        attacker_level: u8,
-        target_damage_factor: u32,
-        random_below: &mut dyn FnMut(i32) -> i32,
-    ) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-        let base_damage = thunder_base_damage(target_damage_factor, sprite);
-        let delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
-        let width = delta.wrapping_abs().wrapping_add(1);
-        let damage = base_damage
-            .wrapping_add(random_below(width))
-            .wrapping_add(self.minimum_attack)
-            .max(0);
-        (
-            AttackInformation {
-                skill_id: LEIMING2_SKILL_ID,
-                skill_level: self.skill_level as u8,
-                attacker_type: self.master.master_type,
-                attacker_id: self.master.master_id,
-                attacker_team_id: self.master.master_team_id,
-                attacker_faction_id: self.master.master_guild_id,
-                attacker_union_id: self.master.master_union_id,
-                hit_modifier: 100,
-                damage_factor: 1.0,
-                damage_modifier: 0,
-                critical: false,
-                blast_attack: false,
-                full_miss: 0,
-                damages: vec![AttackPower {
-                    kind: AttackPowerType::Element,
-                    hp_damage: damage,
-                    mp_damage: 0,
-                }],
-            },
-            combat,
-            occupation,
-            attacker_level,
-        )
     }
 }

@@ -308,6 +308,8 @@ impl CGame {
         let Some(skill) = self.registered_skill(address) else { return };
         let Some(effect) = skill.visual_effect() else { return };
         match effect.kind() {
+            SkillVisualEffectKind::BaseAttack =>
+                crate::gameserver::gameserver::game::baseattackruntime::publish_base_attack_visual(self, skill, mode),
             SkillVisualEffectKind::Rage =>
                 crate::gameserver::appserver::skills::rage::publish_rage_visual(self, skill, mode),
             SkillVisualEffectKind::KnightCut =>

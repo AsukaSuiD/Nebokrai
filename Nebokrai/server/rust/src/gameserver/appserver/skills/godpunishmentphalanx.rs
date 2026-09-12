@@ -25,18 +25,6 @@ const MONSTER_TYPE: i32 = 600;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) enum GodPunishmentPhalanxTick { Scan { sampled_at_ms: u32 }, Expired }
 #[derive(Clone, Debug, Eq, PartialEq)] pub(crate) struct CGodPunishmentPhalanx { shape: CShape, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32 }
 
-pub(crate) fn god_punishment_targets(game: &CGame, region_id: i32, phalanx: &CGodPunishmentPhalanx) -> Vec<ShapeIdentity> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
-    let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
-    let (area_width, area_height) = game.area_dimensions();
-    let mut shapes = Vec::new();
-    if region.get_shapes(x, y, area_width, area_height, game, &mut shapes).is_err() { return Vec::new() }
-    shapes.into_iter().map(|shape| shape.identity).filter(|identity| {
-        *identity != phalanx.shape().identity()
-            && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
-            && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-    }).collect()
-}
 
 pub(crate) fn calculate_owned_god_punishment_attack(game: &mut CGame, phalanx: &CGodPunishmentPhalanx, target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let player = game.find_player(phalanx.master().master_id)?;

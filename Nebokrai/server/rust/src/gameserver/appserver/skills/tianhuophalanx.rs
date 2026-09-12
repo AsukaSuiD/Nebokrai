@@ -5,8 +5,9 @@
 //! на каждом проходе просматривает свою клетку в исходном порядке региона.
 //! После каждой допустимой атаки она помечается на удаление и немедленно
 //! отправляет `0xBF504`; один проход всё ещё обрабатывает уже полученный
-//! снимок клетки, поэтому пакет удаления может повториться. Формула делает ровно один
-//! вызов legacy RNG до чтения боевого духа и свойств навыка. Поиск целей и
+//! снимок клетки, поэтому пакет удаления может повториться. При наличии предмета
+//! в слоте 10 формула делает один вызов legacy RNG до повторного чтения боевого
+//! духа и свойств навыка; поздний отказ сохраняет нулевую запись урона. Поиск целей и
 //! применение результата к независимым владельцам остаются у `CGame`.
 //! Слагаемое боевого духа и случайная база складываются в x87 до единственного
 //! усечения в `i64`, после которого читаются младшие 32 бита.
@@ -45,29 +46,41 @@ pub(crate) struct CTianhuoPhalanx {
     _element_modifier: i32,
 }
 
-pub(crate) fn tianhuo_targets(game: &CGame, region_id: i32, phalanx: &CTianhuoPhalanx) -> Vec<ShapeIdentity> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
-    let (Ok(tile_x), Ok(tile_y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
-    let (area_width, area_height) = game.area_dimensions();
-    let mut shapes = Vec::new();
-    if region.get_shapes(tile_x, tile_y, area_width, area_height, game, &mut shapes).is_err() { return Vec::new() }
-    shapes.into_iter().map(|shape| shape.identity).filter(|identity| {
-        *identity != phalanx.shape().identity()
-            && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
-            && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-    }).collect()
-}
 
 pub(crate) fn calculate_owned_tianhuo_attack(game: &mut CGame, phalanx: &CTianhuoPhalanx) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let master = phalanx.master();
-    if master.master_type != PLAYER_TYPE || master.master_id == 0 { return None }
     let player = game.find_player(master.master_id)?;
-    let sprite = player.war_soul_goods(game.goods_factory())?.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
+    let equipment = player.equipment().get_goods(10)?;
+    let _ = equipment.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let target_damage_factor = game.skill_base_properties(TIANHUO_SKILL_ID, phalanx.skill_level())?.query_property(TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY);
-    Some(phalanx.calculate_attack(sprite, combat, occupation, attacker_level, target_damage_factor, &mut |maximum| game.skill_random_below(maximum)))
+    let mut attack = AttackInformation::for_master(master);
+    attack.skill_id = TIANHUO_SKILL_ID;
+    attack.skill_level = phalanx.skill_level as u8;
+    attack.hit_modifier = 100;
+    let width = phalanx.maximum_attack.wrapping_sub(phalanx.minimum_attack)
+        .wrapping_abs().wrapping_add(1);
+    let rolled_attack = game.skill_random_below(width).wrapping_add(phalanx.minimum_attack);
+    let goods = game.find_player(master.master_id)
+        .and_then(|player| player.war_soul_goods(game.goods_factory()));
+    let properties = game.skill_base_properties(TIANHUO_SKILL_ID, phalanx.skill_level);
+    let damage = if let (Some(goods), Some(properties)) = (goods, properties) {
+        let sprite = goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
+        let target_damage_factor = properties.query_property(TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY);
+        truncate_original_i64_low(
+            f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6
+                + f64::from(rolled_attack),
+        ).max(0)
+    } else {
+        0
+    };
+    attack.damages.push(AttackPower {
+        kind: AttackPowerType::Element,
+        hp_damage: damage,
+        mp_damage: 0,
+    });
+    Some((attack, combat, occupation, attacker_level))
 }
 
 impl CTianhuoPhalanx {
@@ -125,48 +138,5 @@ impl CTianhuoPhalanx {
         self.shape
             .add_to_byte_array(&mut payload, true)
             .then_some(payload)
-    }
-
-    pub(crate) fn calculate_attack(
-        &self,
-        sprite: i32,
-        combat: PlayerCombatProperties,
-        occupation: u8,
-        attacker_level: u8,
-        target_damage_factor: u32,
-        random_below: &mut dyn FnMut(i32) -> i32,
-    ) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-        let delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
-        let width = delta.wrapping_abs().wrapping_add(1);
-        let rolled_attack = random_below(width).wrapping_add(self.minimum_attack);
-        let damage = truncate_original_i64_low(
-            f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6
-                + f64::from(rolled_attack),
-        );
-        (
-            AttackInformation {
-                skill_id: TIANHUO_SKILL_ID,
-                skill_level: self.skill_level as u8,
-                attacker_type: self.master.master_type,
-                attacker_id: self.master.master_id,
-                attacker_team_id: self.master.master_team_id,
-                attacker_faction_id: self.master.master_guild_id,
-                attacker_union_id: self.master.master_union_id,
-                hit_modifier: 100,
-                damage_factor: 1.0,
-                damage_modifier: 0,
-                critical: false,
-                blast_attack: false,
-                full_miss: 0,
-                damages: vec![AttackPower {
-                    kind: AttackPowerType::Element,
-                    hp_damage: damage.max(0),
-                    mp_damage: 0,
-                }],
-            },
-            combat,
-            occupation,
-            attacker_level,
-        )
     }
 }

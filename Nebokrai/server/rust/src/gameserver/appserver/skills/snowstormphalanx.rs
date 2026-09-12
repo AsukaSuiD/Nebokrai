@@ -49,37 +49,6 @@ pub(crate) struct CSnowStormPhalanx {
     cells: Vec<(i32, i32)>,
 }
 
-pub(crate) fn snow_storm_targets(
-    game: &CGame,
-    region_id: i32,
-    phalanx: &CSnowStormPhalanx,
-) -> Vec<ShapeIdentity> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else {
-        return Vec::new();
-    };
-    let (area_width, area_height) = game.area_dimensions();
-    let mut targets = Vec::new();
-    for (x, y) in phalanx.current_cells() {
-        let mut shapes = Vec::new();
-        if region
-            .get_shapes(x, y, area_width, area_height, game, &mut shapes)
-            .is_err()
-        {
-            continue;
-        }
-        for shape in shapes {
-            if shape.identity == phalanx.shape().identity()
-                || (shape.identity.object_type == phalanx.master().master_type
-                    && shape.identity.id == phalanx.master().master_id)
-                || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-            {
-                continue;
-            }
-            targets.push(shape.identity);
-        }
-    }
-    targets
-}
 
 pub(crate) fn calculate_owned_snow_storm_attack(
     game: &mut CGame,
@@ -92,7 +61,7 @@ pub(crate) fn calculate_owned_snow_storm_attack(
             player.occupation(),
             player.level(),
         )
-    })?;
+    }).unwrap_or_default();
     Some(phalanx.calculate_attack(combat, occupation, level, &mut |maximum| {
         game.skill_random_below(maximum)
     }))
