@@ -145,7 +145,7 @@ pub(crate) struct SkillEndPolicy {
     pub(crate) reset_phase: bool,
     /// None сохраняет available; Some задаёт безусловную concrete-запись.
     pub(crate) available: Option<bool>,
-    /// Scorpion восстанавливает CAN до GetUser/Move1, в том числе без payload.
+    /// Concrete CAN меняется до GetUser/Move1, в том числе без payload.
     pub(crate) available_before_movement: bool,
     pub(crate) effect: SkillEndEffect,
     /// Порядок освобождения существующих путей, а не создание пустого payload.
@@ -167,7 +167,9 @@ impl SkillEndPolicy {
     const USER_OR_SUFFERER: Self = Self { movement: SkillEndMovement::UserOrSufferer, ..Self::COMMON };
     const USER_OR_SUFFERER_RESET_PHASE: Self = Self { reset_phase: true, ..Self::USER_OR_SUFFERER };
     const USER_AVAILABLE: Self = Self { available: Some(true), ..Self::USER };
-    const USER_UNAVAILABLE: Self = Self { available: Some(false), ..Self::USER };
+    const IGNITION: Self = Self {
+        available: Some(false), available_before_movement: true, ..Self::USER_RESET_PHASE
+    };
     const USER_PATHS_AFTER_MOVEMENT: Self = Self { path_order: SkillEndPathOrder::AfterMovement, ..Self::USER_RESET_PHASE };
     const RAGE: Self = Self { effect: SkillEndEffect::Rage, ..Self::USER };
     const SCORPION: Self = Self {
@@ -323,8 +325,8 @@ skill_owners! {
     CLightingArrow2: Attack, USER_RESET_PHASE, Weapon, EndOne => 0x0e7,
     CSwordship3: State, COMMON, Weapon => 0x0e8,
     CSwordship4: State, COMMON, Weapon => 0x0e9,
-    CKerosene: State, USER, Weapon => 0x0f1,
-    CIgnition: Attack, USER_UNAVAILABLE, Weapon => 0x0f2,
+    CKerosene: State, USER_RESET_PHASE, Weapon => 0x0f1,
+    CIgnition: Attack, IGNITION, Weapon => 0x0f2,
     CTaiJi: State, COMMON, Weapon => 0x12d,
     CWeak: Summon, USER, Weapon => 0x12e,
     CGodBless: State, USER_OR_SUFFERER, Weapon => 0x12f,

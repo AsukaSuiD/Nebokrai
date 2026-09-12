@@ -2,7 +2,7 @@
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp,
 //! meteorarrowmass.cpp, rainarrow.cpp, lightingarrow.cpp, lightingarrow2.cpp,
 //! poisonmoth.cpp, bloodrose.cpp, explosivearrow{,2,3}.cpp, scorpion.cpp,
-//! boalock.cpp и strike.cpp. Общие проверки пути и MP доступны также
+//! boalock.cpp, strike.cpp, kerosene.cpp и ignition.cpp. Проверки пути и MP доступны также
 //! BoaLock/Strike без требования к оружию.
 //! Check удерживает исходного U, читает reuse и свежий путь по политике навыка.
 //! Проверка самонацеливания, если она нужна, выполняется caller-ом раньше.
@@ -15,6 +15,9 @@
 //! и строк не дублируют механизм.
 //! Именованная ошибка препятствия читает имя захваченной caller-ом цели
 //! после visual15; путь при этом может использовать уже изменённую базовую S.
+//! Kerosene/Ignition читают MAX один раз и трактуют ноль как строгий предел;
+//! в их Check нулевой MP допускает Move0 без чтения маны. Эти различия
+//! задаются отдельно от обычного ненулевого ограничения и обязательной цены.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::skill_is_restored;
@@ -95,17 +98,30 @@ pub(super) enum CastPathBlock {
     Named { target: (i32, ShapeIdentity), message: &'static [u8] },
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum CastDistanceLimit { Nonzero, IncludingZero }
+
 pub(super) fn check_skill_path(
     game: &mut CGame, instance: RegisteredSkill, properties: &CSkillBaseProperties,
     path: &[(i32, i32, u8)], player: Option<i32>, block: CastPathBlock,
 ) -> bool {
-    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
-        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-        if path.len() as u32 > maximum {
-            game.update_registered_skill_visual(instance, 11);
-            if let Some(player) = player { game.send_skill_system_info(player, b"GS0290"); }
-            return false;
-        }
+    check_skill_path_with_limit(game, instance, properties, path, player, CastDistanceLimit::Nonzero, block)
+}
+
+pub(super) fn check_skill_path_with_limit(
+    game: &mut CGame, instance: RegisteredSkill, properties: &CSkillBaseProperties,
+    path: &[(i32, i32, u8)], player: Option<i32>, limit: CastDistanceLimit, block: CastPathBlock,
+) -> bool {
+    let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let maximum = match limit {
+        CastDistanceLimit::IncludingZero => Some(maximum),
+        CastDistanceLimit::Nonzero if maximum != 0 => Some(properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE)),
+        CastDistanceLimit::Nonzero => None,
+    };
+    if maximum.is_some_and(|maximum| path.len() as u32 > maximum) {
+        game.update_registered_skill_visual(instance, 11);
+        if let Some(player) = player { game.send_skill_system_info(player, b"GS0290"); }
+        return false;
     }
     if !matches!(block, CastPathBlock::Ignore) && path.iter().any(|cell| cell.2 == 2) {
         game.update_registered_skill_visual(instance, 15);
@@ -146,22 +162,42 @@ pub(super) fn check_ranged_weapon_cast<Runtime: GameMainLoopRuntime>(
         } else { CastPathBlock::Ignore };
         if !check_skill_path(game, instance, &properties, &path, player, block) { return false; }
     }
-    let Some(player) = player else { return true; };
-    if !check_weapon(game, instance, player, weapon) { return false; }
-    check_cast_mana(game, instance, source, &properties)
+    check_ranged_weapon_and_mana(game, instance, source, &properties, weapon, CastManaRule::RequireCost)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum CastManaRule { RequireCost, AllowFree }
+
+pub(super) fn check_ranged_weapon_and_mana(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    properties: &CSkillBaseProperties, weapon: RangedWeaponKind, mana_rule: CastManaRule,
+) -> bool {
+    if source.1.object_type != PLAYER_TYPE { return true; }
+    if !check_weapon(game, instance, source.1.id, weapon) { return false; }
+    check_cast_mana_with_rule(game, instance, source, properties, mana_rule)
 }
 
 pub(super) fn check_cast_mana(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     properties: &CSkillBaseProperties,
 ) -> bool {
+    check_cast_mana_with_rule(game, instance, source, properties, CastManaRule::RequireCost)
+}
+
+fn check_cast_mana_with_rule(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    properties: &CSkillBaseProperties, rule: CastManaRule,
+) -> bool {
     if source.1.object_type != PLAYER_TYPE { return true; }
     let player = source.1.id;
-    if properties.query_property(USER_MP_LOSE) == 0 { return false; }
-    let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
-    if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
-        mana_failure(game, instance, player, properties);
-        return false;
+    if properties.query_property(USER_MP_LOSE) == 0 {
+        if matches!(rule, CastManaRule::RequireCost) { return false; }
+    } else {
+        let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
+        if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
+            mana_failure(game, instance, player, properties);
+            return false;
+        }
     }
     let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
     source.set_moveable(false);

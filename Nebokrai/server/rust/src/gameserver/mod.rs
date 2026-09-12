@@ -270,6 +270,7 @@ pub(crate) mod appserver {
         pub(crate) mod kerosene;
         pub(crate) mod kerosenestate;
         pub(crate) mod ignition;
+        pub(crate) mod combustioncast;
         pub(crate) mod lightningsword;
         pub(crate) mod lightningsword2;
         pub(crate) mod lightningsword3;

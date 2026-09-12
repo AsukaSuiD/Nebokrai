@@ -1424,14 +1424,6 @@ use crate::gameserver::appserver::skills::spiderpoison::{
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
-use crate::gameserver::appserver::skills::kerosene::{
-    cancel_player_kerosene, complete_player_kerosene, execute_player_kerosene,
-    is_kerosene_dispatch, KEROSENE_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::ignition::{
-    cancel_player_ignition, complete_player_ignition, execute_player_ignition,
-    is_ignition_dispatch, IGNITION_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::blind::{
     cancel_player_blind, complete_player_blind, execute_player_blind, is_blind_dispatch,
     BLIND_SKILL_ID,
@@ -39045,18 +39037,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                IGNITION_SKILL_ID => Some(complete_player_ignition(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                KEROSENE_SKILL_ID => Some(complete_player_kerosene(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 BLIND_SKILL_ID => Some(complete_player_blind(
                     self,
                     player_id,
@@ -39364,12 +39344,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            IGNITION_SKILL_ID => {
-                cancel_player_ignition(self, player_id, &mut player_ai, runtime)
-            }
-            KEROSENE_SKILL_ID => {
-                cancel_player_kerosene(self, player_id, &mut player_ai, runtime)
-            }
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
@@ -39675,8 +39649,6 @@ impl CGame {
             } => execute_player_archery,
             _ if is_heartless_arrow_dispatch(dispatch) => execute_player_heartless_arrow,
             _ if is_heartless_arrow_area_dispatch(dispatch) => execute_player_heartless_arrow_area,
-            _ if is_kerosene_dispatch(dispatch) => execute_player_kerosene,
-            _ if is_ignition_dispatch(dispatch) => execute_player_ignition,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
             _ if match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
