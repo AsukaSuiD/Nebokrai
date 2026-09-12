@@ -270,8 +270,6 @@ impl CGame {
             | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
             | SOUL_MIRROR_SKILL_ID
-            | POISON_MOTH_SKILL_ID
-            | BLOOD_ROSE_SKILL_ID
             | SCORPION_SKILL_ID
             | BOA_LOCK_SKILL_ID
             | EXPLOSIVE_ARROW_SKILL_ID

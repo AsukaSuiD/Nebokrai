@@ -32,7 +32,9 @@ use super::basemagic::{
 };
 use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::meteorarrow::{ArrowCastPathRule, check_arrow_cast, prepare_arrow_player, terminal};
+use super::rangedweaponcast::{
+    ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast, prepare_ranged_weapon_player, terminal,
+};
 use super::playercast::execute_registered_player_cast;
 use super::rainarrowphalanx::{CRainArrowPhalanx, RainArrowCell, RainArrowPath};
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -259,7 +261,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     let source = (user.shape().get_region_id(), user.shape().identity());
     if stage == SkillStage::Begin {
         let player = (source.1.object_type == 400).then_some(source.1.id);
-        if !prepare_arrow_player(game, instance, player, &properties) { return terminal(QueuedSkillExecutionState::Rejected); }
+        if !prepare_ranged_weapon_player(game, instance, player, &properties, RangedWeaponKind::Bow) { return terminal(QueuedSkillExecutionState::Rejected); }
         let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
         let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
         skill.lifecycle_mut().set_available(can_break != 0);
@@ -326,7 +328,7 @@ pub(crate) fn execute_player_rain_arrow<Runtime: GameMainLoopRuntime>(
     execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::ArrowCast,
         |game, instance, _player_id, runtime| original_user
-            .is_some_and(|source| check_arrow_cast(game, instance, source, ArrowCastPathRule::DistanceOnly, runtime)),
+            .is_some_and(|source| check_ranged_weapon_cast(game, instance, source, ArrowCastPathRule::DistanceOnly, RangedWeaponKind::Bow, runtime)),
         |dispatch, started| RainArrowExecutionState::begin(dispatch, started).into(), run_ai,
     )
 }

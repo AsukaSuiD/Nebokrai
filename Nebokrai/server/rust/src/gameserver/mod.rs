@@ -204,6 +204,9 @@ pub(crate) mod appserver {
         pub(crate) mod flash;
         pub(crate) mod dash;
         pub(crate) mod playercast;
+        pub(crate) mod rangedweaponcast;
+        pub(crate) mod crossbowattack;
+        pub(crate) mod crossbowcastvisual;
         pub(crate) mod skillpath;
         pub(crate) mod armybreakattack;
         pub(crate) mod weaponattack;

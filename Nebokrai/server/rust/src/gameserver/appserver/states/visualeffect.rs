@@ -29,6 +29,7 @@ pub(crate) enum SkillVisualEffectKind {
     SelfCast,
     ThunderSlash,
     ArrowCast,
+    CrossbowCast,
     Kerosene,
     Ignition,
     PoisonFog,

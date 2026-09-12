@@ -1072,14 +1072,6 @@ use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     calculate_owned_heartless_arrow_attack,
 };
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
-use crate::gameserver::appserver::skills::poisonmoth::{
-    cancel_player_poison_moth, complete_player_poison_moth, execute_player_poison_moth,
-    is_poison_moth_dispatch, POISON_MOTH_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::bloodrose::{
-    cancel_player_blood_rose, complete_player_blood_rose, execute_player_blood_rose,
-    is_blood_rose_dispatch, BLOOD_ROSE_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::scorpion::{
     cancel_player_scorpion, complete_player_scorpion, execute_player_scorpion,
     is_scorpion_dispatch, SCORPION_SKILL_ID,
@@ -39083,18 +39075,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                POISON_MOTH_SKILL_ID => Some(complete_player_poison_moth(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                BLOOD_ROSE_SKILL_ID => Some(complete_player_blood_rose(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 SCORPION_SKILL_ID => Some(complete_player_scorpion(
                     self,
                     player_id,
@@ -39453,12 +39433,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            POISON_MOTH_SKILL_ID => {
-                cancel_player_poison_moth(self, player_id, &mut player_ai, runtime)
-            }
-            BLOOD_ROSE_SKILL_ID => {
-                cancel_player_blood_rose(self, player_id, &mut player_ai, runtime)
-            }
             SCORPION_SKILL_ID => {
                 cancel_player_scorpion(self, player_id, &mut player_ai, runtime)
             }
@@ -39798,11 +39772,9 @@ impl CGame {
             } => execute_player_archery,
             _ if is_heartless_arrow_dispatch(dispatch) => execute_player_heartless_arrow,
             _ if is_heartless_arrow_area_dispatch(dispatch) => execute_player_heartless_arrow_area,
-            _ if is_poison_moth_dispatch(dispatch) => execute_player_poison_moth,
             _ if is_kerosene_dispatch(dispatch) => execute_player_kerosene,
             _ if is_ignition_dispatch(dispatch) => execute_player_ignition,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
-            _ if is_blood_rose_dispatch(dispatch) => execute_player_blood_rose,
             _ if is_scorpion_dispatch(dispatch) => execute_player_scorpion,
             _ if is_boa_lock_dispatch(dispatch) => execute_player_boa_lock,
             _ if explosive_arrow_variant(dispatch).is_some() => execute_player_explosive_arrow,

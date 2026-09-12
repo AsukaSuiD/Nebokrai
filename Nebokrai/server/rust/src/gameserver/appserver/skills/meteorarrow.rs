@@ -6,7 +6,7 @@
 //! свежий путь, дальность и block2; источник не типа Player допускается без Move0.
 //! Игроку нужны лук категории 3 и ненулевая цена MP. Signed DWORD-разность
 //! разрешает Move0; нулевая цена означает тихий отказ. Запас стрел в Check
-//! не проверяется. Общие с MeteorArrowMass проверки ресурсов остаются здесь.
+//! не проверяется. Проверки ресурсов и оружия используют общий rangedweaponcast.
 //!
 //! Каждый AI заново получает свойства, U и S. Смерть U не проверяется;
 //! отсутствующая S использует базовую точку, мёртвая S даёт End0. Первый AI
@@ -29,18 +29,19 @@
 
 use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
 use super::basemagic::{
-    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
-    SKILL_USAGE_TARGET_MAX_DISTANCE,
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::rangedweaponcast::{
+    ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast,
+    prepare_ranged_weapon_player, ranged_weapon_failure, terminal,
+};
 use super::meteorarrowphalanx::{CMeteorArrowPhalanx, MeteorArrowScope};
 use super::meteorarrowstate::{consume_meteor_arrow_count, first_meteor_arrow_count};
 use super::playercast::execute_registered_player_cast;
-use super::skillbaseproperties::CSkillBaseProperties;
 use super::weaponattack::{SourceProperty, source_property};
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
@@ -54,104 +55,7 @@ use crate::public::tools::get_line_direction;
 
 pub(crate) const METEOR_ARROW_SKILL_ID: u32 = 0xcd;
 const PLAYER_TYPE: i32 = 400;
-const USER_MP_LOSE: u32 = 2;
 const TARGET_AFFECT_FREQUENCY: u32 = 6_001;
-
-pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-fn failure(game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, mode: u32) {
-    game.update_registered_skill_visual(instance, mode);
-    let Some(player) = player else { return; };
-    let text: &[u8] = match mode {
-        4 => b"GS0300", 10 => b"GS0285", 11 => b"GS0290", 13 => b"GS0278",
-        14 => b"GS0297", 15 => b"GS0282", _ => return,
-    };
-    game.send_skill_system_info(player, text);
-}
-
-fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player: i32, properties: &CSkillBaseProperties) {
-    game.update_registered_skill_visual(instance, 7);
-    let amount = properties.query_property(USER_MP_LOSE);
-    game.send_skill_system_info_with_unsigned(player, b"GS0288", amount);
-}
-
-fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
-    player.equipment().get_goods(2).is_some_and(|weapon|
-        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ArrowCastPathRule {
-    None,
-    DistanceOnly,
-    DistanceAndBlocks,
-}
-
-pub(super) fn check_arrow_cast<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity),
-    path_rule: ArrowCastPathRule, runtime: &mut Runtime,
-) -> bool {
-    let Some(source) = resolve_state_move_shape(game, original_user.0, original_user.1) else { return false; };
-    let source = (source.shape().get_region_id(), source.shape().identity());
-    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
-    let Some(skill) = game.registered_skill(instance) else { return false; };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
-    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
-        failure(game, instance, player, 13);
-        return false;
-    }
-    if path_rule != ArrowCastPathRule::None {
-        let path = game.skill_target_path(skill.lifecycle());
-        if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
-            let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-            if path.len() as u32 > maximum {
-                failure(game, instance, player, 11);
-                return false;
-            }
-        }
-        if path_rule == ArrowCastPathRule::DistanceAndBlocks && path.iter().any(|cell| cell.2 == 2) {
-            failure(game, instance, player, 15);
-            return false;
-        }
-    }
-    let Some(player) = player else { return true; };
-    if game.find_player(player).is_none_or(|source| !weapon_is_valid(game, source)) {
-        failure(game, instance, Some(player), 14);
-        return false;
-    }
-    if properties.query_property(USER_MP_LOSE) == 0 { return false; }
-    let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
-    if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
-        mana_failure(game, instance, player, &properties);
-        return false;
-    }
-    let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
-    source.set_moveable(false);
-    true
-}
-
-pub(super) fn prepare_arrow_player(
-    game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, properties: &CSkillBaseProperties,
-) -> bool {
-    let Some(player) = player else { return true; };
-    let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
-    let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
-    if (remaining as i32) < 0 {
-        mana_failure(game, instance, player, properties);
-        return false;
-    }
-    let Some(user) = game.find_player_mut(player) else { return false; };
-    user.set_mana(remaining);
-    game.publish_player_states(player);
-    if game.find_player(player).is_none_or(|user| !weapon_is_valid(game, user)) {
-        failure(game, instance, Some(player), 14);
-        return false;
-    }
-    true
-}
 
 fn summon<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
@@ -212,7 +116,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     let destination = match resolve_skill_sufferer(game, skill.lifecycle()) {
         Some((region, identity)) => {
             if game.move_shape_health(region, identity) == Some(0) {
-                failure(game, instance, player, 10);
+                ranged_weapon_failure(game, instance, player, 10, RangedWeaponKind::Bow);
                 return terminal(QueuedSkillExecutionState::Rejected);
             }
             let Some(target) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
@@ -224,7 +128,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     };
     let Some(source) = source else { return terminal(QueuedSkillExecutionState::Rejected); };
     if stage == SkillStage::Begin {
-        if !prepare_arrow_player(game, instance, player, &properties) {
+        if !prepare_ranged_weapon_player(game, instance, player, &properties, RangedWeaponKind::Bow) {
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
@@ -236,7 +140,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         let direction = get_line_direction(x, y, destination.0, destination.1);
         if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.shape_mut().set_direction(direction); }
         if first_meteor_arrow_count(game, source).unwrap_or(0) == 0 {
-            failure(game, instance, player, 4);
+            ranged_weapon_failure(game, instance, player, 4, RangedWeaponKind::Bow);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         game.update_registered_skill_visual(instance, 0);
@@ -247,7 +151,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
     let arrows = consume_meteor_arrow_count(game, source);
     if arrows == 0 {
-        failure(game, instance, player, 4);
+        ranged_weapon_failure(game, instance, player, 4, RangedWeaponKind::Bow);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     game.update_registered_skill_visual(instance, 1);
@@ -271,7 +175,7 @@ pub(super) fn execute_meteor_arrow_family<Runtime: GameMainLoopRuntime>(
     execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::ArrowCast,
         |game, instance, _player_id, runtime| original_user
-            .is_some_and(|source| check_arrow_cast(game, instance, source, ArrowCastPathRule::DistanceAndBlocks, runtime)),
+            .is_some_and(|source| check_ranged_weapon_cast(game, instance, source, ArrowCastPathRule::DistanceAndBlocks, RangedWeaponKind::Bow, runtime)),
         |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(),
         |game, instance, runtime| run_ai(game, instance, scope, runtime),
     )

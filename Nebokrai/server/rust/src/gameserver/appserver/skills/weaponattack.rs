@@ -5,8 +5,8 @@
 //! контакт доставляет сырой OnBeenAttacked без повторного допуска, затем
 //! вызывает IncreaseRp независимо от результата. NULL таблица Calculate оставляет
 //! исходный UNKNOWN/1, но не отменяет удар. Допуск и дедупликация принадлежат AI.
-//! GhostCut читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
-//! остальные семейства читают MAX→MIN и используют abs(max-min)+1. Обе ветки
+//! RawRange читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
+//! AbsoluteRange читает MAX→MIN и использует abs(max-min)+1. Обе ветки
 //! снова читают MIN после RNG. Mosou оставляет единичный коэффициент, не читая
 //! уровень цели и модификатор оружия. Фронтальные удары добавляют живую
 //! ловкость CPlayer после второго MIN. InverseChopped после hit modifier
@@ -19,6 +19,8 @@
 //! нулевые компоненты/CCH, единичный weapon modifier и пустой IncreaseRp.
 //! LightingArrowPhalanx использует тот же порядок компонентов и RNG без
 //! ловкости; её сохранённый знаковый коэффициент и яд остаются у формы.
+//! PoisonMoth использует сырую ширину, BloodRose дополнительно читает свою
+//! добавку после физического урона, непосредственно перед живым ELEMENT.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -93,7 +95,7 @@ pub(super) fn source_property(game: &CGame, source: (i32, ShapeIdentity), proper
     }
 }
 
-fn source_master(game: &CGame, source: (i32, ShapeIdentity)) -> Option<MasterInfo> {
+pub(super) fn source_master(game: &CGame, source: (i32, ShapeIdentity)) -> Option<MasterInfo> {
     let identity = resolve_state_move_shape(game, source.0, source.1)?.shape().identity();
     if identity.object_type == 400 { return game.find_player(identity.id).map(master_info); }
     Some(MasterInfo { master_type: identity.object_type, master_id: identity.id, ..MasterInfo::default() })
@@ -130,19 +132,27 @@ fn fill_player_weapon_attack(
     let multiplier = if power_mode == WeaponPowerMode::EnergyHolding {
         consume_energy_holding_multiplier(game, source)
     } else { 1.0 };
-    fill_weapon_damage(game, source, roll, power_mode, multiplier, attack);
+    fill_weapon_damage(game, source, roll, power_mode, multiplier, || 0, attack);
 }
 
 pub(super) fn fill_ordinary_weapon_damage(
     game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
     attack: &mut AttackInformation,
 ) {
-    fill_weapon_damage(game, source, roll, WeaponPowerMode::Ordinary, 1.0, attack);
+    fill_ordinary_weapon_damage_with_element_addition(game, source, roll, || 0, attack);
+}
+
+pub(super) fn fill_ordinary_weapon_damage_with_element_addition(
+    game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
+    element_addition: impl FnOnce() -> u32, attack: &mut AttackInformation,
+) {
+    fill_weapon_damage(game, source, roll, WeaponPowerMode::Ordinary, 1.0, element_addition, attack);
 }
 
 fn fill_weapon_damage(
     game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
-    power_mode: WeaponPowerMode, multiplier: f64, attack: &mut AttackInformation,
+    power_mode: WeaponPowerMode, multiplier: f64,
+    element_addition: impl FnOnce() -> u32, attack: &mut AttackInformation,
 ) {
     let scale = |damage: i32| {
         if power_mode == WeaponPowerMode::EnergyHolding {
@@ -169,8 +179,9 @@ fn fill_weapon_damage(
         physical = physical.wrapping_add(player.combat_properties().dexterity as i32);
     }
     attack.damages.push(AttackPower { kind: AttackPowerType::Physical, hp_damage: scale(physical.max(0)), mp_damage: 0 });
+    let element_addition = element_addition();
     let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
-    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: scale((element as i32).max(0)), mp_damage: 0 });
+    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: scale((element.wrapping_add(element_addition) as i32).max(0)), mp_damage: 0 });
     let Some(soul) = source_property(game, source, SourceProperty::Soul) else { return; };
     attack.damages.push(AttackPower { kind: AttackPowerType::Soul, hp_damage: scale(i32::from(soul as u16)), mp_damage: 0 });
     let Some(critical_chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };

@@ -20,7 +20,9 @@
 
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME};
 use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::meteorarrow::{ArrowCastPathRule, check_arrow_cast, prepare_arrow_player, terminal};
+use super::rangedweaponcast::{
+    ArrowCastPathRule, RangedWeaponKind, check_ranged_weapon_cast, prepare_ranged_weapon_player, terminal,
+};
 use super::meteorarrowstate::add_meteor_arrows;
 pub(crate) use super::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID;
 use super::playercast::execute_registered_player_cast;
@@ -47,7 +49,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     let Some(source) = source else { return terminal(QueuedSkillExecutionState::Rejected); };
     let player = (source.1.object_type == 400).then_some(source.1.id);
     if stage == SkillStage::Begin {
-        if !prepare_arrow_player(game, instance, player, &properties) {
+        if !prepare_ranged_weapon_player(game, instance, player, &properties, RangedWeaponKind::Bow) {
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
@@ -73,7 +75,7 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(
     execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
         |game, instance, _player_id, runtime| original_user
-            .is_some_and(|source| check_arrow_cast(game, instance, source, ArrowCastPathRule::None, runtime)),
+            .is_some_and(|source| check_ranged_weapon_cast(game, instance, source, ArrowCastPathRule::None, RangedWeaponKind::Bow, runtime)),
         |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
     )
 }
