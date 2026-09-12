@@ -242,6 +242,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::battlefairyskill::publish_battle_fairy_visual(self, skill, mode),
             SkillVisualEffectKind::SpriteBurn =>
                 crate::gameserver::appserver::skills::spriteburn::publish_sprite_burn_visual(self, skill, mode),
+            SkillVisualEffectKind::LeafCut =>
+                crate::gameserver::appserver::skills::leafcut::publish_leaf_cut_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

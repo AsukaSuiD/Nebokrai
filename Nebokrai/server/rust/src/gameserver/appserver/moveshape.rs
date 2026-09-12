@@ -360,9 +360,9 @@ use crate::gameserver::appserver::skills::swordshipstate::{
 };
 use crate::gameserver::appserver::skills::strikestate::StrikeState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
-use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES};
-use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_BYTES};
-use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES};
+use crate::gameserver::appserver::skills::leafcutstate::LeafCutState;
+use crate::gameserver::appserver::skills::leafcutstate2::LeafCutState2;
+use crate::gameserver::appserver::skills::leafcutstate3::LeafCutState3;
 use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BOSS_BLUE_FURY_STATE_BYTES,
@@ -1462,8 +1462,6 @@ impl CMoveShape {
                 StateData::ChangeBody(state) => Some(state.serialized_span()),
                 StateData::Extended(state) => Some(state.serialized_span()),
                 StateData::Undead(state) => Some(state.serialized_span()),
-                StateData::LeafCut(state) => Some(state.serialized_span()),
-                StateData::LeafCut3(state) => Some(state.serialized_span()),
                 StateData::Kerosene(state) => Some(state.serialized_span()),
                 StateData::PoisonFog(state) => Some(state.serialized_span()),
                 StateData::MeteorArrow(state) => Some(state.serialized_span()),
@@ -1541,14 +1539,8 @@ impl CMoveShape {
                     }));
                     None
                 }
-                StateData::LeafCut(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
-                    None
-                }
-                StateData::LeafCut3(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
-                    None
-                }
+                StateData::LeafCut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
+                StateData::LeafCut3(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Kerosene(state) => {
                     if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
                     None
@@ -1605,7 +1597,7 @@ impl CMoveShape {
                     DefenseShieldState::Life(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
                     DefenseShieldState::Promotion(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
                 }),
-                StateData::LeafCut2(state) => Some(state.encoded(now_ms)),
+                StateData::LeafCut2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Rush2(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::Agility2(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::BloodLoss(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
@@ -2315,8 +2307,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<ChangeBodyState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<UndeadState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<LeafCutState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<LeafCutState3>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<KeroseneState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<PoisonFogState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<MeteorArrowState>(|state| state.shift_serialized_offset_after(offset, amount));
@@ -2372,8 +2362,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<ChangeBodyState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<UndeadState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<LeafCutState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
-        self.state_entries.for_each_mut::<LeafCutState3>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<KeroseneState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<PoisonFogState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<MeteorArrowState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
@@ -2542,8 +2530,6 @@ impl CMoveShape {
         // Как в save, неоднозначный ordinal не разрешает удалять чужие байты.
         let record = (runtime_count == records.len()).then(|| records[occurrence]);
         let span = self.state_entries.serialized_span(key).or_else(|| match self.state_entries.get(key)? {
-            StateData::LeafCut(state) => state.serialized_span(),
-            StateData::LeafCut3(state) => state.serialized_span(),
             StateData::Kerosene(state) => state.serialized_span(),
             StateData::PoisonFog(state) => state.serialized_span(),
             StateData::MeteorArrow(state) => state.serialized_span(),
@@ -2910,100 +2896,6 @@ impl CMoveShape {
         self.state_entries.entries().filter(|(_, state)| state.is_blind())
             .map(|(key, state)| (key, state.state_id())).collect()
     }
-
-
-
-    pub(crate) fn replace_leaf_cut_state(
-        &mut self,
-        mut state: LeafCutState,
-        now_ms: u32,
-    ) -> Option<LeafCutState> {
-        let previous = self.state_entries.take_first::<LeafCutState>();
-        let replaced_in_place = previous
-            .and_then(LeafCutState::serialized_span)
-            .is_some_and(|(offset, amount)| {
-                amount == LEAF_CUT_STATE_BYTES
-                    && state.write_serialized_at(&mut self.ex_states, offset, now_ms)
-            });
-        if !replaced_in_place {
-            if self.ex_states.len() < 4 {
-                self.ex_states.clear();
-                LegacyWriter::new(&mut self.ex_states).write_u32(0);
-            }
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-            state.append_serialized(&mut self.ex_states, now_ms);
-        }
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-
-
-
-
-
-
-
-
-    pub(crate) fn replace_leaf_cut_2_state(
-        &mut self,
-        state: LeafCutState2,
-    ) -> Option<LeafCutState2> {
-        let previous = self.state_entries.first_key::<LeafCutState2>()
-            .and_then(|key| self.remove_applied_state_record::<LeafCutState2>(key, LEAF_CUT_2_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-
-
-
-
-
-
-    pub(crate) fn replace_leaf_cut_3_state(
-        &mut self,
-        mut state: LeafCutState3,
-        now_ms: u32,
-    ) -> Option<LeafCutState3> {
-        let previous = self.state_entries.take_first::<LeafCutState3>();
-        let replaced_in_place = previous
-            .and_then(LeafCutState3::serialized_span)
-            .is_some_and(|(offset, amount)| {
-                amount == LEAF_CUT_3_STATE_BYTES
-                    && state.write_serialized_at(&mut self.ex_states, offset, now_ms)
-            });
-        if !replaced_in_place {
-            if self.ex_states.len() < 4 {
-                self.ex_states.clear();
-                LegacyWriter::new(&mut self.ex_states).write_u32(0);
-            }
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-            state.append_serialized(&mut self.ex_states, now_ms);
-        }
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     pub(crate) fn kerosene_state(&self) -> Option<KeroseneState> { self.state_entries.first::<KeroseneState>().copied() }

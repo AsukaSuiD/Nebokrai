@@ -146,17 +146,17 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         LEAF_CUT_STATE_ID => StateRecordLayout::typed(
             LEAF_CUT_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::leafcutstate::LeafCutState::decode(payload, offset, _now()).ok().map(StateData::LeafCut)
+                super::leafcutstate::LeafCutState::decode(payload, offset, _now).ok().map(StateData::LeafCut)
             },
         ),
         LEAF_CUT_2_STATE_ID => StateRecordLayout::typed(
             LEAF_CUT_2_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::leafcutstate2::LeafCutState2::decode(payload, offset, _now()).ok().map(StateData::LeafCut2)
+                super::leafcutstate2::LeafCutState2::decode(payload, offset, _now).ok().map(StateData::LeafCut2)
             },
         ),
         LEAF_CUT_3_STATE_ID => StateRecordLayout::typed(
             LEAF_CUT_3_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::leafcutstate3::LeafCutState3::decode(payload, offset, _now()).ok().map(StateData::LeafCut3)
+                super::leafcutstate3::LeafCutState3::decode(payload, offset, _now).ok().map(StateData::LeafCut3)
             },
         ),
         KEROSENE_STATE_ID => StateRecordLayout::typed(

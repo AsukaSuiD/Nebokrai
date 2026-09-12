@@ -5954,51 +5954,6 @@ impl CPlayer {
         self.move_shape.blind_state_order()
     }
 
-    pub(crate) fn replace_leaf_cut_state(
-        &mut self,
-        state: super::skills::leafcutstate::LeafCutState,
-        now_ms: u32,
-    ) -> Option<super::skills::leafcutstate::LeafCutState> {
-        self.move_shape.replace_leaf_cut_state(state, now_ms)
-    }
-
-
-
-
-
-
-
-
-    pub(crate) fn replace_leaf_cut_2_state(
-        &mut self,
-        state: super::skills::leafcutstate2::LeafCutState2,
-    ) -> Option<super::skills::leafcutstate2::LeafCutState2> {
-        self.move_shape.replace_leaf_cut_2_state(state)
-    }
-
-
-
-
-
-
-
-
-
-
-
-    pub(crate) fn replace_leaf_cut_3_state(
-        &mut self,
-        state: super::skills::leafcutstate3::LeafCutState3,
-        now_ms: u32,
-    ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
-        self.move_shape.replace_leaf_cut_3_state(state, now_ms)
-    }
-
-
-
-
-
-
 
     pub(crate) fn replace_kerosene_state(&mut self, state: super::skills::kerosenestate::KeroseneState, now_ms: u32) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.replace_kerosene_state(state, now_ms) }
 

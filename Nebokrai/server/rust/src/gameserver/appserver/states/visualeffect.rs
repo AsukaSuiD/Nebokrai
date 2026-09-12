@@ -19,6 +19,7 @@ pub(crate) enum SkillVisualEffectKind {
     KnightCut,
     BattleFairy,
     SpriteBurn,
+    LeafCut,
 }
 
 #[derive(Debug, Eq, PartialEq)]

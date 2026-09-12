@@ -1539,15 +1539,6 @@ use crate::gameserver::appserver::skills::spiderpoison::{
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
-use crate::gameserver::appserver::skills::leafcutstate::{
-    LeafCutState,
-};
-use crate::gameserver::appserver::skills::leafcutstate2::{
-    LeafCutState2,
-};
-use crate::gameserver::appserver::skills::leafcutstate3::{
-    LeafCutState3,
-};
 use crate::gameserver::appserver::skills::kerosene::{
     cancel_player_kerosene, complete_player_kerosene, execute_player_kerosene,
     is_kerosene_dispatch, KEROSENE_SKILL_ID,
@@ -17036,18 +17027,6 @@ impl CGame {
         game_legacy_random(&mut self.random_state, maximum)
     }
 
-    /// Только чистая подготовка tick: payload остаётся в арене, RNG — у CGame.
-    /// Межвладельческое действие выполняется после освобождения обоих borrow.
-    pub(crate) fn with_player_state_random<T: crate::gameserver::appserver::moveshape::AppliedState, R>(
-        &mut self,
-        player_id: i32,
-        key: crate::gameserver::appserver::moveshape::StateKey,
-        prepare: impl FnOnce(&mut T, &mut dyn FnMut(i32) -> i32) -> R,
-    ) -> Option<R> {
-        let (players, random_state) = (&mut self.players, &mut self.random_state);
-        let state = players.get_mut(&player_id)?.move_shape_mut().applied_state_mut::<T>(key)?;
-        Some(prepare(state, &mut |maximum| game_legacy_random(random_state, maximum)))
-    }
 
     /// Точный владелец `RunScript`: загруженный экземпляр получает
     /// переполняющийся идентификатор и попадает в упорядоченный `g_Scripts`;
@@ -40131,100 +40110,6 @@ impl CGame {
         }
     }
 
-    pub(crate) fn replace_leaf_cut_state(
-        &mut self,
-        region_id: i32,
-        target: ShapeIdentity,
-        state: LeafCutState,
-        now_ms: u32,
-    ) -> Option<(Option<LeafCutState>, ShapeIdentity, i32, i32)> {
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self.find_player_mut(target.id)?;
-                let identity = player.shape().identity();
-                let x = player.shape().get_tile_x().ok()?;
-                let y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_leaf_cut_state(state, now_ms);
-                Some((previous, identity, x, y))
-            }
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
-                    let identity = monster.move_shape().shape().identity();
-                    let x = monster.move_shape().shape().get_tile_x().ok()?;
-                    let y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let previous = monster.move_shape_mut().replace_leaf_cut_state(state, now_ms);
-                    Some((previous, identity, x, y))
-                });
-                self.restore_region_owner(owner);
-                result
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn replace_leaf_cut_2_state(
-        &mut self,
-        region_id: i32,
-        target: ShapeIdentity,
-        state: LeafCutState2,
-    ) -> Option<(Option<LeafCutState2>, ShapeIdentity, i32, i32)> {
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self.find_player_mut(target.id)?;
-                let identity = player.shape().identity();
-                let x = player.shape().get_tile_x().ok()?;
-                let y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_leaf_cut_2_state(state);
-                Some((previous, identity, x, y))
-            }
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
-                    let identity = monster.move_shape().shape().identity();
-                    let x = monster.move_shape().shape().get_tile_x().ok()?;
-                    let y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let previous = monster.move_shape_mut().replace_leaf_cut_2_state(state);
-                    Some((previous, identity, x, y))
-                });
-                self.restore_region_owner(owner);
-                result
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn replace_leaf_cut_3_state(
-        &mut self,
-        region_id: i32,
-        target: ShapeIdentity,
-        state: LeafCutState3,
-        now_ms: u32,
-    ) -> Option<(Option<LeafCutState3>, ShapeIdentity, i32, i32)> {
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self.find_player_mut(target.id)?;
-                let identity = player.shape().identity();
-                let x = player.shape().get_tile_x().ok()?;
-                let y = player.shape().get_tile_y().ok()?;
-                let previous = player.replace_leaf_cut_3_state(state, now_ms);
-                Some((previous, identity, x, y))
-            }
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
-                    let identity = monster.move_shape().shape().identity();
-                    let x = monster.move_shape().shape().get_tile_x().ok()?;
-                    let y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let previous = monster.move_shape_mut().replace_leaf_cut_3_state(state, now_ms);
-                    Some((previous, identity, x, y))
-                });
-                self.restore_region_owner(owner);
-                result
-            }
-            _ => None,
-        }
-    }
 
     /// OnExecuteBackStageSkills (0x004C88E0): сначала удаляются старые
     /// SKILL_UNKNOW, затем каждый ID разрешается заново. End не удаляет

@@ -287,6 +287,11 @@ pub(crate) fn update_periodic_attack_state<T: PeriodicAttackState, Runtime: Game
             match target.object_type {
                 400 => game.apply_owned_skill_attack_to_player(master, target.id, target_region, attack, runtime),
                 600 => game.apply_owned_skill_attack_to_monster(master, target.id, target_region, attack, runtime),
+                1_100 | 1_200 if master.master_type == 400 => {
+                    game.apply_owned_skill_attack_to_stationary_build(
+                        master.master_id, target_region, target, attack, runtime,
+                    );
+                }
                 _ => {}
             }
         }

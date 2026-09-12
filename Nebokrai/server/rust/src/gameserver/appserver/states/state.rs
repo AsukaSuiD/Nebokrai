@@ -761,39 +761,30 @@ state_callbacks! {
     ),
     StateData::LeafCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::leafcutstate::update_player_leaf_cut_state(game, target.id, key, runtime); }
-                600 => { skills::leafcutstate::update_monster_leaf_cut_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            skills::leafcutstate::update_leaf_cut_state::<0x6b, _>(game, region, target, key, runtime);
         },
-        skills::leafcutstate::end_leaf_cut_state,
-        skills::leafcutstate::restart_leaf_cut_state,
-        |_, _, _, _, _| true
+        super::periodicattack::end_periodic_attack_state::<skills::leafcutstate::LeafCutState>,
+        super::periodicattack::restart_periodic_attack_state::<skills::leafcutstate::LeafCutState>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::LeafCut2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::leafcutstate2::update_player_leaf_cut_2_state(game, target.id, key, runtime); }
-                600 => { skills::leafcutstate2::update_monster_leaf_cut_2_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            skills::leafcutstate::update_leaf_cut_state::<0x80, _>(game, region, target, key, runtime);
         },
-        skills::leafcutstate2::end_leaf_cut_2_state,
-        skills::leafcutstate2::restart_leaf_cut_2_state,
-        |_, _, _, _, _| true
+        super::periodicattack::end_periodic_attack_state::<skills::leafcutstate2::LeafCutState2>,
+        super::periodicattack::restart_periodic_attack_state::<skills::leafcutstate2::LeafCutState2>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::LeafCut3(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::leafcutstate3::update_player_leaf_cut_3_state(game, target.id, key, runtime); }
-                600 => { skills::leafcutstate3::update_monster_leaf_cut_3_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            skills::leafcutstate::update_leaf_cut_state::<0x8f, _>(game, region, target, key, runtime);
         },
-        skills::leafcutstate3::end_leaf_cut_3_state,
-        skills::leafcutstate3::restart_leaf_cut_3_state,
-        |_, _, _, _, _| true
+        super::periodicattack::end_periodic_attack_state::<skills::leafcutstate3::LeafCutState3>,
+        super::periodicattack::restart_periodic_attack_state::<skills::leafcutstate3::LeafCutState3>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::Kerosene(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
