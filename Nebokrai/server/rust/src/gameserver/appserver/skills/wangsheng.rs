@@ -1,38 +1,33 @@
-//! Восстановление здоровья игрока за ману боевого духа (`CWangsheng`).
-//! Успешный Begin возвращает Begun до первого AI; общий координатор
-//! продолжает тот же owner без повторного допуска расписания.
+//! Восстановление здоровья CWangsheng (0x221), gameserver.exe/GameServer.pdb,
+//! appserver/skills/wangsheng.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/wangsheng.cpp`. Мана owned боевого духа списывается и
-//! рассылается до задержки; после задержки здоровье игрока увеличивается через
-//! ограничивающий `SetHP`. Повтор при исчезнувшем equipment-owner-е, порядок
-//! visual packets и отдельные часы восстановления сохранены. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`; AI также сравнивает
-//! unsigned now с wrapping(start + delay), cmp/jb 0x0051e00a.
-//! После SetHP AI вызывает OnChangeStates (+0x164, 0x0051e043), без
-//! UpdateProperty. Отказ Begin выдаёт action 3 перед внешним 4,2
-//! планировщика; отказ уже начатого AI не получает повторного ответа.
-//! В Rust внешний 4,2 отправляет только координатор после общего End(0),
-//! без дублирования в concrete Begin.
-//! CWangshengEffect::Update — 0x0051d7c0: Begin после базового создаёт
-//! эффект 0x0c и вызывает BeginVisualEffect(1) до CheckCondition. Режимы 0/1
-//! и ошибки проходят через общий visual-dispatch с живым GetUser; mode 1
-//! пишет его реальный тип и ID дважды, затем координаты. Собственный
-//! End(bool,+0x94) 0x0051be50 выполняет Update(3) без повторного Begin,
-//! затем наследуемый End(int). Этот хвост concrete Begin/AI выполняет
-//! координатор, не подменяя им внешний int-слот +0x68.
+//! Общий вход сохраняет зарегистрированный экземпляр и часы base Begin.
+//! Check принимает исходного игрока, требует GetS и проверяет reuse; MP0
+//! допускается без предмета, но ненулевая цена требует GetWarSoulGoods.
+//! Первый AI разрешает свежего U, требует его region-link, но не проверяет S
+//! или смерть. Подтверждённый State owner 0x221 этим навыком не создаётся.
+//!
+//! AI сначала списывает MP у equipment[10] через общий setter с reload
+//! существующих fairy-проекций, затем повторно проверяет
+//! GetWarSoulGoods. Отказ сохраняет списание и ожидание без отката.
+//! Serialize не подавляет BF918 при false; после отправки CAN/visual0/condition
+//! предшествуют абсолютной задержке. После visual1 читаются HP и величина
+//! лечения: wrapping-сумма проходит SetHP и OnChangeStates. Единственный
+//! собственный End(bool), отличный от внешнего End(int), выполняет координатор.
 
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
 };
-use super::battlefairytransfer::{send_failure, send_goods_update};
-use super::kernel::{
-    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
-};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{
-    BattleFairyManaSpendOutcome, BattleFairySkillDispatch,
-};
+use super::battlefairyskill::execute_registered_battle_fairy_state;
+use super::battlefairytransfer::send_goods_update;
+use super::kernel::{SkillStage, battle_fairy_mana_text_cost, skill_is_restored};
+use super::skillbaseproperties::CSkillBaseProperties;
+use super::stateskill::state_skill_outcome;
+use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_MP;
+use crate::gameserver::appserver::player::BattleFairySkillDispatch;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -41,151 +36,139 @@ pub(crate) const WANGSHENG_SKILL_ID: u32 = 0x221;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_TARGET_HP_GAIN: u32 = 31;
 
-const fn mana_cost_unavailable(current: i32, cost: u32) -> bool {
-    (current.wrapping_sub(cost as i32)) < 0
+fn fail_mana(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties,
+) {
+    game.update_registered_skill_visual(instance, 7);
+    let cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    game.send_skill_system_info_with_unsigned(
+        player_id, b"ZHGS0052", battle_fairy_mana_text_cost(cost),
+    );
+}
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32, runtime: &mut Runtime,
+) -> bool {
+    if game.find_player(player_id).is_none() { return false; }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    if resolve_skill_sufferer(game, skill.lifecycle()).is_none() { return false; }
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return false;
+    };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        game.send_skill_system_info(player_id, b"ZHGS0048");
+        return false;
+    }
+    if properties.query_property(SKILL_USAGE_USER_MP_LOSE) != 0 {
+        let Some(current) = game.find_player(player_id)
+            .and_then(|player| player.war_soul_mana(game.goods_factory()))
+        else { return false; };
+        let cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+        if current.wrapping_sub(cost as i32) < 0 {
+            fail_mana(game, instance, player_id, &properties);
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: BattleFairySkillDispatch,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: BattleFairySkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let terminal = |state| QueuedSkillExecutionOutcome {
-        state,
-        first_contact: false,
-    };
-    let skill_level = match dispatch {
-        BattleFairySkillDispatch::SelfTarget {
-            skill_id,
-            skill_level,
-            ..
-        }
-        | BattleFairySkillDispatch::Point {
-            skill_id,
-            skill_level,
-            ..
-        }
-        | BattleFairySkillDispatch::Object {
-            skill_id,
-            skill_level,
-            ..
-        } if skill_id == WANGSHENG_SKILL_ID => skill_level,
-        _ => return terminal(QueuedSkillExecutionState::Rejected),
-    };
-    let Some(properties) = game.skill_base_properties(WANGSHENG_SKILL_ID, skill_level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let hp_gain = properties.query_property(SKILL_USAGE_TARGET_HP_GAIN);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    if dispatch.skill_id() != WANGSHENG_SKILL_ID {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    }
+    execute_registered_battle_fairy_state(
+        game, player_id, instance, dispatch, runtime, None, check_cast, run_ai,
+    )
+}
 
-    if game.battle_fairy_execution(player_id, WANGSHENG_SKILL_ID).is_none() {
-        let Some(player) = game.find_player(player_id) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let started_at_ms = runtime.now_milliseconds();
-        let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(
-            game.battle_fairy_skill_last_used_ms(player_id, WANGSHENG_SKILL_ID),
-            reuse_delay_ms,
-            cooldown_now_ms,
-        ) {
-            send_failure(game, player_id, WANGSHENG_SKILL_ID, 0x0d);
-            game.send_skill_system_info(player_id, b"ZHGS0048");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if mp_loss != 0
-            && player
-                .war_soul_mana(game.goods_factory())
-                .is_some_and(|current| mana_cost_unavailable(current, mp_loss))
-        {
-            send_failure(game, player_id, WANGSHENG_SKILL_ID, 7);
-            let text_cost = battle_fairy_mana_text_cost(mp_loss);
-            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game
-        .battle_fairy_execution(player_id, WANGSHENG_SKILL_ID)
-        .is_none_or(|state| state.dispatch() != dispatch)
-    {
-        return terminal(QueuedSkillExecutionState::Rejected);
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
+        return state_skill_outcome(QueuedSkillExecutionState::Pending);
     }
-    if game
-        .find_player(player_id)
-        .and_then(|player| player.server_region_id())
-        .is_none()
-    {
-        return terminal(QueuedSkillExecutionState::Rejected);
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let (region, user) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, user)
+        .map(|shape| shape.shape().identity()).filter(|source| source.object_type == 400)
+    else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
+    if game.find_player(source.id).is_none_or(|player| {
+        !player.move_shape().shape().is_assigned_to_server_region()
+    }) {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     }
+    if skill.execution_stage() == Some(SkillStage::Begin) {
+        let Some(current) = game.find_player(source.id)
+            .and_then(|player| player.equipment().get_goods(10))
+            .map(|goods| goods.addon_property_value(game.goods_factory(), GAP_BF_MP, 1))
+        else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
+        let cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+        let remaining = current.wrapping_sub(cost as i32);
+        if remaining < 0 {
+            fail_mana(game, instance, source.id, &properties);
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(_stored) = game.set_player_equipment_addon_property(
+            source.id, 10, GAP_BF_MP, 1, remaining,
+        )
+        else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
 
-    if game
-        .battle_fairy_execution(player_id, WANGSHENG_SKILL_ID)
-        .is_some_and(|state| state.stage() == SkillStage::Begin)
-    {
-        let Some(current_mana) = game
-            .find_player(player_id)
-            .and_then(|player| player.equipped_battle_fairy_mana(game.goods_factory()))
-        else {
-            return terminal(QueuedSkillExecutionState::Pending);
+        // Маркер проверяется после записи: неподходящий предмет теряет MP,
+        // но condition не устанавливается, и следующий AI повторяет попытку.
+        let Some(goods) = game.find_player(source.id)
+            .and_then(|player| player.war_soul_goods(game.goods_factory()))
+        else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
+        let mut old_client_payload = Vec::new();
+        let _ = goods.serialize_for_old_client(
+            &mut old_client_payload, game.goods_factory(), game.globe_setup().da_kong_key(),
+        );
+        let update = BattleFairyDefaultGoodsUpdate {
+            message_type: 0x0b_f918,
+            player_id: source.id,
+            goods: goods.identity(),
+            old_client_payload,
         };
-        if mana_cost_unavailable(current_mana, mp_loss) {
-            send_failure(game, player_id, WANGSHENG_SKILL_ID, 7);
-            let text_cost = battle_fairy_mana_text_cost(mp_loss);
-            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
-            return terminal(QueuedSkillExecutionState::Rejected);
+        send_goods_update(game, &update);
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            skill.lifecycle_mut().set_available(can_break != 0);
         }
-        let goods_factory = game.goods_factory().clone();
-        let da_kong_key = game.globe_setup().da_kong_key();
-        let spend = game
-            .find_player_mut(player_id)
-            .map(|player| {
-                player.spend_equipped_battle_fairy_mana(
-                    mp_loss,
-                    &goods_factory,
-                    da_kong_key,
-                )
-            })
-            .unwrap_or(BattleFairyManaSpendOutcome::MissingEquipment);
-        let update = match spend {
-            BattleFairyManaSpendOutcome::MissingEquipment
-            | BattleFairyManaSpendOutcome::SpentWithoutWarSoul => {
-                return terminal(QueuedSkillExecutionState::Pending);
-            }
-            BattleFairyManaSpendOutcome::Spent { update } => update,
-        };
-        if let Some(update) = update.as_ref() {
-            send_goods_update(game, update);
-        } else {
-            tracing::warn!(player_id, "не удалось сериализовать боевой дух после расхода маны");
-        }
-        game.update_player_skill_visual(player_id, WANGSHENG_SKILL_ID, 0);
-        if let Some(state) = game.battle_fairy_execution_mut(player_id, WANGSHENG_SKILL_ID) {
-            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
         }
     }
-
-    let started_at_ms = game
-        .battle_fairy_execution(player_id, WANGSHENG_SKILL_ID)
-        .map(SkillExecutionKernel::started_at_ms)
-        .expect("исполнение восстановления здоровья создано или восстановлено");
-    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
-        return terminal(QueuedSkillExecutionState::Pending);
+    if game.registered_skill(instance).is_none_or(|skill| {
+        skill.execution_stage() != Some(SkillStage::Check)
+    }) {
+        return state_skill_outcome(QueuedSkillExecutionState::Pending);
     }
-    game.update_player_skill_visual(player_id, WANGSHENG_SKILL_ID, 1);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_health(player.health().wrapping_add(hp_gain));
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+        return state_skill_outcome(QueuedSkillExecutionState::Pending);
     }
-    let _ = game.publish_player_states(player_id);
-    if let Some(state) = game.battle_fairy_execution_mut(player_id, WANGSHENG_SKILL_ID) {
-        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
+    game.update_registered_skill_visual(instance, 1);
+    let Some(current) = game.find_player(source.id).map(|player| player.health()) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let gain = properties.query_property(SKILL_USAGE_TARGET_HP_GAIN);
+    if let Some(player) = game.find_player_mut(source.id) {
+        player.set_health(current.wrapping_add(gain));
     }
-    terminal(QueuedSkillExecutionState::Completed)
+    let _ = game.publish_player_states(source.id);
+    state_skill_outcome(QueuedSkillExecutionState::Completed)
 }

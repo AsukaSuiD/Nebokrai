@@ -250,12 +250,8 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             );
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let goods_factory = game.goods_factory().clone();
-        let da_kong_key = game.globe_setup().da_kong_key();
-        let update = game.find_player_mut(player_id).and_then(|player| {
-            player.spend_war_soul_mana_record(mp_loss, &goods_factory, da_kong_key)
-                .map(|(update, _encoded)| update)
-        });
+        let update = game.spend_war_soul_mana_record(player_id, mp_loss)
+            .map(|(update, _encoded)| update);
         let Some(update) = update else { return terminal(QueuedSkillExecutionState::Rejected) };
         send_goods_update(game, &update);
         let can_be_breaked = game.skill_base_properties(POISON_ARROW_SKILL_ID, skill_level)

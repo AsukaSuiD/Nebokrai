@@ -1,4 +1,8 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Запись addon ресурса equipment использует общий CGoods setter с живыми
+//! таблицами опыта и перезагрузкой уже существующих fairy-проекций.
+//! Потерянный catalog на этой границе безопасно прерывает ресурсный шаг
+//! после сохранённой записи и сообщения об ошибке, вместо native NULL-deref.
 //! Virtual UpdateProperty (+0x9C) обслуживает всех держателей состояния:
 //! player — equipment/state/OnChangeProperties, monster — CMoveShape +0x24.
 //! Извлечённый регион публикуется на время callback, затем перечитывается.
@@ -32695,6 +32699,52 @@ impl CGame {
         self.players.get_mut(&player_id)
     }
 
+    pub(crate) fn set_player_equipment_addon_property(
+        &mut self, player_id: i32, position: u32, property: i32, value_id: u32, value: i32,
+    ) -> Option<bool> {
+        let goods = self.players.get_mut(&player_id)?.equipment_mut().get_goods_mut(position)?;
+        match goods.set_addon_property_value(
+            property, value_id, value, &self.goods_factory,
+            |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level),
+            |equip_level, level| self.battle_fairy_exp_config.dw_exp_up(equip_level, level),
+        ) {
+            Ok(stored) => Some(stored),
+            Err(block) => {
+                tracing::error!(player_id, position, property, value_id, index = block.index,
+                    "запись свойства сохранена, но отсутствует catalog для перезагрузки предмета");
+                None
+            }
+        }
+    }
+
+    pub(crate) fn spend_war_soul_mana(
+        &mut self, player_id: i32, amount: u32,
+    ) -> Option<crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
+        self.spend_war_soul_mana_record(player_id, amount)
+            .and_then(|(update, encoded)| encoded.then_some(update))
+    }
+
+    /// Запись и перезагрузка существующих fairy-проекций предшествуют
+    /// сериализации. Её bool остаётся отдельным от уже выполненного расхода:
+    /// конкретный навык определяет, подавлять ли BF918 при false.
+    pub(crate) fn spend_war_soul_mana_record(
+        &mut self, player_id: i32, amount: u32,
+    ) -> Option<(crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate, bool)> {
+        use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate;
+        use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_MP;
+        let current = self.find_player(player_id)?.war_soul_mana(&self.goods_factory)?;
+        let next = current.wrapping_sub(amount as i32);
+        let _ = self.set_player_equipment_addon_property(player_id, 10, GAP_BF_MP, 1, next)?;
+        let goods = self.find_player(player_id)?.equipment().get_goods(10)?;
+        let mut old_client_payload = Vec::new();
+        let encoded = goods.serialize_for_old_client(
+            &mut old_client_payload, &self.goods_factory, self.globe_setup.da_kong_key(),
+        );
+        Some((BattleFairyDefaultGoodsUpdate {
+            message_type: 0x0b_f918, player_id, goods: goods.identity(), old_client_payload,
+        }, encoded))
+    }
+
     // CGame координирует короткие заимствования, но не хранит исполнение.
     // GetSkill разрешает первый зарегистрированный экземпляр по категории
     // фабрики; временное извлечение AI не меняет владельца навыка и reuse.
@@ -40419,6 +40469,9 @@ impl CGame {
         ) -> QueuedSkillExecutionOutcome> = match dispatch.skill_id() {
             LIFE_SHIELD_SKILL_ID => Some(execute_battle_fairy_life_shield),
             id if battle_fairy_attribute_definition(id).is_some() => Some(execute_battle_fairy_attribute),
+            WANGSHENG_SKILL_ID => Some(execute_battle_fairy_wangsheng),
+            HUOXIESHU_SKILL_ID => Some(execute_battle_fairy_huoxieshu),
+            LINGZHISHU_SKILL_ID => Some(execute_battle_fairy_lingzhishu),
             _ => None,
         };
         if let Some(execute) = registered_execute {
@@ -40439,9 +40492,6 @@ impl CGame {
             THUNDER_SKILL_ID => execute_battle_fairy_thunder,
             POISON_ARROW_SKILL_ID => execute_battle_fairy_poison_arrow,
             BLOOD_LOSS_SKILL_ID => execute_battle_fairy_blood_loss,
-            WANGSHENG_SKILL_ID => execute_battle_fairy_wangsheng,
-            HUOXIESHU_SKILL_ID => execute_battle_fairy_huoxieshu,
-            LINGZHISHU_SKILL_ID => execute_battle_fairy_lingzhishu,
             BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => execute_battle_fairy_base_magic,
             _ => {
                 self.send_battle_fairy_skill_failure(player_id, 2);

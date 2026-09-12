@@ -21,6 +21,10 @@
 //! `Clone` использует ту же исходную пару `Serialize(true) → Unserialize(true)`
 //! и новый constructor target, а не Rust field-copy. `CGoodsFactory` и
 //! exp-config передаются явно вместо process-global owners.
+//! Общий SetAddonPropertyValue меняет первый value во всех совпавших addon-ах,
+//! затем обновляет только существующие ordinary/BF-проекции в этом порядке,
+//! включая raw MAX_EXP. Отсутствующий catalog при reload возвращает typed block
+//! после записи, без отката, вместо исходного чтения через NULL.
 //! Script durability getter/setter теперь сохраняют exact base-value storage,
 //! включая запись `-1` без client update. Constructor/release, остальные
 //! time-поля, обратный codec и прочая gameplay mutation ниже остаются RAW:
@@ -1014,8 +1018,33 @@ impl CGoods {
         changed
     }
 
-    /// DaKong-facing exact prefix `SetAddonPropertyValue`: native функция
-    /// останавливается на первой паре property/value.
+    pub(crate) fn set_addon_property_value<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        property_type: i32,
+        value_id: u32,
+        value: i32,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<bool, GoodsBasePropertyBlock>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        if !self.set_addon_property_value_core(property_type, value_id, value) {
+            return Ok(false);
+        }
+        if self.fairy_properties.is_some() {
+            self.load_fairy_properties(factory, ordinary_threshold)?;
+        }
+        if self.battle_fairy_property.is_some() {
+            self.load_battle_fairy_property(factory, battle_threshold)?;
+        }
+        Ok(true)
+    }
+
+    /// Ограниченный storage-adapter старых DaKong callers: первая пара
+    /// property/value, в отличие от общего setter по всем addon-ам.
     pub(crate) fn set_addon_property_value_first_core(
         &mut self,
         property_type: i32,
@@ -1596,20 +1625,6 @@ fn goods_read_error(
 // RVA: 0x000CA340
 // ADDRESS: 004ca340
 // PROTOTYPE: bool __thiscall LoadBFPropertyFromGoods(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::SetAddonPropertyValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:427
-// RVA: 0x000CA7B0
-// ADDRESS: 004ca7b0
-// PROTOTYPE: int __thiscall SetAddonPropertyValue(GOODS_ADDON_PROPERTIES param_1, ulong param_2, long param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -184,11 +184,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         if mp_loss != 0 {
-            let goods_factory = game.goods_factory().clone();
-            let da_kong_key = game.globe_setup().da_kong_key();
-            let update = game.find_player_mut(player_id).and_then(|player| {
-                player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
-            });
+            let update = game.spend_war_soul_mana(player_id, mp_loss);
             let Some(update) = update else {
                 game.update_player_skill_visual(player_id, TIANHUO_SKILL_ID, 7);
                 game.send_skill_system_info_with_unsigned(

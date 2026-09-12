@@ -16,9 +16,9 @@
 //! Полный skill End, включая visual3 и AfterUse, остаётся у координатора.
 
 use super::battlefairytransfer::send_goods_update;
+use super::battlefairyskill::execute_registered_battle_fairy_state;
 use super::kernel::{
-    BattleFairyExecution, SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost,
-    skill_is_restored,
+    SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
 };
 use super::lifeshieldstate::LifeShieldState;
 use super::shieldstate::{DefenseShieldState, begin_primary_self_shield_state};
@@ -89,29 +89,9 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     if dispatch.skill_id() != LIFE_SHIELD_SKILL_ID {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     }
-    let Some(skill) = game.registered_skill(instance) else {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    };
-    if let Some(previous) = skill.battle_fairy_dispatch() {
-        if previous != dispatch {
-            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-        }
-        return run_ai(game, instance, runtime);
-    }
-    if !check_cast(game, instance, player_id, runtime) {
-        game.update_registered_skill_visual(instance, 2);
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    }
-    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    };
-    let kernel = SkillExecutionKernel::begin(dispatch, started);
-    if !game.registered_skill_mut(instance).is_some_and(|skill| {
-        skill.install_battle_fairy_execution(BattleFairyExecution::State(kernel))
-    }) {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    }
-    state_skill_outcome(QueuedSkillExecutionState::Begun)
+    execute_registered_battle_fairy_state(
+        game, player_id, instance, dispatch, runtime, Some(2), check_cast, run_ai,
+    )
 }
 
 fn run_ai<Runtime: GameMainLoopRuntime>(
@@ -143,10 +123,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
             fail_mana(game, instance, source.1.id, &properties);
             return state_skill_outcome(QueuedSkillExecutionState::Rejected);
         }
-        let factory = game.goods_factory().clone();
-        let da_kong_key = game.globe_setup().da_kong_key();
-        let Some((update, _encoded)) = game.find_player_mut(source.1.id)
-            .and_then(|player| player.spend_war_soul_mana_record(cost, &factory, da_kong_key))
+        let Some((update, _encoded)) = game.spend_war_soul_mana_record(source.1.id, cost)
         else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
         send_goods_update(game, &update);
         let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);

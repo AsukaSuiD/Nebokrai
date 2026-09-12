@@ -1,4 +1,4 @@
-//! Общая wire-граница семейства навыков боевого духа.
+//! Общий вход, visual и завершение семейства навыков боевого духа.
 //! Диапазон 0x212..=0x224 не получает искусственный prepared: в 19 телах
 //! AI (0x00517610..0x0052AAC0) нет записи флага владельца +0x44.
 //! Summon BFBaseAttack (0x00517E40), Leiming2 (0x00520990), Thunder
@@ -64,14 +64,17 @@
 //! в этой фазе молчит, пока source/effect остаются доступны AfterUse.
 
 use super::basemagic::BASE_MAGIC_EFFECT_MESSAGE;
-use super::kernel::{BattleFairyExecution, SkillTermination};
+use super::kernel::{BattleFairyExecution, SkillExecutionKernel, SkillTermination};
 use super::skillfactory::{SkillEndEffect, SkillOwner};
+use super::stateskill::state_skill_outcome;
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch};
 use crate::gameserver::appserver::player::BattleFairySkillDispatch;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 
 const BATTLE_FAIRY_VISUAL_OBJECT_TYPE: i32 = 700;
@@ -191,6 +194,47 @@ pub(crate) fn publish_battle_fairy_visual(game: &CGame, skill: &MoveShapeSkill, 
     if let Some(region) = game.find_region(source.get_region_id()) {
         let _ = game.send_game_shape_around(region.base(), source, None, &message);
     }
+}
+
+/// Общая материализация навыков с единственным BF State kernel. Координатор
+/// уже выполнил base Begin и опубликовал AI; здесь нет вторых часов или End.
+/// Concrete Check получает исходный аргумент U, AI разрешает свою живую базу.
+pub(crate) fn execute_registered_battle_fairy_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    instance: RegisteredSkill,
+    dispatch: BattleFairySkillDispatch,
+    runtime: &mut Runtime,
+    begin_failure_visual: Option<u32>,
+    check: impl FnOnce(&mut CGame, RegisteredSkill, i32, &mut Runtime) -> bool,
+    run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    if skill.id() != dispatch.skill_id() {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    }
+    if let Some(previous) = skill.battle_fairy_dispatch() {
+        if previous != dispatch {
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        }
+        return run_ai(game, instance, runtime);
+    }
+    if !check(game, instance, player_id, runtime) {
+        if let Some(mode) = begin_failure_visual {
+            game.update_registered_skill_visual(instance, mode);
+        }
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    }
+    let Some(skill) = game.registered_skill_mut(instance) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let kernel = SkillExecutionKernel::begin(dispatch, skill.lifecycle().started_at_ms());
+    if !skill.install_battle_fairy_execution(BattleFairyExecution::State(kernel)) {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    }
+    state_skill_outcome(QueuedSkillExecutionState::Begun)
 }
 
 impl CGame {

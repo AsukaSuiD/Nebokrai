@@ -27,9 +27,9 @@
 use super::battlefairyattributestate::{
     BattleFairyAttributeKind, BattleFairyAttributeState, begin_battle_fairy_attribute_state,
 };
+use super::battlefairyskill::execute_registered_battle_fairy_state;
 use super::kernel::{
-    BattleFairyExecution, SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost,
-    skill_is_restored,
+    SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::state_skill_outcome;
@@ -117,10 +117,10 @@ fn check_cast<Runtime: GameMainLoopRuntime>(
             return false;
         }
         if skill_id == super::yumo::SKILL_ID {
-            let Some(goods) = game.find_player_mut(player_id)
-                .and_then(|player| player.equipment_mut().get_goods_mut(10))
+            let Some(_stored) = game.set_player_equipment_addon_property(
+                player_id, 10, GAP_BF_MP, 1, remaining,
+            )
             else { return false; };
-            let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, remaining);
         }
     }
     true
@@ -152,28 +152,10 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
     let Some(definition) = definition(dispatch.skill_id()) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
-    let Some(skill) = game.registered_skill(instance) else {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    };
-    if let Some(previous) = skill.battle_fairy_dispatch() {
-        if previous != dispatch {
-            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-        }
-        return run_ai(game, instance, definition, runtime);
-    }
-    if !check_cast(game, instance, player_id, runtime) {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    }
-    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    };
-    let kernel = SkillExecutionKernel::begin(dispatch, started);
-    if !game.registered_skill_mut(instance).is_some_and(|skill| {
-        skill.install_battle_fairy_execution(BattleFairyExecution::State(kernel))
-    }) {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    }
-    state_skill_outcome(QueuedSkillExecutionState::Begun)
+    execute_registered_battle_fairy_state(
+        game, player_id, instance, dispatch, runtime, None, check_cast,
+        |game, instance, runtime| run_ai(game, instance, definition, runtime),
+    )
 }
 
 fn run_ai<Runtime: GameMainLoopRuntime>(
@@ -218,10 +200,10 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
             fail_mana(game, instance, user.id, &properties);
             return state_skill_outcome(QueuedSkillExecutionState::Rejected);
         }
-        let Some(goods) = game.find_player_mut(user.id)
-            .and_then(|player| player.equipment_mut().get_goods_mut(10))
+        let Some(_stored) = game.set_player_equipment_addon_property(
+            user.id, 10, GAP_BF_MP, 1, remaining,
+        )
         else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
-        let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, remaining);
         let _ = game.publish_player_states(user.id);
         let goods_before_visual = skill_id == super::pojia::SKILL_ID;
         if goods_before_visual { send_goods_update(game, user.id, goods_identity); }
