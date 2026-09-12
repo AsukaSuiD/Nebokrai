@@ -20,7 +20,7 @@
 
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME};
 use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::meteorarrow::{check_arrow_cast, prepare_arrow_player, terminal};
+use super::meteorarrow::{ArrowCastPathRule, check_arrow_cast, prepare_arrow_player, terminal};
 use super::meteorarrowstate::add_meteor_arrows;
 pub(crate) use super::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID;
 use super::playercast::execute_registered_player_cast;
@@ -73,7 +73,7 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(
     execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
         |game, instance, _player_id, runtime| original_user
-            .is_some_and(|source| check_arrow_cast(game, instance, source, false, runtime)),
+            .is_some_and(|source| check_arrow_cast(game, instance, source, ArrowCastPathRule::None, runtime)),
         |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
     )
 }

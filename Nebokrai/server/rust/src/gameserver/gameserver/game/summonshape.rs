@@ -1,5 +1,6 @@
 //! Общие сообщения, ForceMove, End и допуск региональных призванных форм.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/summonshape.cpp.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/summonshape.cpp
+//! и ThunderBlowPhalanx::Begin из appserver/skills/thunderblowphalanx.cpp.
 //! CSummonShape отправляет BF604 до базового SetTileXY, без ожидания AI
 //! и перестройки spatial membership CMoveShape. Регион берётся из живой
 //! формы, не из ключа её хранилища. Порядок пары в BF604 — ID, затем type;
@@ -12,6 +13,28 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 
 impl CGame {
+    /// Summon световой стрелы и дождя стрел сначала вызывает Begin прежних
+    /// ThunderBlow из снимка лицевой клетки. Уровень в нём не используется:
+    /// совпадение живых координат вызывает полный End, не просто delete-флаг.
+    pub(super) fn end_overlapping_thunder_blow(&mut self, region: i32, x: i32, y: i32) {
+        let mut shapes = Vec::new();
+        if let Some(owner) = self.find_region(region) {
+            let _ = owner.base().get_shapes(
+                x, y, self.area_width, self.area_height,
+                &RegionShapeResolver { game: self, owner }, &mut shapes,
+            );
+        }
+        for shape in shapes {
+            if shape.identity.object_type != SUMMON_SHAPE_TYPE { continue; }
+            let matched = self.find_region(region)
+                .and_then(|owner| owner.base().find_skill_phalanx(shape.identity.id))
+                .is_some_and(|existing| matches!(existing, SummonedSkillShape::ThunderBlow(existing)
+                    if existing.shape().get_tile_x() == Ok(x)
+                        && existing.shape().get_tile_y() == Ok(y)));
+            if matched { self.end_summoned_shape(region, shape.identity.id); }
+        }
+    }
+
     pub(super) fn publish_summoned_shape_entry(&mut self, shape: &CShape, payload: &[u8]) -> Option<()> {
         let identity = shape.identity();
         let mut message = CMessage::new(0x000b_f502);

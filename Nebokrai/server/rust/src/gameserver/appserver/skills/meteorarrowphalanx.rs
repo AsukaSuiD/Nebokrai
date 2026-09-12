@@ -1,12 +1,13 @@
-//! Область падающих метеорных стрел CMeteorArrowPhalanx (0xCD).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrowphalanx.cpp;
-//! Initialize и wire разделены линкером с fallingstarphalanx.cpp.
+//! Общая область CMeteorArrowPhalanx и CFallingStarPhalanx с wire-ID 0xCD.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrowphalanx.cpp
+//! и fallingstarphalanx.cpp. Два владельца отличаются только маской Initialize.
 //!
 //! Форма хранит неизменный снимок атаки и срок frequency*count+10 с DWORD
 //! переполнением. Конструктор выделяет клетки; Initialize после SetTileXY
 //! читает фактические X/Y и выбирает две координаты MSVCRT RNG для каждой
-//! стрелы. Все три уровня и запасной первый уровень имеют полную маску 3×3.
-//! FallingStar передаёт собственные заранее выбранные клетки через from_cells.
+//! стрелы. Все три уровня и запасной первый уровень имеют полную маску:
+//! 3×3 у MeteorArrow, 1×1 у FallingStar. Даже маска 1×1 потребляет оба RNG.
+//! Маска после Initialize больше не нужна; хранится только полученный массив.
 //!
 //! AI читает часы срока, затем частоты. При наступлении частоты третьи часы
 //! записываются до проверки числа стрел и разрешения фактического региона.
@@ -38,8 +39,17 @@ use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_relate
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 
-const SCOPE_LENGTH: i32 = 3;
-const SCOPE_HEIGHT: i32 = 3;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MeteorArrowScope {
+    Meteor,
+    FallingStar,
+}
+
+impl MeteorArrowScope {
+    const fn side(self) -> i32 {
+        match self { Self::Meteor => 3, Self::FallingStar => 1 }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMeteorArrowPhalanx {
@@ -72,24 +82,10 @@ impl CMeteorArrowPhalanx {
         skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_attack: i32,
         soul_attack: i32, critical_chance: i32, hit_modifier: i32, arrow_count: u32,
     ) -> Self {
-        Self::from_cells(
-            id, master, started_at_ms, frequency_ms, skill_level, minimum_attack,
-            maximum_attack, element_attack, soul_attack, critical_chance,
-            hit_modifier, vec![(0, 0); arrow_count as usize],
-        )
-    }
-
-    #[allow(clippy::too_many_arguments, reason = "совместимый владелец передаёт собственные клетки")]
-    pub(crate) fn from_cells(
-        id: i32, master: MasterInfo, started_at_ms: u32, frequency_ms: u32,
-        skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_attack: i32,
-        soul_attack: i32, critical_chance: i32, hit_modifier: i32, cells: Vec<(i32, i32)>,
-    ) -> Self {
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity {
             object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
         });
-        let arrow_count = cells.len() as u32;
         Self {
             shape, started_at_ms,
             lifetime_ms: frequency_ms.wrapping_mul(arrow_count).wrapping_add(10),
@@ -98,20 +94,23 @@ impl CMeteorArrowPhalanx {
                 master, skill_level, minimum_attack, maximum_attack, element_attack,
                 soul_attack, critical_chance, hit_modifier,
             },
-            cells,
+            cells: vec![(0, 0); arrow_count as usize],
             last_attack_at_ms: 0, attack_count: 0,
         }
     }
 
-    pub(crate) fn initialize_cells(&mut self, mut random_below: impl FnMut(i32) -> i32) {
+    pub(super) fn initialize_cells(
+        &mut self, scope: MeteorArrowScope, mut random_below: impl FnMut(i32) -> i32,
+    ) {
+        let side = scope.side();
         // Native FISTP при непредставимой координате даёт integer indefinite.
         let center_x = self.shape.get_tile_x().unwrap_or(i32::MIN);
         let center_y = self.shape.get_tile_y().unwrap_or(i32::MIN);
-        let start_x = center_x.wrapping_sub(SCOPE_LENGTH >> 1);
-        let start_y = center_y.wrapping_sub(SCOPE_HEIGHT >> 1);
+        let start_x = center_x.wrapping_sub(side >> 1);
+        let start_y = center_y.wrapping_sub(side >> 1);
         for cell in &mut self.cells {
-            let x = random_below(SCOPE_LENGTH);
-            let y = random_below(SCOPE_HEIGHT);
+            let x = random_below(side);
+            let y = random_below(side);
             *cell = (start_x.wrapping_add(x), start_y.wrapping_add(y));
         }
     }

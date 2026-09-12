@@ -19,22 +19,7 @@ impl CGame {
     ) -> Option<()> {
         self.find_region(region_id)?;
         phalanx.shape_mut().set_pos_xy_base(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        let mut shapes = Vec::new();
-        if let Some(owner) = self.find_region(region_id) {
-            let _ = owner.base().get_shapes(
-                tile_x, tile_y, self.area_width, self.area_height,
-                &RegionShapeResolver { game: self, owner }, &mut shapes,
-            );
-        }
-        for shape in shapes {
-            if shape.identity.object_type != SUMMON_SHAPE_TYPE { continue; }
-            let matched = self.find_region(region_id)
-                .and_then(|owner| owner.base().find_skill_phalanx(shape.identity.id))
-                .is_some_and(|existing| matches!(existing, SummonedSkillShape::ThunderBlow(existing)
-                    if existing.shape().get_tile_x() == Ok(tile_x)
-                        && existing.shape().get_tile_y() == Ok(tile_y)));
-            if matched { self.end_summoned_shape(region_id, shape.identity.id); }
-        }
+        self.end_overlapping_thunder_blow(region_id, tile_x, tile_y);
         let mut owner = self.take_region_owner(region_id)?;
         let result = owner.base_mut().add_lighting_arrow_phalanx(
             phalanx, self.area_width, self.area_height, started_at_ms, runtime,

@@ -92,7 +92,6 @@ use super::chaossphere::ChaosSphereExecutionState;
 use super::directprojectile::PlayerDirectProjectileExecutionState;
 use super::energybolt::PlayerPathProjectileExecutionState;
 use super::explosivearrow::ExplosiveArrowExecutionState;
-use super::fallingstar::FallingStarExecutionState;
 use super::fatalblow::FatalBlowExecutionState;
 use super::flash::FlashExecutionState;
 use super::ghostcut::GhostCutExecutionState;
@@ -227,7 +226,6 @@ player_skill_states! {
     BloodRose(BloodRoseExecutionState) paths(clear_end_paths),
     Scorpion(ScorpionExecutionState),
     BoaLock(BoaLockExecutionState),
-    FallingStar(FallingStarExecutionState),
     Strike(StrikeExecutionState),
     YakshaSlash(YakshaSlashExecutionState),
     BaseMagic(BaseMagicExecutionState),
@@ -415,6 +413,10 @@ impl SkillLifecycle {
 
     pub(crate) const fn destination(&self) -> (i32, i32) {
         self.destination
+    }
+
+    pub(crate) fn set_destination(&mut self, destination: (i32, i32)) {
+        self.destination = destination;
     }
 
     /// Фиксирует точку вместо объекта без нового Begin и повторного чтения часов.

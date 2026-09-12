@@ -1072,11 +1072,6 @@ use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     calculate_owned_heartless_arrow_attack,
 };
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
-use crate::gameserver::appserver::skills::rainarrow::{
-    cancel_player_rain_arrow, complete_player_rain_arrow, execute_player_rain_arrow,
-    is_rain_arrow_dispatch,
-};
-use crate::gameserver::appserver::skills::rainarrowphalanx::RAIN_ARROW_SKILL_ID;
 use crate::gameserver::appserver::skills::poisonmoth::{
     cancel_player_poison_moth, complete_player_poison_moth, execute_player_poison_moth,
     is_poison_moth_dispatch, POISON_MOTH_SKILL_ID,
@@ -1092,10 +1087,6 @@ use crate::gameserver::appserver::skills::scorpion::{
 use crate::gameserver::appserver::skills::boalock::{
     cancel_player_boa_lock, complete_player_boa_lock, execute_player_boa_lock,
     is_boa_lock_dispatch, BOA_LOCK_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::fallingstar::{
-    cancel_player_falling_star, complete_player_falling_star, execute_player_falling_star,
-    is_falling_star_dispatch, FALLING_STAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::explosivearrow::{
     cancel_player_explosive_arrow, complete_player_explosive_arrow,
@@ -1115,7 +1106,6 @@ use crate::gameserver::appserver::skills::daubpoison::{
     cancel_player_daub_poison, complete_player_daub_poison, execute_player_daub_poison,
     is_daub_poison_dispatch, DAUB_POISON_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
@@ -39093,12 +39083,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                RAIN_ARROW_SKILL_ID => Some(complete_player_rain_arrow(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 POISON_MOTH_SKILL_ID => Some(complete_player_poison_moth(
                     self,
                     player_id,
@@ -39118,12 +39102,6 @@ impl CGame {
                     runtime,
                 )),
                 BOA_LOCK_SKILL_ID => Some(complete_player_boa_lock(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                FALLING_STAR_SKILL_ID => Some(complete_player_falling_star(
                     self,
                     player_id,
                     &mut player_ai,
@@ -39475,9 +39453,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            RAIN_ARROW_SKILL_ID => {
-                cancel_player_rain_arrow(self, player_id, &mut player_ai, runtime)
-            }
             POISON_MOTH_SKILL_ID => {
                 cancel_player_poison_moth(self, player_id, &mut player_ai, runtime)
             }
@@ -39489,9 +39464,6 @@ impl CGame {
             }
             BOA_LOCK_SKILL_ID => {
                 cancel_player_boa_lock(self, player_id, &mut player_ai, runtime)
-            }
-            FALLING_STAR_SKILL_ID => {
-                cancel_player_falling_star(self, player_id, &mut player_ai, runtime)
             }
             EXPLOSIVE_ARROW_SKILL_ID
             | EXPLOSIVE_ARROW_2_SKILL_ID
@@ -39826,7 +39798,6 @@ impl CGame {
             } => execute_player_archery,
             _ if is_heartless_arrow_dispatch(dispatch) => execute_player_heartless_arrow,
             _ if is_heartless_arrow_area_dispatch(dispatch) => execute_player_heartless_arrow_area,
-            _ if is_rain_arrow_dispatch(dispatch) => execute_player_rain_arrow,
             _ if is_poison_moth_dispatch(dispatch) => execute_player_poison_moth,
             _ if is_kerosene_dispatch(dispatch) => execute_player_kerosene,
             _ if is_ignition_dispatch(dispatch) => execute_player_ignition,
@@ -39834,7 +39805,6 @@ impl CGame {
             _ if is_blood_rose_dispatch(dispatch) => execute_player_blood_rose,
             _ if is_scorpion_dispatch(dispatch) => execute_player_scorpion,
             _ if is_boa_lock_dispatch(dispatch) => execute_player_boa_lock,
-            _ if is_falling_star_dispatch(dispatch) => execute_player_falling_star,
             _ if explosive_arrow_variant(dispatch).is_some() => execute_player_explosive_arrow,
             _ if is_strike_dispatch(dispatch) => execute_player_strike,
             _ if is_daub_poison_dispatch(dispatch) => execute_player_daub_poison,
@@ -43499,7 +43469,7 @@ impl CGame {
             }
             SummonedSkillShape::LightingArrow(_) => None,
             SummonedSkillShape::MeteorArrow(_) => None,
-            SummonedSkillShape::RainArrow(phalanx) => calculate_rain_arrow_attack(self, phalanx, target_level),
+            SummonedSkillShape::RainArrow(_) => None,
             SummonedSkillShape::BaseMagic(phalanx) => {
                 calculate_owned_base_magic_attack(self, phalanx, target_level)
             }
@@ -43744,6 +43714,12 @@ impl CGame {
         {
             return self.run_meteor_arrow_phalanx(region_id, phalanx_id, runtime);
         }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::RainArrow(_)))
+        {
+            return self.run_rain_arrow_phalanx(region_id, phalanx_id, runtime);
+        }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -43751,7 +43727,6 @@ impl CGame {
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
         let mut thunder_fire_tick = None;
-        let mut rain_arrow_tick = None;
         let mut heartless_arrow_tick = None;
         let tick = owner
             .base_mut()
@@ -43769,7 +43744,7 @@ impl CGame {
                 }
                 SummonedSkillShape::LightingArrow(_) => Some(None),
                 SummonedSkillShape::MeteorArrow(_) => Some(None),
-                SummonedSkillShape::RainArrow(phalanx) => { rain_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds())); Some(None) }
+                SummonedSkillShape::RainArrow(_) => Some(None),
                 SummonedSkillShape::BaseMagic(phalanx) => {
                     match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
                         BaseMagicPhalanxTick::Pending => Some(None),
@@ -43938,12 +43913,6 @@ impl CGame {
                     }
                 }
                 HeartlessArrowPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
-            }
-            return true;
-        }
-        if let (Some(rain_arrow_tick), SummonedSkillShape::RainArrow(_)) = (rain_arrow_tick, &phalanx) {
-            if let RainArrowPhalanxTick::Attack { cells, sampled_at_ms } = rain_arrow_tick {
-                for (beam, x, y) in cells { self.apply_rain_arrow_cell(region_id, phalanx_id, beam, x, y, sampled_at_ms, runtime); }
             }
             return true;
         }
@@ -44135,7 +44104,7 @@ impl CGame {
                 }
             }
         }
-        if !matches!(&phalanx, SummonedSkillShape::Archery(_) | SummonedSkillShape::RainArrow(_))
+        if !matches!(&phalanx, SummonedSkillShape::Archery(_))
             && let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
         {
             let _ = self.send_shape_exit_around(region, phalanx.shape());

@@ -228,7 +228,6 @@ impl CGame {
             | HEARTLESS_ARROW_SKILL_ID
             | HEARTLESS_ARROW_2_SKILL_ID
             | HEARTLESS_ARROW_3_SKILL_ID
-            | RAIN_ARROW_SKILL_ID
             | BASE_MAGIC_SKILL_ID
             | FIRE_BOLT_SKILL_ID
             | FIRE_BALL_SKILL_ID
@@ -275,7 +274,6 @@ impl CGame {
             | BLOOD_ROSE_SKILL_ID
             | SCORPION_SKILL_ID
             | BOA_LOCK_SKILL_ID
-            | FALLING_STAR_SKILL_ID
             | EXPLOSIVE_ARROW_SKILL_ID
             | EXPLOSIVE_ARROW_2_SKILL_ID
             | EXPLOSIVE_ARROW_3_SKILL_ID

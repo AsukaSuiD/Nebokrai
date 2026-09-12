@@ -317,7 +317,6 @@ pub(crate) mod appserver {
         pub(crate) mod boalock;
         pub(crate) mod boalockstate;
         pub(crate) mod fallingstar;
-        pub(crate) mod fallingstarphalanx;
         pub(crate) mod explosivearrow;
         pub(crate) mod explosivearrow2;
         pub(crate) mod explosivearrow3;

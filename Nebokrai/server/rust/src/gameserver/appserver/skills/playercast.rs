@@ -24,7 +24,7 @@ use crate::gameserver::gameserver::game::{
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
-    AgilityFamily, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow,
+    AgilityFamily, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -59,8 +59,16 @@ impl RegisteredPlayerCastOwner {
             super::lightingarrow2::LIGHTING_ARROW_2_SKILL_ID => Self::LightingArrow2,
             super::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID => Self::MeteorArrowMass,
             super::meteorarrow::METEOR_ARROW_SKILL_ID => Self::MeteorArrow,
+            super::rainarrowphalanx::RAIN_ARROW_SKILL_ID => Self::RainArrow,
+            super::fallingstar::FALLING_STAR_SKILL_ID => Self::FallingStar,
             _ => return None,
         })
+    }
+
+    fn completion_end_argument(self) -> i32 {
+        // Выпуск RainArrow передаёт End(0); внешний End(1) по-прежнему
+        // выполняет AfterUse. Это не политика смены региона из фабрики.
+        if matches!(self, Self::RainArrow) { 0 } else { 1 }
     }
 
     pub(crate) fn execute<Runtime: GameMainLoopRuntime>(
@@ -90,6 +98,8 @@ impl RegisteredPlayerCastOwner {
             Self::LightingArrow2 => super::lightingarrow2::execute_player_lighting_arrow_2::<Runtime>,
             Self::MeteorArrowMass => super::meteorarrowmass::execute_player_meteor_arrow_mass::<Runtime>,
             Self::MeteorArrow => super::meteorarrow::execute_player_meteor_arrow::<Runtime>,
+            Self::RainArrow => super::rainarrow::execute_player_rain_arrow::<Runtime>,
+            Self::FallingStar => super::fallingstar::execute_player_falling_star::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }
@@ -101,8 +111,12 @@ fn finish_outcome<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     let end = match outcome.state {
         QueuedSkillExecutionState::Rejected => Some((0, SkillTermination::Rejected)),
-        QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::RejectedAfterUse => {
-            Some((1, SkillTermination::Completed))
+        QueuedSkillExecutionState::RejectedAfterUse => Some((1, SkillTermination::Completed)),
+        QueuedSkillExecutionState::Completed => {
+            let argument = game.registered_skill(instance)
+                .and_then(|skill| RegisteredPlayerCastOwner::from_skill_id(skill.id()))
+                .map_or(1, RegisteredPlayerCastOwner::completion_end_argument);
+            Some((argument, SkillTermination::Completed))
         }
         QueuedSkillExecutionState::Begun | QueuedSkillExecutionState::Pending => None,
     };

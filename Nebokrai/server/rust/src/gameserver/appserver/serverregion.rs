@@ -1638,13 +1638,20 @@ impl CServerRegion {
         Ok(id)
     }
 
-    pub(crate) fn add_rain_arrow_phalanx<Context: ServerRegionMembershipContext>(&mut self,
-        mut phalanx: super::skills::rainarrowphalanx::CRainArrowPhalanx, tile_x: i32, tile_y: i32,
-        area_width: i32, area_height: i32, now_ms: u32, context: &mut Context)
-        -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
-        let id = phalanx.shape().identity().id; self.owned_skill_phalanxes.insert(id, SummonedSkillShape::RainArrow(phalanx)); Ok(id)
+    pub(crate) fn add_rain_arrow_phalanx<Context: ServerRegionMembershipContext>(
+        &mut self,
+        mut phalanx: super::skills::rainarrowphalanx::CRainArrowPhalanx,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::rainarrowphalanx::CRainArrowPhalanx)> {
+        if let Err(error) = self.add_object(
+            phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context,
+        ) { return Err((error, phalanx)); }
+        let id = phalanx.shape().identity().id;
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::RainArrow(phalanx));
+        Ok(id)
     }
 
     pub(crate) fn add_battle_fairy_base_magic_phalanx<Context: ServerRegionMembershipContext>(

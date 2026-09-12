@@ -1,5 +1,7 @@
-//! Выпуск накопленных метеорных стрел CMeteorArrow (0xCD).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp.
+//! Общий выпуск накопленных стрел CMeteorArrow (0xCD) и CFallingStar (0xD5).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp
+//! и fallingstar.cpp. Совпадающие Begin/Check/AI/Summon/End исполняются одним
+//! владельцем; тонкий адаптер FallingStar выбирает маску 1×1 вместо 3×3.
 //! Общий Begin сохраняет исходного U и ранние часы. Check проверяет reuse,
 //! свежий путь, дальность и block2; источник не типа Player допускается без Move0.
 //! Игроку нужны лук категории 3 и ненулевая цена MP. Signed DWORD-разность
@@ -31,7 +33,7 @@ use super::basemagic::{
     SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
-use super::meteorarrowphalanx::CMeteorArrowPhalanx;
+use super::meteorarrowphalanx::{CMeteorArrowPhalanx, MeteorArrowScope};
 use super::meteorarrowstate::{consume_meteor_arrow_count, first_meteor_arrow_count};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -80,9 +82,16 @@ fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
         weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ArrowCastPathRule {
+    None,
+    DistanceOnly,
+    DistanceAndBlocks,
+}
+
 pub(super) fn check_arrow_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity),
-    check_path: bool, runtime: &mut Runtime,
+    path_rule: ArrowCastPathRule, runtime: &mut Runtime,
 ) -> bool {
     let Some(source) = resolve_state_move_shape(game, original_user.0, original_user.1) else { return false; };
     let source = (source.shape().get_region_id(), source.shape().identity());
@@ -94,7 +103,7 @@ pub(super) fn check_arrow_cast<Runtime: GameMainLoopRuntime>(
         failure(game, instance, player, 13);
         return false;
     }
-    if check_path {
+    if path_rule != ArrowCastPathRule::None {
         let path = game.skill_target_path(skill.lifecycle());
         if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
             let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
@@ -103,7 +112,7 @@ pub(super) fn check_arrow_cast<Runtime: GameMainLoopRuntime>(
                 return false;
             }
         }
-        if path.iter().any(|cell| cell.2 == 2) {
+        if path_rule == ArrowCastPathRule::DistanceAndBlocks && path.iter().any(|cell| cell.2 == 2) {
             failure(game, instance, player, 15);
             return false;
         }
@@ -146,7 +155,7 @@ pub(super) fn prepare_arrow_player(
 
 fn summon<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    destination: (i32, i32), arrows: i32, runtime: &mut Runtime,
+    destination: (i32, i32), arrows: i32, scope: MeteorArrowScope, runtime: &mut Runtime,
 ) {
     let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
     let identity = user.shape().identity();
@@ -181,7 +190,7 @@ fn summon<Runtime: GameMainLoopRuntime>(
         element, soul, cch, hit, arrows as u32,
     );
     phalanx.shape_mut().set_pos_xy_base(destination.0 as f32 + 0.5, destination.1 as f32 + 0.5);
-    phalanx.initialize_cells(|maximum| game.skill_random_below(maximum));
+    phalanx.initialize_cells(scope, |maximum| game.skill_random_below(maximum));
     let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
     if !user.shape().is_assigned_to_server_region() { return; }
     let region = user.shape().get_region_id();
@@ -189,7 +198,7 @@ fn summon<Runtime: GameMainLoopRuntime>(
 }
 
 fn run_ai<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    game: &mut CGame, instance: RegisteredSkill, scope: MeteorArrowScope, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
@@ -242,7 +251,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     game.update_registered_skill_visual(instance, 1);
-    summon(game, instance, source, destination, arrows, runtime);
+    summon(game, instance, source, destination, arrows, scope, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 
@@ -250,12 +259,20 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, instance: RegisteredSkill,
     dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    execute_meteor_arrow_family(game, player_id, instance, dispatch, MeteorArrowScope::Meteor, runtime)
+}
+
+pub(super) fn execute_meteor_arrow_family<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, scope: MeteorArrowScope, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
     let original_user = game.find_player(player_id)
         .map(|player| (player.shape().get_region_id(), player.shape().identity()));
     execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::ArrowCast,
         |game, instance, _player_id, runtime| original_user
-            .is_some_and(|source| check_arrow_cast(game, instance, source, true, runtime)),
-        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
+            .is_some_and(|source| check_arrow_cast(game, instance, source, ArrowCastPathRule::DistanceAndBlocks, runtime)),
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(),
+        |game, instance, runtime| run_ai(game, instance, scope, runtime),
     )
 }
