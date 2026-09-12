@@ -872,6 +872,19 @@ impl MoveShapeSkill {
     }
 
     /// Материализация сохраняет уже начатую базу именно этого экземпляра.
+    pub(crate) fn install_player_execution(&mut self, mut execution: PlayerSkillExecution) -> bool {
+        if execution.kernel().dispatch().skill_id() != self.id
+            || !matches!(self.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Player(_))
+        {
+            return false;
+        }
+        let lifecycle = std::mem::take(self.execution.lifecycle_mut());
+        execution.kernel_mut().replace_lifecycle(lifecycle);
+        self.execution = RegisteredSkillExecution::Player(execution);
+        true
+    }
+
+    /// Материализация сохраняет уже начатую базу именно этого экземпляра.
     pub(crate) fn install_battle_fairy_execution(&mut self, mut execution: BattleFairyExecution) -> bool {
         if execution.kernel().dispatch().skill_id() != self.id
             || !matches!(self.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_))
@@ -3073,18 +3086,12 @@ impl CMoveShape {
 
     pub(crate) fn install_player_execution(
         &mut self,
-        mut execution: PlayerSkillExecution,
+        execution: PlayerSkillExecution,
         factory: &CSkillFactory,
     ) -> bool {
         let skill_id = execution.kernel().dispatch().skill_id();
         let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::Player(_)) {
-            return false;
-        }
-        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
-        execution.kernel_mut().replace_lifecycle(lifecycle);
-        skill.execution = RegisteredSkillExecution::Player(execution);
-        true
+        skill.install_player_execution(execution)
     }
 
     pub(crate) fn battle_fairy_execution(

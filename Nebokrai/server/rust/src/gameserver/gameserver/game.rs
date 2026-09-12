@@ -142,6 +142,9 @@
 //! текущие исполнения и не терял изменения очередей. Это адаптация Rust
 //! заимствований, не новая игровая очередь. Вложенные callbacks внутри
 //! конкретных skill-owner-ов требуют отдельного проведения через эту границу.
+//! Flash и оба LittleFlash исполняются целиком с опубликованным AI и одним
+//! ключом регистрации через Begin, попадания и End. Повторный поиск по ID
+//! не подменяет экземпляр, удалённый или заменённый вложенным callback.
 //! Смертельный OnBeenAttacked (0x004D38E4..0x004D3A21) синхронно выполняет
 //! StopAllSkills → OnBeenMurdered → WhenBeenKilled до BF60B. Затем общий
 //! CMoveShape хранит identity убийцы и action 6. Настоящий производный регион
@@ -1338,7 +1341,7 @@ use crate::gameserver::appserver::skills::ragebreak::{
     RAGE_BREAK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::flash::{
-    cancel_player_flash, execute_player_flash, is_flash_dispatch, FLASH_SKILL_ID,
+    execute_player_flash, FLASH_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::swallow::{
     cancel_player_swallow, execute_player_swallow, is_swallow_dispatch, SWALLOW_SKILL_ID,
@@ -1365,7 +1368,7 @@ use crate::gameserver::appserver::skills::lightningsword2::LIGHTNING_SWORD_2_SKI
 use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash::{
-    cancel_player_little_flash, execute_player_little_flash, is_little_flash_dispatch,
+    execute_player_little_flash,
     LITTLE_FLASH_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
@@ -32726,10 +32729,20 @@ impl CGame {
     /// Только CState-часть Begin: она публикуется перед OnBeginSkill.
     /// Нулевой объектный target сохраняет прежнюю сторону; point-вход её очищает.
     pub(crate) fn begin_player_skill_lifecycle(&mut self, player_id: i32, dispatch: PlayerSkillDispatch, started_at_ms: u32) -> bool {
+        let Some(instance) = self.registered_player_skill(player_id, dispatch.skill_id()) else { return false; };
+        self.begin_registered_player_skill_lifecycle(instance, player_id, dispatch, started_at_ms)
+    }
+
+    fn begin_registered_player_skill_lifecycle(
+        &mut self, instance: RegisteredSkill, player_id: i32,
+        dispatch: PlayerSkillDispatch, started_at_ms: u32,
+    ) -> bool {
         let Some(player) = self.find_player(player_id) else { return false };
         let source = (player.shape().get_region_id(), player.shape().identity());
         let target = dispatch.object_target().and_then(|target| self.player_skill_begin_object(source.0, target));
-        let Some(lifecycle) = self.player_skill_lifecycle_mut(player_id, dispatch.skill_id()) else { return false };
+        let Some(skill) = self.registered_skill_mut(instance) else { return false; };
+        if skill.id() != dispatch.skill_id() { return false; }
+        let lifecycle = skill.lifecycle_mut();
         match dispatch {
             PlayerSkillDispatch::Point { x, y, .. } => lifecycle.begin_point(source, (x, y), || started_at_ms),
             _ => lifecycle.begin_objects(Some(source), target, || started_at_ms),
@@ -32761,13 +32774,27 @@ impl CGame {
         dispatch: PlayerSkillDispatch,
         started_at_ms: u32,
     ) -> bool {
-        if !self.begin_player_skill_lifecycle(player_id, dispatch, started_at_ms) {
+        let Some(instance) = self.registered_player_skill(player_id, dispatch.skill_id()) else { return false; };
+        self.begin_registered_player_skill_with_combat(instance, player_id, dispatch, started_at_ms)
+    }
+
+    /// Запись базы и продолжение OnBeginSkill используют один ключ. Удалённый
+    /// callback-ом экземпляр не заменяется первым совпадением того же ID.
+    pub(crate) fn begin_registered_player_skill_with_combat(
+        &mut self,
+        instance: RegisteredSkill,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        started_at_ms: u32,
+    ) -> bool {
+        if !self.begin_registered_player_skill_lifecycle(instance, player_id, dispatch, started_at_ms) {
             return false;
         }
         if dispatch.skill_id() != SKILL_BASE_DEFENSE {
             self.enter_player_combat_state(player_id);
         }
-        self.finish_player_skill_base_begin(player_id, dispatch.skill_id(), true);
+        let Some(skill) = self.registered_skill_mut(instance) else { return false; };
+        skill.lifecycle_mut().finish_begin(true);
         true
     }
 
@@ -39107,6 +39134,25 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
         let instance = self.registered_player_skill(player_id, skill_id)?;
+        if matches!(skill_id, FLASH_SKILL_ID | LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID) {
+            let dispatch = self.registered_skill(instance)?.player_dispatch();
+            let mut ai = self.find_player_mut(player_id)?.take_player_ai();
+            let argument = match cause {
+                MaterializedSkillEndCause::ClientRequest => 1,
+                MaterializedSkillEndCause::Stiffen => 4,
+                MaterializedSkillEndCause::Interruption => 0,
+            };
+            let ended = self.with_published_player_ai(player_id, &mut ai, |game| {
+                game.end_registered_instance(instance, argument, SkillTermination::Cancelled, runtime)
+            }).is_some();
+            if let Some(dispatch) = dispatch {
+                self.finish_registered_player_command(Some(instance), &mut ai, dispatch, SkillTermination::Cancelled);
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.restore_player_ai(ai);
+            }
+            return Some(if ended { PlayerSkillEndRuntimeOutcome::Ended } else { PlayerSkillEndRuntimeOutcome::AlreadyEnded });
+        }
         let dispatch = self.player_skill_execution(player_id, skill_id)?.dispatch();
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
         let mut released = false;
@@ -39469,7 +39515,6 @@ impl CGame {
                 cancel_player_rage_break(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
-            FLASH_SKILL_ID => cancel_player_flash(self, player_id, &mut player_ai, runtime),
             SWALLOW_SKILL_ID => cancel_player_swallow(self, player_id, &mut player_ai, runtime),
             LEAF_CUT_SKILL_ID => cancel_player_leaf_cut(self, player_id, &mut player_ai, runtime),
             LEAF_CUT_2_SKILL_ID => {
@@ -39484,9 +39529,6 @@ impl CGame {
             | LIGHTNING_SWORD_3_SKILL_ID
             | LIGHTNING_SWORD_4_SKILL_ID => {
                 cancel_player_lightning_sword(self, player_id, skill_id, &mut player_ai, runtime)
-            }
-            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
-                cancel_player_little_flash(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LITTLE_STAR_SKILL_ID => {
                 cancel_player_little_star(self, player_id, &mut player_ai, runtime)
@@ -39820,7 +39862,7 @@ impl CGame {
             let mut player_ai = player.take_player_ai();
             let outcome = if let Some(execution) = execution {
                 let outcome = self.execute_player_skill_owner(
-                    player_id, execution.dispatch(), &mut player_ai, runtime,
+                    player_id, instance, execution.dispatch(), &mut player_ai, runtime,
                 );
                 self.apply_player_skill_contacts(player_id, execution.dispatch(), &mut player_ai, &outcome, runtime);
                 outcome
@@ -39926,10 +39968,25 @@ impl CGame {
     fn execute_player_skill_owner<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
+        instance: Option<RegisteredSkill>,
         dispatch: PlayerSkillDispatch,
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
+        let dash: Option<fn(&mut Self, i32, RegisteredSkill, PlayerSkillDispatch, &mut Runtime)
+            -> QueuedSkillExecutionOutcome> = match dispatch.skill_id() {
+            FLASH_SKILL_ID => Some(execute_player_flash),
+            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => Some(execute_player_little_flash),
+            _ => None,
+        };
+        if let Some(execute) = dash {
+            let Some(instance) = instance else {
+                return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Rejected, first_contact: false };
+            };
+            return self.with_published_player_ai(player_id, player_ai, |game| {
+                execute(game, player_id, instance, dispatch, runtime)
+            });
+        }
         let execute: fn(
             &mut Self,
             i32,
@@ -40000,14 +40057,12 @@ impl CGame {
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
-            _ if is_flash_dispatch(dispatch) => execute_player_flash,
             _ if is_swallow_dispatch(dispatch) => execute_player_swallow,
             _ if is_leaf_cut_dispatch(dispatch) => execute_player_leaf_cut,
             _ if is_leaf_cut_2_dispatch(dispatch) => execute_player_leaf_cut_2,
             _ if is_leaf_cut_3_dispatch(dispatch) => execute_player_leaf_cut_3,
             _ if is_ju_cut_dispatch(dispatch) => execute_player_ju_cut,
             _ if is_lightning_sword_dispatch(dispatch) => execute_player_lightning_sword,
-            _ if is_little_flash_dispatch(dispatch) => execute_player_little_flash,
             _ if is_fire_wall_target(dispatch) => execute_player_fire_wall,
             _ if is_poison_fog_target(dispatch) => execute_player_poison_fog,
             _ if is_infernol_dispatch(dispatch) => execute_player_infernol,
@@ -40231,7 +40286,7 @@ impl CGame {
                     first_contact: false,
                 }
             } else {
-                self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime)
+                self.execute_player_skill_owner(player_id, instance, dispatch, player_ai, runtime)
             };
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
             if begin_completed {
@@ -40244,7 +40299,8 @@ impl CGame {
                 // Полный End(0) уже завершил экземпляр, но его payload
                 // освобождается ниже вместе с командой. Наличие payload
                 // не должно поглощать внешний отказ Begin.
-                && (self.player_skill_begin_pending(player_id, dispatch.skill_id())
+                && (matches!(dispatch.skill_id(), FLASH_SKILL_ID | LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID)
+                    || self.player_skill_begin_pending(player_id, dispatch.skill_id())
                     || instance.and_then(|address| self.registered_skill(address))
                         .is_some_and(|skill| skill.lifecycle().is_ended()));
             if begin_rejected {
@@ -40281,7 +40337,7 @@ impl CGame {
             return 0;
         };
         let instance = self.registered_player_skill(player_id, dispatch.skill_id());
-        let outcome = self.execute_player_skill_owner(player_id, dispatch, player_ai, runtime);
+        let outcome = self.execute_player_skill_owner(player_id, instance, dispatch, player_ai, runtime);
         self.finish_player_skill_outcome(player_id, instance, dispatch, player_ai, &outcome, runtime);
         1
     }

@@ -41,6 +41,9 @@
 //! затем перемещается в их kernel. CState::Begin пишет source/target, время
 //! и ended=false до OnBeginSkill; неудача не откатывает эту запись.
 //! Установка kernel сохраняет ту же базу, без timestamp-маркеров CPlayerAI.
+//! Flash и оба LittleFlash выполняют базовый Begin и создают visual у своего
+//! общего владельца. Расписание, active и background передают ему захваченный
+//! ключ; после его End здесь освобождаются только payload и та же команда.
 //! Поэтому отсутствие concrete-данных не означает IsEnded: перевод всех
 //! materialized-проверок расписания и End на эту границу ещё не завершён.
 //! Полный End должен охватывать и начатую базу без payload; один сброс
@@ -246,7 +249,6 @@ impl CGame {
             | GHOST_CUT_3_SKILL_ID
             | ARMY_BREAK_SKILL_ID
             | ARMY_BREAK_2_SKILL_ID
-            | FLASH_SKILL_ID
             | SWALLOW_SKILL_ID
             | LEAF_CUT_SKILL_ID
             | LEAF_CUT_2_SKILL_ID
@@ -256,8 +258,6 @@ impl CGame {
             | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID
             | LIGHTNING_SWORD_4_SKILL_ID
-            | LITTLE_FLASH_SKILL_ID
-            | LITTLE_FLASH_2_SKILL_ID
             | LITTLE_STAR_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID
@@ -315,7 +315,10 @@ impl CGame {
             | GOD_BLESS_SKILL_ID
             | GOD_BLESS_2_SKILL_ID
             | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
-            SPIDER_WEB_SKILL_ID
+            FLASH_SKILL_ID
+            | LITTLE_FLASH_SKILL_ID
+            | LITTLE_FLASH_2_SKILL_ID
+            | SPIDER_WEB_SKILL_ID
             | KNOCK_OUT_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | PROMOTION_SKILL_ID

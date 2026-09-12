@@ -196,6 +196,7 @@ pub(crate) mod appserver {
         pub(crate) mod energyholdingstate;
         pub(crate) mod inversechopped;
         pub(crate) mod flash;
+        pub(crate) mod dash;
         pub(crate) mod thunder;
         pub(crate) mod swallow;
         pub(crate) mod thunderblow;

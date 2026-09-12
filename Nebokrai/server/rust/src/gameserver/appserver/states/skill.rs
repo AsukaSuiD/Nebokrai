@@ -315,6 +315,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::rage::publish_rage_visual(self, skill, mode),
             SkillVisualEffectKind::KnightCut =>
                 crate::gameserver::appserver::skills::knightcut::publish_knight_cut_visual(self, skill, mode),
+            SkillVisualEffectKind::Flash =>
+                crate::gameserver::appserver::skills::flash::publish_flash_visual(self, skill, mode),
+            SkillVisualEffectKind::LittleFlash =>
+                crate::gameserver::appserver::skills::littleflash::publish_little_flash_visual(self, skill, mode),
             SkillVisualEffectKind::BattleFairy =>
                 crate::gameserver::appserver::skills::battlefairyskill::publish_battle_fairy_visual(self, skill, mode),
             SkillVisualEffectKind::SpriteBurn =>
