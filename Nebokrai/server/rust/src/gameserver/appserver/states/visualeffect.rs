@@ -30,6 +30,8 @@ pub(crate) enum SkillVisualEffectKind {
     Rush,
     Rush2,
     Strike,
+    KnockOut,
+    SpiderWeb,
 }
 
 #[derive(Debug, Eq, PartialEq)]

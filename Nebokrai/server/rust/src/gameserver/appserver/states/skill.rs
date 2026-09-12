@@ -338,6 +338,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::rush::publish_rush_visual(self, skill, mode),
             SkillVisualEffectKind::Strike =>
                 crate::gameserver::appserver::skills::strike::publish_strike_visual(self, skill, mode),
+            SkillVisualEffectKind::KnockOut =>
+                crate::gameserver::appserver::skills::knockoutruntime::publish_knock_out_visual(self, skill, mode),
+            SkillVisualEffectKind::SpiderWeb =>
+                crate::gameserver::appserver::skills::spiderweb::publish_spider_web_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

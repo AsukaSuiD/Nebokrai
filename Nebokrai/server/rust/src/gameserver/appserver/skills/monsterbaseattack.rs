@@ -28,6 +28,9 @@
 //! дальности перенесены в первый AI его owner-а (0x005B39B0).
 //! Общий lookup не поглощает этот отказ живого cast; до Begin свойства
 //! по-прежнему необходимы расписанию для расчёта диапазона.
+//! KnockOut/SpiderWeb сохраняют собственные getters диапазона при отсутствии
+//! свойств. Новый Begin идёт после диапазона либо Tracing и интервала ИИ;
+//! уже начатый навык получает AI без повторного допуска расписанием.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -306,7 +309,7 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range, has_owned_search_enemy,
+    MonsterTraceTarget, approach_attack_range, has_owned_search_enemy, trace_owned_target_state_skill,
     hibernates_without_nearby_players, release_owned_monster_target,
     queue_monster_idle, schedule_attack_interval, select_attack_skill, uses_stationary_attack_schedule,
 };
@@ -1005,6 +1008,20 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     true
 }
 
+type OwnedTargetStateExecutor<Runtime> = fn(
+    &mut CGame, &mut Option<ServerRegionOwner>, i32, ShapeIdentity, u16, &mut Runtime,
+) -> bool;
+
+fn owned_target_state_executor<Runtime: GameMainLoopRuntime>(
+    skill_id: u32,
+) -> Option<OwnedTargetStateExecutor<Runtime>> {
+    match skill_id {
+        KNOCK_OUT_SKILL_ID => Some(execute_owned_monster_knock_out),
+        SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
+        _ => None,
+    }
+}
+
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
@@ -1035,11 +1052,16 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if let Some((immediate, skill_id, skill_level)) = immediate {
         return immediate.execute(game, owner, monster_id, skill_id, skill_level, runtime);
     }
-    if region_owner.base().find_monster_by_id(monster_id)
+    if let Some(cast) = region_owner.base().find_monster_by_id(monster_id)
         .and_then(|monster| monster.current_active_attack_cast(game.skill_factory()))
-        .is_some_and(|cast| cast.dispatch().skill_id == COMMON_BASE_ATTACK_SKILL_ID)
     {
-        return super::baseattack::execute_owned_monster_base_attack(game, owner, monster_id, runtime);
+        let dispatch = cast.dispatch();
+        if dispatch.skill_id == COMMON_BASE_ATTACK_SKILL_ID {
+            return super::baseattack::execute_owned_monster_base_attack(game, owner, monster_id, runtime);
+        }
+        if let Some(execute) = owned_target_state_executor(dispatch.skill_id) {
+            return execute(game, owner, monster_id, dispatch.target, dispatch.skill_level, runtime);
+        }
     }
     let Some((
         property,
@@ -1296,6 +1318,42 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let Some(target) = target else {
         return false;
     };
+    if let Some(execute) = owned_target_state_executor(skill_id) {
+        // OnFighting выше уже направлен к экземпляру. Здесь только новый
+        // Begin: диапазон либо virtual Tracing, затем часы OnSchedule.
+        if (pet_ai && pet_action == 2) || (!pet_ai && uses_stationary_attack_schedule(property.ai)) {
+            let Some(target_view) = schedule_target_view else { return false; };
+            let distance = monster_view.real_distance(Some(target_view));
+            // Оба owner-а наследуют minimum=1 и signed-положительный maximum.
+            // NULL properties допускает дистанцию 1 до собственного CheckCast.
+            if distance < 1 || distance > game.skill_base_properties(skill_id, i32::from(skill_level))
+                .map(|properties| properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32)
+                .filter(|maximum| *maximum > 0).unwrap_or(1)
+            {
+                if pet_ai {
+                    lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
+                } else {
+                    release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
+                    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+                    }
+                }
+                return true;
+            }
+        } else if !trace_owned_target_state_skill(game, region_owner, monster_id, runtime) {
+            return true;
+        }
+        if !pet_ai && let Some(interval) = schedule_attack_interval(
+            property.ai, pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
+        ) {
+            let attempted = region_owner.base_mut().find_monster_by_id_mut(monster_id)
+                .is_some_and(|monster| monster.begin_ai_attack_attempt_with_clock(
+                    interval, &mut || runtime.now_milliseconds(),
+                ));
+            if !attempted { return true; }
+        }
+        return execute(game, owner, monster_id, target, skill_level, runtime);
+    }
     let Some(skill_properties) = game
         .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
@@ -1395,10 +1453,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
             runtime,
         );
-    }
-    if skill_id == KNOCK_OUT_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_monster_knock_out(game, owner, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime);
     }
     if skill_id == YAKSHA_SLASH_SKILL_ID {
         let skill_properties = skill_properties.clone();
@@ -1640,19 +1694,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return execute_owned_spider_mist(
             game,
             region_owner,
-            monster_id,
-            target,
-            skill_level,
-            &skill_properties,
-            now_ms,
-            runtime,
-        );
-    }
-    if skill_id == SPIDER_WEB_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_spider_web(
-            game,
-            owner,
             monster_id,
             target,
             skill_level,

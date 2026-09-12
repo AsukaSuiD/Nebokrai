@@ -246,7 +246,7 @@ player_skill_states! {
     YunshengLightning(PlayerYunShengLightningExecutionState),
     MonsterThorn(PlayerMonsterThornExecutionState),
     SpiderMist(PlayerSpiderMistExecutionState),
-    SpiderWeb(PlayerSpiderWebExecutionState),
+    SpiderWeb(PlayerSpiderWebExecutionState) prepare(prepare_derived_end),
     BossBlueQuake(PlayerBossBlueQuakeExecutionState),
     BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState) paths(clear_end_paths),
     SpriteBurn(SpriteBurnExecutionState),

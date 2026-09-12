@@ -140,6 +140,9 @@ pub(crate) enum SkillEndEffect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillEndPolicy {
     pub(crate) movement: SkillEndMovement,
+    /// Сбрасывает concrete condition/active через фазу до возврата движения.
+    /// Базовая возможность прерывания (CAN_BE_BREAKED) при этом сохраняется.
+    pub(crate) reset_phase: bool,
     /// None сохраняет available; Some задаёт безусловную concrete-запись.
     pub(crate) available: Option<bool>,
     pub(crate) effect: SkillEndEffect,
@@ -150,11 +153,13 @@ pub(crate) struct SkillEndPolicy {
 impl SkillEndPolicy {
     const COMMON: Self = Self {
         movement: SkillEndMovement::None,
+        reset_phase: false,
         available: None,
         effect: SkillEndEffect::None,
         path_order: SkillEndPathOrder::BeforeMovement,
     };
     const USER: Self = Self { movement: SkillEndMovement::User, ..Self::COMMON };
+    const USER_RESET_PHASE: Self = Self { reset_phase: true, ..Self::USER };
     const USER_OR_SUFFERER: Self = Self { movement: SkillEndMovement::UserOrSufferer, ..Self::COMMON };
     const USER_AVAILABLE: Self = Self { available: Some(true), ..Self::USER };
     const USER_UNAVAILABLE: Self = Self { available: Some(false), ..Self::USER };
@@ -340,14 +345,14 @@ skill_owners! {
     CYinYang2: Summon, USER, Weapon => 0x146,
     CThunderBlow2: Attack, COMMON, Weapon => 0x14d,
     CSpiderPoison: State, USER, Weapon => 0x191,
-    CKnockOut: State, USER, Weapon => 0x192,
+    CKnockOut: State, USER_RESET_PHASE, Weapon => 0x192,
     CSnowStorm: Summon, USER, Weapon => 0x193,
     CCorpseCandleBlasting: Attack, USER, Weapon => 0x194,
     CSporeBlasting: State, USER, Weapon => 0x195,
     CYakshaSlash: Attack, USER, Weapon => 0x196,
     CMonsterThorn: Attack, USER, Weapon => 0x197,
     CSpiderMist: Summon, USER, Weapon => 0x198,
-    CSpiderWeb: State, USER, Weapon => 0x199,
+    CSpiderWeb: State, USER_RESET_PHASE, Weapon => 0x199,
     CSummonCorpseCandle: Summon, USER, Weapon => 0x19a,
     CSummonSkeleton: Summon, USER, Weapon => 0x19b,
     CSummonSpore: Summon, USER, Weapon => 0x19c,

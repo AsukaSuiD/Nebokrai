@@ -789,6 +789,27 @@ impl MoveShapeSkill {
         }
     }
 
+    pub(crate) fn player_state_mut<State: super::skills::kernel::PlayerSkillState>(&mut self) -> Option<&mut State> {
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(execution) => State::from_execution_mut(execution),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn player_kernel(&self) -> Option<super::skills::kernel::SkillExecutionKernel<super::player::PlayerSkillDispatch>> {
+        match &self.execution {
+            RegisteredSkillExecution::Player(execution) => Some(execution.kernel()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn player_kernel_mut(&mut self) -> Option<&mut super::skills::kernel::SkillExecutionKernel<super::player::PlayerSkillDispatch>> {
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(execution) => Some(execution.kernel_mut()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn monster_kernel(&self) -> Option<&super::monster::MonsterBaseAttackCast> {
         match &self.execution {
             RegisteredSkillExecution::Monster(execution) => Some(&execution.kernel),
@@ -800,6 +821,19 @@ impl MoveShapeSkill {
         match &mut self.execution {
             RegisteredSkillExecution::Monster(execution) => Some(&mut execution.kernel),
             _ => None,
+        }
+    }
+
+    pub(crate) fn monster_progress<State: super::monster::MonsterSkillProgressState>(&self) -> Option<&State> {
+        match &self.execution {
+            RegisteredSkillExecution::Monster(execution) => State::from_progress(execution.progress.as_ref()?),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_monster_progress(&mut self, progress: impl Into<super::monster::MonsterSkillProgress>) {
+        if let RegisteredSkillExecution::Monster(execution) = &mut self.execution {
+            execution.progress = Some(progress.into());
         }
     }
 
@@ -859,6 +893,9 @@ impl MoveShapeSkill {
     pub(crate) fn prepare_derived_end(&mut self, argument: i32) -> bool {
         match &mut self.execution {
             RegisteredSkillExecution::Player(execution) => {
+                if self.owner.end_policy().reset_phase {
+                    execution.kernel_mut().clear_phase_for_end();
+                }
                 if !execution.prepare_derived_end(argument) {
                     return false;
                 }
@@ -882,6 +919,14 @@ impl MoveShapeSkill {
 
     pub(crate) fn mark_used(&mut self, now_ms: u32) {
         self.last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn last_used_ms(&self) -> u32 {
+        self.last_used_ms
+    }
+
+    pub(crate) fn replace_visual_effect(&mut self, effect: SkillVisualEffect) {
+        self.current_visual_effect = Some(effect);
     }
 
     pub(crate) fn visual_effect_mut(&mut self) -> Option<&mut SkillVisualEffect> {
@@ -3060,7 +3105,7 @@ impl CMoveShape {
         let Some(skill) = self.skill_mut(skill_id, factory) else {
             return false;
         };
-        skill.current_visual_effect = Some(effect);
+        skill.replace_visual_effect(effect);
         true
     }
 

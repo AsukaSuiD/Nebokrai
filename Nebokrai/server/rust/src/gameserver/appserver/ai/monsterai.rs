@@ -67,6 +67,12 @@
 //! Явный результат подключён к MonsterThorn, MonsterRangeAttack и общей группе широких атак;
 //! прежний bool остальных
 //! owners ещё не отличает отказ Begin от ожидания расписания.
+//! Начальный Tracing для KnockOut/SpiderWeb сохраняет CBaseAI из baseai.cpp:
+//! включительный диапазон, отход от слишком близкой цели и обычный MoveTo
+//! без проверки прямого пути. Мечевые стражи используют свой унаследованный
+//! override из cityguardwithsword.cpp, включая ForceMove; прочие concrete навыки пока
+//! остаются на прежнем адаптере подхода. Часы сравнения интервала и записи
+//! timestamp CMonsterAI читаются раздельно перед Begin этих двух навыков.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
@@ -76,7 +82,7 @@ use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::real_distance;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
 
@@ -266,6 +272,18 @@ pub(crate) struct MonsterAiScheduleState {
 }
 
 impl MonsterAiScheduleState {
+    pub(crate) fn begin_attack_attempt_with_clock(
+        &mut self,
+        interval_ms: u32,
+        now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        if self.last_attack_attempt_ms.wrapping_add(interval_ms) > now() {
+            return false;
+        }
+        self.last_attack_attempt_ms = now();
+        true
+    }
+
     pub(crate) const fn begin_attack_attempt(&mut self, now_ms: u32, interval_ms: u32) -> bool {
         // Exact `m_dwTimeStamp + GetAttackSpeed() <= timeGetTime()` сохраняет
         // wrapped absolute deadline, а не устойчивый elapsed-интервал.
@@ -459,9 +477,8 @@ impl MonsterTraceTarget {
     }
 }
 
-/// Выполняет общий шаг `CBaseAI::Tracing` перед запуском выбранного навыка.
-/// Наблюдаемый порядок движения задаёт существующий индекс региона; функция не
-/// выбирает навык и не потребляет RNG.
+/// Общий адаптер подхода оставшихся владельцев навыков. Его проверка прямого
+/// пути и отсутствие минимальной дистанции не подменяют точный Tracing ниже.
 pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -533,6 +550,95 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
 
     move_owned_monster_to(game, region, monster_id,
         ShapeAreaCoordinates { x: target_x, y: target_y }, 0, || runtime.now_milliseconds());
+    false
+}
+
+/// Virtual Tracing перед новым Begin KnockOut/SpiderWeb. Стоящий питомец и
+/// стационарный OnSchedule проверяют свой диапазон снаружи без вызова Tracing.
+pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    owner: &mut ServerRegionOwner,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(monster) = owner.base().find_monster_by_id(monster_id) else { return false; };
+    let Some(active_ai) = monster.active_ai() else { return false; };
+    if matches!(active_ai, ActiveMonsterAi::Primary(MonsterAiKind::PuninessCreature)) {
+        let _ = super::puninesscreature::execute_owned_puniness_creature(
+            game, owner.base_mut(), monster_id, runtime,
+        );
+        return false;
+    }
+    // OnSchedule повозки не вызывает Begin атакующего навыка.
+    if matches!(active_ai, ActiveMonsterAi::Carriage
+        | ActiveMonsterAi::Primary(MonsterAiKind::Carriage))
+    { return false; }
+    let Some(skill) = monster.move_shape().current_skill(game.skill_factory()) else {
+        release_owned_monster_target(game, owner.base_mut(), monster_id, runtime);
+        return false;
+    };
+    let (skill_id, skill_level) = (skill.id(), skill.level());
+    if !matches!(skill_id, 0x192 | 0x199) { return false; }
+    let target = monster.ai_target()
+        .and_then(|identity| crate::gameserver::appserver::skills::monsterattack::resolve_owned_monster_attack_target(
+            game, owner, identity,
+        ))
+        .filter(|target| !target.dead)
+        .map(|target| target.view);
+    let Some(target) = target else {
+        release_owned_monster_target(game, owner.base_mut(), monster_id, runtime);
+        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+        }
+        return false;
+    };
+    let Some(source) = game.shape_view_in_owner(owner, monster.move_shape().shape().identity()) else {
+        return false;
+    };
+    let maximum = |game: &CGame| {
+        game.skill_base_properties(skill_id, skill_level)
+            .map(|properties| properties.query_property(5_003) as i32)
+            .filter(|value| *value > 0)
+            .unwrap_or(1)
+    };
+    let distance = source.real_distance(Some(target));
+    if distance >= 1 && distance <= maximum(game) { return true; }
+    let chase_range = if monster.is_tamed()
+        && monster.master_info().master_type == 400 && monster.master_info().master_id != 0
+    {
+        game.globe_setup().maximum_pet_tracing_distance() as i32
+    } else {
+        let Some(property) = monster.base_property_key()
+            .and_then(|key| game.find_monster_property_by_origin_name(key))
+        else { return false; };
+        property.chase_range as i32
+    };
+    if matches!(active_ai, ActiveMonsterAi::Primary(kind) if kind.has_guard_station()) {
+        let maximum_distance = maximum(game);
+        return super::cityguardwithsword::trace_city_sword_target(
+            game, owner.base_mut(), monster_id, source, target, 1, maximum_distance, chase_range, runtime,
+        ) == super::cityguardwithsword::CitySwordTraceOutcome::Ready;
+    }
+    if distance > chase_range {
+        release_owned_monster_target(game, owner.base_mut(), monster_id, runtime);
+        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+        }
+        return false;
+    }
+    let destination = if distance <= maximum(game) {
+        let direction = get_line_direction(target.tile_x, target.tile_y, source.tile_x, source.tile_y);
+        let Ok(point) = CShape::get_direction_position(
+            direction, ShapeAreaCoordinates { x: source.tile_x, y: source.tile_y },
+        ) else { return false; };
+        point
+    } else {
+        ShapeAreaCoordinates { x: target.tile_x, y: target.tile_y }
+    };
+    if !owner.base().find_monster_by_id(monster_id)
+        .is_some_and(|monster| monster.move_shape().is_moveable())
+    { return false; }
+    move_owned_monster_to(game, owner.base_mut(), monster_id, destination, 0, || runtime.now_milliseconds());
     false
 }
 

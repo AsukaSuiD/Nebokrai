@@ -255,6 +255,7 @@ impl CGame {
             | MONSTER_THORN_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
+            | KNOCK_OUT_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
@@ -308,7 +309,6 @@ impl CGame {
             | PROMOTION_SKILL_ID
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
-            | KNOCK_OUT_SKILL_ID
             | ITEM_SKILL_2_ID
             | KNIGHT_CUT_SKILL_ID
             | RAGE_SKILL_ID

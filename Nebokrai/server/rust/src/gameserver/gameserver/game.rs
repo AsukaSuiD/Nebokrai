@@ -39563,7 +39563,7 @@ impl CGame {
                 cancel_player_spider_mist(self, player_id, &mut player_ai, runtime)
             }
             SPIDER_WEB_SKILL_ID => {
-                cancel_player_spider_web(self, player_id, &mut player_ai, runtime)
+                cancel_player_spider_web(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             SPIDER_POISON_SKILL_ID => {
                 cancel_player_spider_poison(self, player_id, &mut player_ai, runtime)
@@ -39729,7 +39729,7 @@ impl CGame {
                 cancel_player_monster_taming(self, player_id, &mut player_ai, runtime)
             }
             KNOCK_OUT_SKILL_ID => {
-                cancel_player_knock_out(self, player_id, &mut player_ai, runtime)
+                cancel_player_knock_out(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             GIBE_SKILL_ID => cancel_player_gibe(
                 self,

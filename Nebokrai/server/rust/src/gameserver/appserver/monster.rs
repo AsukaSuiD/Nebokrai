@@ -123,7 +123,7 @@
 //! создания/перезапуска состояния и его публикации. Отказ без reuse часов
 //! завершения не читает; сроки наложенных состояний этим End не меняются.
 //! SpiderWeb::End (0x0057B810) сбрасывает поля полёта и вызывает
-//! SetMoveable(true) перед общим End. SpiderWebProgress освобождается с cast,
+//! SetMoveable(true) перед общим End. SpiderWebProgress сбрасывается в том же экземпляре,
 //! а SpiderWebState на цели остаётся у собственного state-owner-а.
 //! YunShengLightning разделяет End 0x0057B810: общий путь снимает один запрет
 //! движения и очищает полёт, без повторного удара или сообщения эффекта.
@@ -2176,6 +2176,20 @@ impl CMonster {
             Some(ActiveMonsterAi::Pet) => true,
             Some(ActiveMonsterAi::Primary(kind)) if !matches!(kind, MonsterAiKind::Carriage) => {
                 self.ai_schedule.begin_attack_attempt(now_ms, interval_ms)
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn begin_ai_attack_attempt_with_clock(
+        &mut self,
+        interval_ms: u32,
+        now: &mut dyn FnMut() -> u32,
+    ) -> bool {
+        match self.active_ai() {
+            Some(ActiveMonsterAi::Pet) => true,
+            Some(ActiveMonsterAi::Primary(kind)) if !matches!(kind, MonsterAiKind::Carriage) => {
+                self.ai_schedule.begin_attack_attempt_with_clock(interval_ms, now)
             }
             _ => false,
         }
