@@ -83,7 +83,7 @@ use super::archery::ArcheryExecutionState;
 use super::armybreak::ArmyBreakExecutionState;
 use super::basemagic::BaseMagicExecutionState;
 use super::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
-use super::bloodrose::BloodRoseExecutionState;
+use super::scopedarrowcast::ScopedArrowExecutionState;
 use super::boalock::BoaLockExecutionState;
 use super::bossbluequake::PlayerBossBlueQuakeExecutionState;
 use super::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
@@ -91,7 +91,6 @@ use super::chainlightning::ChainLightningExecutionState;
 use super::chaossphere::ChaosSphereExecutionState;
 use super::directprojectile::PlayerDirectProjectileExecutionState;
 use super::energybolt::PlayerPathProjectileExecutionState;
-use super::explosivearrow::ExplosiveArrowExecutionState;
 use super::fatalblow::FatalBlowExecutionState;
 use super::flash::FlashExecutionState;
 use super::ghostcut::GhostCutExecutionState;
@@ -208,7 +207,7 @@ pub(crate) trait PlayerSkillState {
 
 player_skill_states! {
     HeartlessArrowArea(HeartlessArrowAreaExecutionState),
-    ExplosiveArrow(ExplosiveArrowExecutionState) paths(clear_end_paths),
+    ScopedArrow(ScopedArrowExecutionState) paths(clear_end_paths),
     GhostCut(GhostCutExecutionState) paths(clear_end_paths),
     ThunderBlow2(ThunderBlow2Execution) prepare(prepare_derived_end),
     ArmyBreak(ArmyBreakExecutionState) prepare(prepare_derived_end),
@@ -223,7 +222,6 @@ player_skill_states! {
     LightingArrow2(LightingArrow2ExecutionState) paths(clear_end_paths),
     RainArrow(RainArrowExecutionState) paths(clear_end_paths),
     PoisonMoth(PoisonMothExecutionState) paths(clear_end_paths),
-    BloodRose(BloodRoseExecutionState) paths(clear_end_paths),
     Scorpion(ScorpionExecutionState),
     BoaLock(BoaLockExecutionState),
     Strike(StrikeExecutionState),

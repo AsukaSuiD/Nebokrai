@@ -1,15 +1,16 @@
-//! Visual арбалетных PoisonMoth и BloodRose.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/poisonmoth.cpp
-//! и bloodrose.cpp. Общие пакеты содержат идентификатор навыка, уровень и
-//! свежего U. Mode0 передаёт направление; mode3 добавляет сохранённую конечную
+//! Общий visual поклеточных PoisonMoth, BloodRose и ExplosiveArrow1/2/3.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/poisonmoth.cpp,
+//! bloodrose.cpp и explosivearrow{,2,3}.cpp. Пакеты содержат ID навыка, уровень
+//! и свежего U. Mode0 передаёт направление; mode3 добавляет сохранённую конечную
 //! клетку и type/id последней либо выбранной цели без её повторного поиска.
-//! Выпуск CF не вызывает GetS: пишет нулевые type/id и базовую точку. D0
-//! разрешает S заново и передаёт её type/id/X/Y либо базовую точку. Оба
+//! Выпуск CF не вызывает GetS: пишет нулевые type/id и базовую точку. Остальные
+//! разрешают S заново и передают её type/id/X/Y либо базовую точку. Все
 //! добавляют время полёта. Ошибки — BYTE0/BYTEcode; CF не посылает mode4/14.
+//! Формат совместим независимо от требуемой категории оружия у caller-а.
 //! Общий dispatcher сохраняет базовый visual-tail независимо от пакета.
 
-use super::bloodrose::BloodRoseExecutionState;
 use super::poisonmoth::PoisonMothExecutionState;
+use super::scopedarrowcast::ScopedArrowExecutionState;
 use super::skillfactory::SkillOwner;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
@@ -20,7 +21,8 @@ use crate::nets::netserver::message::CMessage;
 pub(crate) fn publish_crossbow_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
     let poison_moth = match skill.owner() {
         SkillOwner::CPoisonMoth => true,
-        SkillOwner::CBloodRose => false,
+        SkillOwner::CBloodRose | SkillOwner::CExplosiveArrow
+            | SkillOwner::CExplosiveArrow2 | SkillOwner::CExplosiveArrow3 => false,
         _ => return,
     };
     if skill.visual_effect().is_none_or(|effect|
@@ -69,7 +71,7 @@ pub(crate) fn publish_crossbow_cast_visual(game: &CGame, skill: &MoveShapeSkill,
             let Some(state) = skill.player_state::<PoisonMothExecutionState>() else { return; };
             state.missile_flying_time()
         } else {
-            let Some(state) = skill.player_state::<BloodRoseExecutionState>() else { return; };
+            let Some(state) = skill.player_state::<ScopedArrowExecutionState>() else { return; };
             state.missile_flying_time()
         };
         message.add_ulong(duration);
@@ -80,7 +82,7 @@ pub(crate) fn publish_crossbow_cast_visual(game: &CGame, skill: &MoveShapeSkill,
                 let Some(state) = skill.player_state::<PoisonMothExecutionState>() else { return; };
                 (state.end_tile(), state.visual_target())
             } else {
-                let Some(state) = skill.player_state::<BloodRoseExecutionState>() else { return; };
+                let Some(state) = skill.player_state::<ScopedArrowExecutionState>() else { return; };
                 (state.end_tile(), state.visual_target())
             };
             message.add_long(end.0);

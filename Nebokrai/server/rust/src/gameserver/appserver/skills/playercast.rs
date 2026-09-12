@@ -25,7 +25,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     AgilityFamily, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, BloodRose,
+    PoisonMoth, ScopedArrow,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -63,7 +63,10 @@ impl RegisteredPlayerCastOwner {
             super::rainarrowphalanx::RAIN_ARROW_SKILL_ID => Self::RainArrow,
             super::fallingstar::FALLING_STAR_SKILL_ID => Self::FallingStar,
             super::poisonmoth::POISON_MOTH_SKILL_ID => Self::PoisonMoth,
-            super::bloodrose::BLOOD_ROSE_SKILL_ID => Self::BloodRose,
+            super::scopedarrowcast::BLOOD_ROSE_SKILL_ID
+                | super::scopedarrowcast::EXPLOSIVE_ARROW_SKILL_ID
+                | super::scopedarrowcast::EXPLOSIVE_ARROW_2_SKILL_ID
+                | super::scopedarrowcast::EXPLOSIVE_ARROW_3_SKILL_ID => Self::ScopedArrow,
             _ => return None,
         })
     }
@@ -104,7 +107,7 @@ impl RegisteredPlayerCastOwner {
             Self::RainArrow => super::rainarrow::execute_player_rain_arrow::<Runtime>,
             Self::FallingStar => super::fallingstar::execute_player_falling_star::<Runtime>,
             Self::PoisonMoth => super::poisonmoth::execute_player_poison_moth::<Runtime>,
-            Self::BloodRose => super::bloodrose::execute_player_blood_rose::<Runtime>,
+            Self::ScopedArrow => super::scopedarrowcast::execute_player_scoped_arrow::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

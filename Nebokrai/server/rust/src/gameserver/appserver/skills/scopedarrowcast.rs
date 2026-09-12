@@ -1,33 +1,39 @@
-//! Поклеточный арбалетный BloodRose (0xD0).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/bloodrose.cpp.
-//! Общий зарегистрированный Begin сохраняет исходные U/S для объектного Check;
-//! точечный Check заново разрешает S после создания visual. Самонацеливание
-//! отклоняется до свойств/reuse, затем проверяются дальность без BLOCK_UNFLY,
-//! арбалет категории 4 и ненулевая MP-цена. Первый AI списывает MP, публикует
-//! OnChangeStates, повторяет проверку оружия и задаёт CAN/направление.
+//! Общий поклеточный выстрел BloodRose и ExplosiveArrow/2/3 (D0/D6/E1/E2).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/bloodrose.cpp
+//! и explosivearrow{,2,3}.cpp. Конкретные ID задают оружие, обход боевых душ
+//! и условие отдачи; единственное исполнение не хранит копию этого профиля.
 //!
-//! Выпуск после Move1 строит свежий путь, сохраняет время до первой непролётной
-//! клетки и переводит базовую цель в endpoint. Attacking/prepared записываются
-//! после visual1; индекс остаётся нулевым. Все сроки абсолютные unsigned,
-//! каждый AI читает свойства задержки заново и обрабатывает не более клетки.
-//! Отсутствие текущего региона U оставляет полёт ожидающим, включая его конец.
+//! Begin сохраняет исходные U/S для объектного Check; координатный Check
+//! разрешает S после visual. Самонацеливание отклоняется до свойств/reuse,
+//! затем идут дальность без BLOCK_UNFLY и signed MP. Цена MP0 даёт тихий отказ,
+//! источник не типа Player проходит без Move0. D0/D6 требуют арбалет категории
+//! 4; E1/E2 — лук категории 3, но отсутствие оружия сохраняет строку GS0293.
+//! Отказ Begin не добавляет отдельный visual2 перед End(0).
 //!
-//! Все три исходные маски и fallback — полная область 3×3; общий арбалетный
-//! owner обходит её X→Y, выбирает visual-цель до дедупликации и хранит список
-//! попаданий в этом же живом экземпляре. Повторная допустимая цель подавляет
-//! лишь урон, но всё равно завершает клетку. Удары не проверяют IsDied и не
-//! начисляют RP. После visual3 индекс получает свежую длину пути и увеличивается;
-//! отбрасывание стрелка выполняется только на следующем подходящем AI.
+//! Первый AI списывает MP до OnChangeStates и повторной проверки оружия,
+//! задаёт CAN, свежие S.X/Y, U.Y/X, направление и visual0. Выпуск после
+//! абсолютного unsigned срока возвращает движение, строит путь длиной MAX
+//! (включая MAX0), сохраняет endpoint/время полёта и очищает S до visual1.
+//! Attacking/prepared пишутся после visual; индекс остаётся нулевым.
 //!
-//! Recoil читает число шагов после каждого свободного блока, а скорость —
-//! только при фактическом смещении; общий ForceMove сохраняет packet/AI-tail.
-//! End сбрасывает фазу, счётчики и visual-цель, освобождает путь перед списком
-//! ударов, затем свежий U Move1 и общий Attack End. Vec и единый kernel заменяют
-//! native контейнеры; постоянная одинаковая маска не требует отдельного объекта.
+//! Один AI обрабатывает не более клетки; step/delay берутся из таблицы этого
+//! AI. Текущий регион U проверяется после часов, даже для завершённого пути.
+//! Все уровни и варианты используют полную маску 3×3. Общий attack-owner
+//! сохраняет X→Y, visual-цель до дедупликации и живой список попаданий.
+//! Только E1 повторяет обход боевых душ перед каждой клеткой: обычный список
+//! подавляет такой урон, но души не пополняют его и не останавливают полёт.
+//!
+//! После visual3 текущая позиция получает свежую длину пути и увеличивается.
+//! Следующий подходящий AI выполняет отдачу стрелка, затем End(1), без нового
+//! visual3. D0 читает скорость и вызывает ForceMove только при смещении;
+//! ExplosiveArrow делает оба действия даже при нуле шагов. End сбрасывает
+//! фазу и счётчики, освобождает путь перед списком до свежего U Move1 и общего
+//! Attack End. Vec и kernel заменяют native контейнеры; одинаковые маски не
+//! требуют отдельного объекта. Весь AI опубликован при синхронных callbacks.
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::crossbowattack::run_blood_rose_scope;
+use super::crossbowattack::run_scoped_arrow_attack;
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::lightingarrowphalanx::ArrowTargetIdentity;
 use super::playercast::execute_registered_player_cast;
@@ -49,14 +55,25 @@ use crate::gameserver::gameserver::game::{
 use crate::public::tools::get_line_direction;
 
 pub(crate) const BLOOD_ROSE_SKILL_ID: u32 = 0xD0;
+pub(crate) const EXPLOSIVE_ARROW_SKILL_ID: u32 = 0xD6;
+pub(crate) const EXPLOSIVE_ARROW_2_SKILL_ID: u32 = 0xE1;
+pub(crate) const EXPLOSIVE_ARROW_3_SKILL_ID: u32 = 0xE2;
 const PLAYER_TYPE: i32 = 400;
 const TARGET_MAX_DISTANCE: u32 = 5_003;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const TARGET_BACK_STEP: u32 = 30_002;
 const TARGET_MOVE_SPEED: u32 = 30_003;
 
+fn weapon_kind(skill_id: u32) -> Option<RangedWeaponKind> {
+    match skill_id {
+        BLOOD_ROSE_SKILL_ID | EXPLOSIVE_ARROW_SKILL_ID => Some(RangedWeaponKind::Crossbow),
+        EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => Some(RangedWeaponKind::ExplosiveBow),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BloodRoseExecutionState {
+pub(crate) struct ScopedArrowExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
     attacking_started: bool,
     missile_flying_time: u32,
@@ -67,7 +84,7 @@ pub(crate) struct BloodRoseExecutionState {
     attacked: Vec<ArrowTargetIdentity>,
 }
 
-impl BloodRoseExecutionState {
+impl ScopedArrowExecutionState {
     fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
         Self {
             kernel: SkillExecutionKernel::begin(dispatch, started),
@@ -86,6 +103,10 @@ impl BloodRoseExecutionState {
     pub(crate) const fn missile_flying_time(&self) -> u32 { self.missile_flying_time }
     pub(crate) const fn end_tile(&self) -> (i32, i32) { self.end_tile }
     pub(crate) const fn visual_target(&self) -> (i32, i32) { self.visual_target }
+
+    pub(super) fn is_target_attacked(&self, target: (i32, ShapeIdentity)) -> bool {
+        self.attacked.contains(&ArrowTargetIdentity::new(target.0, target.1))
+    }
 
     pub(super) fn mark_target_attacked(&mut self, target: (i32, ShapeIdentity)) -> bool {
         let key = ArrowTargetIdentity::new(target.0, target.1);
@@ -113,7 +134,7 @@ impl BloodRoseExecutionState {
 
 fn knock_back_owner(
     game: &mut CGame, source: (i32, ShapeIdentity), region: i32,
-    properties: &CSkillBaseProperties,
+    properties: &CSkillBaseProperties, force_even_if_stationary: bool,
 ) {
     let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
     let direction = user.shape().get_direction();
@@ -134,10 +155,10 @@ fn knock_back_owner(
         maximum = properties.query_property(TARGET_BACK_STEP);
         position = next;
     }
-    let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
-    if position.x != user.shape().get_tile_x().unwrap_or(i32::MIN)
-        || position.y != user.shape().get_tile_y().unwrap_or(i32::MIN)
-    {
+    let should_move = force_even_if_stationary || resolve_state_move_shape(game, source.0, source.1)
+        .is_some_and(|user| position.x != user.shape().get_tile_x().unwrap_or(i32::MIN)
+            || position.y != user.shape().get_tile_y().unwrap_or(i32::MIN));
+    if should_move {
         let duration = properties.query_property(TARGET_MOVE_SPEED).wrapping_mul(count);
         let _ = game.force_move_skill_target(region, source.1, position.x, position.y, duration);
     }
@@ -147,6 +168,8 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let skill_id = skill.id();
+    let Some(weapon) = weapon_kind(skill_id) else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
         return terminal(QueuedSkillExecutionState::Pending);
     };
@@ -161,7 +184,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     if stage == SkillStage::Begin {
         if !prepare_ranged_weapon_player(
             game, instance, (source.1.object_type == PLAYER_TYPE).then_some(source.1.id),
-            &properties, RangedWeaponKind::Crossbow,
+            &properties, weapon,
         ) {
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -193,7 +216,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         }
     }
     let Some(attacking) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<BloodRoseExecutionState>())
+        .and_then(|skill| skill.player_state::<ScopedArrowExecutionState>())
         .map(|state| state.attacking_started)
     else { return terminal(QueuedSkillExecutionState::Rejected); };
     if !attacking {
@@ -209,7 +232,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
         let path = game.skill_target_path_with_length(skill.lifecycle(), maximum);
         let Some(state) = game.registered_skill_mut(instance)
-            .and_then(|skill| skill.player_state_mut::<BloodRoseExecutionState>())
+            .and_then(|skill| skill.player_state_mut::<ScopedArrowExecutionState>())
         else { return terminal(QueuedSkillExecutionState::Rejected); };
         state.path = path;
         let stop = state.path.iter().position(|cell| cell.2 == 2);
@@ -223,7 +246,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         }
         let missile = index.wrapping_mul(properties.query_property(MISSILE_FLYING_TIME));
         let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
-        if let Some(state) = skill.player_state_mut::<BloodRoseExecutionState>() {
+        if let Some(state) = skill.player_state_mut::<ScopedArrowExecutionState>() {
             state.missile_flying_time = missile;
         }
         if blocked_endpoint.is_none() && let Some(endpoint) = last_endpoint {
@@ -233,7 +256,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         skill.lifecycle_mut().set_point_target(destination);
         game.update_registered_skill_visual(instance, 1);
         if let Some(state) = game.registered_skill_mut(instance)
-            .and_then(|skill| skill.player_state_mut::<BloodRoseExecutionState>())
+            .and_then(|skill| skill.player_state_mut::<ScopedArrowExecutionState>())
         {
             state.attacking_started = true;
             state.kernel.lifecycle_mut().mark_prepared();
@@ -242,13 +265,13 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         }
     }
     let Some(attacking) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<BloodRoseExecutionState>())
+        .and_then(|skill| skill.player_state::<ScopedArrowExecutionState>())
         .map(|state| state.attacking_started)
     else { return terminal(QueuedSkillExecutionState::Rejected); };
     if !attacking { return terminal(QueuedSkillExecutionState::Pending); }
     let missile = properties.query_property(MISSILE_FLYING_TIME);
     let Some(position) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<BloodRoseExecutionState>())
+        .and_then(|skill| skill.player_state::<ScopedArrowExecutionState>())
         .map(|state| state.current_position)
     else { return terminal(QueuedSkillExecutionState::Rejected); };
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -265,42 +288,45 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     let region = user.shape().get_region_id();
     if game.find_region(region).is_none() { return terminal(QueuedSkillExecutionState::Pending); }
     let Some(state) = game.registered_skill(instance)
-        .and_then(|skill| skill.player_state::<BloodRoseExecutionState>())
+        .and_then(|skill| skill.player_state::<ScopedArrowExecutionState>())
     else { return terminal(QueuedSkillExecutionState::Rejected); };
     if state.path.len() as u32 <= state.current_position {
-        knock_back_owner(game, source, region, &properties);
+        knock_back_owner(game, source, region, &properties, skill_id != BLOOD_ROSE_SKILL_ID);
         return terminal(QueuedSkillExecutionState::Completed);
     }
     let Some((x, y, _)) = state.path.get(state.current_position as usize).copied() else {
         return terminal(QueuedSkillExecutionState::Pending);
     };
     if let Some(state) = game.registered_skill_mut(instance)
-        .and_then(|skill| skill.player_state_mut::<BloodRoseExecutionState>())
+        .and_then(|skill| skill.player_state_mut::<ScopedArrowExecutionState>())
     {
         state.end_tile = (x, y);
     }
     let block = game.find_region(region).map_or(2, |owner| owner.base().skill_cell_block(x, y));
-    let contact = block == 3 && run_blood_rose_scope(game, instance, source, (x, y), runtime);
+    let contact = block == 3 && run_scoped_arrow_attack(game, instance, source, (x, y), runtime);
     if contact || block == 2 {
         game.update_registered_skill_visual(instance, 3);
         if let Some(state) = game.registered_skill_mut(instance)
-            .and_then(|skill| skill.player_state_mut::<BloodRoseExecutionState>())
+            .and_then(|skill| skill.player_state_mut::<ScopedArrowExecutionState>())
         {
             state.current_position = state.path.len() as u32;
         }
     }
     if let Some(state) = game.registered_skill_mut(instance)
-        .and_then(|skill| skill.player_state_mut::<BloodRoseExecutionState>())
+        .and_then(|skill| skill.player_state_mut::<ScopedArrowExecutionState>())
     {
         state.current_position = state.current_position.wrapping_add(1);
     }
     terminal(QueuedSkillExecutionState::Pending)
 }
 
-pub(crate) fn execute_player_blood_rose<Runtime: GameMainLoopRuntime>(
+pub(crate) fn execute_player_scoped_arrow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, instance: RegisteredSkill,
     dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    let Some(weapon) = game.registered_skill(instance).and_then(|skill| weapon_kind(skill.id())) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
     let original_user = game.find_player(player_id)
         .map(|player| (player.shape().get_region_id(), player.shape().identity()));
     let original_target = if game.registered_skill(instance).is_some_and(|skill| skill.player_dispatch().is_none()) {
@@ -318,11 +344,11 @@ pub(crate) fn execute_player_blood_rose<Runtime: GameMainLoopRuntime>(
             let targets_self = target.and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
                 .is_some_and(|target| std::ptr::eq(user, target));
             if targets_self {
-                ranged_weapon_failure(game, instance, Some(source.1.id), 10, RangedWeaponKind::Crossbow);
+                ranged_weapon_failure(game, instance, (source.1.object_type == PLAYER_TYPE).then_some(source.1.id), 10, weapon);
                 return false;
             }
-            check_ranged_weapon_cast(game, instance, source, ArrowCastPathRule::DistanceOnly, RangedWeaponKind::Crossbow, runtime)
+            check_ranged_weapon_cast(game, instance, source, ArrowCastPathRule::DistanceOnly, weapon, runtime)
         },
-        |dispatch, started| BloodRoseExecutionState::begin(dispatch, started).into(), run_ai,
+        |dispatch, started| ScopedArrowExecutionState::begin(dispatch, started).into(), run_ai,
     )
 }

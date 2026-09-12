@@ -1,24 +1,29 @@
-//! Поклеточные атаки PoisonMoth (0xCF) и BloodRose (0xD0).
+//! Поклеточные атаки PoisonMoth, BloodRose и семейства ExplosiveArrow.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/poisonmoth.cpp
-//! и bloodrose.cpp. Список GetShapes сохраняется отдельно для каждой клетки,
+//! и bloodrose.cpp, explosivearrow{,2,3}.cpp. Список GetShapes сохраняется отдельно для каждой клетки,
 //! но допуск, состояние навыка и боевые getter-ы читаются живыми.
 //!
 //! PoisonMoth проверяет IsDied до допуска и запоминает последнюю допущенную
-//! цель перед контактом. BloodRose не проверяет IsDied; полная область 3×3
-//! одинакова на всех уровнях и идёт X→Y,
+//! цель перед контактом. BloodRose и ExplosiveArrow не проверяют IsDied;
+//! полная область 3×3 одинакова на всех уровнях и идёт X→Y,
 //! её первая подходящая цель на центральном X при ненулевом Y сохраняется
 //! для visual до дедупликации. Повторная цель подавляет только сам контакт,
 //! но не успешный результат клетки. Списки и visual остаются в живом навыке.
+//! ExplosiveArrow2 перед каждой клеткой заново получает упорядоченную карту
+//! боевых душ в центральной точке. Для них исключаются совпавший ID источника,
+//! action6 и IsDied. Они проверяют общий список попаданий, но не дополняют его,
+//! не выбирают visual-цель и не изменяют успешный результат клетки.
 //!
 //! PK-снимок предшествует свежему Calculate. NULL таблица оставляет UNKNOWN/1,
 //! не отменяя raw OnBeenAttacked. Общий оружейный хвост читает MIN→MAX→RNG
 //! с сырой DWORD-шириной, снова MIN, затем ELEMENT/SOUL/CCH и второй RNG.
-//! CF меняет знак hit; D0 читает добавку 20013 после физического урона и перед
+//! CF меняет знак hit; остальные читают добавку 20013 после физического урона и перед
 //! ELEMENT. Контакт не начисляет RP, не наносит яд и не изнашивает оружие.
 
-use super::bloodrose::{BLOOD_ROSE_SKILL_ID, BloodRoseExecutionState};
 use super::flash::cell_views;
 use super::poisonmoth::{POISON_MOTH_SKILL_ID, PoisonMothExecutionState};
+use super::scopedarrowcast::ScopedArrowExecutionState;
+use super::skillfactory::SkillOwner;
 use super::weaponattack::{
     PlayerWeaponRoll, fill_ordinary_weapon_damage_with_element_addition, source_master,
 };
@@ -61,24 +66,30 @@ fn calculate_crossbow_attack(
     );
 }
 
-pub(super) fn apply_crossbow_skill_attack<Runtime: GameMainLoopRuntime>(
+fn apply_crossbow_skill_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), runtime: &mut Runtime,
+    target: (i32, ShapeIdentity), war_soul: bool, runtime: &mut Runtime,
 ) {
     let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
     let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return; };
     let targets_self = std::ptr::eq(user, sufferer);
     let Some(skill) = game.registered_skill_mut(instance) else { return; };
-    if skill.id() == BLOOD_ROSE_SKILL_ID {
+    if skill.id() != POISON_MOTH_SKILL_ID {
         if targets_self { return; }
-        let Some(state) = skill.player_state_mut::<BloodRoseExecutionState>() else { return; };
-        if !state.mark_target_attacked(target) { return; }
+        let Some(state) = skill.player_state_mut::<ScopedArrowExecutionState>() else { return; };
+        if war_soul {
+            if state.is_target_attacked(target) { return; }
+        } else if !state.mark_target_attacked(target) { return; }
     }
     let Some(mut master) = source_master(game, source) else { return; };
     master.master_country_id = 0;
     let mut attack = AttackInformation::for_master(master);
     calculate_crossbow_attack(game, instance, source, target, &mut attack);
-    game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
+    if war_soul {
+        game.apply_owned_skill_attack_to_war_soul(master, target.1.id, target.0, attack, runtime);
+    } else {
+        game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
+    }
 }
 
 pub(super) fn run_poison_moth_cell<Runtime: GameMainLoopRuntime>(
@@ -102,17 +113,37 @@ pub(super) fn run_poison_moth_cell<Runtime: GameMainLoopRuntime>(
             .and_then(|skill| skill.player_state_mut::<PoisonMothExecutionState>())
         else { return attacked; };
         state.set_visual_target(target.1);
-        apply_crossbow_skill_attack(game, instance, source, target, runtime);
+        apply_crossbow_skill_attack(game, instance, source, target, false, runtime);
         attacked = true;
     }
     attacked
 }
 
-pub(super) fn run_blood_rose_scope<Runtime: GameMainLoopRuntime>(
+fn attack_war_souls<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    region: i32, center: (i32, i32), runtime: &mut Runtime,
+) {
+    let Some(owner) = game.find_region(region) else { return; };
+    let war_souls = owner.base().war_souls_at(center.0, center.1);
+    for (player_id, _) in war_souls {
+        let Some(target) = game.find_player(player_id as i32) else { continue; };
+        if target.player_id() == source.1.id || target.shape().get_action() == 6 || target.is_dead() {
+            continue;
+        }
+        let target = (target.shape().get_region_id(), target.shape().identity());
+        if game.live_skill_target_attackable(region, source.1, target.1) {
+            apply_crossbow_skill_attack(game, instance, source, target, true, runtime);
+        }
+    }
+}
+
+pub(super) fn run_scoped_arrow_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     center: (i32, i32), runtime: &mut Runtime,
 ) -> bool {
     if center == (0, 0) { return false; }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let attacks_war_souls = skill.owner() == SkillOwner::CExplosiveArrow2;
     let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return false; };
     if !user.shape().is_assigned_to_server_region() { return false; }
     let region = user.shape().get_region_id();
@@ -121,6 +152,9 @@ pub(super) fn run_blood_rose_scope<Runtime: GameMainLoopRuntime>(
     for offset_x in -1..=1 {
         let x = center.0.wrapping_add(offset_x);
         for offset_y in -1..=1 {
+            if attacks_war_souls {
+                attack_war_souls(game, instance, source, region, center, runtime);
+            }
             let y = center.1.wrapping_add(offset_y);
             for view in cell_views(game, region, x, y) {
                 if view.identity == user_identity { continue; }
@@ -129,11 +163,11 @@ pub(super) fn run_blood_rose_scope<Runtime: GameMainLoopRuntime>(
                 if !game.live_skill_target_attackable(region, source.1, target.1) { continue; }
                 if x == center.0 && y != 0 {
                     let Some(state) = game.registered_skill_mut(instance)
-                        .and_then(|skill| skill.player_state_mut::<BloodRoseExecutionState>())
+                        .and_then(|skill| skill.player_state_mut::<ScopedArrowExecutionState>())
                     else { return attacked; };
                     state.select_visual_target_if_empty(target.1);
                 }
-                apply_crossbow_skill_attack(game, instance, source, target, runtime);
+                apply_crossbow_skill_attack(game, instance, source, target, false, runtime);
                 attacked = true;
             }
         }

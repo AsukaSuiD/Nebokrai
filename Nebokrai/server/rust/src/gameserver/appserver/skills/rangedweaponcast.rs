@@ -1,14 +1,16 @@
 //! Общие проверки и расход MP для совместимых лучных и арбалетных casts.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp,
 //! meteorarrowmass.cpp, rainarrow.cpp, lightingarrow.cpp, lightingarrow2.cpp,
-//! poisonmoth.cpp и bloodrose.cpp.
+//! poisonmoth.cpp, bloodrose.cpp и explosivearrow{,2,3}.cpp.
 //! Check удерживает исходного U, читает reuse и свежий путь по политике навыка.
 //! Проверка самонацеливания, если она нужна, выполняется caller-ом раньше.
 //! Non-player проходит без Move0; игроку нужны категория 3/4, ненулевая MP-цена
 //! и неотрицательная signed DWORD-разность. MP0 — тихий отказ.
 //! Первый AI использует сохранённую таблицу: MP→OnChangeStates→повторная
 //! проверка оружия; поздний отказ не возвращает MP. CAN и фаза остаются
-//! у игрового caller-а. Различия категории и строк не дублируют механизм.
+//! у игрового caller-а. ExplosiveArrow2/3 требуют лук, но сообщают GS0293
+//! при отсутствии оружия и GS0286 при самонацеливании. Различия категории
+//! и строк не дублируют механизм.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::skill_is_restored;
@@ -26,11 +28,11 @@ const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RangedWeaponKind { Bow, Crossbow }
+pub(super) enum RangedWeaponKind { Bow, Crossbow, ExplosiveBow }
 
 impl RangedWeaponKind {
     const fn category(self) -> i32 {
-        match self { Self::Bow => 3, Self::Crossbow => 4 }
+        match self { Self::Bow | Self::ExplosiveBow => 3, Self::Crossbow => 4 }
     }
 }
 
@@ -45,7 +47,7 @@ pub(super) fn ranged_weapon_failure(
     let Some(player) = player else { return; };
     let text: &[u8] = match mode {
         4 => b"GS0300",
-        10 => if weapon == RangedWeaponKind::Crossbow { b"GS0286" } else { b"GS0285" },
+        10 => if weapon == RangedWeaponKind::Bow { b"GS0285" } else { b"GS0286" },
         11 => b"GS0290", 13 => b"GS0278",
         14 => if weapon == RangedWeaponKind::Crossbow { b"GS0293" } else { b"GS0297" },
         15 => b"GS0282", _ => return,
@@ -59,9 +61,20 @@ fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player: i32, proper
     game.send_skill_system_info_with_unsigned(player, b"GS0288", amount);
 }
 
-fn weapon_is_valid(game: &CGame, player: &CPlayer, weapon: RangedWeaponKind) -> bool {
-    player.equipment().get_goods(2).is_some_and(|goods|
-        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == weapon.category())
+fn check_weapon(game: &mut CGame, instance: RegisteredSkill, player: i32, weapon: RangedWeaponKind) -> bool {
+    let missing: &[u8] = if weapon == RangedWeaponKind::Bow { b"GS0297" } else { b"GS0293" };
+    let wrong: &[u8] = if weapon == RangedWeaponKind::Crossbow { b"GS0293" } else { b"GS0297" };
+    let failure = match game.find_player(player).and_then(|user| user.equipment().get_goods(2)) {
+        None => Some(missing),
+        Some(goods) => (goods.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1)
+            != weapon.category()).then_some(wrong),
+    };
+    if let Some(text) = failure {
+        game.update_registered_skill_visual(instance, 14);
+        game.send_skill_system_info(player, text);
+        return false;
+    }
+    true
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,10 +113,7 @@ pub(super) fn check_ranged_weapon_cast<Runtime: GameMainLoopRuntime>(
         }
     }
     let Some(player) = player else { return true; };
-    if game.find_player(player).is_none_or(|source| !weapon_is_valid(game, source, weapon)) {
-        ranged_weapon_failure(game, instance, Some(player), 14, weapon);
-        return false;
-    }
+    if !check_weapon(game, instance, player, weapon) { return false; }
     if properties.query_property(USER_MP_LOSE) == 0 { return false; }
     let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
     if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
@@ -129,9 +139,5 @@ pub(super) fn prepare_ranged_weapon_player(
     let Some(user) = game.find_player_mut(player) else { return false; };
     user.set_mana(remaining);
     game.publish_player_states(player);
-    if game.find_player(player).is_none_or(|user| !weapon_is_valid(game, user, weapon)) {
-        ranged_weapon_failure(game, instance, Some(player), 14, weapon);
-        return false;
-    }
-    true
+    check_weapon(game, instance, player, weapon)
 }

@@ -272,9 +272,6 @@ impl CGame {
             | SOUL_MIRROR_SKILL_ID
             | SCORPION_SKILL_ID
             | BOA_LOCK_SKILL_ID
-            | EXPLOSIVE_ARROW_SKILL_ID
-            | EXPLOSIVE_ARROW_2_SKILL_ID
-            | EXPLOSIVE_ARROW_3_SKILL_ID
             | STRIKE_SKILL_ID
             | YAKSHA_SLASH_SKILL_ID
             | DAUB_POISON_SKILL_ID

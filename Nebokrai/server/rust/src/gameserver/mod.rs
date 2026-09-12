@@ -207,6 +207,7 @@ pub(crate) mod appserver {
         pub(crate) mod rangedweaponcast;
         pub(crate) mod crossbowattack;
         pub(crate) mod crossbowcastvisual;
+        pub(crate) mod scopedarrowcast;
         pub(crate) mod skillpath;
         pub(crate) mod armybreakattack;
         pub(crate) mod weaponattack;
@@ -315,14 +316,10 @@ pub(crate) mod appserver {
         pub(crate) mod poisonfogphalanx;
         pub(crate) mod poisonfogstate;
         pub(crate) mod poisonmoth;
-        pub(crate) mod bloodrose;
         pub(crate) mod scorpion;
         pub(crate) mod boalock;
         pub(crate) mod boalockstate;
         pub(crate) mod fallingstar;
-        pub(crate) mod explosivearrow;
-        pub(crate) mod explosivearrow2;
-        pub(crate) mod explosivearrow3;
         pub(crate) mod strike;
         pub(crate) mod strikestate;
         pub(crate) mod promotion;
