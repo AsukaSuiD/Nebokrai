@@ -1,100 +1,309 @@
-//! Трёхударный навык `CScorpion` (`0xD1`).
-//! На время участка нанесения урона настоящий CPlayerAI опубликован в CPlayer:
-//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
-//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
-//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
-//! же Run; исходный отсчёт Begin сохраняется общим kernel.
+//! Три прицельных арбалетных удара Scorpion (0xD1).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/scorpion.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/scorpion.cpp`. После необратимого расхода MP навык заново
-//! проверяет арбалет, дальность и весь прямой путь. Первый, второй и третий
-//! удары выполняются в разные AI-tick на накопленных сроках; только третий
-//! применяет skill damage factor. Каждый удар заново читает боевые свойства и
-//! выполняет ровно два RNG-вызова. `CGame` оставляет применение к независимому
-//! владельцу цели и сетевую доставку. `Attack` и `AI` не изнашивают оружие на
-//! каждом из трёх ударов: унаследованный `AfterUseSkill` делает это один раз
-//! из `End(true)`, который обновляет свойства и cooldown без завершающего
-//! пакета. `End(false)` после восстановления движения отправляет action `3`
-//! и не изнашивает оружие.
-//! Коэффициент третьего удара сохраняет исходную x87-цепочку до записи в
-//! `float`; критический множитель вычисляется в расширенной точности и
-//! усекается к нулю перед записью `int`. Cooldown использует абсолютный срок
-//! `CSkill::IsRestored`; интервалы трёх ударов остаются elapsed.
+//! Общий Begin сохраняет исходного U и объектного S; координатная команда
+//! проверяет свежего S после loop1 visual. Check читает таблицу до проверки
+//! NULL S, затем reuse, дальность, арбалет категории 4 и signed MP. MP0
+//! отклоняется молча; источник не типа Player проходит без Move0. Самонаведение
+//! разрешено Begin, но AI отвергает его после проверки смерти цели.
+//!
+//! Каждый AI удерживает свежие таблицу и U/S. Первый списывает MP до
+//! OnChangeStates и повторной проверки арбалета, затем задаёт направление,
+//! заново строит путь, проверяет дальность/BLOCK_UNFLY и только потом пишет
+//! CAN, visual0 и condition. Удары ждут абсолютные unsigned сроки
+//! start+delay+first[+second[+third]], не более одного удара за AI.
+//! Первый публикует visual1; каждый заново рассчитывает обычный оружейный
+//! урон, только третий применяет skill factor. Допуска цели и RP в Attack нет.
+//! NULL таблица Calculate сохраняет исходный пустой UNKNOWN/1 контакт.
+//!
+//! Два флага ударов независимы: вложенный End может очистить их до записи
+//! завершившегося Attack. End сбрасывает фазу и оба флага, включает CAN до
+//! свежего U Move1; только End(0) отправляет visual3. Общая база сохраняет
+//! AfterUse и cooldown. Kernel остаётся опубликованным через весь AI;
+//! общие ranged/weapon helpers заменяют повторение ресурса, пути и формулы.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
-use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::poisonmoth::{MONSTER_TYPE, PLAYER_TYPE, master_info, target_level, weapon_is_crossbow};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use super::baseattack::SKILL_USAGE_DELAY_TIME;
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::playercast::execute_registered_player_cast;
+use super::rangedweaponcast::{
+    ArrowCastPathRule, CastPathBlock, RangedWeaponKind, check_ranged_weapon_cast,
+    check_skill_path, prepare_ranged_weapon_player, ranged_weapon_failure, terminal,
+};
+use super::skillfactory::SkillOwner;
+use super::weaponattack::{
+    PlayerWeaponRoll, calculate_player_weapon_attack, calculate_unscaled_weapon_attack,
+};
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
-pub(crate) const SCORPION_SKILL_ID: u32 = 0xd1;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const USER_MP_LOSE: u32 = 2;
-const TARGET_MAX_DISTANCE: u32 = 5_003;
+pub(crate) const SCORPION_SKILL_ID: u32 = 0xD1;
 const FIRST_TIME: u32 = 15_001;
 const SECOND_TIME: u32 = 15_002;
 const THIRD_TIME: u32 = 15_003;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScorpionExecutionState { kernel: SkillExecutionKernel<PlayerSkillDispatch>, condition_checked: bool, attacks: u8 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ScorpionExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    first_attack: bool,
+    second_attack: bool,
+}
+
 impl ScorpionExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, now: u32) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, now), condition_checked: false, attacks: 0 } }
+    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, started), first_attack: false, second_attack: false }
+    }
+
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-}
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
-pub(crate) fn is_scorpion_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: SCORPION_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: SCORPION_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: SCORPION_SKILL_ID, .. }) }
-fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
-fn target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
-pub(super) fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<(i32, i32, bool)> { match identity.object_type { PLAYER_TYPE => game.find_player(identity.id).filter(|player| player.server_region_id() == Some(region_id)).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.is_dead()))), MONSTER_TYPE => game.find_region(region_id).and_then(|owner| { let monster = owner.base().find_monster_by_id(identity.id)?; Some((monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?, monster.hit_points() == 0)) }), _ => None } }
-pub(super) fn target_name<'a>(game: &'a CGame, region_id: i32, identity: ShapeIdentity) -> &'a [u8] { match identity.object_type { PLAYER_TYPE => game.find_player(identity.id).map(CPlayer::player_name).unwrap_or_default(), MONSTER_TYPE => game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(identity.id)).map(CMonster::display_name).unwrap_or_default(), _ => &[] } }
-fn send_failure(game: &CGame, player_id: i32, code: u8, mp: u32, text: Option<&[u8]>) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code); match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp), 10 => game.send_skill_system_info(player_id, text.unwrap_or(b"GS0286")), 0x0b => game.send_skill_system_info(player_id, b"GS0290"), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), 0x0e => game.send_skill_system_info(player_id, b"GS0293"), 0x0f => game.send_skill_system_info_with_text(player_id, b"GS0296", text.unwrap_or_default()), _ => {} } }
-fn send_start(game: &mut CGame, player_id: i32, level: i32) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(1); message.add_long(SCORPION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message); }
-fn send_strike(game: &mut CGame, player_id: i32, level: i32, identity: ShapeIdentity, position: (i32, i32), second: u32, third: u32) { let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(2); message.add_long(SCORPION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(position.0); message.add_long(position.1); message.add_long(0); message.add_ulong(second); message.add_ulong(second.wrapping_add(third)); let _ = game.send_player_shape_around(player_id, None, &message); }
-fn send_end(game: &mut CGame, player_id: i32, level: i32) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(3); message.add_long(SCORPION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message); }
-fn finish_player_scorpion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
-    restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, SCORPION_SKILL_ID, runtime);
-}
-fn abort_player_scorpion(game: &mut CGame, player_id: i32, level: i32) { restore_player_movement(game, player_id); send_end(game, player_id, level); }
-pub(crate) fn complete_player_scorpion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_scorpion(game, player_id, runtime);
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
-}
-pub(crate) fn cancel_player_scorpion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
-    let level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(SCORPION_SKILL_ID, game.skill_factory()));
-    abort_player_scorpion(game, player_id, level);
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
-}
-fn reject(game: &mut CGame, player_id: i32, level: i32, code: Option<(u8, u32, Option<&[u8]>)>) -> QueuedSkillExecutionOutcome { if let Some((code, mp, text)) = code { send_failure(game, player_id, code, mp, text); } abort_player_scorpion(game, player_id, level); terminal(QueuedSkillExecutionState::Rejected) }
 
-fn calculate_attack(game: &mut CGame, player_id: i32, region_id: i32, identity: ShapeIdentity, level: i32, hit_modifier: i32, final_factor: Option<u32>) -> Option<(MasterInfo, AttackInformation)> {
-    let target_level = target_level(game, region_id, identity)?; let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors(); let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum_factor); let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0); let damage_factor = final_factor.map_or(weapon_factor, |factor| (f64::from(factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32);
-    let mut attack = AttackInformation { skill_id: SCORPION_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] }; if game.skill_random_below(100) < i32::from(combat.blast_attack) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } } Some((master, attack))
+    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
+        self.first_attack = false;
+        self.second_attack = false;
+        true
+    }
 }
-fn apply_attack<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, identity: ShapeIdentity, level: i32, hit_modifier: i32, factor: Option<u32>, runtime: &mut Runtime) { let Some((master, attack)) = calculate_attack(game, player_id, region_id, identity, level, hit_modifier, factor) else { return }; match identity.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, identity.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, identity.id, region_id, attack, runtime), _ => return } }
 
-pub(crate) fn execute_player_scorpion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    if !is_scorpion_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) } let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(SCORPION_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(SCORPION_SKILL_ID, level) else { return reject(game, player_id, level, None) }; let mp = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let first = properties.query_property(FIRST_TIME); let second = properties.query_property(SECOND_TIME); let third = properties.query_property(THIRD_TIME); let max_distance = properties.query_property(TARGET_MAX_DISTANCE); let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let final_factor = properties.query_property(TARGET_DAMAGE_FACTOR); let _can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).is_none() { let now = runtime.now_milliseconds(); let Some(identity) = target(dispatch) else { return reject(game, player_id, level, Some((10, mp, Some(b"GS0286")))) }; if !skill_is_restored(game.player_skill_last_used_ms(player_id, SCORPION_SKILL_ID), reuse, now) { return reject(game, player_id, level, Some((0x0d, mp, None))) } let Some((target_x, target_y, _)) = target_snapshot(game, region_id, identity) else { return reject(game, player_id, level, Some((10, mp, Some(b"GS0286")))) }; let path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if max_distance != 0 && path.len() as u32 > max_distance { return reject(game, player_id, level, Some((0x0b, mp, None))) } let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_crossbow(game, player) { return reject(game, player_id, level, Some((0x0e, mp, None))) } if mp != 0 && (initial_mana.wrapping_sub(mp) as i32) < 0 { return reject(game, player_id, level, Some((7, mp, None))) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(SCORPION_SKILL_ID)); } game.begin_player_skill_execution(player_id, ScorpionExecutionState::begin(dispatch, now)); return terminal(QueuedSkillExecutionState::Begun); }
-    else if game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let identity = target(dispatch).expect("активный Scorpion сохраняет объектную цель"); let Some((target_x, target_y, dead)) = target_snapshot(game, region_id, identity) else { return reject(game, player_id, level, Some((10, mp, Some(b"GS0285")))) }; if dead { return reject(game, player_id, level, Some((10, mp, Some(b"GS0285")))) } if identity.object_type == PLAYER_TYPE && identity.id == player_id { return reject(game, player_id, level, Some((10, mp, Some(b"GS0286")))) }
-    if game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).is_some_and(|state| !state.condition_checked) { let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp) as i32) < 0 { return reject(game, player_id, level, Some((7, mp, None))) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_crossbow(game, player)) { return reject(game, player_id, level, Some((0x0e, mp, None))) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); } let path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if max_distance != 0 && path.len() as u32 > max_distance { return reject(game, player_id, level, Some((0x0b, mp, None))) } if path.iter().any(|cell| cell.2 == 2) { let name = target_name(game, region_id, identity).to_vec(); return reject(game, player_id, level, Some((0x0f, mp, Some(&name)))) } send_start(game, player_id, level); if let Some(state) = game.player_skill_state_mut::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); } }
-    let started = game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default(); let attacks = game.player_skill_state::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID).map_or(0, |state| state.attacks); let deadline = match attacks { 0 => delay.wrapping_add(first), 1 => delay.wrapping_add(first).wrapping_add(second), _ => delay.wrapping_add(first).wrapping_add(second).wrapping_add(third) }; if !time_reached(runtime.now_milliseconds(), started, deadline) { return terminal(QueuedSkillExecutionState::Pending) }
-    if attacks == 0 { send_strike(game, player_id, level, identity, (target_x, target_y), second, third); game.with_published_player_ai(player_id, player_ai, |game| apply_attack(game, player_id, region_id, identity, level, hit_modifier, None, runtime)); if let Some(state) = game.player_skill_state_mut::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID) { state.attacks = 1; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); } return terminal(QueuedSkillExecutionState::Pending) }
-    if attacks == 1 { game.with_published_player_ai(player_id, player_ai, |game| apply_attack(game, player_id, region_id, identity, level, hit_modifier, None, runtime)); if let Some(state) = game.player_skill_state_mut::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID) { state.attacks = 2; } return terminal(QueuedSkillExecutionState::Pending) }
-    game.with_published_player_ai(player_id, player_ai, |game| apply_attack(game, player_id, region_id, identity, level, hit_modifier, Some(final_factor), runtime)); if let Some(state) = game.player_skill_state_mut::<ScorpionExecutionState>(player_id, SCORPION_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_scorpion(game, player_id, runtime); terminal(QueuedSkillExecutionState::Completed)
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
+    target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
+) -> bool {
+    let Some(user) = original_user else { return false; };
+    if resolve_state_move_shape(game, user.0, user.1).is_none() { return false; }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    if game.skill_base_properties(skill.id(), skill.level()).is_none() { return false; }
+    if target.and_then(|(region, identity)| resolve_state_move_shape(game, region, identity)).is_none() {
+        ranged_weapon_failure(game, instance, (user.1.object_type == 400).then_some(user.1.id),
+            10, RangedWeaponKind::Crossbow);
+        return false;
+    }
+    check_ranged_weapon_cast(game, instance, user, ArrowCastPathRule::DistanceOnly,
+        RangedWeaponKind::Crossbow, runtime)
+}
+
+fn attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), final_strike: bool, runtime: &mut Runtime,
+) {
+    if resolve_state_move_shape(game, target.0, target.1).is_none() { return; }
+    let calculated = if final_strike {
+        calculate_player_weapon_attack(game, instance, source, target, TARGET_DAMAGE_FACTOR,
+            PlayerWeaponRoll::AbsoluteRange)
+    } else {
+        calculate_unscaled_weapon_attack(game, instance, source, target, PlayerWeaponRoll::AbsoluteRange)
+    };
+    if let Some((master, attack)) = calculated {
+        game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
+    }
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let (region, identity) = skill.lifecycle().user();
+    let source = resolve_state_move_shape(game, region, identity);
+    let target = resolve_skill_sufferer(game, skill.lifecycle())
+        .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity));
+    let (Some(source), Some(target)) = (source, target) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let targets_self = std::ptr::eq(source, target);
+    let source = (source.shape().get_region_id(), source.shape().identity());
+    let target = (target.shape().get_region_id(), target.shape().identity());
+    let player = (source.1.object_type == 400).then_some(source.1.id);
+    if game.move_shape_health(target.0, target.1) == Some(0) {
+        game.update_registered_skill_visual(instance, 10);
+        if let Some(player) = player { game.send_skill_system_info(player, b"GS0285"); }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if targets_self {
+        ranged_weapon_failure(game, instance, player, 10, RangedWeaponKind::Crossbow);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if stage == SkillStage::Begin {
+        if !prepare_ranged_weapon_player(game, instance, player, &properties, RangedWeaponKind::Crossbow) {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let target_y = sufferer.shape().get_tile_y().unwrap_or(i32::MIN);
+        let target_x = sufferer.shape().get_tile_x().unwrap_or(i32::MIN);
+        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let source_y = user.shape().get_tile_y().unwrap_or(i32::MIN);
+        let source_x = user.shape().get_tile_x().unwrap_or(i32::MIN);
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) {
+            user.shape_mut().set_direction(direction);
+        }
+        let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let path = game.skill_target_path(skill.lifecycle());
+        if !check_skill_path(game, instance, &properties, &path, player,
+            CastPathBlock::Named { target, message: b"GS0296" })
+        { return terminal(QueuedSkillExecutionState::Rejected); }
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        if let Some(skill) = game.registered_skill_mut(instance) { skill.lifecycle_mut().set_available(can_break != 0); }
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let Some(first_attack) = game.registered_skill(instance)
+        .and_then(|skill| skill.player_state::<ScorpionExecutionState>()).map(|state| state.first_attack)
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if !first_attack {
+        let first = properties.query_property(FIRST_TIME);
+        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+        let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if started.wrapping_add(first).wrapping_add(delay) <= runtime.now_milliseconds() {
+            game.update_registered_skill_visual(instance, 1);
+            attack(game, instance, source, target, false, runtime);
+            if let Some(state) = game.registered_skill_mut(instance)
+                .and_then(|skill| skill.player_state_mut::<ScorpionExecutionState>())
+            { state.first_attack = true; }
+            return terminal(QueuedSkillExecutionState::Pending);
+        }
+        if game.registered_skill(instance).and_then(|skill| skill.player_state::<ScorpionExecutionState>())
+            .is_none_or(|state| !state.first_attack)
+        { return terminal(QueuedSkillExecutionState::Pending); }
+    }
+    let Some(second_attack) = game.registered_skill(instance)
+        .and_then(|skill| skill.player_state::<ScorpionExecutionState>()).map(|state| state.second_attack)
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if !second_attack {
+        let second = properties.query_property(SECOND_TIME);
+        let first = properties.query_property(FIRST_TIME);
+        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+        let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if started.wrapping_add(second).wrapping_add(first).wrapping_add(delay) <= runtime.now_milliseconds() {
+            attack(game, instance, source, target, false, runtime);
+            if let Some(state) = game.registered_skill_mut(instance)
+                .and_then(|skill| skill.player_state_mut::<ScorpionExecutionState>())
+            { state.second_attack = true; }
+            return terminal(QueuedSkillExecutionState::Pending);
+        }
+    }
+    if game.registered_skill(instance).and_then(|skill| skill.player_state::<ScorpionExecutionState>())
+        .is_some_and(|state| state.first_attack && state.second_attack)
+    {
+        let third = properties.query_property(THIRD_TIME);
+        let second = properties.query_property(SECOND_TIME);
+        let first = properties.query_property(FIRST_TIME);
+        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+        let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if started.wrapping_add(third).wrapping_add(second).wrapping_add(first).wrapping_add(delay)
+            <= runtime.now_milliseconds()
+        {
+            attack(game, instance, source, target, true, runtime);
+            return terminal(QueuedSkillExecutionState::Completed);
+        }
+    }
+    terminal(QueuedSkillExecutionState::Pending)
+}
+
+pub(crate) fn execute_player_scorpion<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    let original_target = if game.registered_skill(instance).is_some_and(|skill| skill.player_dispatch().is_none()) {
+        dispatch.object_target().and_then(|target| {
+            original_user.and_then(|user| game.player_skill_begin_object(user.0, target))
+        })
+    } else { None };
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::Scorpion,
+        |game, instance, _, runtime| {
+            let target = if matches!(dispatch, PlayerSkillDispatch::Point { .. }) {
+                game.registered_skill(instance).and_then(|skill| resolve_skill_sufferer(game, skill.lifecycle()))
+            } else { original_target };
+            if !check_cast(game, instance, original_user, target, runtime) { return false; }
+            if let Some(state) = game.registered_skill_mut(instance)
+                .and_then(|skill| skill.player_state_mut::<ScorpionExecutionState>())
+            {
+                state.first_attack = false;
+                state.second_attack = false;
+                state.kernel.lifecycle_mut().set_available(true);
+            }
+            true
+        },
+        |dispatch, started| ScorpionExecutionState::begin(dispatch, started).into(), run_ai,
+    )
+}
+
+pub(crate) fn publish_scorpion_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) -> bool {
+    if skill.owner() != SkillOwner::CScorpion || skill.visual_effect().is_none_or(|effect|
+        effect.kind() != SkillVisualEffectKind::Scorpion || effect.is_ended())
+    { return true; }
+    let (region, identity) = skill.lifecycle().user();
+    let Some(user) = resolve_state_move_shape(game, region, identity) else { return true; };
+    let source = user.shape();
+    if matches!(mode, 2 | 4 | 7 | 10 | 11 | 13 | 14 | 15) {
+        if source.identity().object_type == 400 {
+            let mut message = CMessage::new(0x000b_fe01);
+            message.add_byte(0);
+            message.add_byte(mode as u8);
+            let _ = message.send_to_player(game.net_server(), source.identity().id);
+        }
+        return true;
+    }
+    let action = match mode { 0 => 1, 1 => 2, 3 => 3, _ => return true };
+    let target = if mode == 1 {
+        let Some((region, identity)) = resolve_skill_sufferer(game, skill.lifecycle()) else { return false; };
+        let Some(target) = resolve_state_move_shape(game, region, identity) else { return false; };
+        Some(target.shape())
+    } else { None };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(action);
+    message.add_long(skill.id() as i32);
+    message.add_short(skill.level() as i16);
+    message.add_long(source.identity().object_type);
+    message.add_long(source.identity().id);
+    if let Some(target) = target {
+        message.add_long(target.identity().object_type);
+        message.add_long(target.identity().id);
+        message.add_long(target.get_tile_x().unwrap_or(i32::MIN));
+        message.add_long(target.get_tile_y().unwrap_or(i32::MIN));
+        if let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) {
+            message.add_long(0);
+            message.add_ulong(properties.query_property(SECOND_TIME));
+            let third = properties.query_property(THIRD_TIME);
+            let second = properties.query_property(SECOND_TIME);
+            message.add_ulong(third.wrapping_add(second));
+        }
+    } else {
+        message.add_long(source.get_direction());
+    }
+    if source.is_assigned_to_server_region()
+        && let Some(region) = game.find_region(source.get_region_id())
+    {
+        let _ = game.send_game_shape_around(region.base(), source, None, &message);
+    }
+    true
 }

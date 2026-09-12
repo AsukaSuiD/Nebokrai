@@ -25,7 +25,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     AgilityFamily, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -67,6 +67,8 @@ impl RegisteredPlayerCastOwner {
                 | super::scopedarrowcast::EXPLOSIVE_ARROW_SKILL_ID
                 | super::scopedarrowcast::EXPLOSIVE_ARROW_2_SKILL_ID
                 | super::scopedarrowcast::EXPLOSIVE_ARROW_3_SKILL_ID => Self::ScopedArrow,
+            super::scorpion::SCORPION_SKILL_ID => Self::Scorpion,
+            super::boalock::BOA_LOCK_SKILL_ID => Self::BoaLock,
             _ => return None,
         })
     }
@@ -108,6 +110,8 @@ impl RegisteredPlayerCastOwner {
             Self::FallingStar => super::fallingstar::execute_player_falling_star::<Runtime>,
             Self::PoisonMoth => super::poisonmoth::execute_player_poison_moth::<Runtime>,
             Self::ScopedArrow => super::scopedarrowcast::execute_player_scoped_arrow::<Runtime>,
+            Self::Scorpion => super::scorpion::execute_player_scorpion::<Runtime>,
+            Self::BoaLock => super::boalock::execute_player_boa_lock::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

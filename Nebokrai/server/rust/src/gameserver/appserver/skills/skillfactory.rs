@@ -145,6 +145,8 @@ pub(crate) struct SkillEndPolicy {
     pub(crate) reset_phase: bool,
     /// None сохраняет available; Some задаёт безусловную concrete-запись.
     pub(crate) available: Option<bool>,
+    /// Scorpion восстанавливает CAN до GetUser/Move1, в том числе без payload.
+    pub(crate) available_before_movement: bool,
     pub(crate) effect: SkillEndEffect,
     /// Порядок освобождения существующих путей, а не создание пустого payload.
     pub(crate) path_order: SkillEndPathOrder,
@@ -155,6 +157,7 @@ impl SkillEndPolicy {
         movement: SkillEndMovement::None,
         reset_phase: false,
         available: None,
+        available_before_movement: false,
         effect: SkillEndEffect::None,
         path_order: SkillEndPathOrder::BeforeMovement,
     };
@@ -167,7 +170,10 @@ impl SkillEndPolicy {
     const USER_UNAVAILABLE: Self = Self { available: Some(false), ..Self::USER };
     const USER_PATHS_AFTER_MOVEMENT: Self = Self { path_order: SkillEndPathOrder::AfterMovement, ..Self::USER_RESET_PHASE };
     const RAGE: Self = Self { effect: SkillEndEffect::Rage, ..Self::USER };
-    const SCORPION: Self = Self { effect: SkillEndEffect::ScorpionOnlyZero, ..Self::USER_AVAILABLE };
+    const SCORPION: Self = Self {
+        reset_phase: true, available_before_movement: true,
+        effect: SkillEndEffect::ScorpionOnlyZero, ..Self::USER_AVAILABLE
+    };
     const STAR: Self = Self { effect: SkillEndEffect::Star, ..Self::USER };
     const BATTLE_FAIRY_BASE_MAGIC: Self = Self { effect: SkillEndEffect::BattleFairyBaseMagic, ..Self::COMMON };
     const BATTLE_FAIRY_STATE: Self = Self { effect: SkillEndEffect::BattleFairyState, ..Self::COMMON };
@@ -293,7 +299,7 @@ skill_owners! {
     CPoisonMoth: Attack, USER_RESET_PHASE, Weapon, EndOne => 0x0cf,
     CBloodRose: Attack, USER_RESET_PHASE, Weapon => 0x0d0,
     CScorpion: Attack, SCORPION, Weapon => 0x0d1,
-    CBoaLock: State, USER, Weapon => 0x0d2,
+    CBoaLock: State, USER_RESET_PHASE, Weapon => 0x0d2,
     CHeal: State, USER, Weapon, EndZero => 0x0d3,
     CMonsterTaming: Attack, USER, None => 0x0d4,
     CFallingStar: Summon, USER_RESET_PHASE, Weapon => 0x0d5,

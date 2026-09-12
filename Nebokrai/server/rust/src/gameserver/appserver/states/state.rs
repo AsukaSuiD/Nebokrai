@@ -852,7 +852,8 @@ state_callbacks! {
         },
         skills::boalockstate::end_boa_lock_state,
         skills::boalockstate::restart_boa_lock_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::GodBless(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
         |game, region, target, key, runtime| {

@@ -5652,12 +5652,6 @@ impl CPlayer {
         self.move_shape.take_spider_web_state()
     }
 
-    pub(crate) fn replace_knock_out_state(
-        &mut self,
-        state: super::skills::knockoutstate::KnockOutState,
-    ) -> Option<super::skills::knockoutstate::KnockOutState> {
-        self.move_shape.replace_knock_out_state(state)
-    }
 
 
 
@@ -5665,21 +5659,12 @@ impl CPlayer {
 
 
 
-    pub(crate) fn replace_boa_lock_state(&mut self, state: super::skills::boalockstate::BoaLockState) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.replace_boa_lock_state(state) }
-    pub(crate) fn take_expired_boa_lock_state(&mut self, key: super::moveshape::StateKey, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(key, now_ms) }
-    pub(crate) fn take_boa_lock_state(&mut self) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_boa_lock_state() }
 
     pub(crate) fn pillar_state(&self) -> Option<super::skills::pillarstate::PillarState> {
         self.move_shape.pillar_state()
     }
 
 
-
-    pub(crate) fn take_knock_out_state(
-        &mut self,
-    ) -> Option<super::skills::knockoutstate::KnockOutState> {
-        self.move_shape.take_knock_out_state()
-    }
 
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {
         self.move_shape.blind_state_order()

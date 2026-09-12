@@ -193,6 +193,13 @@ impl CGame {
     fn live_build_target_attackable_in(
         &self, owner: &ServerRegionOwner, source: ShapeIdentity, identity: ShapeIdentity,
     ) -> bool {
+        self.live_build_target_attackable_between(owner, owner, source, identity)
+    }
+
+    fn live_build_target_attackable_between(
+        &self, source_owner: &ServerRegionOwner, owner: &ServerRegionOwner,
+        source: ShapeIdentity, identity: ShapeIdentity,
+    ) -> bool {
         let Some(build) = owner.stationary_build(identity) else { return false; };
         if !build.move_shape().shape().is_assigned_to_server_region() { return false; }
         if owner.base().war_region_type == 3 {
@@ -265,7 +272,7 @@ impl CGame {
                                     || player.faction_id() != owner.base().owned_city_faction()
                             }
                         }),
-                        600 => owner.base().find_monster_by_id(source.id).is_some_and(|monster| {
+                        600 => source_owner.base().find_monster_by_id(source.id).is_some_and(|monster| {
                             monster.is_tamed() && monster.has_pet_ai()
                                 && self.find_player(monster.master_info().master_id).is_some_and(|master| {
                                     self.stationary_build_attackable_by_player_in(master.player_id(), owner, identity)
@@ -354,9 +361,16 @@ impl CGame {
     fn live_monster_target_attackable_in(
         &self, owner: &ServerRegionOwner, source_id: i32, target_id: i32,
     ) -> bool {
+        self.live_monster_target_attackable_between(owner, owner, source_id, target_id)
+    }
+
+    fn live_monster_target_attackable_between(
+        &self, source_owner: &ServerRegionOwner, owner: &ServerRegionOwner,
+        source_id: i32, target_id: i32,
+    ) -> bool {
         let Some(target) = owner.base().find_monster_by_id(target_id) else { return false; };
         if !target.move_shape().shape().is_assigned_to_server_region() { return false; }
-        let Some(source) = owner.base().find_monster_by_id(source_id) else { return false; };
+        let Some(source) = source_owner.base().find_monster_by_id(source_id) else { return false; };
         let source_property = source.base_property_key()
             .and_then(|key| self.find_monster_property_by_origin_name(key));
         let target_property = target.base_property_key()
@@ -406,8 +420,33 @@ impl CGame {
         // Только питомец делегирует оставшегося охранника своему хозяину.
         // Повозка при другом либо отсутствующем GetAI возвращает false.
         target_pet && target_master.is_none_or(|master| {
-            self.live_monster_attack_at_player_in(owner, source_id, master.player_id())
+            self.live_monster_attack_at_player_in(source_owner, source_id, master.player_id())
         })
+    }
+
+    /// BoaLock удерживает U/S через callbacks: их регионы могут различаться.
+    /// Региональная identity монстра разрешается у своего owner-а; правила
+    /// цели используют её регион, а глобальный CPlayer находится независимо.
+    pub(crate) fn live_skill_target_attackable_between(
+        &self, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
+    ) -> bool {
+        if source.1.object_type == MONSTER_TYPE && target.1.object_type == PLAYER_TYPE {
+            return self.find_region(source.0).is_some_and(|source_owner|
+                self.live_monster_attack_at_player_in(source_owner, source.1.id, target.1.id));
+        }
+        let Some(target_shape) = crate::gameserver::appserver::states::state::resolve_state_move_shape(
+            self, target.0, target.1,
+        ) else { return false; };
+        let Some(owner) = self.find_region(target_shape.shape().get_region_id()) else { return false; };
+        if source.1.object_type == MONSTER_TYPE && matches!(target.1.object_type, 1100 | 1200) {
+            return self.find_region(source.0).is_some_and(|source_owner|
+                self.live_build_target_attackable_between(source_owner, owner, source.1, target.1));
+        }
+        if source.1.object_type == MONSTER_TYPE && target.1.object_type == MONSTER_TYPE {
+            return self.find_region(source.0).is_some_and(|source_owner|
+                self.live_monster_target_attackable_between(source_owner, owner, source.1.id, target.1.id));
+        }
+        self.live_skill_target_attackable_in(owner, source.1, target.1)
     }
 
     pub(crate) fn live_skill_target_attackable(

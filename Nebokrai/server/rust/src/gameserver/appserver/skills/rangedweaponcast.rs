@@ -1,7 +1,8 @@
 //! Общие проверки и расход MP для совместимых лучных и арбалетных casts.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp,
 //! meteorarrowmass.cpp, rainarrow.cpp, lightingarrow.cpp, lightingarrow2.cpp,
-//! poisonmoth.cpp, bloodrose.cpp и explosivearrow{,2,3}.cpp.
+//! poisonmoth.cpp, bloodrose.cpp, explosivearrow{,2,3}.cpp, scorpion.cpp
+//! и boalock.cpp. Общие проверки пути и MP доступны также BoaLock без оружия.
 //! Check удерживает исходного U, читает reuse и свежий путь по политике навыка.
 //! Проверка самонацеливания, если она нужна, выполняется caller-ом раньше.
 //! Non-player проходит без Move0; игроку нужны категория 3/4, ненулевая MP-цена
@@ -11,6 +12,8 @@
 //! у игрового caller-а. ExplosiveArrow2/3 требуют лук, но сообщают GS0293
 //! при отсутствии оружия и GS0286 при самонацеливании. Различия категории
 //! и строк не дублируют механизм.
+//! Именованная ошибка препятствия читает имя захваченной caller-ом цели
+//! после visual15; путь при этом может использовать уже изменённую базовую S.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::skill_is_restored;
@@ -84,6 +87,43 @@ pub(super) enum ArrowCastPathRule {
     DistanceAndBlocks,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum CastPathBlock {
+    Ignore,
+    Generic,
+    Named { target: (i32, ShapeIdentity), message: &'static [u8] },
+}
+
+pub(super) fn check_skill_path(
+    game: &mut CGame, instance: RegisteredSkill, properties: &CSkillBaseProperties,
+    path: &[(i32, i32, u8)], player: Option<i32>, block: CastPathBlock,
+) -> bool {
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
+        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        if path.len() as u32 > maximum {
+            game.update_registered_skill_visual(instance, 11);
+            if let Some(player) = player { game.send_skill_system_info(player, b"GS0290"); }
+            return false;
+        }
+    }
+    if !matches!(block, CastPathBlock::Ignore) && path.iter().any(|cell| cell.2 == 2) {
+        game.update_registered_skill_visual(instance, 15);
+        if let Some(player) = player {
+            match block {
+                CastPathBlock::Generic => game.send_skill_system_info(player, b"GS0282"),
+                CastPathBlock::Named { target, message } => {
+                    if let Some(target) = resolve_state_move_shape(game, target.0, target.1) {
+                        game.send_skill_system_info_with_text(player, message, target.shape().base_object().get_name());
+                    }
+                }
+                CastPathBlock::Ignore => {}
+            }
+        }
+        return false;
+    }
+    true
+}
+
 pub(super) fn check_ranged_weapon_cast<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity),
     path_rule: ArrowCastPathRule, weapon: RangedWeaponKind, runtime: &mut Runtime,
@@ -100,24 +140,26 @@ pub(super) fn check_ranged_weapon_cast<Runtime: GameMainLoopRuntime>(
     }
     if path_rule != ArrowCastPathRule::None {
         let path = game.skill_target_path(skill.lifecycle());
-        if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
-            let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-            if path.len() as u32 > maximum {
-                ranged_weapon_failure(game, instance, player, 11, weapon);
-                return false;
-            }
-        }
-        if path_rule == ArrowCastPathRule::DistanceAndBlocks && path.iter().any(|cell| cell.2 == 2) {
-            ranged_weapon_failure(game, instance, player, 15, weapon);
-            return false;
-        }
+        let block = if path_rule == ArrowCastPathRule::DistanceAndBlocks {
+            CastPathBlock::Generic
+        } else { CastPathBlock::Ignore };
+        if !check_skill_path(game, instance, &properties, &path, player, block) { return false; }
     }
     let Some(player) = player else { return true; };
     if !check_weapon(game, instance, player, weapon) { return false; }
+    check_cast_mana(game, instance, source, &properties)
+}
+
+pub(super) fn check_cast_mana(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    properties: &CSkillBaseProperties,
+) -> bool {
+    if source.1.object_type != PLAYER_TYPE { return true; }
+    let player = source.1.id;
     if properties.query_property(USER_MP_LOSE) == 0 { return false; }
     let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
     if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
-        mana_failure(game, instance, player, &properties);
+        mana_failure(game, instance, player, properties);
         return false;
     }
     let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
@@ -125,9 +167,8 @@ pub(super) fn check_ranged_weapon_cast<Runtime: GameMainLoopRuntime>(
     true
 }
 
-pub(super) fn prepare_ranged_weapon_player(
+pub(super) fn spend_cast_mana(
     game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, properties: &CSkillBaseProperties,
-    weapon: RangedWeaponKind,
 ) -> bool {
     let Some(player) = player else { return true; };
     let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
@@ -139,5 +180,14 @@ pub(super) fn prepare_ranged_weapon_player(
     let Some(user) = game.find_player_mut(player) else { return false; };
     user.set_mana(remaining);
     game.publish_player_states(player);
+    true
+}
+
+pub(super) fn prepare_ranged_weapon_player(
+    game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, properties: &CSkillBaseProperties,
+    weapon: RangedWeaponKind,
+) -> bool {
+    let Some(player) = player else { return true; };
+    if !spend_cast_mana(game, instance, Some(player), properties) { return false; }
     check_weapon(game, instance, player, weapon)
 }

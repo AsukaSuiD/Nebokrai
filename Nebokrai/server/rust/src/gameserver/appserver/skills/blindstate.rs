@@ -1,5 +1,7 @@
-//! Общая блокировка движения и боя для Blind и состояний рывка.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/blindstate.cpp.
+//! Общая блокировка движения и боя для Blind и состояний рывка;
+//! BoaLock использует тот же lifecycle, но запрещает только движение.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/blindstate.cpp
+//! и boalockstate.cpp.
 //!
 //! Объектный Begin требует S; NULL U сохраняет timestamp. Visual Update(0)
 //! предшествует move/fight-lock и публикации нового экземпляра в общей арене.
@@ -9,11 +11,11 @@
 //!
 //! Строгий wrapping deadline действует и при нулевом сроке. Восьмибайтный
 //! ID/remaining codec читает часы перед remaining при Load и после ID при Save.
-//! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike/KnightCut. Для primary
-//! KnockOut/SpiderWeb/BossBlueQuake/KnightCut payload-адаптер сохраняет тот же Begin;
+//! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike/KnightCut/BoaLock. Для primary
+//! KnockOut/SpiderWeb/BossBlueQuake/KnightCut/BoaLock payload-адаптер сохраняет тот же Begin;
 //! caller выбирает append либо освобождённый прежний слот без второго хранилища.
 //! OnAction не объединён: Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
-//! Rush/Rush2/SpiderWeb/Strike ничего не делают.
+//! Rush/Rush2/SpiderWeb/Strike/BoaLock ничего не делают.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::{AppliedState, StateData, StateKey};
@@ -87,6 +89,7 @@ pub(crate) trait BlindStatePayload: AppliedState {
     fn begin_at(&mut self, now_ms: u32);
     fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32;
     fn install_record(&self) -> [u8; BLIND_STATE_BYTES];
+    fn blocks_fighting(&self) -> bool { true }
 }
 
 impl<const ID: u32> BlindStatePayload for BlindState<ID>
@@ -98,7 +101,7 @@ where BlindState<ID>: AppliedState {
 }
 
 fn has_blind_lifecycle(state: &StateData) -> bool {
-    state.is_blind() || matches!(state, StateData::Rush(_) | StateData::Rush2(_))
+    state.is_blind() || matches!(state, StateData::Rush(_) | StateData::Rush2(_) | StateData::BoaLock(_))
 }
 
 fn begin_visual_message(
@@ -170,7 +173,7 @@ pub(crate) fn begin_primary_blind_state_at<T: BlindStatePayload>(
     let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
     let target = resolve_state_move_shape_mut(game, sufferer.0, sufferer.1)?;
     target.set_moveable(false);
-    target.set_fightable(false);
+    if state.blocks_fighting() { target.set_fightable(false); }
     // После Begin(1)/Update(0) loop1 остаётся незавершённым. Общая арена
     // создаёт этот visual лишь после полного Begin, без повторного пакета.
     let record = state.install_record();
@@ -195,9 +198,10 @@ pub(crate) fn restart_blind_state(
     _changing_region: bool,
     now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    if !resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state_data(key)).is_some_and(has_blind_lifecycle)
-    { return false; }
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_data(key)).filter(|state| has_blind_lifecycle(state))
+    else { return false; };
+    let blocks_fighting = !matches!(state, StateData::BoaLock(_));
     if !begin_base_applied_state(game, region_id, holder, key)
         || !begin_applied_state_visual(game, region_id, holder, key, 1)
     { return false; }
@@ -213,7 +217,7 @@ pub(crate) fn restart_blind_state(
     // другого участника после доставки. Для restart этим параметром был holder.
     if let Some(target) = resolve_state_move_shape_mut(game, region_id, holder) {
         target.set_moveable(false);
-        target.set_fightable(false);
+        if blocks_fighting { target.set_fightable(false); }
     }
     true
 }
@@ -232,6 +236,7 @@ pub(crate) fn update_blind_state(
             StateData::Rush(state) => state.expired(now_ms),
             StateData::Rush2(state) => state.expired(now_ms),
             StateData::KnockOut(state) => state.expired(now_ms),
+            StateData::BoaLock(state) => state.expired(now_ms),
             StateData::KnightCut(state) => state.expired(now_ms),
             StateData::SpiderWeb(state) => state.expired(now_ms),
             StateData::Seal(state) => state.expired(now_ms),
@@ -247,14 +252,15 @@ pub(crate) fn end_blind_state(
     holder: ShapeIdentity,
     key: StateKey,
 ) -> bool {
-    if !resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state_data(key)).is_some_and(has_blind_lifecycle)
-    { return false; }
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_data(key)).filter(|state| has_blind_lifecycle(state))
+    else { return false; };
+    let blocks_fighting = !matches!(state, StateData::BoaLock(_));
     update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
     let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
     else { return false; };
     let Some(shape) = resolve_state_move_shape_mut(game, target_region, target) else { return false; };
-    shape.set_fightable(true);
+    if blocks_fighting { shape.set_fightable(true); }
     shape.set_moveable(true);
     remove_applied_state_from(game, region_id, holder, key, (target_region, target), BLIND_STATE_BYTES)
 }

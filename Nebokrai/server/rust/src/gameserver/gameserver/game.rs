@@ -728,7 +728,6 @@ mod rainarrow;
 mod thunderblow;
 mod thunderslash;
 mod rush;
-mod boalock;
 mod bossbluequake;
 mod seal;
 mod thunder;
@@ -1072,14 +1071,6 @@ use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     calculate_owned_heartless_arrow_attack,
 };
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
-use crate::gameserver::appserver::skills::scorpion::{
-    cancel_player_scorpion, complete_player_scorpion, execute_player_scorpion,
-    is_scorpion_dispatch, SCORPION_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::boalock::{
-    cancel_player_boa_lock, complete_player_boa_lock, execute_player_boa_lock,
-    is_boa_lock_dispatch, BOA_LOCK_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::strike::{
     cancel_player_strike, complete_player_strike, execute_player_strike, is_strike_dispatch,
     STRIKE_SKILL_ID,
@@ -39069,18 +39060,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                SCORPION_SKILL_ID => Some(complete_player_scorpion(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                BOA_LOCK_SKILL_ID => Some(complete_player_boa_lock(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 STRIKE_SKILL_ID => Some(complete_player_strike(
                     self,
                     player_id,
@@ -39418,12 +39397,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            SCORPION_SKILL_ID => {
-                cancel_player_scorpion(self, player_id, &mut player_ai, runtime)
-            }
-            BOA_LOCK_SKILL_ID => {
-                cancel_player_boa_lock(self, player_id, &mut player_ai, runtime)
-            }
             STRIKE_SKILL_ID => {
                 cancel_player_strike(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
@@ -39755,8 +39728,6 @@ impl CGame {
             _ if is_kerosene_dispatch(dispatch) => execute_player_kerosene,
             _ if is_ignition_dispatch(dispatch) => execute_player_ignition,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
-            _ if is_scorpion_dispatch(dispatch) => execute_player_scorpion,
-            _ if is_boa_lock_dispatch(dispatch) => execute_player_boa_lock,
             _ if is_strike_dispatch(dispatch) => execute_player_strike,
             _ if is_daub_poison_dispatch(dispatch) => execute_player_daub_poison,
             _ if is_yaksha_slash_dispatch(dispatch) => execute_player_yaksha_slash,

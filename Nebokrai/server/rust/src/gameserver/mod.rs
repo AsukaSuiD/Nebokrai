@@ -318,6 +318,7 @@ pub(crate) mod appserver {
         pub(crate) mod poisonmoth;
         pub(crate) mod scorpion;
         pub(crate) mod boalock;
+        pub(crate) mod boalockattack;
         pub(crate) mod boalockstate;
         pub(crate) mod fallingstar;
         pub(crate) mod strike;

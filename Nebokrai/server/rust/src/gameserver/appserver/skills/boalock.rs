@@ -1,92 +1,295 @@
-//! Управляющий навык `CBoaLock` и его полёт (`0xD2`).
+//! Управляющий выстрел BoaLock (0xD2).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/boalock.cpp.
+//! Общий Begin сохраняет исходные U/S для объектной проверки; координатная
+//! перегрузка разрешает S после loop1-visual. Check отклоняет self до свойств,
+//! затем требует S, reuse, допустимый путь и ненулевую MP-цену. При отказе
+//! Begin добавляет visual2 перед End(0). Требования к оружию здесь нет.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/boalock.cpp`. До расхода MP проверяются цель, дальность и
-//! исходный путь; после задержки путь к живой цели строится снова. При
-//! попадании длительность уменьшается на 25% за каждый уровень цели сверх
-//! `уровень владельца + 5`, затем в исходном порядке заменяются связывание и
-//! оглушение, после чего выполняется пустая контактная атака с каноническим
-//! default skill-id `0x7fffffff` из конструктора `tagAttackInformation`.
-//! Состояния принадлежат `CanonicalStateStorage`; `CGame` только координирует
-//! владельцев.
-//! Унаследованный `CSkill::End(true)` фиксирует cooldown после применения;
-//! `End(false)` не откатывает уже установленные состояния и контакт.
-//! Коэффициент сокращения времени сохраняется в `f32`, после чего unsigned
-//! базовая длительность умножается в x87 и усекается к нулю. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`; задержка остаётся elapsed.
-//! Выпуск устанавливает общий prepared-флаг после эффекта 1
-//! (0x0059173E). Последующий AI продолжает тот же
-//! экземпляр в фоне; повторный Begin и отдельное хранилище не создаются.
-//! Успешный Begin возвращает Begun после инициализации исполнения. Первый
-//! AI выполняет повторные проверки и эффекты отдельно, в том же Run после
-//! постановки Attack; раннее время Begin сохраняется общим kernel.
+//! Каждый AI сохраняет таблицу свойств и разрешает U/S до callbacks. Смерть S
+//! отклоняет выстрел; первый AI списывает MP→OnChangeStates→CAN и читает
+//! координаты в порядке S.Y/X→U.Y/X перед направлением/visual0. Путь выпуска
+//! строится заново по живой базе, но имя в ошибке относится к захваченному S.
+//!
+//! Две проверки абсолютного unsigned start+delay независимы. Срок контакта
+//! не включает missile-time: последний служит только пакету выпуска. Если
+//! первые часы ещё не допускают выпуск, вторые всё равно могут допустить
+//! контакт. Финальная проверка зависит от condition, а не attacking/prepared.
+//! Путь локален; единственный payload хранит лишь kernel, attacking и duration.
+//!
+//! Перед контактом проверяются текущий регион захваченного S и его допуск.
+//! boalockattack сохраняет свежие свойства/уровни, порядок Lock→KnockOut и
+//! пустой raw OnBeenAttacked; при NULL properties отменяет также контакт.
+//! End сбрасывает фазу, attacking/time, затем свежий U Move1 и общий хвост.
+//! Категория конструктора State не меняет совместимый базовый Begin/End.
+//! Vec и зарегистрированный kernel заменяют native контейнеры и указатели.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
-use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::boalockstate::BoaLockState;
-use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::knockoutstate::KnockOutState;
-use super::poisonmoth::{PLAYER_TYPE, master_info, target_level};
-use super::scorpion::{target_name, target_snapshot};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use super::basemagic::{
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
+};
+use super::boalockattack::apply_boa_lock_attack;
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::playercast::execute_registered_player_cast;
+use super::rangedweaponcast::{
+    CastPathBlock, check_cast_mana, check_skill_path, spend_cast_mana, terminal,
+};
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
-use crate::gameserver::appserver::states::attackpower::AttackInformation;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
-pub(crate) const BOA_LOCK_SKILL_ID: u32 = 0xd2;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const USER_MP_LOSE: u32 = 2;
-const TARGET_MAX_DISTANCE: u32 = 5_003;
+pub(crate) const BOA_LOCK_SKILL_ID: u32 = 0xD2;
+const PLAYER_TYPE: i32 = 400;
 const MISSILE_FLYING_TIME: u32 = 10_008;
-const STATE_PERSIST_TIME: u32 = 10_002;
-const DEFAULT_CONTACT_SKILL_ID: u32 = 0x7fff_ffff;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BoaLockExecutionState { kernel: SkillExecutionKernel<PlayerSkillDispatch>, condition_checked: bool, missile_time: u32 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BoaLockExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    attacking_started: bool,
+    missile_flying_time: u32,
+}
+
 impl BoaLockExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, now: u32) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, now), condition_checked: false, missile_time: 0 } }
+    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started),
+            attacking_started: false,
+            missile_flying_time: 0,
+        }
+    }
+
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
-}
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
-pub(crate) fn is_boa_lock_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: BOA_LOCK_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: BOA_LOCK_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: BOA_LOCK_SKILL_ID, .. }) }
-fn target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
-fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
-fn finish_player_boa_lock<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _ai: &mut CPlayerAI, runtime: &mut Runtime) {
-    restore_player_movement(game, player_id);
-    finish_state_skill(game, player_id, BOA_LOCK_SKILL_ID, runtime);
-}
-fn abort_player_boa_lock(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
-pub(crate) fn complete_player_boa_lock<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_boa_lock(game, player_id, ai, runtime);
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
-}
-pub(crate) fn cancel_player_boa_lock<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false };
-    abort_player_boa_lock(game, player_id);
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
-}
-fn send_failure(game: &CGame, player_id: i32, code: u8, mp: u32, text: Option<&[u8]>) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code); match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp), 10 => game.send_skill_system_info(player_id, text.unwrap_or(b"GS0294")), 0x0b => game.send_skill_system_info(player_id, b"GS0290"), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), _ => {} } }
-fn send_path_failure(game: &CGame, player_id: i32, string_id: &[u8], name: &[u8]) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 0x0f); game.send_skill_system_info_with_text(player_id, string_id, name); }
-fn send_start(game: &mut CGame, player_id: i32, level: i32) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(1); message.add_long(BOA_LOCK_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message); }
-fn send_fire(game: &mut CGame, player_id: i32, level: i32, identity: ShapeIdentity, position: (i32, i32), missile_time: u32) { let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(2); message.add_long(BOA_LOCK_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(position.0); message.add_long(position.1); message.add_ulong(missile_time); let _ = game.send_player_shape_around(player_id, None, &message); }
-fn reject_begin(game: &mut CGame, player_id: i32, code: Option<(u8, u32, Option<&[u8]>)>) -> QueuedSkillExecutionOutcome { if let Some((code, mp, text)) = code { send_failure(game, player_id, code, mp, text); } send_failure(game, player_id, 2, 0, None); abort_player_boa_lock(game, player_id); terminal(QueuedSkillExecutionState::Rejected) }
-fn reject_runtime(game: &mut CGame, player_id: i32, code: Option<(u8, u32, Option<&[u8]>)>) -> QueuedSkillExecutionOutcome { if let Some((code, mp, text)) = code { send_failure(game, player_id, code, mp, text); } abort_player_boa_lock(game, player_id); terminal(QueuedSkillExecutionState::Rejected) }
-fn contact(player: &CPlayer) -> AttackInformation { let master = master_info(player); AttackInformation { skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: PLAYER_TYPE, attacker_id: player.player_id(), attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: Vec::new() } }
-fn adjusted_time(source: u8, target: u8, base: u32) -> u32 { if u32::from(source).wrapping_add(5) >= u32::from(target) { return base } let delta = u32::from(target).wrapping_sub(u32::from(source)).wrapping_sub(5) as f32; let factor = (1.0 - delta * 0.25).max(0.0); truncate_original(f64::from(base) * f64::from(factor)) as u32 }
 
-pub(crate) fn execute_player_boa_lock<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    if !is_boa_lock_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) } let Some((region_id, source_x, source_y, level, source_level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(BOA_LOCK_SKILL_ID, game.skill_factory()), player.level(), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(BOA_LOCK_SKILL_ID, level) else { return if game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).is_none() { reject_begin(game, player_id, None) } else { reject_runtime(game, player_id, None) } }; let mp = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let max_distance = properties.query_property(TARGET_MAX_DISTANCE); let missile_per_cell = properties.query_property(MISSILE_FLYING_TIME); let persist = properties.query_property(STATE_PERSIST_TIME); let _can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).is_none() { let now = runtime.now_milliseconds(); let Some(identity) = target(dispatch) else { return reject_begin(game, player_id, Some((10, mp, Some(b"GS0294")))) }; if identity.object_type == PLAYER_TYPE && identity.id == player_id { return reject_begin(game, player_id, Some((10, mp, Some(b"GS0286")))) } if !skill_is_restored(game.player_skill_last_used_ms(player_id, BOA_LOCK_SKILL_ID), reuse, now) { return reject_begin(game, player_id, Some((0x0d, mp, None))) } let Some((x, y, _)) = target_snapshot(game, region_id, identity) else { return reject_begin(game, player_id, Some((10, mp, Some(b"GS0294")))) }; let path = game.base_magic_path(region_id, source_x, source_y, x, y, None); if max_distance != 0 && path.len() as u32 > max_distance { return reject_begin(game, player_id, Some((0x0b, mp, None))) } if path.iter().any(|cell| cell.2 == 2) { let name = target_name(game, region_id, identity).to_vec(); send_path_failure(game, player_id, b"GS0295", &name); send_failure(game, player_id, 2, 0, None); abort_player_boa_lock(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if mp != 0 && (initial_mana.wrapping_sub(mp) as i32) < 0 { return reject_begin(game, player_id, Some((7, mp, None))) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(BOA_LOCK_SKILL_ID)); } game.begin_player_skill_execution(player_id, BoaLockExecutionState::begin(dispatch, now)); return terminal(QueuedSkillExecutionState::Begun); }
-    else if game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let identity = target(dispatch).expect("активный BoaLock сохраняет объектную цель"); let Some((target_x, target_y, dead)) = target_snapshot(game, region_id, identity) else { return reject_runtime(game, player_id, None) }; if dead { return reject_runtime(game, player_id, Some((10, mp, Some(b"GS0285")))) }
-    if game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).is_some_and(|state| !state.condition_checked) { let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp) as i32) < 0 { return reject_runtime(game, player_id, Some((7, mp, None))) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp)); player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_start(game, player_id, level); if let Some(state) = game.player_skill_state_mut::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID) { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); } }
-    let started = game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default(); if !game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).is_some_and(|state| state.kernel().is_prepared()) { if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } let Some((x, y, _)) = target_snapshot(game, region_id, identity) else { return reject_runtime(game, player_id, None) }; let path = game.base_magic_path(region_id, source_x, source_y, x, y, None); if max_distance != 0 && path.len() as u32 > max_distance { return reject_runtime(game, player_id, Some((0x0b, mp, None))) } if path.iter().any(|cell| cell.2 == 2) { let name = target_name(game, region_id, identity).to_vec(); send_path_failure(game, player_id, b"GS0296", &name); abort_player_boa_lock(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let missile_time = missile_per_cell.wrapping_mul(path.len() as u32); send_fire(game, player_id, level, identity, (x, y), missile_time); if let Some(state) = game.player_skill_state_mut::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID) { state.kernel_mut().mark_prepared(); state.missile_time = missile_time; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); } }
-    let missile_time = game.player_skill_state::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID).map_or(0, |state| state.missile_time); if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(missile_time)) { return terminal(QueuedSkillExecutionState::Pending) } let Some(target_level) = target_level(game, region_id, identity) else { finish_player_boa_lock(game, player_id, player_ai, runtime); return terminal(QueuedSkillExecutionState::Completed) }; let master = game.find_player(player_id).map(master_info); if let Some(master) = master && game.owned_player_skill_target_attackable(master, identity, region_id) { let keep = adjusted_time(source_level, target_level, persist); if keep != 0 { let now = runtime.now_milliseconds(); let lock = (target_level < source_level).then_some(BoaLockState::new(now, keep)); let _ = game.apply_boa_lock_control(region_id, identity, lock, KnockOutState::new(now, keep), now); } if let Some(contact) = game.find_player(player_id).map(contact) { game.apply_owned_skill_contact(master, identity, region_id, contact, runtime); } } if let Some(state) = game.player_skill_state_mut::<BoaLockExecutionState>(player_id, BOA_LOCK_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_boa_lock(game, player_id, player_ai, runtime); terminal(QueuedSkillExecutionState::Completed)
+    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
+        self.attacking_started = false;
+        self.missile_flying_time = 0;
+        true
+    }
+}
+
+fn failure(
+    game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, mode: u32, text: &[u8],
+) {
+    game.update_registered_skill_visual(instance, mode);
+    if let Some(player) = player { game.send_skill_system_info(player, text); }
+}
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
+    original_target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
+) -> bool {
+    let Some(user) = original_user else { return false; };
+    let Some(source) = resolve_state_move_shape(game, user.0, user.1) else { return false; };
+    let target = original_target.and_then(|(region, identity)| resolve_state_move_shape(game, region, identity));
+    let player = (source.shape().identity().object_type == PLAYER_TYPE).then_some(source.shape().identity().id);
+    if target.is_some_and(|target| std::ptr::eq(source, target)) {
+        failure(game, instance, player, 10, b"GS0286");
+        return false;
+    }
+    let target = target.map(|target| (target.shape().get_region_id(), target.shape().identity()));
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let Some(target) = target else {
+        failure(game, instance, player, 10, b"GS0294");
+        return false;
+    };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        failure(game, instance, player, 13, b"GS0278");
+        return false;
+    }
+    let path = game.skill_target_path(skill.lifecycle());
+    if !check_skill_path(
+        game, instance, &properties, &path, player,
+        CastPathBlock::Named { target, message: b"GS0295" },
+    ) { return false; }
+    check_cast_mana(game, instance, user, &properties)
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let (region, identity) = skill.lifecycle().user();
+    let user = resolve_state_move_shape(game, region, identity)
+        .map(|source| (source.shape().get_region_id(), source.shape().identity()));
+    let target = resolve_skill_sufferer(game, skill.lifecycle());
+    let (Some(user), Some(target)) = (user, target) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let player = (user.1.object_type == PLAYER_TYPE).then_some(user.1.id);
+    if game.move_shape_health(target.0, target.1) == Some(0) {
+        failure(game, instance, player, 10, b"GS0285");
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if stage == SkillStage::Begin {
+        if !spend_cast_mana(game, instance, player, &properties) {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let target_y = sufferer.shape().get_tile_y().unwrap_or(i32::MIN);
+        let target_x = sufferer.shape().get_tile_x().unwrap_or(i32::MIN);
+        let Some(source) = resolve_state_move_shape(game, user.0, user.1) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let source_y = source.shape().get_tile_y().unwrap_or(i32::MIN);
+        let source_x = source.shape().get_tile_x().unwrap_or(i32::MIN);
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) {
+            source.shape_mut().set_direction(direction);
+        }
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    if game.registered_skill(instance).and_then(|skill| skill.execution_stage())
+        .is_none_or(|stage| matches!(stage, SkillStage::Idle | SkillStage::Begin))
+    { return terminal(QueuedSkillExecutionState::Pending); }
+    let Some(attacking) = game.registered_skill(instance)
+        .and_then(|skill| skill.player_state::<BoaLockExecutionState>())
+        .map(|state| state.attacking_started)
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if !attacking {
+        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+        let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if runtime.now_milliseconds() >= started.wrapping_add(delay) {
+            if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) { source.set_moveable(true); }
+            let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let path = game.skill_target_path(skill.lifecycle());
+            if !check_skill_path(
+                game, instance, &properties, &path, player,
+                CastPathBlock::Named { target, message: b"GS0296" },
+            ) { return terminal(QueuedSkillExecutionState::Rejected); }
+            let duration = properties.query_property(MISSILE_FLYING_TIME).wrapping_mul(path.len() as u32);
+            if let Some(state) = game.registered_skill_mut(instance)
+                .and_then(|skill| skill.player_state_mut::<BoaLockExecutionState>())
+            { state.missile_flying_time = duration; }
+            game.update_registered_skill_visual(instance, 1);
+            if let Some(state) = game.registered_skill_mut(instance)
+                .and_then(|skill| skill.player_state_mut::<BoaLockExecutionState>())
+            {
+                state.attacking_started = true;
+                state.kernel.lifecycle_mut().mark_prepared();
+                let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate);
+                let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack);
+            }
+        }
+    }
+    // Native повторяет срок даже без выпуска: missile-time не входит в него.
+    if game.registered_skill(instance).and_then(|skill| skill.execution_stage())
+        .is_none_or(|stage| matches!(stage, SkillStage::Idle | SkillStage::Begin))
+    { return terminal(QueuedSkillExecutionState::Pending); }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    if let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1)
+        && sufferer.shape().is_assigned_to_server_region()
+    {
+        let region = sufferer.shape().get_region_id();
+        if game.find_region(region).is_some()
+            && game.live_skill_target_attackable_between(user, target)
+        {
+            apply_boa_lock_attack(game, instance, user, target, runtime);
+        }
+    }
+    terminal(QueuedSkillExecutionState::Completed)
+}
+
+pub(crate) fn execute_player_boa_lock<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    let original_target = if game.registered_skill(instance).is_some_and(|skill| skill.player_dispatch().is_none()) {
+        dispatch.object_target().and_then(|target|
+            original_user.and_then(|source| game.player_skill_begin_object(source.0, target)))
+    } else { None };
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::BoaLock,
+        |game, instance, _, runtime| {
+            let target = if matches!(dispatch, PlayerSkillDispatch::Point { .. }) {
+                game.registered_skill(instance).and_then(|skill| resolve_skill_sufferer(game, skill.lifecycle()))
+            } else { original_target };
+            let accepted = check_cast(game, instance, original_user, target, runtime);
+            if !accepted { game.update_registered_skill_visual(instance, 2); }
+            accepted
+        },
+        |dispatch, started| BoaLockExecutionState::begin(dispatch, started).into(), run_ai,
+    )
+}
+
+pub(crate) fn publish_boa_lock_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    if skill.id() != BOA_LOCK_SKILL_ID || skill.visual_effect().is_none_or(|effect|
+        effect.kind() != SkillVisualEffectKind::BoaLock || effect.is_ended())
+    { return; }
+    let (region, identity) = skill.lifecycle().user();
+    let Some(user) = resolve_state_move_shape(game, region, identity) else { return; };
+    let source = user.shape();
+    if matches!(mode, 2 | 7 | 10 | 11 | 13 | 15) {
+        if source.identity().object_type == PLAYER_TYPE {
+            let mut message = CMessage::new(0x000b_fe01);
+            message.add_byte(0);
+            message.add_byte(mode as u8);
+            let _ = message.send_to_player(game.net_server(), source.identity().id);
+        }
+        return;
+    }
+    let target = match mode {
+        0 => None,
+        1 => {
+            let Some((region, identity)) = resolve_skill_sufferer(game, skill.lifecycle()) else { return; };
+            let Some(target) = resolve_state_move_shape(game, region, identity) else { return; };
+            Some(target.shape())
+        }
+        _ => return,
+    };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(if mode == 0 { 1 } else { 2 });
+    message.add_long(skill.id() as i32);
+    message.add_short(skill.level() as i16);
+    message.add_long(source.identity().object_type);
+    message.add_long(source.identity().id);
+    if let Some(target) = target {
+        message.add_long(target.identity().object_type);
+        message.add_long(target.identity().id);
+        message.add_long(target.get_tile_x().unwrap_or(i32::MIN));
+        message.add_long(target.get_tile_y().unwrap_or(i32::MIN));
+        let Some(state) = skill.player_state::<BoaLockExecutionState>() else { return; };
+        message.add_ulong(state.missile_flying_time);
+    } else {
+        message.add_long(source.get_direction());
+    }
+    if source.is_assigned_to_server_region()
+        && let Some(region) = game.find_region(source.get_region_id())
+    {
+        let _ = game.send_game_shape_around(region.base(), source, None, &message);
+    }
 }

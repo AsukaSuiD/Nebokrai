@@ -346,6 +346,13 @@ impl CGame {
                 crate::gameserver::appserver::skills::arrowcastvisual::publish_arrow_cast_visual(self, skill, mode),
             SkillVisualEffectKind::CrossbowCast =>
                 crate::gameserver::appserver::skills::crossbowcastvisual::publish_crossbow_cast_visual(self, skill, mode),
+            SkillVisualEffectKind::Scorpion => {
+                if !crate::gameserver::appserver::skills::scorpion::publish_scorpion_visual(self, skill, mode) {
+                    return;
+                }
+            }
+            SkillVisualEffectKind::BoaLock =>
+                crate::gameserver::appserver::skills::boalock::publish_boa_lock_visual(self, skill, mode),
             SkillVisualEffectKind::Kerosene =>
                 crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {
@@ -529,6 +536,9 @@ impl CGame {
         if policy.path_order == SkillEndPathOrder::BeforeMovement {
             self.registered_skill_mut(address)?.clear_end_paths();
         }
+        if policy.available_before_movement && let Some(available) = policy.available {
+            self.registered_skill_mut(address)?.lifecycle_mut().set_available(available);
+        }
         let movement_target = match policy.movement {
             SkillEndMovement::None => None,
             SkillEndMovement::User => self.registered_skill_user(address),
@@ -543,7 +553,7 @@ impl CGame {
         if policy.path_order == SkillEndPathOrder::AfterMovement {
             self.registered_skill_mut(address)?.clear_end_paths();
         }
-        if let Some(available) = policy.available {
+        if !policy.available_before_movement && let Some(available) = policy.available {
             self.registered_skill_mut(address)?.lifecycle_mut().set_available(available);
         }
         self.prepare_registered_skill_end_effect(address, policy.effect, argument)?;

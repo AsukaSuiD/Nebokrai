@@ -13,15 +13,15 @@
 //! Begin (0x005F5020/0x005F5100) сохранён отдельно от объектного пути.
 //! Mosou и KnockOut заменяют первый одноимённый объект через полный End,
 //! destructor и объектный Begin, публикуя новый экземпляр в прежней позиции.
+//! BoaLock использует тот же Begin, но снимает первый ID 0x73 и добавляет
+//! новый KnockOut в конец; эта отдельная политика остаётся у boalockattack.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, timed_client_state_time,
 };
-use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::gameserver::game::CGame;
 use super::sealstate::SEAL_STATE_ID;
 use super::blindstate::BLIND_STATE_ID;
 use super::knightcutstate::KNIGHT_CUT_STATE_ID;
@@ -71,95 +71,6 @@ pub(crate) fn replace_knock_out_state(
     super::blindstate::replace_primary_blind_state(game, source, target, state, now)
 }
 
-#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
-pub(crate) fn send_knock_out_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KnockOutState, begin: bool, now_milliseconds: impl FnMut() -> u32) {
-    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_milliseconds)); message.add_long(0); }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
-}
-
-fn send_owned_monster_knock_out_state_visual(
-    game: &CGame,
-    region: &CServerRegion,
-    shape: &crate::gameserver::appserver::shape::CShape,
-    state: KnockOutState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let identity = shape.identity();
-    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_milliseconds)); message.add_long(0); }
-    let _ = game.send_game_shape_around(region, shape, None, &message);
-}
-
-pub(crate) fn replace_player_knock_out_state(
-    game: &mut CGame,
-    player_id: i32,
-    state: KnockOutState,
-    now_ms: u32,
-) -> bool {
-    let installed = game.find_player_mut(player_id).and_then(|player| {
-        let region_id = player.server_region_id()?;
-        let identity = player.shape().identity();
-        let tile_x = player.shape().get_tile_x().ok()?;
-        let tile_y = player.shape().get_tile_y().ok()?;
-        let old = player.replace_knock_out_state(state);
-        if old.is_some() {
-            player.set_skill_fightable(true);
-            player.set_skill_moveable(true);
-        }
-        player.set_skill_moveable(false);
-        player.set_skill_fightable(false);
-        Some((old, region_id, identity, tile_x, tile_y))
-    });
-    let Some((old, region_id, identity, tile_x, tile_y)) = installed else {
-        return false;
-    };
-    if let Some(old) = old {
-        send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, old, false, || now_ms);
-    }
-    send_knock_out_state_visual(
-        game, region_id, identity, tile_x, tile_y, state, true, game_tick_milliseconds,
-    );
-    let _ = game.publish_player_states(player_id);
-    true
-}
-
-pub(crate) fn replace_monster_knock_out_state(
-    game: &mut CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    state: KnockOutState,
-    now_ms: u32,
-) -> bool {
-    let installed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let shape = monster.move_shape().shape().clone();
-        let old = monster.move_shape_mut().replace_knock_out_state(state);
-        if old.is_some() {
-            monster.move_shape_mut().set_fightable(true);
-            monster.move_shape_mut().set_moveable(true);
-        }
-        monster.move_shape_mut().set_moveable(false);
-        monster.move_shape_mut().set_fightable(false);
-        Some((old, shape))
-    });
-    let Some((old, shape)) = installed else {
-        return false;
-    };
-    if let Some(old) = old {
-        send_owned_monster_knock_out_state_visual(game, region, &shape, old, false, || now_ms);
-    }
-    send_owned_monster_knock_out_state_visual(
-        game, region, &shape, state, true, game_tick_milliseconds,
-    );
-    true
-}
 
 pub(crate) fn finish_player_knock_out_state_on_defense(game: &mut CGame, player_id: i32, _now_ms: u32) -> bool {
     let context = game.find_player(player_id).and_then(|player| {

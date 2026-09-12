@@ -305,12 +305,8 @@ use crate::gameserver::appserver::skills::lifeshieldstate::LIFE_SHIELD_STATE_BYT
 use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::manashieldstate::MANA_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::promotionstate::PROMOTION_STATE_BYTES;
-use crate::gameserver::appserver::skills::knockoutstate::{
-    KNOCK_OUT_STATE_BYTES, KnockOutState,
-};
-use crate::gameserver::appserver::skills::boalockstate::{
-    BOA_LOCK_STATE_BYTES, BoaLockState,
-};
+use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
+use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
 use crate::gameserver::appserver::skills::blindstate::BlindState;
 use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
@@ -2537,50 +2533,19 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn replace_knock_out_state(&mut self, state: KnockOutState) -> Option<KnockOutState> {
-        let previous = self.state_entries.first_key::<KnockOutState>()
-            .and_then(|key| self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
 
 
 
 
 
 
-    pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> {
-        let previous = self.state_entries.first_key::<BoaLockState>()
-            .and_then(|key| self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
 
 
 
-    pub(crate) fn take_expired_boa_lock_state(&mut self, key: StateKey, now_ms: u32) -> Option<BoaLockState> {
-        self.applied_state::<BoaLockState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES)?;
-        Some(state)
-    }
-
-    pub(crate) fn take_boa_lock_state(&mut self) -> Option<BoaLockState> {
-        let key = self.state_entries.first_key::<BoaLockState>()?;
-        let state = self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.state_entries.first::<PillarState>().copied() }
 
 
-
-    pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
-        let key = self.state_entries.first_key::<KnockOutState>()?;
-        let state = self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
         self.state_entries.iter_data().filter(|state| state.is_curable())

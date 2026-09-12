@@ -21,6 +21,8 @@
 //! ловкости; её сохранённый знаковый коэффициент и яд остаются у формы.
 //! PoisonMoth использует сырую ширину, BloodRose дополнительно читает свою
 //! добавку после физического урона, непосредственно перед живым ELEMENT.
+//! Первые два удара Scorpion сохраняют живой weapon modifier без запроса
+//! skill factor; третий использует обычный WeaponUsage. RP остаётся у caller-а.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -45,6 +47,7 @@ pub(super) enum PlayerWeaponRoll {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PlayerWeaponDamageFactor {
     Unit,
+    WeaponOnly,
     WeaponUsage(u32),
 }
 
@@ -113,7 +116,7 @@ fn fill_player_weapon_attack(
     attack.damage_modifier = 0;
     attack.damage_factor = match factor {
         PlayerWeaponDamageFactor::Unit => 1.0,
-        PlayerWeaponDamageFactor::WeaponUsage(usage) => {
+        PlayerWeaponDamageFactor::WeaponOnly | PlayerWeaponDamageFactor::WeaponUsage(_) => {
             let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
             let weapon_factor = if source.1.object_type == 400 {
                 let Some(player) = game.find_player(source.1.id) else { return; };
@@ -124,8 +127,13 @@ fn fill_player_weapon_attack(
                 if resolve_state_move_shape(game, source.0, source.1).is_none() { return; }
                 1.0
             };
-            let damage_factor = properties.query_property(usage);
-            (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32
+            match factor {
+                PlayerWeaponDamageFactor::WeaponUsage(usage) => {
+                    let damage_factor = properties.query_property(usage);
+                    (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32
+                }
+                _ => weapon_factor,
+            }
         }
     };
     attack.hit_modifier = properties.query_property(USER_HIT_MODIFIER) as i32;
@@ -200,6 +208,16 @@ pub(super) fn calculate_player_weapon_attack(
 ) -> Option<(MasterInfo, AttackInformation)> {
     calculate_player_weapon_attack_with_factor(
         game, instance, source, target, PlayerWeaponDamageFactor::WeaponUsage(damage_factor_usage), roll,
+        WeaponPowerMode::Ordinary,
+    )
+}
+
+pub(super) fn calculate_unscaled_weapon_attack(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
+) -> Option<(MasterInfo, AttackInformation)> {
+    calculate_player_weapon_attack_with_factor(
+        game, instance, source, target, PlayerWeaponDamageFactor::WeaponOnly, roll,
         WeaponPowerMode::Ordinary,
     )
 }
