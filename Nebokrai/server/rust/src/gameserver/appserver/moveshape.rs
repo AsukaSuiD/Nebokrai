@@ -339,7 +339,6 @@ use crate::gameserver::appserver::skills::blindstate::{
 use crate::gameserver::appserver::skills::knightcutstate::{
     KNIGHT_CUT_STATE_BYTES, KnightCutState,
 };
-use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES};
 use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
 use crate::gameserver::appserver::skills::pillarstate::{
     PILLAR_STATE_BYTES, PillarState,
@@ -360,6 +359,7 @@ use crate::gameserver::appserver::skills::swordshipstate::{
 };
 use crate::gameserver::appserver::skills::strikestate::StrikeState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
+use crate::gameserver::appserver::skills::kerosenestate::KeroseneState;
 use crate::gameserver::appserver::skills::leafcutstate::LeafCutState;
 use crate::gameserver::appserver::skills::leafcutstate2::LeafCutState2;
 use crate::gameserver::appserver::skills::leafcutstate3::LeafCutState3;
@@ -1462,7 +1462,6 @@ impl CMoveShape {
                 StateData::ChangeBody(state) => Some(state.serialized_span()),
                 StateData::Extended(state) => Some(state.serialized_span()),
                 StateData::Undead(state) => Some(state.serialized_span()),
-                StateData::Kerosene(state) => Some(state.serialized_span()),
                 StateData::PoisonFog(state) => Some(state.serialized_span()),
                 StateData::MeteorArrow(state) => Some(state.serialized_span()),
                 StateData::Ride(state) => Some(state.serialized_span()),
@@ -1541,10 +1540,7 @@ impl CMoveShape {
                 }
                 StateData::LeafCut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::LeafCut3(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Kerosene(state) => {
-                    if record_index.is_some() { state.update_serialized_runtime(&mut payload, now_ms); }
-                    None
-                }
+                StateData::Kerosene(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::PoisonFog(state) => Some(state.encoded(now_ms)),
                 StateData::MeteorArrow(state) => {
                     if record_index.is_some() { state.update_serialized(&mut payload); }
@@ -2307,7 +2303,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<ChangeBodyState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<UndeadState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<KeroseneState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<PoisonFogState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<MeteorArrowState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|state| state.shift_serialized_offset_after(offset, amount));
@@ -2362,7 +2357,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<ChangeBodyState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<UndeadState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<KeroseneState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<PoisonFogState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<MeteorArrowState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
@@ -2530,7 +2524,6 @@ impl CMoveShape {
         // Как в save, неоднозначный ordinal не разрешает удалять чужие байты.
         let record = (runtime_count == records.len()).then(|| records[occurrence]);
         let span = self.state_entries.serialized_span(key).or_else(|| match self.state_entries.get(key)? {
-            StateData::Kerosene(state) => state.serialized_span(),
             StateData::PoisonFog(state) => state.serialized_span(),
             StateData::MeteorArrow(state) => state.serialized_span(),
             StateData::Swordship(state) => {
@@ -2896,23 +2889,6 @@ impl CMoveShape {
         self.state_entries.entries().filter(|(_, state)| state.is_blind())
             .map(|(key, state)| (key, state.state_id())).collect()
     }
-
-
-    pub(crate) fn kerosene_state(&self) -> Option<KeroseneState> { self.state_entries.first::<KeroseneState>().copied() }
-    pub(crate) fn replace_kerosene_state(&mut self, mut state: KeroseneState, now_ms: u32) -> Option<KeroseneState> {
-        let previous = self.state_entries.take_first::<KeroseneState>();
-        let replaced = previous.and_then(KeroseneState::serialized_span).is_some_and(|(offset, amount)| amount == KEROSENE_STATE_BYTES && state.write_serialized_at(&mut self.ex_states, offset, now_ms));
-        if !replaced { if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); } let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.wrapping_add(1)); state.append_serialized(&mut self.ex_states, now_ms); }
-        self.state_entries.append(state); previous
-    }
-
-
-    pub(crate) fn take_kerosene_state(&mut self) -> Option<KeroseneState> {
-        let key = self.state_entries.first_key::<KeroseneState>()?;
-        let state = self.remove_applied_state_record::<KeroseneState>(key, KEROSENE_STATE_BYTES)?;
-        Some(state)
-    }
-
 
 
     pub(crate) fn battle_fairy_attribute_states(&self) -> impl Iterator<Item = &BattleFairyAttributeState> {

@@ -5955,13 +5955,6 @@ impl CPlayer {
     }
 
 
-    pub(crate) fn replace_kerosene_state(&mut self, state: super::skills::kerosenestate::KeroseneState, now_ms: u32) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.replace_kerosene_state(state, now_ms) }
-
-
-    pub(crate) fn take_kerosene_state(&mut self) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.take_kerosene_state() }
-
-
-
     pub(crate) fn take_expired_battle_fairy_attribute_state(&mut self, key: crate::gameserver::appserver::moveshape::StateKey, now_ms: u32) -> Option<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
         self.move_shape.take_expired_battle_fairy_attribute_state(key, now_ms)
     }

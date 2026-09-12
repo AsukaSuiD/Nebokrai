@@ -7,7 +7,8 @@
 //! NULL-user restart сохраняет источник и начало срока. End отправляет visual,
 //! заново разрешает Sufferer и удаляет запись только из исходной арены.
 //! Общий префикс сохранения — ID4/Master40/remaining4/frequency4; хвост задаёт
-//! конкретный тип. Load читает Master до часов, Save не изменяет payload,
+//! конкретный тип. Load читает Master до часов; отдельные владельцы откладывают
+//! timestamp до конца записи. Save не изменяет payload,
 //! а техническая запись при установке состояния не читает часы.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -55,6 +56,22 @@ impl PeriodicAttackCore {
     pub(crate) fn decode<'a>(
         payload: &'a [u8], offset: usize, id: u32, now: &mut dyn FnMut() -> u32,
     ) -> Result<(Self, LegacyReader<'a>), LegacyReadBlock> {
+        Self::decode_prefix(payload, offset, id, Some(now))
+    }
+
+    pub(crate) fn decode_deferred_start<'a>(
+        payload: &'a [u8], offset: usize, id: u32,
+    ) -> Result<(Self, LegacyReader<'a>), LegacyReadBlock> {
+        Self::decode_prefix(payload, offset, id, None)
+    }
+
+    pub(crate) fn finish_loading_at(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+    }
+
+    fn decode_prefix<'a>(
+        payload: &'a [u8], offset: usize, id: u32, now: Option<&mut dyn FnMut() -> u32>,
+    ) -> Result<(Self, LegacyReader<'a>), LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != id {
             return Err(LegacyReadBlock {
@@ -73,7 +90,10 @@ impl PeriodicAttackCore {
             permitted_to_kill_guild_member: reader.read_i32()?,
             permitted_to_kill_criminal: reader.read_i32()?,
         };
-        let started_at_ms = now();
+        let started_at_ms = match now {
+            Some(now) => now(),
+            None => 0,
+        };
         let core = Self {
             master, started_at_ms, keep_time_ms: reader.read_u32()?,
             frequency_ms: reader.read_u32()?, attack_count: 0,

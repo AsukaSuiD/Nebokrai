@@ -1,81 +1,395 @@
-//! Воспламенение `CIgnition` (`0xF2`).
-//! На время применения удара настоящий AI источника опубликован в CPlayer;
-//! изменения синхронных callback возвращаются в тот же проход навыка.
-//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
-//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
+//! Воспламенение: подготовка арбалетного удара и расход горючей смеси на цели.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/ignition.cpp`. Навык сохраняет необратимый расход MP до
-//! поздней проверки арбалета, выбирает один из двух коэффициентов по наличию
-//! `KeroseneState`, выполняет ровно два RNG-вызова и снимает горючую смесь
-//! только после реально допустимого `OnBeenAttacked`. `End(false)` не
-//! откатывает уже нанесённый урон и снятую смесь; `End(true)` дополнительно
-//! обновляет свойства и фиксирует cooldown.
-//! Damage factor умножает точный `u32` на `0.01_f32` в x87 и только затем
-//! сохраняется как `f32`. Критический множитель аналогично не округляет
-//! исходный `i32` в `f32`, а усекается к нулю только при итоговой записи.
-//! Восстановление использует абсолютный срок `CSkill::IsRestored`; cast остаётся elapsed.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/ignition.cpp.
+//! Навык сохраняет расход MP до поздней проверки оружия, абсолютный срок
+//! применения и выбор коэффициента по состояниям цели в момент расчёта.
+//! Общая арена выполняет End и удаление смеси после OnBeenAttacked;
+//! зарегистрированный CAttackSkill владеет завершением и износом оружия.
 
-use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER};
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::kerosene::{kerosene_path_block, kerosene_target_facts};
-use super::kerosenestate::{send_kerosene_state_visual, KEROSENE_STATE_ID};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
+use super::kerosene::{
+    kerosene_path_block, kerosene_skill_target, kerosene_source_position,
+    kerosene_target_position,
+};
+use super::kerosenestate::KEROSENE_STATE_ID;
 use super::poisonmoth::{master_info, weapon_is_crossbow};
+use super::skillfactory::{SkillOwner, UNKNOWN_SKILL_ID};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::appserver::states::attackpower::{
+    AttackInformation, AttackPower, AttackPowerType,
+};
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_skill_sufferer, resolve_state_move_shape,
+};
+use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 pub(crate) const IGNITION_SKILL_ID: u32 = 0xf2;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const PLAYER_TYPE: i32 = 400; const MONSTER_TYPE: i32 = 600;
-const USER_MP_LOSE: u32 = 2; const SECOND_TIME: u32 = 15_002; const THIRD_TIME: u32 = 15_003; const TARGET_DAMAGE_FACTOR: u32 = 20_003; const TARGET_DAMAGE_FACTOR_2: u32 = 20_021;
+const PLAYER_TYPE: i32 = 400;
+const USER_MP_LOSE: u32 = 2;
+const SECOND_TIME: u32 = 15_002;
+const THIRD_TIME: u32 = 15_003;
+const TARGET_DAMAGE_FACTOR: u32 = 20_003;
+const TARGET_DAMAGE_FACTOR_2: u32 = 20_021;
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
-pub(crate) fn is_ignition_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Object { skill_id: IGNITION_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }) }
-fn target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
-fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
-fn finish_player_ignition<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _ai: &mut CPlayerAI, runtime: &mut Runtime) {
-    restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, IGNITION_SKILL_ID, runtime);
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
-fn abort_player_ignition(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
-pub(crate) fn complete_player_ignition<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, IGNITION_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_ignition(game, player_id, ai, runtime);
+
+pub(crate) fn is_ignition_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    dispatch.skill_id() == IGNITION_SKILL_ID
+}
+
+/// Возвращает необходимость общего visual-хвоста. Только исчезнувшая цель
+/// режима попадания завершает исходный UpdateVisualEffect до этого хвоста.
+pub(crate) fn publish_ignition_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) -> bool {
+    if skill.owner() != SkillOwner::CIgnition
+        || skill.visual_effect().is_none_or(|effect| {
+            effect.kind() != SkillVisualEffectKind::Ignition || effect.is_ended()
+        })
+    { return true; }
+    let (region, identity) = skill.lifecycle().user();
+    let Some(user) = resolve_state_move_shape(game, region, identity) else { return true; };
+    let source = user.shape();
+    let identity = source.identity();
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    if matches!(mode, 2 | 4 | 7 | 10 | 11 | 13 | 14 | 15) {
+        if identity.object_type == PLAYER_TYPE {
+            message.add_byte(0);
+            message.add_byte(mode as u8);
+            let _ = message.send_to_player(game.net_server(), identity.id);
+        }
+        return true;
+    }
+    let action = match mode { 0 => 1, 1 => 2, 3 => 3, _ => return true };
+    let target = if action == 2 {
+        let Some((region, target)) = resolve_skill_sufferer(game, skill.lifecycle()) else { return false; };
+        let Some(target) = resolve_state_move_shape(game, region, target) else { return false; };
+        Some(target.shape())
+    } else { None };
+    message.add_byte(action);
+    message.add_long(skill.id() as i32);
+    message.add_short(skill.level() as i16);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    if let Some(target) = target {
+        let (Ok(x), Ok(y)) = (target.get_tile_x(), target.get_tile_y()) else { return true; };
+        message.add_long(target.identity().object_type);
+        message.add_long(target.identity().id);
+        message.add_long(x);
+        message.add_long(y);
+        if let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) {
+            message.add_long(0);
+            message.add_ulong(properties.query_property(SECOND_TIME));
+            let third = properties.query_property(THIRD_TIME);
+            let second = properties.query_property(SECOND_TIME);
+            message.add_ulong(third.wrapping_add(second));
+        }
+    } else {
+        message.add_long(source.get_direction());
+    }
+    if let Some(region) = game.find_region(source.get_region_id()) {
+        let _ = game.send_game_shape_around(region.base(), source, None, &message);
+    }
+    true
+}
+
+pub(crate) fn complete_player_ignition<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    ai: &mut CPlayerAI,
+    _runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = game.player_skill_execution(player_id, IGNITION_SKILL_ID)
+        .map(SkillExecutionKernel::dispatch)
+    else { return false; };
     game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Completed)
 }
-pub(crate) fn cancel_player_ignition<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, IGNITION_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    abort_player_ignition(game, player_id);
+
+pub(crate) fn cancel_player_ignition<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    ai: &mut CPlayerAI,
+    _runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = game.player_skill_execution(player_id, IGNITION_SKILL_ID)
+        .map(SkillExecutionKernel::dispatch)
+    else { return false; };
     game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
 }
-fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32, name: Option<&[u8]>) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code); match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss), 10 => game.send_skill_system_info(player_id, b"GS0286"), 0x0b => game.send_skill_system_info(player_id, b"GS0290"), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), 0x0e => game.send_skill_system_info(player_id, b"GS0293"), 0x0f => game.send_skill_system_info_with_text(player_id, b"GS0291", name.unwrap_or_default()), _ => {} } }
-fn send_start(game: &mut CGame, player_id: i32, level: i32) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(1); message.add_long(IGNITION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message); }
-fn send_fire(game: &mut CGame, player_id: i32, level: i32, target: ShapeIdentity, x: i32, y: i32, second: u32, third: u32) { let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(2); message.add_long(IGNITION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(target.object_type); message.add_long(target.id); message.add_long(x); message.add_long(y); message.add_long(0); message.add_ulong(second); message.add_ulong(second.wrapping_add(third)); let _ = game.send_player_shape_around(player_id, None, &message); }
 
-fn has_kerosene(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool { match target.object_type { PLAYER_TYPE => game.find_player(target.id).is_some_and(|owner| owner.has_state_by_skill_id(KEROSENE_STATE_ID)), MONSTER_TYPE => game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(target.id)).is_some_and(|owner| owner.move_shape().has_state_by_skill_id(KEROSENE_STATE_ID)), _ => false } }
-fn remove_kerosene(game: &mut CGame, region_id: i32, target: ShapeIdentity, now_ms: u32) {
-    let removed = match target.object_type { PLAYER_TYPE => game.find_player_mut(target.id).and_then(|owner| Some((owner.take_kerosene_state()?, owner.shape().get_tile_x().ok()?, owner.shape().get_tile_y().ok()?))), MONSTER_TYPE => { let mut owner = game.take_region_owner(region_id); let result = owner.as_mut().and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.id)).and_then(|shape| Some((shape.move_shape_mut().take_kerosene_state()?, shape.move_shape().shape().get_tile_x().ok()?, shape.move_shape().shape().get_tile_y().ok()?))); if let Some(owner) = owner { game.restore_region_owner(owner); } result }, _ => None };
-    if let Some((state, x, y)) = removed { send_kerosene_state_visual(game, region_id, target, x, y, state, false, now_ms); if target.object_type == PLAYER_TYPE { let _ = game.publish_player_states(target.id); } }
+fn send_failure(game: &mut CGame, player_id: i32, code: u32, amount: u32) {
+    game.update_player_skill_visual(player_id, IGNITION_SKILL_ID, code);
+    match code {
+        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", amount),
+        10 => game.send_skill_system_info(player_id, b"GS0286"),
+        11 => game.send_skill_system_info(player_id, b"GS0290"),
+        13 => game.send_skill_system_info(player_id, b"GS0278"),
+        14 => game.send_skill_system_info(player_id, b"GS0293"),
+        _ => {}
+    }
 }
-fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, hit: i32) -> Option<(MasterInfo, AttackInformation)> { let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let span = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(span)).max(0); let damage_factor = (f64::from(factor) * f64::from(0.01_f32)) as f32; let mut attack = AttackInformation { skill_id: IGNITION_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] }; if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } } Some((master, attack)) }
 
-pub(crate) fn execute_player_ignition<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    if !is_ignition_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) } let Some(target) = target(dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) }; if target.object_type == PLAYER_TYPE && target.id == player_id { failure(game, player_id, 10, 0, None); return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, source, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, (player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?), player.learned_skill_level(IGNITION_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) }; let Some((target_x, target_y, dead, name)) = kerosene_target_facts(game, region_id, target) else { failure(game, player_id, 10, 0, None); return terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else { if game.player_skill_execution(player_id, IGNITION_SKILL_ID).is_some() { abort_player_ignition(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
-    let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let second = properties.query_property(SECOND_TIME); let third = properties.query_property(THIRD_TIME); let factor = properties.query_property(if has_kerosene(game, region_id, target) { TARGET_DAMAGE_FACTOR_2 } else { TARGET_DAMAGE_FACTOR }); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if game.player_skill_execution(player_id, IGNITION_SKILL_ID).is_none() { let now = runtime.now_milliseconds(); if !skill_is_restored(game.player_skill_last_used_ms(player_id, IGNITION_SKILL_ID), reuse, now) { failure(game, player_id, 0x0d, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } let Some(blocked) = kerosene_path_block(game, region_id, source, (target_x, target_y), maximum) else { failure(game, player_id, 0x0b, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) }; if blocked { failure(game, player_id, 0x0f, mp_loss, Some(&name)); return terminal(QueuedSkillExecutionState::Rejected) } let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_crossbow(game, player) { failure(game, player_id, 0x0e, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && initial_mana < mp_loss { failure(game, player_id, 7, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(IGNITION_SKILL_ID)); } game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now)); return terminal(QueuedSkillExecutionState::Begun); }
-    if dead { failure(game, player_id, 10, mp_loss, None); abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
-    if game.player_skill_execution(player_id, IGNITION_SKILL_ID).is_some_and(|kernel| kernel.stage() == SkillStage::Begin) { let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if mana < mp_loss { failure(game, player_id, 7, mp_loss, None); abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_crossbow(game, player)) { failure(game, player_id, 0x0e, mp_loss, None); abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source.0, source.1, target_x, target_y)); } send_start(game, player_id, level); if let Some(kernel) = game.player_skill_execution_mut(player_id, IGNITION_SKILL_ID) { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); } }
-    let started = game.player_skill_execution(player_id, IGNITION_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default(); if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } let Some((live_x, live_y, live_dead, live_name)) = kerosene_target_facts(game, region_id, target) else { abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if live_dead { failure(game, player_id, 10, mp_loss, None); abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let Some(blocked) = kerosene_path_block(game, region_id, source, (live_x, live_y), maximum) else { failure(game, player_id, 0x0b, mp_loss, None); abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if blocked { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 0x0f); game.send_skill_system_info_with_text(player_id, b"GS0307", &live_name); abort_player_ignition(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
-    send_fire(game, player_id, level, target, live_x, live_y, second, third); let master = game.find_player(player_id).map(master_info); let attackable = master.is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)); if attackable { if let Some((master, attack)) = calculate_attack(game, player_id, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)), MONSTER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)), _ => {} } remove_kerosene(game, region_id, target, runtime.now_milliseconds()); } }
-    if let Some(kernel) = game.player_skill_execution_mut(player_id, IGNITION_SKILL_ID) { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_ignition(game, player_id, ai, runtime); terminal(QueuedSkillExecutionState::Completed)
+fn send_path_failure(game: &mut CGame, player_id: i32, target: (i32, ShapeIdentity), id: &[u8]) {
+    game.update_player_skill_visual(player_id, IGNITION_SKILL_ID, 15);
+    let name = game.base_magic_target_name(target.0, target.1).unwrap_or_default();
+    game.send_skill_system_info_with_text(player_id, id, name);
+}
+
+fn reject_begin(game: &mut CGame, player_id: i32) -> QueuedSkillExecutionOutcome {
+    game.update_player_skill_visual(player_id, IGNITION_SKILL_ID, 2);
+    terminal(QueuedSkillExecutionState::Rejected)
+}
+
+fn calculate_attack(game: &mut CGame, player_id: i32, target: (i32, ShapeIdentity), attack: &mut AttackInformation) {
+    let Some(level) = game.registered_player_skill(player_id, IGNITION_SKILL_ID)
+        .and_then(|address| game.registered_skill(address)).map(MoveShapeSkill::level)
+    else { return; };
+    let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else { return; };
+    attack.skill_id = IGNITION_SKILL_ID;
+    attack.skill_level = level as u8;
+    attack.damage_modifier = 0;
+    let soaked = resolve_state_move_shape(game, target.0, target.1)
+        .is_some_and(|shape| shape.has_state_by_skill_id(KEROSENE_STATE_ID));
+    let factor = properties.query_property(if soaked { TARGET_DAMAGE_FACTOR_2 } else { TARGET_DAMAGE_FACTOR });
+    // В x87 исходный unsigned factor сохраняет точность до записи float.
+    attack.damage_factor = (f64::from(factor) * f64::from(0.01_f32)) as f32;
+    attack.hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+
+    let Some(player) = game.find_player(player_id) else { return; };
+    let maximum = player.combat_properties().maximum_attack as i32;
+    let minimum = player.combat_properties().minimum_attack as i32;
+    let span = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
+    let random = game.skill_random_below(span);
+    let Some(player) = game.find_player(player_id) else { return; };
+    let physical = (player.combat_properties().minimum_attack as i32).wrapping_add(random).max(0);
+    attack.damages.push(AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 });
+    let element = (player.combat_properties().add_element_attack as i32).max(0);
+    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: element, mp_damage: 0 });
+    let soul = i32::from(player.combat_properties().add_soul_attack);
+    attack.damages.push(AttackPower { kind: AttackPowerType::Soul, hp_damage: soul, mp_damage: 0 });
+    let cch = i32::from(player.combat_properties().cch);
+    if game.skill_random_below(100) < cch {
+        attack.critical = true;
+        for power in &mut attack.damages {
+            let rate = game.globe_setup().critical_rate();
+            power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
+        }
+    }
+}
+
+fn apply_ignition<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    target: (i32, ShapeIdentity),
+    runtime: &mut Runtime,
+) {
+    let Some(source) = game.find_player(player_id).map(|player| player.shape().identity())
+    else { return; };
+    if source == target.1 { return; }
+    let attackable = match target.1.object_type {
+        400 | 600 => game.live_skill_target_attackable(target.0, source, target.1),
+        1100 | 1200 => game.stationary_build_attackable_by_player(player_id, target.0, target.1),
+        _ => false,
+    };
+    if !attackable { return; }
+    let Some(player) = game.find_player(player_id) else { return; };
+    let master = master_info(player);
+    let mut attack = AttackInformation {
+        skill_id: UNKNOWN_SKILL_ID, skill_level: 1,
+        attacker_type: PLAYER_TYPE, attacker_id: player_id,
+        attacker_team_id: master.master_team_id,
+        attacker_faction_id: master.master_guild_id,
+        attacker_union_id: master.master_union_id,
+        hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0,
+        critical: false, blast_attack: false, full_miss: 0, damages: Vec::new(),
+    };
+    calculate_attack(game, player_id, target, &mut attack);
+    match target.1.object_type {
+        400 => game.apply_owned_skill_attack_to_player(master, target.1.id, target.0, attack, runtime),
+        600 => game.apply_owned_skill_attack_to_monster(master, target.1.id, target.0, attack, runtime),
+        1100 | 1200 => game.apply_owned_skill_attack_to_stationary_build(player_id, target.0, target.1, attack, runtime),
+        _ => return,
+    }
+    // Защита и callbacks попадания могут изменить арену. Ищется первая живая
+    // смесь уже после удара; её End может снова заменить тот же слот.
+    if let Some((position, _)) = resolve_state_move_shape(game, target.0, target.1)
+        .and_then(|shape| shape.find_state_position(|state| state.state_id() == KEROSENE_STATE_ID))
+    {
+        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
+    }
+}
+
+pub(crate) fn execute_player_ignition<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_ignition_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
+    let beginning = game.player_skill_execution(player_id, IGNITION_SKILL_ID).is_none();
+    if beginning {
+        game.replace_player_skill_visual_effect(
+            player_id, IGNITION_SKILL_ID, SkillVisualEffect::new(SkillVisualEffectKind::Ignition, 1),
+        );
+    }
+    let Some(level) = game.registered_player_skill(player_id, IGNITION_SKILL_ID)
+        .and_then(|address| game.registered_skill(address)).map(MoveShapeSkill::level)
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    // CheckCast проверяет U/S до таблицы свойств; AI начинает с таблицы.
+    if !beginning && game.skill_base_properties(IGNITION_SKILL_ID, level).is_none() {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if game.find_player(player_id).is_none() {
+        return if beginning { reject_begin(game, player_id) }
+            else { terminal(QueuedSkillExecutionState::Rejected) };
+    }
+    let Some(target) = kerosene_skill_target(game, player_id, IGNITION_SKILL_ID) else {
+        if beginning {
+            send_failure(game, player_id, 10, 0);
+            return reject_begin(game, player_id);
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if beginning {
+        if target.1.object_type == PLAYER_TYPE && target.1.id == player_id {
+            send_failure(game, player_id, 10, 0);
+            return reject_begin(game, player_id);
+        }
+        let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else {
+            return reject_begin(game, player_id);
+        };
+        let started = game.player_skill_lifecycle(player_id, IGNITION_SKILL_ID)
+            .expect("общий Begin сохранил базу воспламенения").started_at_ms();
+        let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        if !skill_is_restored(game.player_skill_last_used_ms(player_id, IGNITION_SKILL_ID), reuse, runtime.now_milliseconds()) {
+            send_failure(game, player_id, 13, 0);
+            return reject_begin(game, player_id);
+        }
+        let Some(blocked) = kerosene_path_block(game, player_id, IGNITION_SKILL_ID, properties) else {
+            send_failure(game, player_id, 11, 0);
+            return reject_begin(game, player_id);
+        };
+        if blocked {
+            send_path_failure(game, player_id, target, b"GS0291");
+            return reject_begin(game, player_id);
+        }
+        let Some(player) = game.find_player(player_id) else { return reject_begin(game, player_id); };
+        if !weapon_is_crossbow(game, player) {
+            send_failure(game, player_id, 14, 0);
+            return reject_begin(game, player_id);
+        }
+        if properties.query_property(USER_MP_LOSE) != 0
+            && (player.mana().wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0
+        {
+            let amount = properties.query_property(USER_MP_LOSE);
+            send_failure(game, player_id, 7, amount);
+            return reject_begin(game, player_id);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+        }
+        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
+        return terminal(QueuedSkillExecutionState::Begun);
+    }
+
+    if game.base_magic_target_dead(target.0, target.1) {
+        game.update_player_skill_visual(player_id, IGNITION_SKILL_ID, 10);
+        game.send_skill_system_info(player_id, b"GS0285");
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if game.player_skill_execution(player_id, IGNITION_SKILL_ID)
+        .is_some_and(|kernel| kernel.stage() == SkillStage::Begin)
+    {
+        let Some(mana) = game.find_player(player_id).map(CPlayer::mana) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let properties = game.skill_base_properties(IGNITION_SKILL_ID, level)
+            .expect("таблица свойств активного навыка сохраняется");
+        let mp_loss = properties.query_property(USER_MP_LOSE);
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            let amount = properties.query_property(USER_MP_LOSE);
+            send_failure(game, player_id, 7, amount);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(mana.wrapping_sub(mp_loss));
+        }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        if game.find_player(player_id).is_none_or(|player| !weapon_is_crossbow(game, player)) {
+            send_failure(game, player_id, 14, 0);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        if let Some(kernel) = game.player_skill_execution_mut(player_id, IGNITION_SKILL_ID) {
+            kernel.lifecycle_mut().set_available(can_be_breaked != 0);
+        }
+        let Some((target_x, target_y)) = kerosene_target_position(game, target) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let Some((_, source_x, source_y)) = kerosene_source_position(game, player_id) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y));
+        }
+        game.update_player_skill_visual(player_id, IGNITION_SKILL_ID, 0);
+        if let Some(kernel) = game.player_skill_execution_mut(player_id, IGNITION_SKILL_ID) {
+            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.player_skill_execution(player_id, IGNITION_SKILL_ID)
+        .map(SkillExecutionKernel::started_at_ms)
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(blocked) = kerosene_path_block(game, player_id, IGNITION_SKILL_ID, properties) else {
+        send_failure(game, player_id, 11, 0);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if blocked {
+        send_path_failure(game, player_id, target, b"GS0307");
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let has_visual = game.registered_player_skill(player_id, IGNITION_SKILL_ID)
+        .and_then(|address| game.registered_skill(address))
+        .is_some_and(|skill| skill.visual_effect().is_some());
+    if !has_visual { return terminal(QueuedSkillExecutionState::Pending); }
+    game.update_player_skill_visual(player_id, IGNITION_SKILL_ID, 1);
+    if let Some(target) = kerosene_skill_target(game, player_id, IGNITION_SKILL_ID) {
+        game.with_published_player_ai(player_id, ai, |game| apply_ignition(game, player_id, target, runtime));
+    }
+    if let Some(kernel) = game.player_skill_execution_mut(player_id, IGNITION_SKILL_ID) {
+        let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    terminal(QueuedSkillExecutionState::Completed)
 }

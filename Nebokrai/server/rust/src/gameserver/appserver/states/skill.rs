@@ -244,6 +244,13 @@ impl CGame {
                 crate::gameserver::appserver::skills::spriteburn::publish_sprite_burn_visual(self, skill, mode),
             SkillVisualEffectKind::LeafCut =>
                 crate::gameserver::appserver::skills::leafcut::publish_leaf_cut_visual(self, skill, mode),
+            SkillVisualEffectKind::Kerosene =>
+                crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
+            SkillVisualEffectKind::Ignition => {
+                if !crate::gameserver::appserver::skills::ignition::publish_ignition_visual(self, skill, mode) {
+                    return;
+                }
+            }
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

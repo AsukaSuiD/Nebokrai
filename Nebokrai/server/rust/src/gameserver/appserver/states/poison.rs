@@ -1,7 +1,7 @@
-//! Общий payload состояний PoisonArrow, SpiderPoison и SpriteBurn.
+//! Общий payload состояний PoisonArrow, SpiderPoison, SpriteBurn и Kerosene.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые owners appserver/skills.
-//! Их запись содержит 56 байт и один DWORD урона HP. Тип урона всех трёх —
-//! Poison, включая SpriteBurn; MP не изменяется. Конкретный ID сохраняет
+//! Их запись содержит 56 байт и один DWORD урона HP. Тип урона —
+//! Poison, включая SpriteBurn и Kerosene; MP не изменяется. Конкретный ID сохраняет
 //! отдельный вариант общей арены, без дополнительного хранилища.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyWriter};
@@ -36,8 +36,16 @@ impl<const ID: u32> PoisonState<ID> {
     pub(crate) fn decode(
         payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
-        let (core, mut reader) = PeriodicAttackCore::decode(payload, offset, ID, now)?;
-        Ok(Self { core, hp_loss: reader.read_u32()? })
+        let (mut core, mut reader) = if ID == 0xf1 {
+            PeriodicAttackCore::decode_deferred_start(payload, offset, ID)?
+        } else {
+            PeriodicAttackCore::decode(payload, offset, ID, now)?
+        };
+        let hp_loss = reader.read_u32()?;
+        // Kerosene начинает отсчёт после полного чтения записи, остальные
+        // варианты — после MasterInfo, до срока, частоты и HP.
+        if ID == 0xf1 { core.finish_loading_at(now()); }
+        Ok(Self { core, hp_loss })
     }
 
     pub(crate) fn encoded(&self, now: impl FnMut() -> u32) -> [u8; POISON_STATE_BYTES]

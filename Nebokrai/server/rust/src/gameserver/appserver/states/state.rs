@@ -788,15 +788,12 @@ state_callbacks! {
     ),
     StateData::Kerosene(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
-            match target.object_type {
-                400 => { skills::kerosenestate::update_player_kerosene_state(game, target.id, key, runtime); }
-                600 => { skills::kerosenestate::update_monster_kerosene_state(game, region, target.id, key, runtime); }
-                _ => {}
-            }
+            super::poison::update_poison_state::<0xf1, _>(game, region, target, key, runtime);
         },
-        skills::kerosenestate::end_kerosene_state,
-        skills::kerosenestate::restart_kerosene_state,
-        |_, _, _, _, _| true
+        super::periodicattack::end_periodic_attack_state::<skills::kerosenestate::KeroseneState>,
+        super::periodicattack::restart_periodic_attack_state::<skills::kerosenestate::KeroseneState>,
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::Cure(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {

@@ -37007,11 +37007,8 @@ impl CGame {
     ) -> Option<()> {
         let attacker = self.find_player(attacker_id)?;
         let victim = self.find_player(victim_id)?;
-        if attacker.server_region_id() != Some(region_id)
-            || victim.server_region_id() != Some(region_id)
-        {
-            return None;
-        }
+        // Регион и security принадлежат caller-у: смена региона участником
+        // не отменяет уже дошедший до OnFirstSkill контакт.
         let victim_x = victim.shape().get_tile_x().ok()?;
         let victim_y = victim.shape().get_tile_y().ok()?;
         let owner = self.find_region(region_id)?;
@@ -37092,12 +37089,21 @@ impl CGame {
         {
             return false;
         }
-        let Some(region_id) = attacker
-            .server_region_id()
-            .filter(|region_id| victim.server_region_id() == Some(*region_id))
-        else {
+        if attacker.server_region_id().is_none()
+            || attacker.server_region_id() != victim.server_region_id()
+        {
             return false;
-        };
+        }
+        self.player_attack_pk_allowed(attacker_id, victim_id)
+    }
+
+    // IsAttackAble использует регион цели и живые права источника. HP/god
+    // принадлежат последующему OnBeenAttacked, а self — конкретному caller-у;
+    // совмещённый допуск базовой атаки выше сохраняет свои ранние фильтры.
+    fn player_attack_pk_allowed(&self, attacker_id: i32, victim_id: i32) -> bool {
+        let Some(attacker) = self.find_player(attacker_id) else { return false; };
+        let Some(victim) = self.find_player(victim_id) else { return false; };
+        let Some(region_id) = victim.server_region_id() else { return false; };
         let Some(region) = self.find_region(region_id) else {
             return false;
         };
@@ -37349,9 +37355,20 @@ impl CGame {
     ) -> Option<(&'static [u8], u32)> {
         let attacker = self.find_player(attacker_id)?;
         let victim = self.find_player(victim_id)?;
-        let region_id = attacker
+        attacker
             .server_region_id()
             .filter(|region_id| victim.server_region_id() == Some(*region_id))?;
+        self.player_attack_level_block(attacker_id, victim_id)
+    }
+
+    fn player_attack_level_block(
+        &self,
+        attacker_id: i32,
+        victim_id: i32,
+    ) -> Option<(&'static [u8], u32)> {
+        let attacker = self.find_player(attacker_id)?;
+        let victim = self.find_player(victim_id)?;
+        let region_id = victim.server_region_id()?;
         let region = self.find_region(region_id)?.base();
         if attacker_id == victim_id || region.war_region_type != 0 {
             return None;

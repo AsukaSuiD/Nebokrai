@@ -161,7 +161,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         KEROSENE_STATE_ID => StateRecordLayout::typed(
             KEROSENE_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::kerosenestate::KeroseneState::decode(payload, offset, _now()).ok().map(StateData::Kerosene)
+                super::kerosenestate::KeroseneState::decode(payload, offset, _now).ok().map(StateData::Kerosene)
             },
         ),
         SWORDSHIP_SKILL_ID | SWORDSHIP_2_SKILL_ID | SWORDSHIP_3_SKILL_ID | SWORDSHIP_4_SKILL_ID => StateRecordLayout::typed(

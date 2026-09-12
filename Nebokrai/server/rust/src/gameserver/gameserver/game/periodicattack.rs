@@ -29,11 +29,11 @@ impl CGame {
         if self.find_player(target_id).is_none_or(|player| player.city_war_died_state()) {
             return false;
         }
-        if let Some((text, limit)) = self.player_base_attack_level_block(source_id, target_id) {
+        if let Some((text, limit)) = self.player_attack_level_block(source_id, target_id) {
             self.send_base_attack_level_block(source_id, text, limit);
             return false;
         }
-        self.player_base_attackable(source_id, target_id)
+        self.player_attack_pk_allowed(source_id, target_id)
     }
 
     pub(crate) fn live_skill_target_attackable(
@@ -80,11 +80,15 @@ impl CGame {
     }
 
     fn increase_owned_skill_attacker_rp(&mut self, player_id: i32, skill_id: u32) {
-        // Range/Fast Attack (VA 0x005123e0/0x00513700/0x00530fb0) не вызывают
-        // IncreaseRp после OnBeenAttacked; RP защищающейся стороны обычный.
-        // MachineryStomp/LordWiderangingAttack (VA 0x00532290/0x0052fdc0)
-        // имеют такой же хвост без IncreaseRp.
-        if !matches!(skill_id, MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID) {
+        // Периодические состояния с конструкторским skill-id и перечисленные
+        // прямые удары не начисляют RP атакующему после OnBeenAttacked.
+        // Изменение RP защищающейся стороны остаётся внутри обработки попадания.
+        if !matches!(skill_id,
+            crate::gameserver::appserver::skills::skillfactory::UNKNOWN_SKILL_ID
+            | MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID
+            | LORD_FAST_ATTACK_SKILL_ID | MACHINERY_STOMP_SKILL_ID
+            | LORD_WIDERANGING_ATTACK_SKILL_ID | IGNITION_SKILL_ID
+        ) {
             self.increase_owned_player_rp(player_id, true, 0);
         }
     }
