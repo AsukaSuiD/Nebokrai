@@ -44,10 +44,10 @@ pub(crate) fn publish_knight_cut_visual(game: &CGame, skill: &MoveShapeSkill, mo
         message.add_long(0);
         let x = shape.get_tile_x().unwrap_or(i32::MIN);
         let y = shape.get_tile_y().unwrap_or(i32::MIN);
-        let direction = skill.player_state::<KnightCutExecutionState>()
-            .map_or(-1, KnightCutExecutionState::direction);
-        let position = ShapeAreaCoordinates { x, y };
-        let front = CShape::get_direction_position(direction, position).unwrap_or(position);
+        let Some(state) = skill.player_state::<KnightCutExecutionState>() else { return; };
+        // Native индексирует таблицу без проверки: ошибочное направление
+        // не подменяется произвольной клеткой визуального эффекта.
+        let Ok(front) = CShape::get_direction_position(state.direction(), ShapeAreaCoordinates { x, y }) else { return; };
         message.add_long(front.x);
         message.add_long(front.y);
     } else {
