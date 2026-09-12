@@ -346,6 +346,12 @@ impl CGame {
                 crate::gameserver::appserver::skills::spiderpoison::publish_spider_poison_visual(self, skill, mode),
             SkillVisualEffectKind::Promotion =>
                 crate::gameserver::appserver::skills::promotion::publish_promotion_visual(self, skill, mode),
+            SkillVisualEffectKind::Cure =>
+                crate::gameserver::appserver::skills::cure::publish_cure_visual(self, skill, mode),
+            SkillVisualEffectKind::Hearten =>
+                crate::gameserver::appserver::skills::hearten::publish_hearten_visual(self, skill, mode),
+            SkillVisualEffectKind::ManaShield | SkillVisualEffectKind::MachineShield =>
+                crate::gameserver::appserver::skills::selfshield::publish_self_shield_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

@@ -1,9 +1,9 @@
 //! Общий цикл совместимых навыков-состояний игрока и монстра.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/states/stateskill.cpp
-//! и Begin/AI владельцев KnockOut, SpiderWeb, SpiderPoison, Promotion.
+//! и Begin/AI подключённого семейства атак, усилений и щитов.
 //!
-//! База Begin уже записана расписанием; concrete visual loop1 создаётся до
-//! CheckCast. Отказ добавляет visual2 и полный End(0), успех разрешает первый
+//! Общий Begin записывает базу перед OnBeginSkill; concrete visual loop1 создаётся до
+//! CheckCast. Отказ выполняет конкретную диагностику и полный End(0), успех разрешает первый
 //! AI. Монстр получает отдельные часы Begin и события Attack. Публикация
 //! реального AI/региона сохраняется через вложенные обработчики.
 //! Общая обвязка не хранит копии исполнения: payload и visual принадлежат
@@ -31,13 +31,42 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 
+/// Поле цели в подтверждённых вариантах пакета применения.
+pub(crate) enum StateSkillVisualTarget {
+    Sufferer,
+    SuffererOrUser,
+    UserOnly,
+}
+
+/// Аргумент конкретного Begin живёт только на стеке вызова. NULL объект
+/// не равен прежней S, которую базовый Begin при NULL оставляет неизменной.
+pub(crate) enum StateSkillBeginTarget {
+    Object(Option<(i32, ShapeIdentity)>),
+    Resolved,
+}
+
+impl StateSkillBeginTarget {
+    pub(crate) fn resolve(self, game: &CGame, skill: &MoveShapeSkill, fallback_to_user: bool) -> Option<(i32, ShapeIdentity)> {
+        match self {
+            Self::Object(target) => target,
+            Self::Resolved => resolve_skill_sufferer(game, skill.lifecycle()).or_else(|| {
+                if !fallback_to_user { return None; }
+                let (region, identity) = skill.lifecycle().user();
+                let user = resolve_state_move_shape(game, region, identity)?.shape();
+                Some((user.get_region_id(), user.identity()))
+            }),
+        }
+    }
+}
+
 /// Совместимое семейство с общей базой Begin, visual loop1 и отдельным первым AI.
 /// Здесь нет хранилища исполнения: payload остаётся в зарегистрированном навыке.
 pub(crate) trait RegisteredStateSkill {
     const ID: u32;
     const VISUAL: SkillVisualEffectKind;
     const VISUAL_FAILURES: &'static [u32] = &[2, 7, 10, 11, 13, 15];
-    const VISUAL_FALLBACK_TO_USER: bool = false;
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::Sufferer;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = Some(2);
 
     fn visual_flight_time(_skill: &MoveShapeSkill) -> Option<u32> { None }
 
@@ -50,7 +79,7 @@ pub(crate) trait RegisteredStateSkill {
     fn prepare_monster(_skill: &mut MoveShapeSkill) {}
 
     fn check_cast<Runtime: GameMainLoopRuntime>(
-        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+        game: &mut CGame, address: RegisteredSkill, begin_target: StateSkillBeginTarget, runtime: &mut Runtime,
     ) -> bool;
 
     /// Конкретный AI сам вызывает полный End на достигнутой ветке.
@@ -85,11 +114,12 @@ pub(crate) fn publish_state_skill_visual<Skill: RegisteredStateSkill>(
     }
     let target = match mode {
         0 => None,
+        1 if matches!(Skill::VISUAL_TARGET, StateSkillVisualTarget::UserOnly) => None,
         1 => {
             let target = resolve_skill_sufferer(game, skill.lifecycle())
                 .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
                 .or_else(|| {
-                    if Skill::VISUAL_FALLBACK_TO_USER {
+                    if matches!(Skill::VISUAL_TARGET, StateSkillVisualTarget::SuffererOrUser) {
                         resolve_state_move_shape(game, user_region, user)
                     } else { None }
                 });
@@ -111,8 +141,13 @@ pub(crate) fn publish_state_skill_visual<Skill: RegisteredStateSkill>(
         if let Some(flight_time) = Skill::visual_flight_time(skill) {
             message.add_ulong(flight_time);
         }
-    } else {
+    } else if mode == 0 {
         message.add_long(source.get_direction());
+    } else {
+        // Щиты адресованы источнику; их пакет заканчивается двумя нулями,
+        // не содержит повторной identity и вообще не вызывает GetSufferer.
+        message.add_long(0);
+        message.add_long(0);
     }
     if let Some(region) = game.find_region(source.get_region_id()) {
         let _ = game.send_game_shape_around(region.base(), source, None, &message);
@@ -134,14 +169,16 @@ pub(crate) fn end_state_skill<Runtime: GameMainLoopRuntime>(
 }
 
 fn begin_state_skill<Skill: RegisteredStateSkill, Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    game: &mut CGame, address: RegisteredSkill, begin_target: StateSkillBeginTarget, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let Some(skill) = game.registered_skill_mut(address) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
     skill.replace_visual_effect(SkillVisualEffect::new(Skill::VISUAL, 1));
-    if !Skill::check_cast(game, address, runtime) {
-        game.update_registered_skill_visual(address, 2);
+    if !Skill::check_cast(game, address, begin_target, runtime) {
+        if let Some(mode) = Skill::BEGIN_FAILURE_VISUAL {
+            game.update_registered_skill_visual(address, mode);
+        }
         return end_state_skill(game, address, 0, runtime);
     }
     if let Some(skill) = game.registered_skill_mut(address) {
@@ -169,11 +206,27 @@ pub(crate) fn execute_player_state_skill<Skill: RegisteredStateSkill, Runtime: G
         }
         return game.with_published_player_ai(player_id, ai, |game| Skill::run_ai(game, address, runtime));
     }
-    let execution = Skill::player_execution(dispatch, skill.lifecycle().started_at_ms());
-    if !game.begin_player_skill_execution(player_id, execution) {
+    let Some(source) = game.find_player(player_id).map(|player| player.shape().get_region_id()) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    }
-    game.with_published_player_ai(player_id, ai, |game| begin_state_skill::<Skill, Runtime>(game, address, runtime))
+    };
+    let begin_target = match dispatch {
+        PlayerSkillDispatch::Point { .. } => StateSkillBeginTarget::Resolved,
+        _ => StateSkillBeginTarget::Object(dispatch.object_target()
+            .and_then(|target| game.player_skill_begin_object(source, target))),
+    };
+    game.with_published_player_ai(player_id, ai, |game| {
+        if !game.begin_player_skill_with_combat(player_id, dispatch, runtime.now_milliseconds()) {
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(skill) = game.registered_skill(address) else {
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        };
+        let execution = Skill::player_execution(dispatch, skill.lifecycle().started_at_ms());
+        if !game.begin_player_skill_execution(player_id, execution) {
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        }
+        begin_state_skill::<Skill, Runtime>(game, address, begin_target, runtime)
+    })
 }
 
 pub(crate) fn finish_player_state_skill<Skill: RegisteredStateSkill, Runtime: GameMainLoopRuntime>(
@@ -217,7 +270,8 @@ pub(crate) fn execute_owned_state_skill<Skill: RegisteredStateSkill, Runtime: Ga
         let Some(kernel) = skill.monster_kernel_mut() else { return MonsterSkillCallOutcome::NotHandled; };
         kernel.clear_phase_for_end();
         Skill::prepare_monster(skill);
-        if begin_state_skill::<Skill, Runtime>(game, address, runtime).state != QueuedSkillExecutionState::Begun {
+        if begin_state_skill::<Skill, Runtime>(game, address, StateSkillBeginTarget::Object(target_object), runtime)
+            .state != QueuedSkillExecutionState::Begun {
             return MonsterSkillCallOutcome::BeginRejected;
         }
         if let Some(monster) = game.find_region_mut(region_id)

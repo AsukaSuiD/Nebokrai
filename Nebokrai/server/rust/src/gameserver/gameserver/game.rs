@@ -32725,7 +32725,7 @@ impl CGame {
         self.players.get_mut(&player_id)?.move_shape_mut().skill_lifecycle_mut(skill_id, &self.skill_factory)
     }
 
-    fn player_skill_begin_object(&self, source_region: i32, target: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
+    pub(crate) fn player_skill_begin_object(&self, source_region: i32, target: ShapeIdentity) -> Option<(i32, ShapeIdentity)> {
         if target.object_type == PLAYER_TYPE {
             let player = self.find_player(target.id)?;
             return Some((player.shape().get_region_id(), player.shape().identity()));
@@ -39122,12 +39122,6 @@ impl CGame {
         Some(result)
     }
 
-    pub(crate) fn finish_self_shield_movement(&mut self, player_id: i32) {
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-        }
-    }
-
 
     pub(crate) fn target_has_state_by_skill_id(
         &self,
@@ -39706,7 +39700,7 @@ impl CGame {
                 cancel_player_agility_family(self, player_id, skill_id, &mut player_ai, runtime)
             }
             HEARTEN_SKILL_ID => {
-                cancel_player_hearten(self, player_id, &mut player_ai, runtime)
+                cancel_player_hearten(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             POISON_FOG_SKILL_ID => {
                 cancel_player_poison_fog(self, player_id, &mut player_ai, runtime)
@@ -39718,7 +39712,7 @@ impl CGame {
             GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => {
                 cancel_player_god_bless(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, runtime),
+            CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
             PROMOTION_SKILL_ID => {
                 cancel_player_promotion(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
@@ -39746,6 +39740,7 @@ impl CGame {
                 player_id,
                 skill_id,
                 &mut player_ai,
+                cause.uses_nonzero_end(),
                 runtime,
             ),
                 _ => {
@@ -40106,13 +40101,7 @@ impl CGame {
                     )
                 }
             } => execute_player_agility_family,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == HEARTEN_SKILL_ID,
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE
-                }
-            } => execute_player_hearten,
+            _ if dispatch.skill_id() == HEARTEN_SKILL_ID => execute_player_hearten,
             _ if dispatch.skill_id() == PROMOTION_SKILL_ID => execute_player_promotion,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
@@ -40299,7 +40288,12 @@ impl CGame {
                 && !begin_completed
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected
-                && self.player_skill_begin_pending(player_id, dispatch.skill_id());
+                // Полный End(0) уже завершил экземпляр, но его payload
+                // освобождается ниже вместе с командой. Наличие payload
+                // не должно поглощать внешний отказ Begin.
+                && (self.player_skill_begin_pending(player_id, dispatch.skill_id())
+                    || instance.and_then(|address| self.registered_skill(address))
+                        .is_some_and(|skill| skill.lifecycle().is_ended()));
             if begin_rejected {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }

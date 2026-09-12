@@ -80,12 +80,13 @@ pub(crate) fn publish_knock_out_visual(game: &CGame, skill: &MoveShapeSkill, mod
 }
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    game: &mut CGame, instance: RegisteredSkill,
+    begin_target: super::stateskill::StateSkillBeginTarget, runtime: &mut Runtime,
 ) -> bool {
     let Some(skill) = game.registered_skill(instance) else { return false; };
     let lifecycle = *skill.lifecycle();
     let Some(user) = participant(game, lifecycle.user()) else { return false; };
-    if sufferer(game, instance).is_none() { return false; }
+    if begin_target.resolve(game, skill, false).is_none() { return false; }
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return false; };
     let reuse = properties.query_property(REUSE);
     if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
@@ -299,9 +300,9 @@ impl RegisteredStateSkill for KnockOutSkill {
     const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::KnockOut;
 
     fn check_cast<Runtime: GameMainLoopRuntime>(
-        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+        game: &mut CGame, address: RegisteredSkill, begin_target: super::stateskill::StateSkillBeginTarget, runtime: &mut Runtime,
     ) -> bool {
-        check_cast(game, address, runtime)
+        check_cast(game, address, begin_target, runtime)
     }
 
     fn run_ai<Runtime: GameMainLoopRuntime>(

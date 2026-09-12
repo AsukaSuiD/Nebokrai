@@ -1,56 +1,31 @@
-//! Каноническое достигнутое состояние `CHeartenState`.
+//! CHeartenState (0x144), gameserver.exe/GameServer.pdb,
+//! appserver/skills/heartenstate.cpp.
 //!
-//! Состояние `324` хранит wrapping-часы и прибавляет знаковый параметр к
-//! максимальному HP через `u32`, затем ограничивает результат `i32::MAX`.
-//! Начальный визуальный пакет повторяется при каждом пересчёте свойств;
-//! завершение публикуется при замене или строгом истечении срока. DB-запись
-//! хранит остаток срока и знаковую прибавку максимального HP. Установка и
-//! истечение немедленно пересчитывают canonical maximum HP. Vtable exact EXE
-//! направляет `GetRemainedTime` на общее тело `CBlindState` по `0x005F2CD0`.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
-//! формул игрока не запрещают жизненный цикл региональных держателей.
-//! Exact vtable 0x006600D4: End 0x005FD420 отправляет visual до RemoveState.
-//! После эффекта holder перечитывается; общий virtual UpdateProperty
-//! пересчитывает свойства только при фактическом удалении точной записи.
-//! Прямой End и AI используют один exact-key хвост без чтения часов.
-
-//! Restart воспроизводит только Begin(NULL, holder) (0x005EE7A0):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
-//! Begin создаёт принадлежащий записи loop=1 visual без немедленного пакета.
-
-//! Unserialize 0x004F9D80 сохраняет один собственный clock в timestamp;
-//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
-
-//! OnUpdateProperties 0x005EE740: GetSufferer → существующий visual Update(0)
-//! → type400 → wrapping-прибавка maximum HP с пределом INT_MAX. Изменение
-//! живого tagProperty не запускает повторный пересчёт остальных состояний.
-
-use crate::gameserver::appserver::states::state::{
-    resolve_applied_state_sufferer, update_property_state_visual, StatePropertyTarget,
-    update_player_state_properties,
-};
-
-use crate::gameserver::appserver::states::state::{
-    begin_base_applied_state, begin_applied_state_visual,
-};
-use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+//! Первичный Begin записывает часы только при ненулевом U и создаёт loop1
+//! visual без пакета. Пакет начала отправляется при каждом пересчёте свойств
+//! actual S; лишь игрок получает wrapping-прибавку maximum HP с пределом
+//! INT_MAX. После End visual цель разрешается заново для RemoveState.
+//! Перезапуск с NULL U сохраняет часы и прежнего пользователя.
+//! DB-запись содержит ID, остаток срока и знаковую прибавку HP; загрузка
+//! читает часы перед полями, клиентский остаток — два живых чтения часов.
+//! Payload и DB-span принадлежат одной записи общей арены.
 
 use super::hearten::HEARTEN_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
+    remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
+    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_end_visual,
+    update_player_state_properties, update_property_state_visual,
+};
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
-pub(crate) const HEARTEN_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-pub(crate) const HEARTEN_STATE_END_MESSAGE: i32 = 0x000b_fe04;
 pub(crate) const HEARTEN_STATE_BYTES: usize = 12;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct HeartenState {
     started_at_ms: u32,
     keep_time_ms: u32,
@@ -61,23 +36,23 @@ impl HeartenState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, max_hp_gain: i32) -> Self {
         Self { started_at_ms, keep_time_ms, max_hp_gain }
     }
-    pub(crate) const fn skill_id(self) -> u32 { HEARTEN_SKILL_ID }
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+
+    pub(crate) const fn skill_id(&self) -> u32 { HEARTEN_SKILL_ID }
+
+    pub(crate) const fn expired(&self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+
+    pub(crate) fn client_time(&self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
-    pub(crate) const fn apply(self, value: u32) -> u32 {
+
+    pub(crate) const fn apply(&self, value: u32) -> u32 {
         let result = value.wrapping_add(self.max_hp_gain as u32);
         if result > i32::MAX as u32 { i32::MAX as u32 } else { result }
     }
 
-    pub(crate) fn decode(
-        payload: &[u8],
-        offset: usize,
-        now_ms: u32,
-    ) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != HEARTEN_SKILL_ID {
             return Err(LegacyReadBlock {
@@ -90,70 +65,62 @@ impl HeartenState {
     }
 
     pub(crate) fn encoded(
-        self,
-        now_milliseconds: impl FnMut() -> u32,
+        &self, now_milliseconds: impl FnMut() -> u32,
     ) -> [u8; HEARTEN_STATE_BYTES] {
-        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
-    }
-
-    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; HEARTEN_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(HEARTEN_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(HEARTEN_SKILL_ID);
-        writer.write_u32(remaining_time_ms);
+        writer.write_u32(self.client_time(now_milliseconds) as u32);
         writer.write_i32(self.max_hp_gain);
-        bytes
-            .try_into()
-            .expect("размер состояния воодушевления фиксирован")
+        bytes.try_into().expect("размер состояния воодушевления фиксирован")
     }
 
-    pub(crate) fn encoded_for_install(self) -> [u8; HEARTEN_STATE_BYTES] {
-        self.encoded_with_remaining(self.keep_time_ms)
+    pub(crate) fn encoded_for_install(&self) -> [u8; HEARTEN_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(HEARTEN_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(HEARTEN_SKILL_ID);
+        writer.write_u32(self.keep_time_ms);
+        writer.write_i32(self.max_hp_gain);
+        bytes.try_into().expect("размер состояния воодушевления фиксирован")
     }
-
-
 }
 
-pub(crate) fn send_hearten_state_visual(
+pub(crate) fn begin_primary_hearten_state(
     game: &mut CGame,
-    player_id: i32,
-    state: HeartenState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
+    user: Option<(i32, ShapeIdentity)>,
+    sufferer: (i32, ShapeIdentity),
+    mut state: HeartenState,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<StateKey> {
+    if user.is_some() { state.started_at_ms = now(); }
+    let participant = |(region, identity)| {
+        let shape = resolve_state_move_shape(game, region, identity)?.shape();
+        Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
     };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(if begin {
-        HEARTEN_STATE_BEGIN_MESSAGE
-    } else {
-        HEARTEN_STATE_END_MESSAGE
-    });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.client_time(now_milliseconds));
-        message.add_long(0);
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+    let user = match user { Some(user) => Some(participant(user)?), None => None };
+    let sufferer = participant(sufferer)?;
+    let record = state.encoded_for_install();
+    let shape = resolve_state_move_shape_mut(game, sufferer.0, sufferer.1)?;
+    let key = shape.append_applied_state_record(state, &record);
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, user);
+    shape.set_applied_state_sufferer(key, Some(sufferer));
+    // Loop1 создаёт общий каталог. Между Begin и append нет внешнего callback;
+    // первый UpdateVisualEffect принадлежит последующему UpdateProperty.
+    Some(key)
 }
 
 pub(crate) fn update_hearten_state_properties(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
-    now: &mut dyn FnMut() -> u32,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity,
+    key: StateKey, now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    if resolve_applied_state_sufferer(game, region_id, holder, key).is_none() {
-        return false;
-    }
+    let Some((_, sufferer)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
     let _ = update_property_state_visual::<HeartenState>(
         game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
         |state, now| state.client_time(now) as u32,
     );
+    if sufferer.object_type != 400 { return true; }
     update_player_state_properties::<HeartenState>(game, region_id, holder, key, |state, player| {
         player.update_state_combat_properties(|mut properties| {
             properties.maximum_hp = state.apply(properties.maximum_hp);
@@ -163,86 +130,35 @@ pub(crate) fn update_hearten_state_properties(
 }
 
 pub(crate) fn restart_hearten_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
-    _changing_region: bool,
-    _now: &mut dyn FnMut() -> u32,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _changing_region: bool, _now: &mut dyn FnMut() -> u32,
 ) -> bool {
     if resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<HeartenState>(key)).is_none() {
-        return false;
-    }
-    if !begin_base_applied_state(game, region_id, holder, key) {
-        return false;
-    }
+        .and_then(|shape| shape.applied_state::<HeartenState>(key)).is_none()
+    { return false; }
+    if !begin_base_applied_state(game, region_id, holder, key) { return false; }
     let _ = begin_applied_state_visual(game, region_id, holder, key, 1);
     true
 }
 
 pub(crate) fn update_hearten_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
-    now_ms: u32,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey, now_ms: u32,
 ) -> bool {
     if !resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<HeartenState>(key))
-        .is_some_and(|state| state.expired(now_ms)) {
-        return false;
-    }
+        .is_some_and(|state| state.expired(now_ms))
+    { return false; }
     end_hearten_state(game, region_id, holder, key)
 }
 
 pub(crate) fn end_hearten_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<HeartenState>(key))
-        .copied()
-        else { return false };
-    let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(state.skill_id() as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<HeartenState>(key, HEARTEN_STATE_BYTES))
-        .is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<HeartenState>(key)).is_none()
+    { return false; }
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(sufferer) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, sufferer, HEARTEN_STATE_BYTES)
 }
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранён только не подключённый конструктор по умолчанию.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp
-
-// ============================================================================
-// FUNCTION: CHeartenState::CHeartenState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:25
-// RVA: 0x001EE580
-// ADDRESS: 005ee580
-// PROTOTYPE: undefined __thiscall CHeartenState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer

@@ -266,6 +266,8 @@ use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::knockoutruntime::{KNOCK_OUT_SKILL_ID, execute_owned_monster_knock_out};
 use super::promotion::{PROMOTION_SKILL_ID, execute_owned_monster_promotion};
+use super::cure::{CURE_SKILL_ID, execute_owned_monster_cure};
+use super::hearten::{HEARTEN_SKILL_ID, execute_owned_monster_hearten};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
 use super::snakebolt::{SNAKE_BOLT_SKILL_ID, execute_owned_snake_bolt};
 use super::snowstorm::{SNOW_STORM_SKILL_ID, execute_owned_monster_snow_storm};
@@ -1020,6 +1022,8 @@ fn owned_target_state_executor<Runtime: GameMainLoopRuntime>(
         SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
         SPIDER_POISON_SKILL_ID => Some(execute_owned_spider_poison),
         PROMOTION_SKILL_ID => Some(execute_owned_monster_promotion),
+        CURE_SKILL_ID => Some(execute_owned_monster_cure),
+        HEARTEN_SKILL_ID => Some(execute_owned_monster_hearten),
         _ => None,
     }
 }

@@ -51,6 +51,16 @@ fn set_state_sufferer_region(game: &mut CGame, region_id: i32, holder: ShapeIden
     }
 }
 
+fn set_defense_shield_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
+    let Some(state) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.defense_shield(key)) else { return; };
+    if matches!(state, skills::shieldstate::DefenseShieldState::Promotion(_)) {
+        set_state_user_region(game, region_id, holder, key);
+    } else {
+        set_state_sufferer_region(game, region_id, holder, key);
+    }
+}
+
 // Оба GodBless: vtable0x00661864/0x00660074 +0x2C=0x00601660,
 // записывающий user-region и sufferer-region независимо от варианта Begin.
 fn set_god_bless_regions(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
@@ -801,7 +811,8 @@ state_callbacks! {
         },
         skills::curestate::end_cure_state_key,
         skills::curestate::restart_cure_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::BossBlueQuake(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
         |game, region, target, key, runtime| {
@@ -901,7 +912,8 @@ state_callbacks! {
         },
         skills::shieldstate::end_defense_shield,
         skills::shieldstate::restart_defense_shield_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_defense_shield_region
     ); visual = |state| { let once = matches!(state, StateData::DefenseShield(skills::shieldstate::DefenseShieldState::Promotion(_))); Some((if once { 0 } else { 1 }, once)) },
     StateData::DaubPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
         |game, region, target, key, runtime| {

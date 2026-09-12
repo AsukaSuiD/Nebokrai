@@ -135,12 +135,13 @@ fn install_state<Runtime: GameMainLoopRuntime>(
 }
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    game: &mut CGame, address: RegisteredSkill,
+    begin_target: super::stateskill::StateSkillBeginTarget, runtime: &mut Runtime,
 ) -> bool {
     let Some(skill) = game.registered_skill(address) else { return false; };
     let (region, identity) = skill.lifecycle().user();
     if resolve_state_move_shape(game, region, identity).is_none()
-        || resolve_skill_sufferer(game, skill.lifecycle()).is_none()
+        || begin_target.resolve(game, skill, false).is_none()
     { return false; }
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return false; };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
@@ -292,9 +293,9 @@ impl RegisteredStateSkill for SpiderWebSkill {
     }
 
     fn check_cast<Runtime: GameMainLoopRuntime>(
-        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+        game: &mut CGame, address: RegisteredSkill, begin_target: super::stateskill::StateSkillBeginTarget, runtime: &mut Runtime,
     ) -> bool {
-        check_cast(game, address, runtime)
+        check_cast(game, address, begin_target, runtime)
     }
 
     fn run_ai<Runtime: GameMainLoopRuntime>(

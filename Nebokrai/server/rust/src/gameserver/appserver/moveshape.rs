@@ -288,9 +288,7 @@ use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
 use crate::gameserver::appserver::skills::enlargemaxhpstate::{ENLARGE_MAX_HP_STATE_BYTES, EnlargeMaxHpState};
 use crate::gameserver::appserver::skills::enlargemaxmpstate::{ENLARGE_MAX_MP_STATE_BYTES, EnlargeMaxMpState};
-use crate::gameserver::appserver::skills::heartenstate::{
-    HeartenState, HEARTEN_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::heartenstate::HeartenState;
 use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
 };
@@ -311,12 +309,8 @@ use crate::gameserver::appserver::skills::energyholdingstate::{
 use crate::gameserver::appserver::skills::lifeshieldstate::{
     LifeShieldState, LIFE_SHIELD_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::machineshieldstate::{
-    MachineShieldState, MACHINE_SHIELD_STATE_BYTES,
-};
-use crate::gameserver::appserver::skills::manashieldstate::{
-    ManaShieldState, MANA_SHIELD_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
+use crate::gameserver::appserver::skills::manashieldstate::MANA_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::promotionstate::PROMOTION_STATE_BYTES;
 use crate::gameserver::appserver::skills::knockoutstate::{
     KNOCK_OUT_STATE_BYTES, KnockOutState,
@@ -1994,18 +1988,6 @@ impl CMoveShape {
         self.state_entries.first::<OriginState>().copied()
     }
 
-    pub(crate) fn replace_hearten_state(&mut self, state: HeartenState) -> Option<HeartenState> {
-        let previous = self.state_entries.take_first::<HeartenState>();
-        self.remove_serialized_state_record(state.skill_id(), HEARTEN_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-    pub(crate) fn hearten_state(&self) -> Option<HeartenState> {
-        self.state_entries.first::<HeartenState>().copied()
-    }
-
 
 
 
@@ -2157,44 +2139,6 @@ impl CMoveShape {
         let state = self.state_entries.take_first::<BossBlueQuakeState>()?;
         self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
         Some(state)
-    }
-
-    pub(crate) fn replace_mana_shield_state(
-        &mut self,
-        state: ManaShieldState,
-    ) -> Option<ManaShieldState> {
-        let previous = self
-            .defense_shield_key(state.skill_id())
-            .and_then(|key| self.state_entries.take::<DefenseShieldState>(key))
-            .and_then(|candidate| match candidate {
-                DefenseShieldState::Life(_) => None,
-                DefenseShieldState::Mana(previous) => Some(previous),
-                DefenseShieldState::Machine(_) => None,
-                DefenseShieldState::Promotion(_) => None,
-            });
-        self.remove_serialized_state_record(state.skill_id(), MANA_SHIELD_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(DefenseShieldState::Mana(state));
-        previous
-    }
-
-    pub(crate) fn replace_machine_shield_state(
-        &mut self,
-        state: MachineShieldState,
-    ) -> Option<MachineShieldState> {
-        let previous = self
-            .defense_shield_key(state.skill_id())
-            .and_then(|key| self.state_entries.take::<DefenseShieldState>(key))
-            .and_then(|candidate| match candidate {
-                DefenseShieldState::Life(_) => None,
-                DefenseShieldState::Machine(previous) => Some(previous),
-                DefenseShieldState::Mana(_) => None,
-                DefenseShieldState::Promotion(_) => None,
-            });
-        self.remove_serialized_state_record(state.skill_id(), MACHINE_SHIELD_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(DefenseShieldState::Machine(state));
-        previous
     }
 
     pub(crate) fn replace_life_shield_state(
@@ -2354,13 +2298,6 @@ impl CMoveShape {
 
     pub(crate) fn restore_defense_shields(&mut self, states: StateBatch<DefenseShieldState>) {
         self.state_entries.restore_batch(states);
-    }
-
-    pub(crate) fn push_cure_state(&mut self, state: CureState) {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        let offset = self.ex_states.len() - CURE_STATE_BYTES;
-        let key = self.state_entries.append(state);
-        self.state_entries.set_serialized_span(key, (offset, CURE_STATE_BYTES));
     }
 
     /// Позиция замены и техническое место DB-записи. Caller сохраняет их

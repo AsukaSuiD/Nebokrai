@@ -1,50 +1,31 @@
-//! Упорядоченная защитная ветвь `CFightDefense::PreDefense`.
-//!
-//! Исходный `m_vStates` применяет щиты в порядке вставки для каждой части
-//! атаки. Типизированный enum сохраняет этот порядок без RTTI и не превращает
-//! состояния в универсальную систему эффектов.
-//! Источник: `gameserver.exe` + `GameServer.pdb`, владельцы
-//! `appserver/skills/{life,mana,machine}shieldstate.cpp` и `moveshape.cpp`.
-//! AI (`0x5E2D90`, `0x5F34B0`) проверяет срок, прочность, смерть и MP.
-//! End (`0x5E3110`, `0x5FD420`) выполняет эффект до RemoveState
-//! (`0x4CDAB0`), который вызывает общий virtual UpdateProperty. Поэтому следующий
-//! щит проверяется после полного завершения предыдущего, а LifeShield
-//! создаёт Cure до удаления самого щита. Экземплярами владеет общий
-//! `CMoveShape::state_entries`: SlotMap сохраняет identity, а список адресов —
-//! исходный порядок и пропуски. End удаляет тот же ключ после своего эффекта.
-//! Для чистого PreDefense payload временно выделяется в keyed batch и
-//! возвращается в прежние ключи до любых callbacks или применения урона.
-//! Vtable Life 0x0065F1EC направляет AI на 0x005E2D90; Mana 0x00660654 и
-//! Machine 0x006604DC — на одно тело 0x005F34B0. До чтения ресурсов общими
-//! являются deadline, signed life, GetSufferer и IsDied. Затем EXE читает
-//! unchecked CPlayer layout [+0x284], а Life — ещё GetWarSoulGoods0x0042DF10.
-//! Достигнутые creators и DB load этих трёх щитов принадлежат CPlayer.
-//! Для прочих materialized holders выполняется доказанный общий префикс AI
-//! и настоящий End, но MP/war soul не выдумываются: семантика последующего
-//! unchecked player-layout вне достигнутых creators остаётся неизвестной.
-//! Promotion имеет только собственный срок, без life/dead/resource gates.
-//! Direct End получает тот же живой ключ без проверок AI. Life выполняет
-//! AddCure с вложенным End прежнего Cure до своего visual и удаления;
-//! Machine/Mana выполняют visual→Remove, Promotion не создаёт End-пакет.
-//! Player-wrapper и generic AI входят в один End с опубликованным holder.
-//! restart_defense_shield_state переносит object Begin(NULL, holder):
-//! Life 0x005E2CE0, Mana 0x005F3400, Machine 0x005F1F50,
-//! Promotion 0x005F2F00. Guard требует только sufferer, затем base Begin
-//! без сброса времени → создание visual → Begin-пакет → base visual tail.
-//! У Promotion loop=0 и base tail завершает visual, у остальных loop=1.
-//! Timestamp каждого payload задаётся отдельным clock его Unserialize;
-//! Begin читает часы лишь через клиентский остаток для пакета.
+//! Защитная ветвь CFightDefense::PreDefense: gameserver.exe + GameServer.pdb,
+//! appserver/skills/{life,mana,machine}shieldstate.cpp, promotionstate.cpp и moveshape.cpp.
+//! Общая арена SlotMap сохраняет identity, порядок щитов и пропуски m_vStates.
+//! Чистый PreDefense временно выделяет payload в keyed batch и возвращает его
+//! до callbacks. End выполняет эффект, удаляет прежний ключ и обновляет свойства;
+//! Life сначала создаёт Cure, Machine/Mana отправляют End-пакет, Promotion — нет.
+//! AI Life/Mana/Machine проверяет deadline, signed life и смерть перед ресурсами.
+//! Их достигнутые creators/DB load требуют CPlayer; последующий unchecked MP/layout
+//! для иных holders не выдумывается. Promotion проверяет только собственный срок.
+//! Первичный Mana/Machine Begin читает базовые часы при U, отправляет visual и
+//! добавляет состояние в арену; UpdateProperty остаётся caller-у. Restart после
+//! Unserialize использует Begin(NULL, holder) и сохраняет уже прочитанный старт.
+//! Object Begin требует S; visual loop1 общий, у Promotion loop0 завершается сразу.
 
-use super::lifeshieldstate::{finish_life_shield_state_for_holder, LifeShieldState};
+use super::lifeshieldstate::{add_life_shield_cure, LifeShieldState};
 use super::machineshieldstate::MachineShieldState;
 use super::manashieldstate::ManaShieldState;
 use super::promotionstate::PromotionState;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::AttackPower;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::state::{
+    StatePropertyTarget, remove_applied_state_from, resolve_applied_state_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_end_visual,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DefenseShieldState {
@@ -120,6 +101,70 @@ impl DefenseShieldState {
     }
 }
 
+/// Первичный object Begin щитов Mana/Machine: S guard → base clock при U →
+/// visual loop1 → пакет → append. DB-record технический и часов не читает.
+pub(crate) fn begin_primary_self_shield_state(
+    game: &mut CGame,
+    holder_region: i32,
+    holder: ShapeIdentity,
+    user: Option<(i32, ShapeIdentity)>,
+    sufferer: Option<(i32, ShapeIdentity)>,
+    mut state: DefenseShieldState,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<StateKey> {
+    let sufferer = sufferer?;
+    if !matches!(state, DefenseShieldState::Mana(_) | DefenseShieldState::Machine(_)) { return None; }
+    resolve_state_move_shape(game, holder_region, holder)?;
+    resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
+    if user.is_some() {
+        let started = now();
+        match &mut state {
+            DefenseShieldState::Mana(state) => state.begin_at(started),
+            DefenseShieldState::Machine(state) => state.begin_at(started),
+            _ => unreachable!("первичный owner проверен до Begin"),
+        }
+    }
+    let participant = |(region, identity)| {
+        let shape = resolve_state_move_shape(game, region, identity)?.shape();
+        Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
+    };
+    let user = match user { Some(user) => Some(participant(user)?), None => None };
+    let sufferer = participant(sufferer)?;
+    let message = shield_begin_message(sufferer.1, state, now);
+    let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
+    let record = match state {
+        DefenseShieldState::Mana(state) => state.encoded_for_install().to_vec(),
+        DefenseShieldState::Machine(state) => state.encoded_for_install().to_vec(),
+        _ => unreachable!("первичный owner проверен до Begin"),
+    };
+    let shape = resolve_state_move_shape_mut(game, holder_region, holder)?;
+    let key = shape.append_applied_state_record(state, &record);
+    shape.begin_applied_state_visual(key, 1);
+    shape.update_applied_state_visual_base(key);
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, user);
+    shape.set_applied_state_sufferer(key, Some(sufferer));
+    Some(key)
+}
+
+fn shield_begin_message(
+    sufferer: ShapeIdentity, state: DefenseShieldState, now: &mut dyn FnMut() -> u32,
+) -> CMessage {
+    let mut message = CMessage::new(super::manashieldstate::MANA_SHIELD_STATE_BEGIN_MESSAGE);
+    message.add_long(sufferer.object_type);
+    message.add_long(sufferer.id);
+    message.add_long(state.skill_id() as i32);
+    let (time, life) = match state {
+        DefenseShieldState::Life(state) => (state.client_time(&mut *now), state.life()),
+        DefenseShieldState::Machine(state) => (state.client_time(&mut *now), state.life()),
+        DefenseShieldState::Mana(state) => (state.client_time(&mut *now), state.life()),
+        DefenseShieldState::Promotion(state) => (state.client_time(&mut *now), 0),
+    };
+    message.add_long(time);
+    message.add_long(life);
+    message
+}
+
 pub(crate) fn restart_defense_shield_state(
     game: &mut CGame,
     region_id: i32,
@@ -138,18 +183,7 @@ pub(crate) fn restart_defense_shield_state(
     if crate::gameserver::appserver::states::state::begin_applied_state_visual(
         game, region_id, holder, key, loop_value,
     ) {
-        let mut message = CMessage::new(super::manashieldstate::MANA_SHIELD_STATE_BEGIN_MESSAGE);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        let (time, life) = match state {
-            DefenseShieldState::Life(state) => (state.client_time(&mut *now), state.life()),
-            DefenseShieldState::Machine(state) => (state.client_time(&mut *now), state.life()),
-            DefenseShieldState::Mana(state) => (state.client_time(&mut *now), state.life()),
-            DefenseShieldState::Promotion(state) => (state.client_time(&mut *now), 0),
-        };
-        message.add_long(time);
-        message.add_long(life);
+        let message = shield_begin_message(holder, state, now);
         let _ = game.send_move_shape_around(region_id, holder, &message);
         let _ = crate::gameserver::appserver::states::state::update_applied_state_visual_base(
             game, region_id, holder, key,
@@ -191,25 +225,23 @@ pub(crate) fn end_defense_shield(
 ) -> bool {
     let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.defense_shield(key)).copied() else { return false };
-    match state {
+    let bytes = match state {
         DefenseShieldState::Life(state) => {
-            finish_life_shield_state_for_holder(game, region_id, holder, state);
+            add_life_shield_cure(game, region_id, holder, state, key);
+            super::lifeshieldstate::LIFE_SHIELD_STATE_BYTES
         }
-        DefenseShieldState::Machine(_) | DefenseShieldState::Mana(_) => {
-            let mut message = CMessage::new(super::manashieldstate::MANA_SHIELD_STATE_END_MESSAGE);
-            message.add_long(holder.object_type);
-            message.add_long(holder.id);
-            message.add_long(state.skill_id() as i32);
-            let _ = game.send_move_shape_around(region_id, holder, &message);
+        DefenseShieldState::Machine(_) => super::machineshieldstate::MACHINE_SHIELD_STATE_BYTES,
+        DefenseShieldState::Mana(_) => super::manashieldstate::MANA_SHIELD_STATE_BYTES,
+        DefenseShieldState::Promotion(_) => {
+            let removed = resolve_state_move_shape_mut(game, region_id, holder)
+                .and_then(|shape| shape.remove_defense_shield_key(key)).is_some();
+            if removed { let _ = game.update_move_shape_properties(region_id, holder); }
+            return removed;
         }
-        DefenseShieldState::Promotion(_) => {}
-    }
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_defense_shield_key(key)).is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    };
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(sufferer) = resolve_applied_state_sufferer(game, region_id, holder, key) else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, sufferer, bytes)
 }
 
 pub(crate) fn expire_player_defense_shield(

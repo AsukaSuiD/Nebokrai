@@ -1,282 +1,185 @@
-//! Общий execution-owner самонакладываемых `CManaShield` и `CMachineShield`.
-//!
-//! Здесь объединён только подтверждённый одинаковый контракт двух навыков:
-//! двойная проверка MP, время восстановления, стадии каста, клиентская отмена
-//! и точный порядок полей пакета. Конкретный набор параметров и создание
-//! канонического состояния остаются у владельца навыка. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`. Источник: gameserver.exe
-//! + GameServer.pdb, `CMachineShield::AI` (0x005671C0) и `CManaShield::AI`
-//! (0x00569DF0). Каст ждёт unsigned now >= wrapping(start + delay).
-//! После расхода MP вызывается OnChangeStates; прежний щит полностью
-//! завершается до Begin нового, а после установки вызывается UpdateProperty.
-//! Проверка MP внутри AI использует знак 32-битной разности (`sub/js`),
-//! а не беззнаковое сравнение исходных значений.
-//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
-//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
-//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
-//! Оба concrete owner наследуют оружейный AfterUseSkill (0x0053CF30):
-//! ненулевой End после возврата движения изнашивает оружие GetUser, затем
-//! фиксирует reuse через общую границу экземпляра. End(0) не делает этого.
+//! Самонакладываемые CManaShield и CMachineShield: gameserver.exe + GameServer.pdb,
+//! исходные owner-ы appserver/skills/{mana,machine}shield.cpp.
+//! Общая обвязка stateskill владеет Begin, visual, фазой и полным End.
+//! Здесь остаются двойная проверка MP и наложение щита после задержки.
+//! Исходный caller требует CPlayer: прямые GetMP/SetMP/SendSystemInfo не являются
+//! виртуальным контрактом монстра. Чужой unchecked layout не имитируется.
+//! Состояние принадлежит арене источника и продолжает жить после End навыка.
 
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
 use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
 use super::manashield::{MANA_SHIELD_SKILL_ID, ManaShieldOwner};
+use super::shieldstate::{DefenseShieldState, begin_primary_self_shield_state};
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
+    execute_player_state_skill, finish_player_state_skill, publish_state_skill_visual,
+    state_skill_outcome,
 };
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::end_and_destroy_state_at;
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 
-const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
-const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
-const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
-const SKILL_USAGE_STATE_HP: u32 = 10_010;
-const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
-const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
+const MP_LOSS: u32 = 2;
+const DELAY: u32 = 10_001;
+const REUSE: u32 = 10_005;
+const CAN_BREAK: u32 = 10_006;
 
 pub(crate) trait SelfShieldOwner {
-    type State: Copy;
-    type Extra: Copy;
-
     const SKILL_ID: u32;
-    const EFFECT_MESSAGE: i32;
+    const VISUAL: SkillVisualEffectKind;
 
-    fn read_extra(properties: &CSkillBaseProperties) -> Self::Extra;
-    fn create_state(
-        started_at_ms: u32,
-        keep_time_ms: u32,
-        life: i32,
-        hp_factor: u16,
-        mp_factor: u16,
-        extra: Self::Extra,
-    ) -> Self::State;
-    fn replace_state(player: &mut CPlayer, state: Self::State) -> Option<Self::State>;
-    fn send_state_visual(
-        game: &mut CGame,
-        player_id: i32,
-        state: Self::State,
-        begin: bool,
-        now_milliseconds: impl FnMut() -> u32,
-    );
+    /// Параметры читаются после End прежнего щита из таблицы начала AI.
+    fn create_state(properties: &CSkillBaseProperties) -> DefenseShieldState;
+}
 
+impl<Owner: SelfShieldOwner> RegisteredStateSkill for Owner {
+    const ID: u32 = Owner::SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = <Owner as SelfShieldOwner>::VISUAL;
+    const VISUAL_FAILURES: &'static [u32] = &[2, 7, 8, 13, 14];
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::UserOnly;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = None;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, _target: StateSkillBeginTarget,
+        runtime: &mut Runtime,
+    ) -> bool {
+        check_cast::<Owner, Runtime>(game, instance, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        match execute_stage::<Owner, Runtime>(game, instance, runtime) {
+            Some(argument) => end_state_skill(game, instance, argument, runtime),
+            None => state_skill_outcome(QueuedSkillExecutionState::Pending),
+        }
+    }
 }
 
 pub(crate) const fn is_self_shield_skill(skill_id: u32) -> bool {
     matches!(skill_id, MANA_SHIELD_SKILL_ID | MACHINE_SHIELD_SKILL_ID)
 }
 
-fn finish_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    runtime: &mut Runtime,
-) {
-    game.finish_self_shield_movement(player_id);
-    game.after_use_player_skill(player_id, Owner::SKILL_ID, runtime);
-}
-
-fn cancel_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, Owner::SKILL_ID).map(SkillExecutionKernel::dispatch) else {
-        return false;
-    };
-    finish_player_self_shield::<Owner, Runtime>(game, player_id, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
+pub(crate) fn publish_self_shield_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    match skill.id() {
+        MANA_SHIELD_SKILL_ID => publish_state_skill_visual::<ManaShieldOwner>(game, skill, mode),
+        MACHINE_SHIELD_SKILL_ID => publish_state_skill_visual::<MachineShieldOwner>(game, skill, mode),
+        _ => {}
+    }
 }
 
 pub(crate) fn cancel_player_self_shield_dispatch<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, skill_id: u32, player_ai: &mut CPlayerAI,
+    nonzero_end: bool, runtime: &mut Runtime,
 ) -> bool {
     match skill_id {
-        MANA_SHIELD_SKILL_ID => cancel_player_self_shield::<ManaShieldOwner, Runtime>(
-            game, player_id, player_ai, runtime,
+        MANA_SHIELD_SKILL_ID => finish_player_state_skill::<ManaShieldOwner, Runtime>(
+            game, player_id, player_ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
         ),
-        MACHINE_SHIELD_SKILL_ID => cancel_player_self_shield::<MachineShieldOwner, Runtime>(
-            game, player_id, player_ai, runtime,
+        MACHINE_SHIELD_SKILL_ID => finish_player_state_skill::<MachineShieldOwner, Runtime>(
+            game, player_id, player_ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
         ),
         _ => false,
     }
 }
 
 pub(crate) fn execute_player_self_shield_dispatch<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
-    };
-    match skill_id {
-        MANA_SHIELD_SKILL_ID => execute_player_self_shield::<ManaShieldOwner, Runtime>(
+    match dispatch.skill_id() {
+        MANA_SHIELD_SKILL_ID => execute_player_state_skill::<ManaShieldOwner, Runtime>(
             game, player_id, dispatch, player_ai, runtime,
         ),
-        MACHINE_SHIELD_SKILL_ID => execute_player_self_shield::<MachineShieldOwner, Runtime>(
+        MACHINE_SHIELD_SKILL_ID => execute_player_state_skill::<MachineShieldOwner, Runtime>(
             game, player_id, dispatch, player_ai, runtime,
         ),
-        _ => QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Rejected,
-            first_contact: false,
-        },
+        _ => state_skill_outcome(QueuedSkillExecutionState::Rejected),
     }
 }
 
-fn send_cast<Owner: SelfShieldOwner>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_level: i32,
-    action: u8,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
+fn check_cast<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> bool {
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let (_, user) = skill.lifecycle().user();
+    if user.object_type != 400 || game.find_player(user.id).is_none() { return false; }
+    let Some(properties) = game.skill_base_properties(Owner::SKILL_ID, skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(REUSE);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        game.send_skill_system_info(user.id, b"GS0278");
+        return false;
+    }
+    // Нулевой расход вообще не читает MP; ненулевой проверяется знаком
+    // wrapping-разности, а не unsigned сравнением двух исходных величин.
+    if properties.query_property(MP_LOSS) != 0 {
+        let mana = game.find_player(user.id).expect("источник CheckCast разрешён").mana();
+        let mp_loss = properties.query_property(MP_LOSS);
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            game.update_registered_skill_visual(instance, 7);
+            game.send_skill_system_info_with_unsigned(user.id, b"GS0288", properties.query_property(MP_LOSS));
+            return false;
+        }
+    }
+    if let Some(player) = game.find_player_mut(user.id) { player.set_skill_moveable(false); }
+    true
+}
+
+/// Some(0/1) задаёт точный End; None оставляет начатый навык следующему AI.
+fn execute_stage<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> Option<i32> {
+    let skill = game.registered_skill(instance)?;
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) { return None; }
+    let Some(properties) = game.skill_base_properties(Owner::SKILL_ID, skill.level()).cloned() else { return Some(0); };
+    let (_, user) = skill.lifecycle().user();
+    if user.object_type != 400 || game.find_player(user.id).is_none() { return Some(0); }
+    if skill.execution_stage() == Some(SkillStage::Begin) {
+        let mana = game.find_player(user.id)?.mana();
+        let mp_loss = properties.query_property(MP_LOSS);
+        let remaining = mana.wrapping_sub(mp_loss);
+        if (remaining as i32) < 0 {
+            game.update_registered_skill_visual(instance, 7);
+            game.send_skill_system_info_with_unsigned(user.id, b"GS0288", properties.query_property(MP_LOSS));
+            return Some(0);
+        }
+        game.find_player_mut(user.id)?.set_mana(remaining);
+        let _ = game.publish_player_states(user.id);
+        // OnChangeStates предшествует CAN. Сохранена таблица начала AI,
+        // но параметры читаются в исходных поздних позициях после callbacks.
+        let can_break = properties.query_property(CAN_BREAK);
+        game.registered_skill_mut(instance)?.lifecycle_mut().set_available(can_break != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let delay = properties.query_property(DELAY);
+    let started = game.registered_skill(instance)?.lifecycle().started_at_ms();
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return None; }
+    game.update_registered_skill_visual(instance, 1);
+    let player = game.find_player(user.id)?;
+    let region = player.shape().get_region_id();
     let identity = player.shape().identity();
-    let mut message = CMessage::new(Owner::EFFECT_MESSAGE);
-    message.add_byte(action);
-    message.add_long(Owner::SKILL_ID as i32);
-    message.base_mut().add_short(skill_level as i16);
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    if action == 1 {
-        message.add_long(player.shape().get_direction());
-    } else {
-        message.add_long(0);
-        message.add_long(0);
+    let previous = player.move_shape().find_state_position(|state| state.state_id() == Owner::SKILL_ID);
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, region, identity, position);
     }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-pub(crate) fn execute_player_self_shield<Owner, Runtime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome
-where
-    Owner: SelfShieldOwner,
-    Runtime: GameMainLoopRuntime,
-{
-    let terminal = |state| QueuedSkillExecutionOutcome {
-        state,
-        first_contact: false,
-    };
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. }
-            if skill_id == Owner::SKILL_ID => skill_id,
-        _ => return terminal(QueuedSkillExecutionState::Rejected),
-    };
-    let Some(player) = game.find_player(player_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
-    let initial_mana = player.mana();
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let state_life = properties.query_property(SKILL_USAGE_STATE_HP) as i32;
-    let hp_factor = properties.query_property(SKILL_USAGE_TARGET_HP_DECREASE_FACTOR) as u16;
-    let mp_factor = properties.query_property(SKILL_USAGE_TARGET_MP_DECREASE_FACTOR) as u16;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    let extra = Owner::read_extra(properties);
-
-    if game.player_skill_execution(player_id, Owner::SKILL_ID).is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-        let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(
-            game.player_skill_last_used_ms(player_id, Owner::SKILL_ID),
-            reuse_delay_ms,
-            cooldown_now_ms,
-        ) {
-            game.send_self_state_skill_failure(Owner::EFFECT_MESSAGE, player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS0278");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if initial_mana < mp_loss {
-            game.send_self_state_skill_failure(Owner::EFFECT_MESSAGE, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(skill_id));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, Owner::SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.player_skill_execution(player_id, Owner::SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
-        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        let remaining_mana = current_mana.wrapping_sub(mp_loss);
-        if (remaining_mana as i32) < 0 {
-            game.send_self_state_skill_failure(Owner::EFFECT_MESSAGE, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            game.finish_self_shield_movement(player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(remaining_mana);
-        }
-        let _ = game.publish_player_states(player_id);
-        send_cast::<Owner>(game, player_id, skill_level, 1);
-        if let Some(state) = game.player_skill_execution_mut(player_id, Owner::SKILL_ID) {
-            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-
-    let started_at_ms = game.player_skill_execution(player_id, Owner::SKILL_ID)
-        .map(SkillExecutionKernel::started_at_ms)
-        .expect("выполнение щита создано или восстановлено");
-    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
-        return terminal(QueuedSkillExecutionState::Pending);
-    }
-
-    send_cast::<Owner>(game, player_id, skill_level, 2);
-    let _ = super::shieldstate::end_player_defense_shield(
-        game, player_id, Owner::SKILL_ID, runtime.now_milliseconds(),
+    let state = Owner::create_state(&properties);
+    // Новый щит начинается после полного старого End и добавляется в хвост.
+    // Повторной замены по ID нет: callback мог добавить другой экземпляр.
+    let _ = begin_primary_self_shield_state(
+        game, region, identity, Some((region, identity)), Some((region, identity)),
+        state, &mut || runtime.now_milliseconds(),
     );
-    let state = Owner::create_state(
-        runtime.now_milliseconds(),
-        keep_time_ms,
-        state_life,
-        hp_factor,
-        mp_factor,
-        extra,
-    );
-    Owner::send_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
-    let _ = game
-        .find_player_mut(player_id)
-        .and_then(|player| Owner::replace_state(player, state));
-    let _ = game.update_player_properties(player_id);
-    if let Some(state) = game.player_skill_execution_mut(player_id, Owner::SKILL_ID) {
-        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_self_shield::<Owner, Runtime>(game, player_id, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
+    let _ = game.update_player_properties(user.id);
+    Some(1)
 }

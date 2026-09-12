@@ -1,213 +1,83 @@
-//! Очищение `CCure` (`0x131`).
-//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
-//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/cure.cpp`. Модуль сохраняет двойную проверку MP,
-//! время восстановления, путь и препятствия, задержку, направление, точную
-//! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
-//! в порядке исходного вектора состояний. Из уже типизированных состояний
-//! достигнуты `0x67`, `0x73`, `0x7C`, `0xC9`, `0xD2`, `0x138`, `0x191`,
-//! `0x192`, эффекты `0x199`, `0x1A6` и
-//! `0x1F8`; неизвестные старые записи
-//! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
-//! доставку. Координатная перегрузка `Begin` использует точный базовый
-//! `CState::GetSufferer` и fallback к `GetUser`, когда цель не найдена;
-//! `DoesTargetEffective` допускает игрока либо только carriage-монстра, не
-//! подменяя обычного или приручённого монстра заклинателем.
-//! Порог очищения сохраняет расширенное вычисление x87 и усечение к нулю
-//! перед исходным целочисленным умножением. Восстановление использует
-//! абсолютные сроки `CSkill::IsRestored` и cast-delay (cmp/jb по 0x005AE373).
-//! После списания MP вызывается OnChangeStates (0x005AE2F1) до поворота
-//! и визуализации каста, а не обновление общего боевого статуса.
-//! AI (`0x005AE110`) сначала выполняет Begin нового Cure (`0x005AE49F`),
-//! затем завершает только первый прежний (`0x005AE50A`) и устанавливает
-//! новый в освободившийся слот (`0x005AE53A`). End пересчитывает свойства
-//! без обоих экземпляров; остальные Cure сохраняются. При отсутствии
-//! прежней записи новый экземпляр добавляется в конец без UpdateProperty.
-//! CastCure (0x005ADB10) допускает 0x198 (cmp в 0x005ADC0A) без
-//! исключения для самого заклинателя и вызывает End состояния через +0x1C
-//! в 0x005ADC58. Этот фильтр ID не доказывает наличие активного SpiderMist
-//! в m_vStates: exact RTTI 0x0066F16C задаёт базу CSummonSkill, а его
-//! Begin/CheckCastCondition не вызывают AddState (см. spidermist.rs).
-//! Поэтому недостигнутый producer записи 0x198 не заменяется выдуманной
-//! регистрацией cast и его отменой. На время owning callbacks извлечённый
-//! AI заклинателя публикуется в CPlayer и затем возвращается тому же владельцу.
-//! CastCure перечитывает живую длину (0x005ADBA0) и выполняет один RNG на
-//! достигнутую подходящую позицию. После общего direct End (0x005ADC58)
-//! перечитывается та же позиция; оставшийся экземпляр удаляется без второго
-//! End (0x005ADC5B..0x005ADC7F). Дополнительного UpdateProperty после
-//! обхода нет. Установка нового Cure также выполняется с опубликованными
-//! player AI и настоящим регионом, сохраняя прежнюю позицию замены.
+//! Очищение CCure (0x131), gameserver.exe + GameServer.pdb,
+//! appserver/skills/cure.cpp. Общий stateskill владеет Begin, visual и End
+//! игрока и монстра; здесь остаются выбор цели, MP, путь и CastCure.
+//! AI сохраняет участников и таблицу свойств до callbacks. Потерянная S
+//! заменяется U только для текущего вызова; дикий нетранспортный монстр
+//! дополнительно переназначает сохранённую identity цели. CAN_BE_BREAKED
+//! независим от фазы исполнения. Reuse и delay сравнивают wrapping DWORD.
+//! CastCure перечитывает живой вектор и расходует RNG для каждой подходящей
+//! позиции. Новый CureState начинает действие до End первого прежнего Cure;
+//! после замены нет дополнительного UpdateProperty.
 
+use super::curestate::{CureState, begin_and_replace_cure_state};
 use super::fightdefense::truncate_original;
-use super::curestate::{CureState, end_cure_state_key, send_cure_state_visual_for_holder};
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::stateskill::finish_state_skill;
+use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
+    execute_owned_state_skill, execute_player_state_skill, finish_player_state_skill,
+    publish_state_skill_visual, state_skill_outcome,
+};
+use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    resolve_coordinate_sufferer, resolve_identity_sufferer, resolve_state_user,
-    resolve_state_move_shape, resolve_state_move_shape_mut, end_move_shape_state,
-    end_and_destroy_state_at,
+    end_and_destroy_state_at, end_move_shape_state, resolve_skill_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
 };
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
-use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
 
 pub(crate) const CURE_SKILL_ID: u32 = 0x131;
-
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
-const USER_MP_LOSE: u32 = 2;
-const TARGET_MAX_DISTANCE: u32 = 5_003;
-const DELAY_TIME: u32 = 10_001;
-const STATE_PERSIST_TIME: u32 = 10_002;
-const REUSE_DELAY_TIME: u32 = 10_005;
-const CAN_BE_BREAKED: u32 = 10_006;
-const CONST: u32 = 20_010;
+const MP_LOSS: u32 = 2;
+const MAX_DISTANCE: u32 = 5_003;
+const DELAY: u32 = 10_001;
+const PERSIST: u32 = 10_002;
+const REUSE: u32 = 10_005;
+const CAN_BREAK: u32 = 10_006;
+const CONSTANT: u32 = 20_010;
 const EM_MODIFIER: u32 = 20_015;
-const BASE_PROBABILITY: u32 = 40_001;
+const PROBABILITY: u32 = 40_001;
 
-#[derive(Clone)]
-struct CureTarget {
-    identity: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    dead: bool,
-    display_name: Vec<u8>,
+fn participant(game: &CGame, value: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
+    let shape = resolve_state_move_shape(game, value.0, value.1)?.shape();
+    Some((shape.get_region_id(), shape.identity()))
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
+pub(crate) fn publish_cure_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    publish_state_skill_visual::<Cure>(game, skill, mode);
 }
 
-fn caster_identity(player_id: i32) -> ShapeIdentity {
-    ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID }
-}
-
-fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<CureTarget> {
-    match identity.object_type {
-        PLAYER_TYPE => {
-            let player = game.find_player(identity.id)?;
-            let tile_x = player.shape().get_tile_x().ok()?;
-            let tile_y = player.shape().get_tile_y().ok()?;
-            Some(CureTarget {
-                identity,
-                tile_x,
-                tile_y,
-                dead: player.is_dead(),
-                display_name: player.player_name().to_vec(),
-            })
-        }
-        MONSTER_TYPE => {
-            let monster = game.find_region(region_id)?.base().find_monster_by_id(identity.id)?;
-            let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
-            let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
-            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            if !monster.is_carriage(property) {
-                return None;
-            }
-            Some(CureTarget {
-                identity,
-                tile_x,
-                tile_y,
-                dead: monster.hit_points() == 0,
-                display_name: monster.display_name().to_vec(),
-            })
-        }
-        _ => None,
+fn failure(
+    game: &mut CGame, address: RegisteredSkill, source: (i32, ShapeIdentity),
+    mode: u32, text: &[u8], amount: Option<u32>,
+) {
+    game.update_registered_skill_visual(address, mode);
+    if source.1.object_type == PLAYER_TYPE {
+        if let Some(amount) = amount {
+            game.send_skill_system_info_with_unsigned(source.1.id, text, amount);
+        } else { game.send_skill_system_info(source.1.id, text); }
     }
 }
 
-fn requested_target(
-    game: &CGame,
-    region_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_id: i32,
-) -> Option<ShapeIdentity> {
-    match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id: CURE_SKILL_ID, .. } => Some(caster_identity(player_id)),
-        PlayerSkillDispatch::Point { skill_id: CURE_SKILL_ID, x, y } => {
-            resolve_coordinate_sufferer(game, region_id, x, y)
-                .or_else(|| resolve_state_user(game, region_id, caster_identity(player_id)))
-        }
-        PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: target @ ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } } => {
-            resolve_identity_sufferer(game, region_id, target)
-                .or_else(|| resolve_state_user(game, region_id, caster_identity(player_id)))
-        }
-        _ => None,
-    }
-}
-
-fn send_failure(game: &CGame, player_id: i32, code: u8) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-}
-
-fn send_cast(game: &mut CGame, player_id: i32, target: &CureTarget, level: i32, apply: bool) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(if apply { 2 } else { 1 });
-    message.add_long(CURE_SKILL_ID as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if apply {
-        message.add_long(target.identity.object_type);
-        message.add_long(target.identity.id);
-        message.add_long(target.tile_x);
-        message.add_long(target.tile_y);
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn restore_player_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-}
-
-fn finish_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
-    restore_player_movement(game, player_id);
-    finish_state_skill(game, player_id, CURE_SKILL_ID, runtime);
-}
-
-fn abort_player_cure(game: &mut CGame, player_id: i32) {
-    restore_player_movement(game, player_id);
-}
-
-pub(crate) fn complete_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, CURE_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_cure(game, player_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
-}
-
-pub(crate) fn cancel_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, CURE_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    abort_player_cure(game, player_id);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
-
-fn cure_threshold(element_modify: i32, base_probability: u32, constant: u32, em_modifier: u32) -> i32 {
+fn cure_threshold(element_modify: i32, probability: u32, constant: u32, em_modifier: u32) -> i32 {
     let scaled = truncate_original(
         f64::from(em_modifier) * f64::from(0.01_f32) * f64::from(element_modify),
     );
-    (scaled as u32).wrapping_mul(constant).wrapping_add(base_probability) as i32
+    (scaled as u32).wrapping_mul(constant).wrapping_add(probability) as i32
 }
 
 fn cast_cure_states(game: &mut CGame, region_id: i32, target: ShapeIdentity, threshold: i32) {
     let mut index = 0;
     loop {
-        let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return };
-        if index >= shape.state_slot_count() { break }
+        let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return; };
+        if index >= shape.state_slot_count() { break; }
         let selected = shape.state_at(index).is_some_and(|(_, state)| state.is_curable());
         if selected && game.skill_random_below(100) < threshold {
             let _ = end_and_destroy_state_at(game, region_id, target, index);
@@ -217,166 +87,172 @@ fn cast_cure_states(game: &mut CGame, region_id: i32, target: ShapeIdentity, thr
 }
 
 pub(crate) fn finish_curable_state(
-    game: &mut CGame,
-    region_id: i32,
-    target: ShapeIdentity,
-    state_id: u32,
-    _now_ms: u32,
+    game: &mut CGame, region_id: i32, target: ShapeIdentity, state_id: u32, _now_ms: u32,
 ) -> bool {
-    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return false };
+    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return false; };
     let key = (0..shape.state_slot_count()).find_map(|index| {
         let (key, state) = shape.state_at(index)?;
         (state.is_curable() && state.state_id() == state_id).then_some(key)
     });
-    let Some(key) = key else { return false };
+    let Some(key) = key else { return false; };
     end_move_shape_state(game, region_id, target, key)
 }
 
-fn install_cure_state(game: &mut CGame, region_id: i32, target: &CureTarget, state: CureState) -> bool {
-    if !matches!(target.identity.object_type, PLAYER_TYPE | MONSTER_TYPE) {
-        return false;
-    }
-    if target.identity.object_type == PLAYER_TYPE
-        && !game.find_player(target.identity.id)
-            .is_some_and(|player| player.server_region_id() == Some(region_id))
-    {
-        return false;
-    }
-    let Some(shape) = resolve_state_move_shape(game, region_id, target.identity) else { return false };
-    let old = shape.cure_state_key();
-    send_cure_state_visual_for_holder(game, region_id, target.identity, state, true);
-    if let Some(key) = old {
-        let Some(location) = resolve_state_move_shape(game, region_id, target.identity)
-            .and_then(|shape| shape.applied_state_replacement_location(key)) else { return false };
-        if !end_cure_state_key(game, region_id, target.identity, key) {
+struct Cure;
+
+impl RegisteredStateSkill for Cure {
+    const ID: u32 = CURE_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::Cure;
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::SuffererOrUser;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, begin_target: StateSkillBeginTarget, runtime: &mut Runtime,
+    ) -> bool {
+        let Some(skill) = game.registered_skill(address) else { return false; };
+        let Some(source) = participant(game, skill.lifecycle().user()) else { return false; };
+        let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+        let Some(target) = begin_target.resolve(game, skill, true).and_then(|target| participant(game, target)) else {
+            failure(game, address, source, 10, b"GS0286", None);
+            return false;
+        };
+        if !skill_is_restored(skill.last_used_ms(), properties.query_property(REUSE), runtime.now_milliseconds()) {
+            failure(game, address, source, 13, b"GS0278", None);
             return false;
         }
-        let Some(shape) = resolve_state_move_shape_mut(game, region_id, target.identity) else { return false };
-        let record = state.encoded_for_install();
-        if shape.insert_replacement_state_record(state, &record, location).is_none() { return false; }
-    } else if let Some(shape) = resolve_state_move_shape_mut(game, region_id, target.identity) {
-        shape.push_cure_state(state);
-    } else { return false }
-    true
+        let path = game.skill_target_path(skill.lifecycle());
+        if source != target && properties.query_property(MAX_DISTANCE) != 0
+            && properties.query_property(MAX_DISTANCE) < path.len() as u32
+        {
+            failure(game, address, source, 11, b"GS0290", None);
+            return false;
+        }
+        if path.iter().any(|cell| cell.2 == 2) {
+            game.update_registered_skill_visual(address, 15);
+            if source.1.object_type == PLAYER_TYPE {
+                let name = game.base_magic_target_name(target.0, target.1).unwrap_or_default().to_vec();
+                game.send_skill_system_info_with_text(source.1.id, b"GS0295", &name);
+            }
+            return false;
+        }
+        if source.1.object_type == PLAYER_TYPE {
+            if properties.query_property(MP_LOSS) == 0 { return false; }
+            let Some(mana) = game.find_player(source.1.id).map(|player| player.mana()) else { return false; };
+            if (mana.wrapping_sub(properties.query_property(MP_LOSS)) as i32) < 0 {
+                failure(game, address, source, 7, b"GS0288", Some(properties.query_property(MP_LOSS)));
+                return false;
+            }
+            if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) {
+                user.set_moveable(false);
+            }
+        }
+        true
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let Some(skill) = game.registered_skill(address) else {
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        };
+        if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
+            return state_skill_outcome(QueuedSkillExecutionState::Pending);
+        }
+        let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+            return end_state_skill(game, address, 0, runtime);
+        };
+        let source = participant(game, skill.lifecycle().user());
+        let mut target = resolve_skill_sufferer(game, skill.lifecycle()).and_then(|target| participant(game, target));
+        if let Some(value) = target {
+            let redirect = value.1.object_type == 600
+                && game.find_region(value.0).and_then(|region| region.base().find_monster_by_id(value.1.id))
+                    .is_some_and(|monster| !monster.is_tamed() && !matches!(
+                        monster.active_ai(), Some(ActiveMonsterAi::Carriage | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)),
+                    ));
+            if redirect {
+                target = source;
+                if let Some(source) = source && let Some(skill) = game.registered_skill_mut(address) {
+                    skill.lifecycle_mut().set_sufferer_identity(source.1);
+                }
+            }
+        } else { target = source; }
+        let (Some(source), Some(target)) = (source, target) else { return end_state_skill(game, address, 0, runtime); };
+        if game.base_magic_target_dead(target.0, target.1) {
+            failure(game, address, source, 10, b"GS0285", None);
+            return end_state_skill(game, address, 0, runtime);
+        }
+        if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) == Some(SkillStage::Begin) {
+            if source.1.object_type == PLAYER_TYPE {
+                let Some(mana) = game.find_player(source.1.id).map(|player| player.mana()) else { return end_state_skill(game, address, 0, runtime); };
+                let remaining = mana.wrapping_sub(properties.query_property(MP_LOSS));
+                if (remaining as i32) < 0 {
+                    failure(game, address, source, 7, b"GS0288", Some(properties.query_property(MP_LOSS)));
+                    return end_state_skill(game, address, 0, runtime);
+                }
+                if let Some(player) = game.find_player_mut(source.1.id) { player.set_mana(remaining); }
+                let _ = game.publish_player_states(source.1.id);
+            }
+            if let Some(skill) = game.registered_skill_mut(address) {
+                skill.lifecycle_mut().set_available(properties.query_property(CAN_BREAK) != 0);
+            }
+            let direction = (|| {
+                let target = resolve_state_move_shape(game, target.0, target.1)?.shape();
+                let target_y = target.get_tile_y().unwrap_or(i32::MIN);
+                let target_x = target.get_tile_x().unwrap_or(i32::MIN);
+                let source = resolve_state_move_shape(game, source.0, source.1)?.shape();
+                let source_y = source.get_tile_y().unwrap_or(i32::MIN);
+                let source_x = source.get_tile_x().unwrap_or(i32::MIN);
+                Some(get_line_direction(source_x, source_y, target_x, target_y))
+            })();
+            if let Some(direction) = direction && let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) {
+                user.shape_mut().set_direction(direction);
+            }
+            game.update_registered_skill_visual(address, 0);
+            if let Some(skill) = game.registered_skill_mut(address) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+        }
+        let Some(skill) = game.registered_skill(address) else { return state_skill_outcome(QueuedSkillExecutionState::Rejected); };
+        if skill.execution_stage() != Some(SkillStage::Check) { return state_skill_outcome(QueuedSkillExecutionState::Pending); }
+        let delay = properties.query_property(DELAY);
+        let started = skill.lifecycle().started_at_ms();
+        if runtime.now_milliseconds() < started.wrapping_add(delay) { return state_skill_outcome(QueuedSkillExecutionState::Pending); }
+        game.update_registered_skill_visual(address, 1);
+        let em_modifier = properties.query_property(EM_MODIFIER);
+        let constant = properties.query_property(CONSTANT);
+        let probability = properties.query_property(PROBABILITY);
+        let element_modify = if source.1.object_type == PLAYER_TYPE {
+            game.find_player(source.1.id).map_or(0, |player| player.combat_properties().element_modify)
+        } else { 0 };
+        if resolve_state_move_shape(game, source.0, source.1).is_some() {
+            cast_cure_states(game, target.0, target.1, cure_threshold(element_modify, probability, constant, em_modifier));
+        }
+        let state = CureState::new(properties.query_property(PERSIST));
+        let _ = begin_and_replace_cure_state(game, Some(source), Some(target), state, &mut || runtime.now_milliseconds());
+        end_state_skill(game, address, 1, runtime)
+    }
 }
 
-pub(crate) const fn is_cure_target(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch,
-        PlayerSkillDispatch::SelfTarget { skill_id: CURE_SKILL_ID, .. }
-        | PlayerSkillDispatch::Point { skill_id: CURE_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }
-    )
+pub(crate) const fn is_cure_target(dispatch: PlayerSkillDispatch) -> bool { dispatch.skill_id() == CURE_SKILL_ID }
+
+pub(crate) fn complete_player_cure<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime,
+) -> bool {
+    finish_player_state_skill::<Cure, Runtime>(game, player_id, ai, 1, SkillTermination::Completed, runtime)
+}
+
+pub(crate) fn cancel_player_cure<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, nonzero_end: bool, runtime: &mut Runtime,
+) -> bool {
+    finish_player_state_skill::<Cure, Runtime>(game, player_id, ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime)
 }
 
 pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(CURE_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(requested_identity) = requested_target(game, region_id, dispatch, player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(CURE_SKILL_ID, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let mp_loss = properties.query_property(USER_MP_LOSE);
-    let maximum_distance = properties.query_property(TARGET_MAX_DISTANCE);
-    let delay_ms = properties.query_property(DELAY_TIME);
-    let _keep_time_ms = properties.query_property(STATE_PERSIST_TIME);
-    let reuse_delay_ms = properties.query_property(REUSE_DELAY_TIME);
-    let constant = properties.query_property(CONST);
-    let em_modifier = properties.query_property(EM_MODIFIER);
-    let base_probability = properties.query_property(BASE_PROBABILITY);
-    let _can_be_breaked = properties.query_property(CAN_BE_BREAKED);
+    execute_player_state_skill::<Cure, Runtime>(game, player_id, dispatch, ai, runtime)
+}
 
-    if game.player_skill_execution(player_id, CURE_SKILL_ID).is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-        let Some(initial_target) = target_snapshot(game, region_id, requested_identity) else {
-            send_failure(game, player_id, 10);
-            game.send_skill_system_info(player_id, b"GS0286");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, CURE_SKILL_ID), reuse_delay_ms, cooldown_now_ms) {
-            send_failure(game, player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS0278");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let path = if requested_identity == caster_identity(player_id) { Vec::new() } else { game.base_magic_path(region_id, source_x, source_y, initial_target.tile_x, initial_target.tile_y, None) };
-        if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            send_failure(game, player_id, 0x0b);
-            game.send_skill_system_info(player_id, b"GS0290");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if path.iter().any(|cell| cell.2 == 2) {
-            send_failure(game, player_id, 0x0f);
-            game.send_skill_system_info_with_text(player_id, b"GS0295", &initial_target.display_name);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if mp_loss == 0 { return terminal(QueuedSkillExecutionState::Rejected) }
-        if (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_failure(game, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(CURE_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, CURE_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    let target = match target_snapshot(game, region_id, requested_identity) {
-        Some(target) => target,
-        None => { abort_player_cure(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
-    };
-    if target.dead {
-        send_failure(game, player_id, 10);
-        game.send_skill_system_info(player_id, b"GS0285");
-        abort_player_cure(game, player_id);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    if game.player_skill_execution(player_id, CURE_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_failure(game, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            abort_player_cure(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(mana.wrapping_sub(mp_loss));
-        }
-        let _ = game.publish_player_states(player_id);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target.tile_x, target.tile_y));
-        }
-        send_cast(game, player_id, &target, level, false);
-        if let Some(execution) = game.player_skill_execution_mut(player_id, CURE_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
-    }
-    let started_at_ms = game.player_skill_execution(player_id, CURE_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение очищения создано или восстановлено");
-    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
-
-    send_cast(game, player_id, &target, level, true);
-    let element_modify = game.find_player(player_id).map(|player| player.combat_properties().element_modify).unwrap_or_default();
-    let threshold = cure_threshold(element_modify, base_probability, constant, em_modifier);
-    let installed = game.with_published_player_ai(player_id, player_ai, |game| {
-        cast_cure_states(game, region_id, target.identity, threshold);
-        install_cure_state(
-            game,
-            region_id,
-            &target,
-            CureState::new(caster_identity(player_id), target.identity).begin_now(),
-        )
-    });
-    if let Some(execution) = game.player_skill_execution_mut(player_id, CURE_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_cure(game, player_id, player_ai, runtime);
-    terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
+pub(crate) fn execute_owned_monster_cure<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<Cure, Runtime>(game, owner, monster_id, target, skill_level, runtime)
 }

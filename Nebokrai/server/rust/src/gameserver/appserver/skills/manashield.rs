@@ -1,83 +1,30 @@
-//! Достигнутый контракт самонакладываемого `CManaShield`.
-//!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
-//! `appserver/skills/manashield.cpp`. Навык `321` сохраняет две проверки и
-//! необратимый расход MP, задержку, пакеты применения, замену щита и отдельное
-//! время восстановления. Общие с `CMachineShield` стадии исполняет узкий
-//! `selfshield`; физическая и стихийная защита принадлежат этому owner-у.
+//! CManaShield, gameserver.exe + GameServer.pdb, appserver/skills/manashield.cpp.
+//! Check/AI и lifecycle общие с MachineShield в selfshield/stateskill;
+//! этот owner добавляет физическую и стихийную защиту к payload мана-щита.
+
+use super::manashieldstate::ManaShieldState;
+use super::selfshield::SelfShieldOwner;
+use super::shieldstate::DefenseShieldState;
+use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 
 pub(crate) const MANA_SHIELD_SKILL_ID: u32 = 321;
-pub(crate) const MANA_SHIELD_EFFECT_MESSAGE: i32 = 0x000b_fe01;
-pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
-pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
-pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
-pub(crate) const SKILL_USAGE_STATE_HP: u32 = 10_010;
-pub(crate) const SKILL_USAGE_STATE_DEF: u32 = 10_011;
-pub(crate) const SKILL_USAGE_STATE_ELEMENT_DEF: u32 = 10_012;
-pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
-pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
-
-use super::manashieldstate::{send_mana_shield_state_visual, ManaShieldState};
-use super::selfshield::SelfShieldOwner;
-use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::player::CPlayer;
-use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) struct ManaShieldOwner;
 
 impl SelfShieldOwner for ManaShieldOwner {
-    type State = ManaShieldState;
-    type Extra = (i32, i32);
-
     const SKILL_ID: u32 = MANA_SHIELD_SKILL_ID;
-    const EFFECT_MESSAGE: i32 = MANA_SHIELD_EFFECT_MESSAGE;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::ManaShield;
 
-    fn read_extra(properties: &CSkillBaseProperties) -> Self::Extra {
-        (
-            properties.query_property(SKILL_USAGE_STATE_DEF) as i32,
-            properties.query_property(SKILL_USAGE_STATE_ELEMENT_DEF) as i32,
-        )
+    fn create_state(properties: &CSkillBaseProperties) -> DefenseShieldState {
+        let mp_factor = properties.query_property(20_025) as u16;
+        let hp_factor = properties.query_property(20_024) as u16;
+        let element_defense = properties.query_property(10_012) as i32;
+        let physical_defense = properties.query_property(10_011) as i32;
+        let life = properties.query_property(10_010) as i32;
+        let keep = properties.query_property(10_002);
+        DefenseShieldState::Mana(ManaShieldState::new(
+            0, keep, life, physical_defense, element_defense, hp_factor, mp_factor,
+        ))
     }
-
-    fn create_state(
-        started_at_ms: u32,
-        keep_time_ms: u32,
-        life: i32,
-        hp_factor: u16,
-        mp_factor: u16,
-        (physical_defense, element_defense): Self::Extra,
-    ) -> Self::State {
-        ManaShieldState::new(
-            started_at_ms,
-            keep_time_ms,
-            life,
-            physical_defense,
-            element_defense,
-            hp_factor,
-            mp_factor,
-        )
-    }
-
-    fn replace_state(player: &mut CPlayer, state: Self::State) -> Option<Self::State> {
-        player.replace_mana_shield_state(state)
-    }
-
-    fn send_state_visual(
-        game: &mut CGame,
-        player_id: i32,
-        state: Self::State,
-        begin: bool,
-        now_milliseconds: impl FnMut() -> u32,
-    ) {
-        send_mana_shield_state_visual(game, player_id, state, begin, now_milliseconds);
-    }
-
-
-
-
-
-
-
 }

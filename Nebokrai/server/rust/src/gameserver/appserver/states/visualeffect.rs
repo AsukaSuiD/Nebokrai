@@ -34,6 +34,10 @@ pub(crate) enum SkillVisualEffectKind {
     SpiderWeb,
     SpiderPoison,
     Promotion,
+    Cure,
+    Hearten,
+    ManaShield,
+    MachineShield,
 }
 
 #[derive(Debug, Eq, PartialEq)]

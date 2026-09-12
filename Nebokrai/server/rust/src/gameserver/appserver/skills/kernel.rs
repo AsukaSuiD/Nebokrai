@@ -411,6 +411,12 @@ impl SkillLifecycle {
         self.sufferer
     }
 
+    /// Переназначение цели внутри AI меняет только её type/id, без нового
+    /// Begin, сброса координат или замены региона и времени исходной базы.
+    pub(crate) fn set_sufferer_identity(&mut self, identity: ShapeIdentity) {
+        self.sufferer.1 = Self::native_identity(identity);
+    }
+
     pub(crate) const fn destination(&self) -> (i32, i32) {
         self.destination
     }

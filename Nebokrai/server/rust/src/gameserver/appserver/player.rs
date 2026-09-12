@@ -5032,13 +5032,6 @@ impl CPlayer {
         self.move_shape.replace_origin_state(state)
     }
 
-    pub(crate) fn replace_hearten_state(
-        &mut self,
-        state: super::skills::heartenstate::HeartenState,
-    ) -> Option<super::skills::heartenstate::HeartenState> {
-        self.move_shape.replace_hearten_state(state)
-    }
-
     pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
         self.move_shape.promotion_heal_recover_factor()
     }
@@ -5655,20 +5648,6 @@ impl CPlayer {
     }
 
 
-    pub(crate) fn replace_mana_shield_state(
-        &mut self,
-        state: super::skills::manashieldstate::ManaShieldState,
-    ) -> Option<super::skills::manashieldstate::ManaShieldState> {
-        self.move_shape.replace_mana_shield_state(state)
-    }
-
-    pub(crate) fn replace_machine_shield_state(
-        &mut self,
-        state: super::skills::machineshieldstate::MachineShieldState,
-    ) -> Option<super::skills::machineshieldstate::MachineShieldState> {
-        self.move_shape.replace_machine_shield_state(state)
-    }
-
     pub(crate) fn replace_life_shield_state(
         &mut self,
         state: super::skills::lifeshieldstate::LifeShieldState,
@@ -5729,10 +5708,6 @@ impl CPlayer {
         self.move_shape.take_cure_state()
     }
 
-
-    pub(crate) fn push_cure_state(&mut self, state: super::skills::curestate::CureState) {
-        self.move_shape.push_cure_state(state);
-    }
 
 
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {

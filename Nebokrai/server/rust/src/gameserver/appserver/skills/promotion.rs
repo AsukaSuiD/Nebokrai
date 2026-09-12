@@ -21,7 +21,7 @@
 use super::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use super::promotionstate::begin_or_restart_promotion_state;
 use super::stateskill::{
-    RegisteredStateSkill, end_state_skill, execute_owned_state_skill, execute_player_state_skill,
+    RegisteredStateSkill, StateSkillVisualTarget, end_state_skill, execute_owned_state_skill, execute_player_state_skill,
     finish_player_state_skill, publish_state_skill_visual, state_skill_outcome,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -78,15 +78,15 @@ struct Promotion;
 impl RegisteredStateSkill for Promotion {
     const ID: u32 = PROMOTION_SKILL_ID;
     const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::Promotion;
-    const VISUAL_FALLBACK_TO_USER: bool = true;
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::SuffererOrUser;
 
     fn check_cast<Runtime: GameMainLoopRuntime>(
-        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+        game: &mut CGame, address: RegisteredSkill, begin_target: super::stateskill::StateSkillBeginTarget, runtime: &mut Runtime,
     ) -> bool {
         let Some(skill) = game.registered_skill(address) else { return false; };
         let Some(source) = participant(game, skill.lifecycle().user()) else { return false; };
         let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
-        let Some(target) = resolve_skill_sufferer(game, skill.lifecycle())
+        let Some(target) = begin_target.resolve(game, skill, false)
             .and_then(|target| participant(game, target))
         else {
             failure(game, address, source, 10, b"GS0286", None);

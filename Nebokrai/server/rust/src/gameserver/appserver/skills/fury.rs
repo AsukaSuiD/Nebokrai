@@ -4,7 +4,7 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает задержку и
 //! повторное использование, пакеты `0xBFE01`, накопление `CFuryState`, порядок
-//! снятия конфликтующих состояний и последующее краткоживущее `CCureState`.
+//! снятия конфликтующих состояний и последующее `CCureState` со сроком навыка.
 //! Модуль владеет проверками, расходом RP, стадиями, состояниями и визуальными
 //! пакетами. `CGame` предоставляет владельцев, доставку и общий пересчёт
 //! свойств. `AI` (0x00536970) при наличии `CRageBreakState` вызывает Restart
@@ -19,18 +19,18 @@
 //! lifecycle остаётся отдельным и не использует этот хвост. Обе ветви
 //! используют абсолютные сроки `CSkill::IsRestored` и задержки каста
 //! (unsigned cmp/jb по 0x00536A9C).
-//! Cure добавляется без поиска и замены предыдущей записи: Begin по
-//! 0x00536D26, затем push_back по 0x00536D38. Накопление сохраняется в DB и AI.
-//! Общий UpdateProperty (0x00536D4D) следует после Fury, снятия конфликтов
-//! и Cure append, но до skill End(1). Монстровый вызов публикует настоящий
-//! region owner на время этого пересчёта и затем разрешает его заново.
+//! Cure добавляется без поиска и замены предыдущей записи: поздний persist
+//! → Begin(U,U) с собственными часами и visual → append. Накопление
+//! сохраняется в DB и AI. UpdateProperty следует после Fury, снятия
+//! конфликтов и Cure append, но до skill End(1). Вложенные вызовы видят
+//! опубликованный настоящий AI игрока либо полный регион монстра.
 //! CFuryState::Begin(0x005EA500) только создаёт loop=1 visual; начальный
 //! BFE03 отправляет OnUpdateProperties, а не отдельный вызов после Begin.
 use crate::gameserver::appserver::states::state::{
     end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
 };
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::curestate::{CureState, send_cure_state_visual_in_region};
+use super::curestate::{CureState, begin_primary_cure_state};
 use super::furystate::FuryState;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
@@ -243,16 +243,11 @@ pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
 
     let _ = game.with_published_region(owner, |game| {
         remove_reached_conflict_states(game, region_id, identity);
-    });
-    let Some(region_owner) = owner.as_mut() else { return true; };
-
-    let cure = CureState::new(identity, identity).begin_now();
-    send_cure_state_visual_in_region(game, region_owner.base_mut(), &source, cure, true);
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().push_cure_state(cure);
-    }
-
-    let _ = game.with_published_region(owner, |game| {
+        let cure = CureState::new(properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME));
+        let _ = begin_primary_cure_state(
+            game, region_id, identity, Some((region_id, identity)), Some((region_id, identity)),
+            cure, &mut || runtime.now_milliseconds(),
+        );
         game.update_move_shape_properties(region_id, identity)
     });
     let Some(region_owner) = owner.as_mut() else { return true };
@@ -331,7 +326,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let Some(properties) = game.skill_base_properties(FURY_SKILL_ID, level) else {
+    let Some(properties) = game.skill_base_properties(FURY_SKILL_ID, level).cloned() else {
         if game.player_skill_execution(player_id, FURY_SKILL_ID).is_some() {
             finish_player_fury(game, player_id, player_ai, runtime);
         }
@@ -434,15 +429,16 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         player.push_fury_state(fury);
     }
 
-    remove_reached_conflict_states(game, region_id, identity);
-
-    let cure = CureState::new(identity, identity).begin_now();
-    super::curestate::send_cure_state_visual(game, player_id, cure, true);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.push_cure_state(cure);
-    }
-    let _ = game.update_player_properties(player_id);
-    let _ = game.publish_player_states(player_id);
+    game.with_published_player_ai(player_id, player_ai, |game| {
+        remove_reached_conflict_states(game, region_id, identity);
+        let cure = CureState::new(properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME));
+        let _ = begin_primary_cure_state(
+            game, region_id, identity, Some((region_id, identity)), Some((region_id, identity)),
+            cure, &mut || runtime.now_milliseconds(),
+        );
+        let _ = game.update_player_properties(player_id);
+        let _ = game.publish_player_states(player_id);
+    });
 
     if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

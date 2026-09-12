@@ -12,16 +12,18 @@
 //! используется только для канонического player-owner-а, доставки и общего
 //! пересчёта свойств. Подтверждённый `End` возвращает движение и выполняет
 //! общий хвост `CSummonSkill::End(1)` после установки состояний.
-//! AI (`0x005A00F0`) завершает прежний RageBreak (0x005A0322) и прежний
-//! Cure (0x005A047C) до Begin новых, включая отдельный UpdateProperty
-//! каждого удаления; после установки Cure пересчитывает свойства вновь.
+//! AI завершает прежний RageBreak и первый Cure до Begin новых, включая
+//! отдельный UpdateProperty каждого удаления. Для Cure нет внешнего
+//! destructor: затем читается persist, проходит Begin(U,U) и append,
+//! после чего свойства пересчитываются вновь. Вложенные callbacks видят
+//! опубликованный настоящий AI игрока.
 //! Begin RageBreakState(0x005FD5C0) создаёт loop=1 visual без Update;
 //! BFE03 состояния публикуется только последующим OnUpdateProperties.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::cure::finish_curable_state;
-use super::curestate::{CureState, end_player_cure_state, send_cure_state_visual};
+use super::curestate::{CureState, begin_primary_cure_state, end_player_cure_state};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::ragebreakstate::{RageBreakState, end_player_rage_break_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -87,12 +89,12 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
-    _ai: &mut CPlayerAI,
+    player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_rage_break_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((level, rp)) = game.find_player(player_id).map(|player| (player.learned_skill_level(RAGE_BREAK_SKILL_ID, game.skill_factory()), player.rp())) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(RAGE_BREAK_SKILL_ID, level) else { if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_some() { finish_player_rage_break(game, player_id, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(RAGE_BREAK_SKILL_ID, level).cloned() else { if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_some() { finish_player_rage_break(game, player_id, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let rp_loss = properties.query_property(USER_RP_LOSE);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -152,15 +154,21 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     let state = RageBreakState::new(state_now, keep, attack_gain);
     if let Some(player) = game.find_player_mut(player_id) { player.replace_rage_break_state(state); }
 
-    let order = game.find_player(player_id).map(CPlayer::curable_state_ids).unwrap_or_default();
-    for state_id in order {
-        if CONFLICTING_STATES.contains(&state_id) { let _ = finish_curable_state(game, region_id, identity, state_id, now); }
-    }
-    let _ = end_player_cure_state(game, player_id);
-    let cure = CureState::new(identity, identity).begin_now();
-    send_cure_state_visual(game, player_id, cure, true);
-    let _ = game.find_player_mut(player_id).map(|player| player.push_cure_state(cure));
-    let _ = game.update_player_properties(player_id);
+    game.with_published_player_ai(player_id, player_ai, |game| {
+        let order = game.find_player(player_id).map(CPlayer::curable_state_ids).unwrap_or_default();
+        for state_id in order {
+            if CONFLICTING_STATES.contains(&state_id) { let _ = finish_curable_state(game, region_id, identity, state_id, now); }
+        }
+        // Этот caller вызывает только первый End, без внешнего destructor.
+        // Новый Cure всегда добавляется в хвост, даже если End оставил старый.
+        let _ = end_player_cure_state(game, player_id);
+        let cure = CureState::new(properties.query_property(STATE_PERSIST_TIME));
+        let _ = begin_primary_cure_state(
+            game, region_id, identity, Some((region_id, identity)), Some((region_id, identity)),
+            cure, &mut || runtime.now_milliseconds(),
+        );
+        let _ = game.update_player_properties(player_id);
+    });
 
     if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_rage_break(game, player_id, runtime);

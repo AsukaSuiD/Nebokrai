@@ -22,8 +22,9 @@
 //! Отказ самого Begin имеет тот же общий RejectUseSkillRequest/OnLoseTarget
 //! после конкретной диагностики: объектный хвост 0x00509B0B, координатный
 //! 0x00509B32. Достигнутый координатор пока различает отказ Begin и отказ AI
-//! по наличию concrete-исполнения до и после вызова owner-а; это не native
-//! IsEnded и не полная обработка изменённой базы при отказе без payload.
+//! по границе первого вызова и результату владельца. Полный End(0)
+//! захваченного экземпляра означает отказ Begin даже до освобождения payload;
+//! для прочих старых владельцев остаётся проверка отсутствия исполнения.
 //! Luvinia PlayerAI использует CheckNextAct/stModuParam вместо этого расписания;
 //! отказ старого Begin восстановлен по нашему EXE, без переноса нового AI.
 //! Координатный вход не проходит эту проверку; отсутствие и объекта, и
@@ -254,10 +255,6 @@ impl CGame {
             | CORPSE_PTOMAINE_SKILL_ID
             | MONSTER_THORN_SKILL_ID
             | SPIDER_MIST_SKILL_ID
-            | SPIDER_WEB_SKILL_ID
-            | KNOCK_OUT_SKILL_ID
-            | SPIDER_POISON_SKILL_ID
-            | PROMOTION_SKILL_ID
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
@@ -305,8 +302,14 @@ impl CGame {
             | GOD_BLESS_SKILL_ID
             | GOD_BLESS_2_SKILL_ID
             | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
-            HEARTEN_SKILL_ID
+            SPIDER_WEB_SKILL_ID
+            | KNOCK_OUT_SKILL_ID
+            | SPIDER_POISON_SKILL_ID
+            | PROMOTION_SKILL_ID
             | CURE_SKILL_ID
+            | HEARTEN_SKILL_ID
+            | MACHINE_SHIELD_SKILL_ID
+            | MANA_SHIELD_SKILL_ID
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID
@@ -320,7 +323,7 @@ impl CGame {
             | RAPTURE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
             _ if is_non_fun_skill(skill_id) => Some(PlayerSkillBeginPolicy::Inherited),
             _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
-                || is_heal_skill(skill_id) || is_self_shield_skill(skill_id) =>
+                || is_heal_skill(skill_id) =>
             {
                 Some(PlayerSkillBeginPolicy::Owner)
             }

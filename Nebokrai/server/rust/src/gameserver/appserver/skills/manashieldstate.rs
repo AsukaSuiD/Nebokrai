@@ -1,12 +1,9 @@
-//! Каноническое состояние `CManaShieldState`.
-//!
-//! Щит `321` хранит срок, остаток прочности, две защиты и WORD-факторы
-//! преобразования урона. `absorb_damage` вызывается в исходной позиции
-//! `CFightDefense::PreDefense`, до обычной защиты и итогового коэффициента
-//! `damage_factor`. DB-запись хранит остаток срока, прочность, обе
-//! защиты и WORD-факторы; после загрузки отсчёт начинается от текущих часов.
-//! Vtable exact EXE подтверждает общий с `CBlindState` клиентский срок по
-//! `0x005F2CD0`, включая условное второе чтение clock.
+//! CManaShieldState: gameserver.exe + GameServer.pdb, appserver/skills/manashieldstate.cpp.
+//! Payload щита хранит срок, прочность, две защиты и WORD-факторы; общий
+//! shieldstate владеет первичным Begin/ареной, restart, AI и End.
+//! DB-запись содержит остаток срока и после загрузки получает свежий старт.
+//! Клиентский срок совпадает с Blind и условно читает часы второй раз.
+//! PreDefense вызывается до обычной защиты и итогового damage_factor.
 //! Все преобразования absorbed damage используют x87-усечение к нулю;
 //! `mp_factor` сохраняется в `f32` перед умножением, а `hp_factor` — нет.
 //! Первичное масштабирование через `damage_factor` использует `__ftol2` и
@@ -18,8 +15,6 @@ use super::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
-use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const MANA_SHIELD_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const MANA_SHIELD_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -34,6 +29,12 @@ pub(crate) struct ManaShieldState {
     element_defense: i32,
     hp_factor: u16,
     mp_factor: u16,
+}
+
+impl Default for ManaShieldState {
+    fn default() -> Self {
+        Self::new(0, 0, 0, 0, 0, 1, 1)
+    }
 }
 
 impl ManaShieldState {
@@ -63,6 +64,10 @@ impl ManaShieldState {
 
     pub(crate) const fn life(self) -> i32 {
         self.life
+    }
+
+    pub(crate) fn begin_at(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) const fn lifetime_expired(self, now_ms: u32) -> bool {
@@ -162,54 +167,3 @@ impl ManaShieldState {
         );
     }
 }
-
-pub(crate) fn send_mana_shield_state_visual(
-    game: &mut CGame,
-    player_id: i32,
-    state: ManaShieldState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(if begin {
-        MANA_SHIELD_STATE_BEGIN_MESSAGE
-    } else {
-        MANA_SHIELD_STATE_END_MESSAGE
-    });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.client_time(now_milliseconds));
-        message.add_long(state.life());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Ниже сохранён только ещё не подключённый конструктор по умолчанию.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp
-
-// ============================================================================
-// FUNCTION: CManaShieldState::CManaShieldState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:31
-// RVA: 0x001F3170
-// ADDRESS: 005f3170
-// PROTOTYPE: undefined __thiscall CManaShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-
-// COMPONENT_VARIANT_END: GameServer
