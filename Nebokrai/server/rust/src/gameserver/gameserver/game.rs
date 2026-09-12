@@ -1330,8 +1330,7 @@ use crate::gameserver::appserver::skills::battlefairyattribute::{
     definition as battle_fairy_attribute_definition, execute_battle_fairy_attribute,
 };
 use crate::gameserver::appserver::skills::callosity::{
-    cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
-    CALLOSITY_SKILL_ID,
+    CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
@@ -39575,9 +39574,6 @@ impl CGame {
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
-            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
-                cancel_player_callosity(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 cancel_player_agility_family(self, player_id, skill_id, &mut player_ai, runtime)
             }
@@ -39952,13 +39948,6 @@ impl CGame {
             _ if is_chaos_sphere_dispatch(dispatch) => execute_player_chaos_sphere,
             _ if is_lightning_target(dispatch) => execute_player_lightning,
             _ if is_seal_target(dispatch) => execute_player_seal,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID)
-                }
-            } => execute_player_callosity,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }

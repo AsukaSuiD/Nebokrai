@@ -283,9 +283,7 @@ use crate::gameserver::appserver::skills::wuxingmetal::WUXING_METAL_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwater::WUXING_WATER_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
-use crate::gameserver::appserver::skills::callositystate::{
-    CALLOSITY_STATE_BYTES, CallosityFamilyState,
-};
+use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES};
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
@@ -1670,7 +1668,7 @@ impl CMoveShape {
                 StateData::Agility2(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::BloodLoss(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
-                StateData::Callosity(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::Callosity(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::BossBlueFury(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::PoisonArrow(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::BattleFairyAttribute(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
@@ -1851,24 +1849,6 @@ impl CMoveShape {
     pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
         (0..self.state_entries.len()).any(|index| self.state_id_at(index) == Some(state_id))
     }
-
-    pub(crate) fn callosity_state(&self) -> Option<CallosityFamilyState> {
-        self.state_entries.first::<CallosityFamilyState>().copied()
-    }
-
-    pub(crate) fn take_callosity_state(&mut self, skill_id: u32) -> Option<CallosityFamilyState> {
-        let position = self.state_entries.iter::<CallosityFamilyState>()
-            .position(|state| state.skill_id() == skill_id)?;
-        let state = self.state_entries.take_nth::<CallosityFamilyState>(position)?;
-        self.remove_serialized_state_record(skill_id, CALLOSITY_STATE_BYTES);
-        Some(state)
-    }
-
-    pub(crate) fn begin_callosity_state(&mut self, state: CallosityFamilyState) {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-    }
-
 
 
     pub(crate) fn swordship_states(&self) -> impl Iterator<Item = &SwordshipState> {

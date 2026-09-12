@@ -1,259 +1,167 @@
-//! Исполнение взаимно исключающих навыков `CCallosity/CCallosity2`.
+//! Зарегистрированный вход взаимно исключающих закалок CCallosity/CCallosity2.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/callosity.cpp
+//! и callosity2.cpp. Различаются только ID, таблица свойств и восстановление.
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
-//! `appserver/skills/callosity.cpp` и `callosity2.cpp`. Оба навыка сохраняют
-//! один порядок: две проверки ресурсов, запрет движения, повторная проверка
-//! с необратимым расходом MP до проверки RP, задержка, удаление первого
-//! конфликтующего состояния, наложение нового состояния и `OnChangeStates`.
-//! Новый коэффициент немедленно проходит через полный `UpdateProperty`.
-//! Общий `SkillExecutionKernel` хранит только стадии и часы команды; форматы
-//! сообщений, частичная мутация и два независимых времени восстановления
-//! остаются здесь. Клиентская отмена сохраняет уже списанные ресурсы и
-//! завершает тот же активный экземпляр до фиксации времени восстановления.
-//! Reuse каждого варианта использует exact `CSkill::IsRestored`; stage delay
-//! остаётся elapsed-интервалом.
+//! Attack Begin сохраняет исходного U, ранний отсчёт и loop1 visual. Check
+//! проверяет reuse и ненулевые цены MP/RP до Move0; отказ получает End(0).
+//! Каждый AI сохраняет таблицу свойств и своего U через callbacks. Смерть U
+//! даёт visual2/End(1), нехватка ресурсов — visual7/8 и End(0). Первый AI
+//! всегда выполняет GetMP→query→SetMP, затем GetRP→query→SetRP, включая нулевые
+//! цены. Signed wrapping-проверка RP не откатывает уже списанный MP.
+//! CAN предшествует visual0 и condition; отдельного OnChangeStates здесь нет.
 //!
-//! Сохранённый ниже псевдокод относится к `CCallosity`; `CCallosity2` имеет
-//! тот же контракт с идентификатором `0x7d` и собственным временем
-//! восстановления.
-//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
-//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
-//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
+//! Абсолютный unsigned срок start+delay предшествует visual1. Затем завершается
+//! первый непустой ID75/7D без RTTI/ended-фильтра; только после этого frozen
+//! таблица отдаёт persist и WORD factor. Новый экземпляр получает Begin(U,U)
+//! до append, а UpdateProperty выполняется и при отказе Begin. Общий End
+//! сбрасывает phase/active, возвращает движение свежему U и завершает State
+//! с настоящим аргументом. Исполнение публикуется целиком общим владельцем.
+//! Непроверенный native доступ к ресурсам CPlayer заменён безопасным отказом
+//! для чужого CMoveShape; без чтения ресурсов Check сохраняет общий Move0.
 
-use super::baseattack::time_reached;
-use super::callosity2::create_callosity_2_state;
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 pub(crate) use super::callosity2::CALLOSITY_2_SKILL_ID;
-use super::callositystate::{
-    end_player_callosity_state, send_callosity_state_begin, CallosityFamilyState, CallosityState,
-};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use super::callositystate::{CallosityFamilyState, replace_callosity_state};
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::playercast::execute_registered_player_cast;
+use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored,
-};
-use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
 pub(crate) const CALLOSITY_SKILL_ID: u32 = 0x75;
-pub(crate) const CALLOSITY_EFFECT_MESSAGE: i32 = 0x000b_fe01;
-pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 pub(crate) const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
-pub(crate) const SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN: u32 = 125;
-pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
-pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
-pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+const PLAYER_TYPE: i32 = 400;
+const USER_MP_LOSE: u32 = 2;
+const TARGET_BLAST_COEFFICIENT_GAIN: u32 = 125;
+const STATE_PERSIST_TIME: u32 = 10_002;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CallosityExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
-impl CallosityExecutionState {
-    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+
+fn resource_failure(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties, usage: u32,
+) {
+    let (mode, text) = if usage == USER_MP_LOSE { (7, &b"GS0288"[..]) } else { (8, &b"GS0289"[..]) };
+    game.update_registered_skill_visual(instance, mode);
+    let amount = properties.query_property(usage);
+    game.send_skill_system_info_with_unsigned(player_id, text, amount);
+}
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity), runtime: &mut Runtime,
+) -> bool {
+    let Some(source) = resolve_state_move_shape(game, original_user.0, original_user.1) else { return false; };
+    let source = (source.shape().get_region_id(), source.shape().identity());
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        if source.1.object_type == PLAYER_TYPE { game.send_skill_system_info(source.1.id, b"GS0278"); }
+        return false;
+    }
+    if properties.query_property(USER_MP_LOSE) != 0 {
+        if source.1.object_type != PLAYER_TYPE { return false; }
+        let Some(mana) = game.find_player(source.1.id).map(CPlayer::mana) else { return false; };
+        let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+        if (remaining as i32) < 0 {
+            resource_failure(game, instance, source.1.id, &properties, USER_MP_LOSE);
+            return false;
         }
     }
-
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
+    if properties.query_property(SKILL_USAGE_USER_RP_LOSE) != 0 {
+        if source.1.object_type != PLAYER_TYPE { return false; }
+        let Some(rp) = game.find_player(source.1.id).map(CPlayer::rp) else { return false; };
+        let remaining = u32::from(rp).wrapping_sub(properties.query_property(SKILL_USAGE_USER_RP_LOSE));
+        if (remaining as i32) < 0 {
+            resource_failure(game, instance, source.1.id, &properties, SKILL_USAGE_USER_RP_LOSE);
+            return false;
+        }
     }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
+    let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
+    source.set_moveable(false);
+    true
 }
 
-fn restore_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-}
-
-fn abort_player_callosity(game: &mut CGame, player_id: i32) {
-    restore_movement(game, player_id);
-}
-
-fn finish_player_callosity<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) {
-    restore_movement(game, player_id);
-    finish_state_skill(game, player_id, skill_id, runtime);
-}
-
-pub(crate) fn cancel_player_callosity<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    execution_skill_id: u32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> bool {
-    let Some(dispatch) = game.player_skill_state::<CallosityExecutionState>(player_id, execution_skill_id).copied().map(|state| state.kernel().dispatch()) else {
-        return false;
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
     };
-    let skill_id = dispatch.skill_id();
-    finish_player_callosity(game, player_id, skill_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
+    let skill_id = skill.id();
+    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity)
+        .map(|source| (source.shape().get_region_id(), source.shape().identity()))
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if game.move_shape_health(source.0, source.1) == Some(0) {
+        game.update_registered_skill_visual(instance, 2);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
+    }
+    if stage == SkillStage::Begin {
+        if source.1.object_type != PLAYER_TYPE { return terminal(QueuedSkillExecutionState::Rejected); }
+        let Some(mana) = game.find_player(source.1.id).map(CPlayer::mana) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+        if (remaining as i32) < 0 {
+            resource_failure(game, instance, source.1.id, &properties, USER_MP_LOSE);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(player) = game.find_player_mut(source.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        player.set_mana(remaining);
+        let Some(rp) = game.find_player(source.1.id).map(CPlayer::rp) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let remaining = u32::from(rp).wrapping_sub(properties.query_property(SKILL_USAGE_USER_RP_LOSE));
+        if (remaining as i32) < 0 {
+            resource_failure(game, instance, source.1.id, &properties, SKILL_USAGE_USER_RP_LOSE);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(player) = game.find_player_mut(source.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        player.set_rp(remaining as u16);
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+    }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
+    game.update_registered_skill_visual(instance, 1);
+    let _ = replace_callosity_state(game, source, || {
+        let keep = properties.query_property(STATE_PERSIST_TIME) as i32;
+        let factor = properties.query_property(TARGET_BLAST_COEFFICIENT_GAIN) as u16;
+        CallosityFamilyState::new(skill_id, factor, 0, keep)
+    }, &mut || runtime.now_milliseconds());
+    terminal(QueuedSkillExecutionState::Completed)
 }
 
 pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let rejected = || QueuedSkillExecutionOutcome {
-        state: QueuedSkillExecutionState::Rejected,
-        first_contact: false,
-    };
-    let pending = || QueuedSkillExecutionOutcome {
-        state: QueuedSkillExecutionState::Pending,
-        first_contact: false,
-    };
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. }
-            if matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID) => skill_id,
-        _ => return rejected(),
-    };
-    let Some(player) = game.find_player(player_id) else {
-        return rejected();
-    };
-    if player.server_region_id().is_none() {
-        return rejected();
+    if !matches!(dispatch.skill_id(), CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID) {
+        return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
-    let initial_mana = player.mana();
-    let initial_rp = player.rp();
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level)
-    else {
-        if game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied().is_some() {
-            abort_player_callosity(game, player_id);
-        }
-        return rejected();
-    };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let rp_loss = properties.query_property(SKILL_USAGE_USER_RP_LOSE);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let blast_factor = properties.query_property(SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN) as u16;
-    let state_persist_time = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME) as i32;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-
-    if game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied().is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-        let cooldown_now_ms = runtime.now_milliseconds();
-        let last_used_ms = game.player_skill_last_used_ms(player_id, skill_id);
-        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
-            game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS0278");
-            return rejected();
-        }
-        if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
-            game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            return rejected();
-        }
-        if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
-            game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 8);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
-            return rejected();
-        }
-        let Some(player) = game.find_player_mut(player_id) else {
-            return rejected();
-        };
-        player.set_skill_moveable(false);
-        player.set_current_skill_id(Some(skill_id));
-        game.begin_player_skill_execution(player_id, CallosityExecutionState::begin(dispatch, started_at_ms));
-        return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Begun, ..pending() };
-    } else if game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied()
-        .is_none_or(|state| state.kernel().dispatch() != dispatch)
-    {
-        return rejected();
-    }
-
-    if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
-        game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 2);
-        finish_player_callosity(game, player_id, skill_id, player_ai, runtime);
-        return rejected();
-    }
-
-    if game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied()
-        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
-    {
-        let current_mp = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (current_mp.wrapping_sub(mp_loss) as i32) < 0 {
-            game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            abort_player_callosity(game, player_id);
-            return rejected();
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(current_mp.wrapping_sub(mp_loss));
-        }
-        let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
-            game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 8);
-            game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
-            abort_player_callosity(game, player_id);
-            return rejected();
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_rp(current_rp.wrapping_sub(rp_loss as u16));
-        }
-        game.send_self_state_skill_cast(CALLOSITY_EFFECT_MESSAGE, player_id, skill_id, skill_level, 1);
-        if let Some(state) = game.player_skill_state_mut::<CallosityExecutionState>(player_id, dispatch.skill_id()) {
-            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-
-    let started_at_ms = game.player_skill_state::<CallosityExecutionState>(player_id, dispatch.skill_id()).copied()
-        .map(|state| state.kernel().started_at_ms())
-        .expect("исполнение закалки создано или восстановлено");
-    let delay_now_ms = runtime.now_milliseconds();
-    if !time_reached(delay_now_ms, started_at_ms, delay_ms) {
-        return pending();
-    }
-
-    game.send_self_state_skill_cast(CALLOSITY_EFFECT_MESSAGE, player_id, skill_id, skill_level, 2);
-    let _ = end_player_callosity_state(game, player_id);
-    let state_started_at_ms = runtime.now_milliseconds();
-    let state = if skill_id == CALLOSITY_2_SKILL_ID {
-        CallosityFamilyState::Callosity2(create_callosity_2_state(
-            blast_factor,
-            state_started_at_ms,
-            state_persist_time,
-        ))
-    } else {
-        CallosityFamilyState::Callosity(CallosityState::new(
-            blast_factor,
-            state_started_at_ms,
-            state_persist_time,
-        ))
-    };
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.begin_callosity_state(state);
-    }
-    send_callosity_state_begin(game, player_id, state);
-    let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id);
-    if let Some(state) = game.player_skill_state_mut::<CallosityExecutionState>(player_id, dispatch.skill_id()) {
-        let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_callosity(game, player_id, skill_id, player_ai, runtime);
-    QueuedSkillExecutionOutcome {
-        state: QueuedSkillExecutionState::Completed,
-        first_contact: false,
-    }
-    }
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
+        |game, instance, _player_id, runtime| original_user
+            .is_some_and(|source| check_cast(game, instance, source, runtime)),
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
+    )
+}

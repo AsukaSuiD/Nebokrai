@@ -309,8 +309,6 @@ impl CGame {
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID
             | RAGE_SKILL_ID
-            | CALLOSITY_SKILL_ID
-            | CALLOSITY_2_SKILL_ID
             | AGILITY_SKILL_ID
             | AGILITY_2_SKILL_ID
             | NATURAL_SKILL_ID

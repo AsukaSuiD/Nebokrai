@@ -143,7 +143,6 @@ pub(crate) mod appserver {
         pub(crate) mod callosity;
         pub(crate) mod callosity2;
         pub(crate) mod callositystate;
-        pub(crate) mod callositystate2;
         pub(crate) mod chuckstone;
         pub(crate) mod chaossphere;
         pub(crate) mod chaosspherephalanx;

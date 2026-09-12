@@ -88,7 +88,6 @@ use super::bloodrose::BloodRoseExecutionState;
 use super::boalock::BoaLockExecutionState;
 use super::bossbluequake::PlayerBossBlueQuakeExecutionState;
 use super::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
-use super::callosity::CallosityExecutionState;
 use super::chainlightning::ChainLightningExecutionState;
 use super::chaossphere::ChaosSphereExecutionState;
 use super::directprojectile::PlayerDirectProjectileExecutionState;
@@ -223,7 +222,6 @@ player_skill_states! {
     DirectProjectile(PlayerDirectProjectileExecutionState),
     SummonCreature(PlayerSummonCreatureExecutionState),
     LordFastAttack(LordFastAttackExecutionState),
-    Callosity(CallosityExecutionState),
     Archery(ArcheryExecutionState),
     HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end) paths(clear_end_paths),
     LightingArrow(LightingArrowExecutionState),
