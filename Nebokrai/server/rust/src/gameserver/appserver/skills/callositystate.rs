@@ -9,7 +9,7 @@
 //! вычисляет длительность и WORD-коэффициент. Объектный Begin читает часы,
 //! сохраняет U/S и запускает visual до append; UpdateProperty вызывается после
 //! попытки Begin независимо от её результата. OnUpdateProperties сначала
-//! захватывает S, вызывает существующий visual и прибавляет WORD CCH именно
+//! захватывает S, вызывает существующий visual и прибавляет WORD blast_attack именно
 //! захваченному игроку, даже если сам visual завершён.
 //!
 //! AI проверяет строгий абсолютный unsigned wrapping deadline без death-gate.
@@ -104,7 +104,7 @@ impl CallosityFamilyState {
     pub(crate) const fn apply_to_player(
         self, mut properties: PlayerCombatProperties,
     ) -> PlayerCombatProperties {
-        properties.cch = properties.cch.wrapping_add(self.blast_factor);
+        properties.blast_attack = properties.blast_attack.wrapping_add(self.blast_factor);
         properties
     }
 }

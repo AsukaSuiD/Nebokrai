@@ -266,9 +266,7 @@ use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
 };
-use crate::gameserver::appserver::skills::agilitystate::{
-    AgilityState, PersistentAgilityFamilyState, PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::agilitystate::PersistentAgilityFamilyState;
 use crate::gameserver::appserver::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
 use crate::gameserver::appserver::skills::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
 use crate::gameserver::appserver::skills::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
@@ -282,7 +280,7 @@ use crate::gameserver::appserver::skills::wuxingfire::WUXING_FIRE_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingmetal::WUXING_METAL_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwater::WUXING_WATER_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
-use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
+use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES};
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
@@ -1665,7 +1663,7 @@ impl CMoveShape {
                 }),
                 StateData::LeafCut2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Rush2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Agility2(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::Agility2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::BloodLoss(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
                 StateData::Callosity(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
@@ -2656,70 +2654,6 @@ impl CMoveShape {
 
 
 
-
-    pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {
-        self.state_entries.iter::<PersistentAgilityFamilyState>().find_map(|state| match state {
-            PersistentAgilityFamilyState::Agility(state) if state.skill_id() == skill_id => Some(*state),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn take_agility_state(&mut self, skill_id: u32) -> Option<AgilityState> {
-        let position = self.state_entries.iter::<PersistentAgilityFamilyState>()
-            .position(|state| matches!(state, PersistentAgilityFamilyState::Agility(state)
-                if state.skill_id() == skill_id))?;
-        let PersistentAgilityFamilyState::Agility(state) =
-            self.state_entries.take_nth::<PersistentAgilityFamilyState>(position)? else { return None };
-        self.remove_serialized_state_record(skill_id, PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
-        Some(state)
-    }
-
-    pub(crate) fn begin_agility_state(&mut self, state: AgilityState) {
-        debug_assert_eq!(state.skill_id(), crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID);
-        let state = PersistentAgilityFamilyState::Agility(state);
-        self.append_serialized_state_record(&state.encoded());
-        self.state_entries.append(state);
-    }
-
-    pub(crate) fn agility_state_2(&self) -> Option<AgilityState2> {
-        self.state_entries.first::<AgilityState2>().copied()
-    }
-
-    pub(crate) fn take_agility_state_2(&mut self) -> Option<AgilityState2> {
-        let state = self.state_entries.take_first::<AgilityState2>()?;
-        self.remove_serialized_state_record(state.skill_id(), AGILITY_STATE_2_BYTES);
-        Some(state)
-    }
-
-    pub(crate) fn begin_agility_state_2(&mut self, state: AgilityState2) {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-    }
-
-    pub(crate) fn persistent_agility_family_state(
-        &self,
-    ) -> Option<PersistentAgilityFamilyState> {
-        self.state_entries.first::<PersistentAgilityFamilyState>().copied()
-    }
-
-    pub(crate) fn take_persistent_agility_family_state(
-        &mut self,
-    ) -> Option<PersistentAgilityFamilyState> {
-        let state = self.state_entries.take_first::<PersistentAgilityFamilyState>()?;
-        self.remove_serialized_state_record(state.skill_id(), PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
-        Some(state)
-    }
-
-    pub(crate) fn begin_persistent_agility_family_state(
-        &mut self,
-        state: PersistentAgilityFamilyState,
-    ) {
-        debug_assert!(PersistentAgilityFamilyState::is_known_skill(
-            state.skill_id()
-        ));
-        self.append_serialized_state_record(&state.encoded());
-        self.state_entries.append(state);
-    }
 
 
 

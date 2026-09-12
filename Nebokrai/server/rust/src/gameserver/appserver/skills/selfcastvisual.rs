@@ -1,4 +1,5 @@
-//! Общий визуальный ресурс EnergyHolding, Pillar, Roar и Callosity1/2.
+//! Общий visual навыков на себя: EnergyHolding, Pillar, Roar, Callosity1/2
+//! и семейства Agility/Agility2/Natural/Rapture.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые owners appserver/skills.
 //!
 //! Подготовка передаёт направление свежего U, выпуск повторяет его type/id
@@ -17,7 +18,8 @@ use crate::nets::netserver::message::CMessage;
 
 pub(crate) fn publish_self_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
     if !matches!(skill.owner(), SkillOwner::CEnergyHolding | SkillOwner::CPillar | SkillOwner::CRoar
-        | SkillOwner::CCallosity | SkillOwner::CCallosity2)
+        | SkillOwner::CCallosity | SkillOwner::CCallosity2 | SkillOwner::CAgility
+        | SkillOwner::CAgility2 | SkillOwner::CNatural | SkillOwner::CRapture)
         || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::SelfCast || effect.is_ended())
     { return; }
     let (region, identity) = skill.lifecycle().user();

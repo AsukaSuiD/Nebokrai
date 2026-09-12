@@ -1,50 +1,39 @@
-//! Каноническое временное состояние `CAgilityState2`.
+//! Временная ловкость CAgilityState2 (0x81).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/agilitystate2.cpp
+//! и первичное наложение agility2.cpp. Постоянные DA/DB/DC — другое семейство.
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
-//! `agilitystate2.cpp`. Состояние `0x81` добавляет `full_miss` сложением с
-//! переполнением, AI завершает его только при строгом `started + keep < now` и при
-//! вычислении положительного клиентского остатка второй раз читает часы.
-//! Жизненный цикл принадлежит `CanonicalStateStorage`; DB-запись хранит
-//! остаток срока и WORD-прибавку полного уклонения. Истечение сразу запускает
-//! полный пересчёт свойств, чтобы снятая прибавка не оставалась в combat snapshot.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! AI/End разрешают общий CMoveShape по region/type/id; правила свойств
-//! игрока не запрещают жизненный цикл региональных держателей.
-//! Exact vtable 0x006602FC: AI 0x005D60B0, End 0x005EEBA0.
-//! End только разрешает sufferer и удаляет запись: визуала и отдельной
-//! публикации HP/MP/RP/YP в этом пути нет.
-//! После фактического удаления вызывается общий virtual UpdateProperty держателя.
-//! Прямой End и AI используют один exact-key хвост; проверка срока остаётся только в AI.
-
-//! Restart воспроизводит только Begin(NULL, holder) (0x005F0350):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
-//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(0) →
-//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
-//! У loop=0 базовый visual-хвост завершает ресурс; End этого состояния visual не вызывает.
-
-//! Unserialize 0x005F48E0 сохраняет один собственный clock в timestamp;
-//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
-
-//! OnUpdateProperties 0x005F02F0: GetSufferer → type400/RTTI CPlayer →
-//! WORD-сложение full_miss. Этот callback не вызывает visual и не читает часы.
-
-use crate::gameserver::appserver::states::state::update_player_state_properties;
-
-use crate::gameserver::appserver::states::state::{
-    begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
-};
-use crate::nets::netserver::message::CMessage;
-use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+//! Наложение завершает первый непустой ID81 без RTTI/ended-фильтра и уничтожает
+//! свежий остаток той же позиции. Только затем caller читает WORD full_miss
+//! и длительность. Begin(U,U) читает часы и отправляет BFE03 до append;
+//! loop=0 завершает visual после этого единственного сообщения. UpdateProperty
+//! выполняется после попытки Begin независимо от результата.
+//!
+//! AI использует строгий абсолютный unsigned wrapping deadline, без death-gate.
+//! End разрешает фактического S и удаляет тот же указатель: без visual и записи
+//! ended. Отсутствующий либо чужой S не заменяется держателем арены.
+//! Restart Begin(NULL, holder) сохраняет U/timestamp и заменяет S; SetRegion
+//! меняет только регион U. OnUpdateProperties прибавляет WORD full_miss игроку
+//! с переполнением, не вызывает visual и не читает часы.
+//!
+//! DB хранит DWORD ID, DWORD remaining и WORD full_miss. Getter остатка читает
+//! одни либо двое часов; Unserialize — часы после внешнего ID, до remaining/WORD.
+//! Общая арена сохраняет независимые записи и их позиции; безопасный массив
+//! байтов заменяет исходный vector без изменения десятибайтового формата.
 
 use super::agility2::AGILITY_2_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::{
+    StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
+    end_and_destroy_state_at, remove_applied_state_from, resolve_applied_state_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+    update_player_state_properties, update_property_state_visual,
+};
 use crate::gameserver::gameserver::game::CGame;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
 pub(crate) const AGILITY_STATE_2_BYTES: usize = 10;
 
@@ -95,20 +84,66 @@ impl AgilityState2 {
         Ok(Self::new(reader.read_u16()?, now_ms, keep_time_ms))
     }
 
-    pub(crate) fn encoded(self, now_ms: u32) -> [u8; AGILITY_STATE_2_BYTES] {
-        let mut bytes = Vec::with_capacity(AGILITY_STATE_2_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(AGILITY_2_SKILL_ID);
-        writer.write_i32(self.client_time(|| now_ms));
-        writer.write_u16(self.full_miss);
-        bytes.try_into().expect("размер временного состояния ловкости фиксирован")
+    pub(crate) fn encoded(self, now: impl FnMut() -> u32) -> [u8; AGILITY_STATE_2_BYTES] {
+        let mut bytes = [0; AGILITY_STATE_2_BYTES];
+        bytes[..4].copy_from_slice(&AGILITY_2_SKILL_ID.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.client_time(now).to_le_bytes());
+        bytes[8..].copy_from_slice(&self.full_miss.to_le_bytes());
+        bytes
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; AGILITY_STATE_2_BYTES] {
-        self.encoded(self.started_at_ms)
+        let mut bytes = [0; AGILITY_STATE_2_BYTES];
+        bytes[..4].copy_from_slice(&AGILITY_2_SKILL_ID.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.keep_time_ms.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.full_miss.to_le_bytes());
+        bytes
     }
+}
 
+fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
+    let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
+    Some((shape.get_region_id(), ShapeIdentity {
+        ex_id: CGuid::GUID_INVALID, ..shape.identity()
+    }))
+}
 
+pub(crate) fn replace_agility_state_2(
+    game: &mut CGame, source: (i32, ShapeIdentity),
+    create: impl FnOnce() -> AgilityState2, now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let previous = resolve_state_move_shape(game, source.0, source.1)
+        .and_then(|shape| shape.find_state_position(|state| state.state_id() == AGILITY_2_SKILL_ID));
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, source.0, source.1, position);
+    }
+    let mut state = create();
+    let begun = (|| {
+        resolve_state_move_shape(game, source.0, source.1)?;
+        state.started_at_ms = now();
+        let user = participant(game, source)?;
+        let sufferer = participant(game, source)?;
+        if resolve_state_move_shape(game, sufferer.0, sufferer.1).is_some() {
+            let mut message = CMessage::new(0x000b_fe03);
+            message.add_long(sufferer.1.object_type);
+            message.add_long(sufferer.1.id);
+            message.add_ulong(state.skill_id());
+            message.add_long(state.client_time(&mut *now));
+            message.add_ulong(0);
+            let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
+        }
+        let record = state.encoded_for_install();
+        let shape = resolve_state_move_shape_mut(game, source.0, source.1)?;
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some(user));
+        shape.set_applied_state_sufferer(key, Some(sufferer));
+        shape.begin_applied_state_visual(key, 0);
+        shape.update_applied_state_visual_base(key);
+        Some(())
+    })().is_some();
+    let _ = game.update_move_shape_properties(source.0, source.1);
+    begun
 }
 
 pub(crate) fn update_agility_state_2_properties(
@@ -131,21 +166,21 @@ pub(crate) fn restart_agility_state_2(
     _changing_region: bool,
     now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<AgilityState2>(key)).copied()
-        else { return false };
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<AgilityState2>(key)).is_none()
+    { return false; }
+    let Some(sufferer) = participant(game, (region_id, holder)) else { return false; };
     if !begin_base_applied_state(game, region_id, holder, key) {
         return false;
     }
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_applied_state_sufferer(key, Some(sufferer));
+    }
     if begin_applied_state_visual(game, region_id, holder, key, 0) {
-        let mut message = CMessage::new(0x000b_fe03);
-        message.add_long(holder.object_type);
-        message.add_long(holder.id);
-        message.add_long(state.skill_id() as i32);
-        message.add_long(state.client_time(now));
-        message.add_long(0);
-        let _ = game.send_move_shape_around(region_id, holder, &message);
-        let _ = update_applied_state_visual_base(game, region_id, holder, key);
+        update_property_state_visual::<AgilityState2>(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+            |state, now| state.client_time(now) as u32,
+        );
     }
     true
 }
@@ -171,11 +206,10 @@ pub(crate) fn end_agility_state_2(
     holder: ShapeIdentity,
     key: StateKey,
 ) -> bool {
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<AgilityState2>(key, AGILITY_STATE_2_BYTES))
-        .is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<AgilityState2>(key)).is_none()
+    { return false; }
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, target, AGILITY_STATE_2_BYTES)
 }

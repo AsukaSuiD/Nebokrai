@@ -1046,8 +1046,7 @@ use crate::gameserver::appserver::skills::baseattack::{
     real_distance,
 };
 use crate::gameserver::appserver::skills::agility::{
-    cancel_player_agility_family, execute_player_agility_family, AGILITY_2_SKILL_ID,
-    AGILITY_SKILL_ID,
+    AGILITY_2_SKILL_ID, AGILITY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
@@ -39574,9 +39573,6 @@ impl CGame {
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
-            AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
-                cancel_player_agility_family(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             HEARTEN_SKILL_ID => {
                 cancel_player_hearten(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
@@ -39948,16 +39944,6 @@ impl CGame {
             _ if is_chaos_sphere_dispatch(dispatch) => execute_player_chaos_sphere,
             _ if is_lightning_target(dispatch) => execute_player_lightning,
             _ if is_seal_target(dispatch) => execute_player_seal,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    matches!(
-                        skill_id,
-                        AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
-                    )
-                }
-            } => execute_player_agility_family,
             _ if dispatch.skill_id() == HEARTEN_SKILL_ID => execute_player_hearten,
             _ if dispatch.skill_id() == PROMOTION_SKILL_ID => execute_player_promotion,
             _ if match dispatch {

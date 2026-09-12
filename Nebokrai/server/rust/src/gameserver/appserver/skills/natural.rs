@@ -1,10 +1,8 @@
-//! Параметры исполнения `CNatural`.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий с
-//! `CAgility/CRapture` ход исполнения, сообщение навыка `0xBFE01`, отдельные
-//! часы восстановления и строку нехватки MP `GS0288`. Само состояние насыщает
-//! сопротивление стихиям до `i32::MAX`; его замена и сетевой результат
-//! выполняются общим владельцем семейства в `CGame`.
+//! Сопротивление стихиям CNatural (0xDC).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/natural.cpp.
+//! Общий caller находится в agility; ошибка MP отличается строкой GS0288.
+//! После удаления всех постоянных состояний семейства читается WORD gain
+//! сопротивления. Формула, Begin/End и wire экземпляра принадлежат agilitystate.
 
-pub(crate) const NATURAL_SKILL_ID: u32 = 220;
+pub(crate) const NATURAL_SKILL_ID: u32 = 0xdc;
 pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;

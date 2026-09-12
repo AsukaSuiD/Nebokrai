@@ -4914,59 +4914,6 @@ impl CPlayer {
         self.move_shape.replace_wuxing_state(state)
     }
 
-    pub(crate) fn agility_state(
-        &self,
-        skill_id: u32,
-    ) -> Option<super::skills::agilitystate::AgilityState> {
-        self.move_shape.agility_state(skill_id)
-    }
-
-    pub(crate) fn take_agility_state(
-        &mut self,
-        skill_id: u32,
-    ) -> Option<super::skills::agilitystate::AgilityState> {
-        self.move_shape.take_agility_state(skill_id)
-    }
-
-    pub(crate) fn begin_agility_state(
-        &mut self,
-        state: super::skills::agilitystate::AgilityState,
-    ) {
-        self.move_shape.begin_agility_state(state);
-    }
-
-    pub(crate) fn agility_state_2(
-        &self,
-    ) -> Option<super::skills::agilitystate2::AgilityState2> {
-        self.move_shape.agility_state_2()
-    }
-
-    pub(crate) fn take_agility_state_2(
-        &mut self,
-    ) -> Option<super::skills::agilitystate2::AgilityState2> {
-        self.move_shape.take_agility_state_2()
-    }
-
-    pub(crate) fn begin_agility_state_2(
-        &mut self,
-        state: super::skills::agilitystate2::AgilityState2,
-    ) {
-        self.move_shape.begin_agility_state_2(state);
-    }
-
-    pub(crate) fn take_persistent_agility_family_state(
-        &mut self,
-    ) -> Option<super::skills::agilitystate::PersistentAgilityFamilyState> {
-        self.move_shape.take_persistent_agility_family_state()
-    }
-
-    pub(crate) fn begin_persistent_agility_family_state(
-        &mut self,
-        state: super::skills::agilitystate::PersistentAgilityFamilyState,
-    ) {
-        self.move_shape.begin_persistent_agility_family_state(state);
-    }
-
 
 
     pub(crate) fn replace_taiji_state(

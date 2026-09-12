@@ -332,7 +332,6 @@ pub(crate) mod appserver {
         pub(crate) mod pomostate;
         pub(crate) mod pofa;
         pub(crate) mod pofastate;
-        pub(crate) mod naturalstate;
         pub(crate) mod knockout;
         pub(crate) mod knockoutruntime;
         pub(crate) mod knockoutstate;
@@ -349,7 +348,6 @@ pub(crate) mod appserver {
         pub(crate) mod godbless2;
         pub(crate) mod godblessstate2;
         pub(crate) mod rapture;
-        pub(crate) mod rapturestate;
         pub(crate) mod sevenshootingstar;
         pub(crate) mod seal;
         pub(crate) mod sealstate;

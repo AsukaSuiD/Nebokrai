@@ -308,11 +308,7 @@ impl CGame {
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID
-            | RAGE_SKILL_ID
-            | AGILITY_SKILL_ID
-            | AGILITY_2_SKILL_ID
-            | NATURAL_SKILL_ID
-            | RAPTURE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
+            | RAGE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
             _ if is_non_fun_skill(skill_id) => Some(PlayerSkillBeginPolicy::Inherited),
             _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
                 || is_heal_skill(skill_id) =>

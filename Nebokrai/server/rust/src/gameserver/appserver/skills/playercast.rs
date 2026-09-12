@@ -24,6 +24,7 @@ use crate::gameserver::gameserver::game::{
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
+    AgilityFamily,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -52,6 +53,8 @@ impl RegisteredPlayerCastOwner {
             super::roar::ROAR_SKILL_ID => Self::Roar,
             super::thunderslash::THUNDER_SLASH_SKILL_ID => Self::ThunderSlash,
             super::callosity::CALLOSITY_SKILL_ID | super::callosity2::CALLOSITY_2_SKILL_ID => Self::Callosity,
+            super::agility::AGILITY_SKILL_ID | super::agility2::AGILITY_2_SKILL_ID
+                | super::natural::NATURAL_SKILL_ID | super::rapture::RAPTURE_SKILL_ID => Self::AgilityFamily,
             _ => return None,
         })
     }
@@ -78,6 +81,7 @@ impl RegisteredPlayerCastOwner {
             Self::Roar => super::roar::execute_player_roar::<Runtime>,
             Self::ThunderSlash => super::thunderslash::execute_player_thunder_slash::<Runtime>,
             Self::Callosity => super::callosity::execute_player_callosity::<Runtime>,
+            Self::AgilityFamily => super::agility::execute_player_agility_family::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

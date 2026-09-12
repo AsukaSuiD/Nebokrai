@@ -1,110 +1,80 @@
-//! Каноническое постоянное состояние `CAgilityState`.
-//! OnUpdateProperties Agility/Natural/Rapture (0x005F02F0/0x005F3970/0x005F3E90):
-//! GetSufferer, затем player-only wrapping WORD addon, без visual и часов.
+//! Постоянные состояния Agility/Natural/Rapture (0xda/0xdc/0xdb).
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/agilitystate.cpp,
+//! naturalstate.cpp и `rapturestate .cpp`. Типизированные варианты сохраняют разные
+//! игровые величины: WORD full-miss, WORD прирост сопротивления стихиям и WORD
+//! blast_attack. У Agility/Rapture сложение WORD с
+//! переполнением; Natural складывает DWORD с переполнением, затем ограничивает
+//! результат INT_MAX. OnUpdateProperties только разрешает S и применяет
+//! player-формулу: visual, ended-gate и чтения часов отсутствуют.
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
-//! `agilitystate.cpp`. Состояние `0xda` публикует начало/завершение и добавляет
-//! `full_miss` сложением с переполнением. Временным состоянием `0x81` владеет
-//! отдельный `agilitystate2.rs`; все экземпляры принадлежат общей арене
-//! `CanonicalStateStorage` и сохраняют порядок повторных DB-записей.
-//! Три постоянных варианта используют общую шестибайтную DB-запись `ID + WORD`.
-//! Vtable Agility/Natural/Rapture 0x00660774/0x006606B4/0x00660714:
-//! End +0x1C→0x005FD420 публикует visual phase1, затем GetSufferer и
-//! RemoveState. Он не вызывает базовый End и не пишет IsEnded.
-//! Удаляется достигнутый ключ; UpdateProperty следует за RemoveState.
-//! Object Begin Agility/Natural/Rapture 0x005F4370/0x005F39D0/0x005F3EE0:
-//! только null sufferer даёт отказ; base Begin, новый visual(0xC),
-//! BeginVisualEffect(1), Update(state,0), затем return 1. При null user
-//! timestamp сохраняется, payload не сбрасывается; Begin-пакет содержит 0,0.
-//! OnChangeRegion +0x2C→0x005D9BA0 записывает только user-region в общей
-//! lifecycle-базе. PDB alias SetSourceContainerExtendID — то же ICF-тело setter-а,
-//! но не отдельный владелец или дополнительное игровое действие.
+//! Наложение обходит живые слоты и удаляет все ID этого постоянного семейства,
+//! не затрагивая временную Agility2. После каждого End уничтожается свежий
+//! остаток той же позиции; пустые слоты не уплотняются. Только после обхода
+//! caller читает новый коэффициент. Объектный Begin(U,U) читает часы,
+//! сохраняет участников и публикует visual до append; UpdateProperty следует
+//! после попытки Begin независимо от результата. Ненужный постоянному
+//! состоянию timestamp не дублируется в payload.
+//!
+//! AI пустой; DB состоит из DWORD ID и WORD величины, без часов. Клиентские
+//! время и дополнительные данные нулевые. End не пишет ended: существующий
+//! visual получает Update(1) с базовым tail, затем свежий S удаляет именно
+//! этот экземпляр. Чужой/NULL S не подменяется держателем арены. SetRegion
+//! меняет только регион U; restart Begin(NULL, holder) сохраняет U и меняет S.
+//! Общая арена, безопасный enum и шестибайтный массив заменяют указатели,
+//! дублирующие классы и промежуточный вектор сериализации.
 
 use super::agility::AGILITY_SKILL_ID;
 use super::natural::NATURAL_SKILL_ID;
-use super::naturalstate::NaturalState;
 use super::rapture::RAPTURE_SKILL_ID;
-use super::rapturestate::RaptureState;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    begin_applied_state_visual, begin_base_applied_state, resolve_state_move_shape,
-    resolve_state_move_shape_mut, update_applied_state_visual_base,
+    StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
+    end_and_destroy_state_at, remove_applied_state_from, resolve_applied_state_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_end_visual,
+    update_player_state_properties, update_property_state_visual,
 };
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
-pub(crate) const AGILITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
-pub(crate) const AGILITY_STATE_END_MESSAGE: i32 = 0x000b_fe04;
 pub(crate) const PERSISTENT_AGILITY_FAMILY_STATE_BYTES: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AgilityState {
-    full_miss: u16,
-}
-
-impl AgilityState {
-    pub(crate) const fn persistent(full_miss: u16) -> Self {
-        Self {
-            full_miss,
-        }
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 { AGILITY_SKILL_ID }
-    pub(crate) const fn full_miss(self) -> u16 { self.full_miss }
-    pub(crate) fn apply_to_player(
-        self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        properties.full_miss = properties.full_miss.wrapping_add(self.full_miss);
-        properties
-    }
-}
-
-/// Одно из трёх взаимно исключающих постоянных состояний семейства.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PersistentAgilityFamilyState {
-    Agility(AgilityState),
-    Natural(NaturalState),
-    Rapture(RaptureState),
+    Agility { full_miss: u16 },
+    Natural { element_resistance_gain: u16 },
+    Rapture { blast_attack_gain: u16 },
 }
 
 impl PersistentAgilityFamilyState {
     pub(crate) const fn skill_id(self) -> u32 {
         match self {
-            Self::Agility(state) => state.skill_id(),
-            Self::Natural(state) => state.skill_id(),
-            Self::Rapture(state) => state.skill_id(),
+            Self::Agility { .. } => AGILITY_SKILL_ID,
+            Self::Natural { .. } => NATURAL_SKILL_ID,
+            Self::Rapture { .. } => RAPTURE_SKILL_ID,
         }
     }
 
     pub(crate) const fn is_known_skill(skill_id: u32) -> bool {
-        matches!(
-            skill_id,
-            AGILITY_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
-        )
+        matches!(skill_id, AGILITY_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID)
     }
 
     pub(crate) fn apply_to_player(
-        self,
-        mut properties: PlayerCombatProperties,
+        self, mut properties: PlayerCombatProperties,
     ) -> PlayerCombatProperties {
         match self {
-            Self::Agility(state) => {
-                properties = state.apply_to_player(properties);
+            Self::Agility { full_miss } => {
+                properties.full_miss = properties.full_miss.wrapping_add(full_miss);
             }
-            Self::Natural(state) => {
-                properties.element_resistance = properties
-                    .element_resistance
-                    .wrapping_add(u32::from(state.element_resistance_gain()))
-                    .min(i32::MAX as u32);
+            Self::Natural { element_resistance_gain } => {
+                properties.element_resistance = properties.element_resistance
+                    .wrapping_add(u32::from(element_resistance_gain)).min(i32::MAX as u32);
             }
-            Self::Rapture(state) => {
-                properties.blast_attack = properties
-                    .blast_attack
-                    .wrapping_add(state.blast_attack_gain());
+            Self::Rapture { blast_attack_gain } => {
+                properties.blast_attack = properties.blast_attack.wrapping_add(blast_attack_gain);
             }
         }
         properties
@@ -115,60 +85,84 @@ impl PersistentAgilityFamilyState {
         let skill_id = reader.read_u32()?;
         let value = reader.read_u16()?;
         match skill_id {
-            AGILITY_SKILL_ID => Ok(Self::Agility(AgilityState::persistent(value))),
-            NATURAL_SKILL_ID => Ok(Self::Natural(NaturalState::new(value))),
-            RAPTURE_SKILL_ID => Ok(Self::Rapture(RaptureState::new(value))),
-            _ => Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }),
+            AGILITY_SKILL_ID => Ok(Self::Agility { full_miss: value }),
+            NATURAL_SKILL_ID => Ok(Self::Natural { element_resistance_gain: value }),
+            RAPTURE_SKILL_ID => Ok(Self::Rapture { blast_attack_gain: value }),
+            _ => Err(LegacyReadBlock {
+                offset, needed: 4, available: payload.len().saturating_sub(offset),
+            }),
         }
     }
 
     pub(crate) fn encoded(self) -> [u8; PERSISTENT_AGILITY_FAMILY_STATE_BYTES] {
         let value = match self {
-            Self::Agility(state) => state.full_miss(),
-            Self::Natural(state) => state.element_resistance_gain(),
-            Self::Rapture(state) => state.blast_attack_gain(),
+            Self::Agility { full_miss } => full_miss,
+            Self::Natural { element_resistance_gain } => element_resistance_gain,
+            Self::Rapture { blast_attack_gain } => blast_attack_gain,
         };
-        let mut bytes = Vec::with_capacity(PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(self.skill_id());
-        writer.write_u16(value);
-        bytes.try_into().expect("размер постоянного состояния ловкости фиксирован")
+        let mut bytes = [0; PERSISTENT_AGILITY_FAMILY_STATE_BYTES];
+        bytes[..4].copy_from_slice(&self.skill_id().to_le_bytes());
+        bytes[4..].copy_from_slice(&value.to_le_bytes());
+        bytes
     }
 }
 
-pub(crate) fn send_agility_family_state_visual(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    begin: bool,
-    client_time: i32,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(if begin {
-        AGILITY_STATE_BEGIN_MESSAGE
-    } else {
-        AGILITY_STATE_END_MESSAGE
-    });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(skill_id as i32);
-    if begin {
-        message.add_long(client_time);
-        message.add_long(0);
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
+    let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
+    Some((shape.get_region_id(), ShapeIdentity {
+        ex_id: CGuid::GUID_INVALID, ..shape.identity()
+    }))
 }
 
-/// OnUpdateProperties 0x005F02F0/0x005F3970/0x005F3E90: GetSufferer, затем только player-формула.
-/// Visual, IsEnded-gate и чтения часов у этого override отсутствуют.
+pub(crate) fn replace_persistent_agility_state(
+    game: &mut CGame, source: (i32, ShapeIdentity),
+    create: impl FnOnce() -> PersistentAgilityFamilyState, now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let mut index = 0;
+    loop {
+        let Some(shape) = resolve_state_move_shape(game, source.0, source.1) else { break; };
+        if index >= shape.state_slot_count() { break; }
+        if shape.state_at(index).is_some_and(|(_, state)| {
+            PersistentAgilityFamilyState::is_known_skill(state.state_id())
+        }) {
+            let _ = end_and_destroy_state_at(game, source.0, source.1, index);
+        }
+        index += 1;
+    }
+    let state = create();
+    let begun = (|| {
+        resolve_state_move_shape(game, source.0, source.1)?;
+        let _ = now();
+        let user = participant(game, source)?;
+        let sufferer = participant(game, source)?;
+        if resolve_state_move_shape(game, sufferer.0, sufferer.1).is_some() {
+            let mut message = CMessage::new(0x000b_fe03);
+            message.add_long(sufferer.1.object_type);
+            message.add_long(sufferer.1.id);
+            message.add_ulong(state.skill_id());
+            message.add_long(0);
+            message.add_ulong(0);
+            let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
+        }
+        let record = state.encoded();
+        let shape = resolve_state_move_shape_mut(game, source.0, source.1)?;
+        let key = shape.append_applied_state_record(state, &record);
+        shape.mark_applied_state_begun(key);
+        shape.set_applied_state_user(key, Some(user));
+        shape.set_applied_state_sufferer(key, Some(sufferer));
+        shape.begin_applied_state_visual(key, 1);
+        shape.update_applied_state_visual_base(key);
+        Some(())
+    })().is_some();
+    let _ = game.update_move_shape_properties(source.0, source.1);
+    begun
+}
+
 pub(crate) fn update_persistent_agility_state_properties(
     game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
     _now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    crate::gameserver::appserver::states::state::update_player_state_properties::<PersistentAgilityFamilyState>(
+    update_player_state_properties::<PersistentAgilityFamilyState>(
         game, region_id, holder, key, |state, player| {
             player.update_state_combat_properties(|properties| state.apply_to_player(properties));
         },
@@ -176,79 +170,36 @@ pub(crate) fn update_persistent_agility_state_properties(
 }
 
 pub(crate) fn restart_persistent_agility_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
-    _changing_region: bool,
-    _now: &mut dyn FnMut() -> u32,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+    _changing_region: bool, now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let Some(skill_id) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<PersistentAgilityFamilyState>(key))
-        .map(|state| state.skill_id())
-    else { return false };
-    if !begin_base_applied_state(game, region_id, holder, key)
-        || !begin_applied_state_visual(game, region_id, holder, key, 1)
-    {
-        return false;
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PersistentAgilityFamilyState>(key)).is_none()
+    { return false; }
+    let Some(sufferer) = participant(game, (region_id, holder)) else { return false; };
+    if !begin_base_applied_state(game, region_id, holder, key) { return false; }
+    if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
+        shape.set_applied_state_sufferer(key, Some(sufferer));
     }
-    let mut message = CMessage::new(AGILITY_STATE_BEGIN_MESSAGE);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(skill_id as i32);
-    message.add_long(0);
-    message.add_long(0);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let _ = update_applied_state_visual_base(game, region_id, holder, key);
+    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+        update_property_state_visual::<PersistentAgilityFamilyState>(
+            game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
+            |_, _| 0,
+        );
+    }
     true
 }
 
 pub(crate) fn end_persistent_agility_state(
-    game: &mut CGame,
-    region_id: i32,
-    holder: ShapeIdentity,
-    key: StateKey,
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
 ) -> bool {
-    let Some(state) = resolve_state_move_shape(game, region_id, holder)
-        .and_then(|shape| shape.applied_state::<PersistentAgilityFamilyState>(key)).copied()
-        else { return false };
-    let mut message = CMessage::new(AGILITY_STATE_END_MESSAGE);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(state.skill_id() as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder)
-        .and_then(|shape| shape.remove_applied_state_record::<PersistentAgilityFamilyState>(key, PERSISTENT_AGILITY_FAMILY_STATE_BYTES))
-        .is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
-    }
-    removed
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state::<PersistentAgilityFamilyState>(key)).is_none()
+    { return false; }
+    update_applied_state_end_visual(game, region_id, holder, key, StatePropertyTarget::Sufferer);
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    else { return false; };
+    remove_applied_state_from(
+        game, region_id, holder, key, target, PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
+    )
 }
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранён конструктор по умолчанию; OnChangeRegion находится в общей lifecycle-базе.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp
-
-// ============================================================================
-// FUNCTION: CAgilityState::CAgilityState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:24
-// RVA: 0x001F4140
-// ADDRESS: 005f4140
-// PROTOTYPE: undefined __thiscall CAgilityState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer

@@ -79,7 +79,6 @@ use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkill
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
-use super::agility::AgilityFamilyExecutionState;
 use super::archery::ArcheryExecutionState;
 use super::armybreak::ArmyBreakExecutionState;
 use super::basemagic::BaseMagicExecutionState;
@@ -213,7 +212,6 @@ pub(crate) trait PlayerSkillState {
 player_skill_states! {
     HeartlessArrowArea(HeartlessArrowAreaExecutionState),
     ExplosiveArrow(ExplosiveArrowExecutionState) paths(clear_end_paths),
-    AgilityFamily(AgilityFamilyExecutionState),
     GhostCut(GhostCutExecutionState) paths(clear_end_paths),
     ThunderBlow2(ThunderBlow2Execution) prepare(prepare_derived_end),
     ArmyBreak(ArmyBreakExecutionState) prepare(prepare_derived_end),

@@ -1,365 +1,188 @@
-//! Общее исполнение семейства `CAgility/CAgility2/CNatural/CRapture`.
+//! Зарегистрированный вход CAgility, CAgility2, CNatural и CRapture.
+//! Источник: gameserver.exe/GameServer.pdb, одноимённые appserver/skills owners.
+//! Attack Begin сохраняет исходного U, ранний отсчёт и loop1 visual; отказ
+//! Check получает End(0) без дополнительного visual2. После reuse чужой
+//! CMoveShape допускается без Move0, но игроку требуется ненулевая цена MP:
+//! MP0 даёт тихий отказ. Ненулевой расход проверяется по знаку DWORD-разности
+//! перед Move0. Natural использует GS0288, остальные варианты — GS0279.
 //!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
-//! `appserver/skills/agility.cpp` и `agility2.cpp`. Общая часть сохраняет
-//! отдельные часы восстановления, повторную проверку и расход MP, дополнительный
-//! `UpdateCurrentState`, задержку и сетевой формат навыка на себя. Нулевая цена MP
-//! намеренно не ставит запрет движения, хотя завершение всё равно снимает его.
-//! Три постоянных состояния взаимно заменяются, а временная `CAgility2`
-//! заменяет только себя. Различающиеся свойства и жизненный цикл принадлежат
-//! `CanonicalStateStorage` и вызывающему `CGame`; после замены состояние
-//! немедленно входит в полный `UpdateProperty`, а не ждёт постороннего
-//! пересчёта. Клиентская отмена проходит через тот же семейный владелец и не
-//! откатывает уже выполненный расход MP.
-//! Reuse каждого ID проверяется общим absolute deadline `CSkill::IsRestored`;
-//! задержка исполнения остаётся отдельным elapsed-интервалом.
-//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
-//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
-//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
+//! Каждый AI сохраняет свежую таблицу свойств и найденного U через callbacks.
+//! Смерть U публикует visual2 и завершает End(1); нехватка MP — visual7/End(0).
+//! Первый AI всегда списывает MP, затем вызывает OnChangeStates, записывает
+//! CAN, публикует visual0 и включает condition. Непроверенный native доступ
+//! к ресурсам CPlayer безопасно отклоняется для чужого живого CMoveShape.
+//! Абсолютный unsigned срок start+delay предшествует visual1, без раннего
+//! region/S-gate; S и координаты команды не определяют получателя состояния.
+//!
+//! Постоянные варианты удаляют все встреченные DA/DB/DC живым индексным
+//! обходом; Agility2 заменяет только первый ID81. Frozen-таблица отдаёт бонус
+//! после завершения старых состояний; только Agility2 затем читает persist.
+//! Begin(U,U), visual, append и безусловный UpdateProperty принадлежат владельцу
+//! состояния. Отдельных публикаций после замены нет. Общий End сбрасывает фазу,
+//! возвращает движение свежему U и завершает State с настоящим аргументом.
 
-use super::agility2::begin_agility_2_state;
 pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
-use super::agilitystate::{
-    send_agility_family_state_visual, AgilityState, PersistentAgilityFamilyState,
-};
-use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::stateskill::finish_state_skill;
+use super::agilitystate::{PersistentAgilityFamilyState, replace_persistent_agility_state};
+use super::agilitystate2::{AgilityState2, replace_agility_state_2};
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::natural::{NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN};
-use super::naturalstate::NaturalState;
+use super::playercast::execute_registered_player_cast;
 use super::rapture::{RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN};
-use super::rapturestate::RaptureState;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
-pub(crate) const AGILITY_SKILL_ID: u32 = 218;
-pub(crate) const AGILITY_EFFECT_MESSAGE: i32 = 0x000b_fe01;
-pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-pub(crate) const SKILL_USAGE_TARGET_FULL_MISS_GAIN: u32 = 127;
-pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
-pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
-pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+pub(crate) const AGILITY_SKILL_ID: u32 = 0xda;
+const PLAYER_TYPE: i32 = 400;
+const USER_MP_LOSE: u32 = 2;
+const TARGET_FULL_MISS_GAIN: u32 = 127;
+const STATE_PERSIST_TIME: u32 = 10_002;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AgilityFamilyExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-}
+enum AgilityProfile { Agility, Agility2, Natural, Rapture }
 
-impl AgilityFamilyExecutionState {
-    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+impl AgilityProfile {
+    fn from_skill_id(skill_id: u32) -> Option<Self> {
+        match skill_id {
+            AGILITY_SKILL_ID => Some(Self::Agility),
+            AGILITY_2_SKILL_ID => Some(Self::Agility2),
+            NATURAL_SKILL_ID => Some(Self::Natural),
+            RAPTURE_SKILL_ID => Some(Self::Rapture),
+            _ => None,
         }
     }
 
-    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
-        &self.kernel
-    }
-
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
+    fn mana_failure(self) -> &'static [u8] {
+        if self == Self::Natural { b"GS0288" } else { b"GS0279" }
     }
 }
 
-fn restore_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
-fn abort_player_agility(game: &mut CGame, player_id: i32) {
-    restore_movement(game, player_id);
-}
-
-fn finish_player_agility<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+fn mana_failure(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties, profile: AgilityProfile,
 ) {
-    restore_movement(game, player_id);
-    finish_state_skill(game, player_id, skill_id, runtime);
+    game.update_registered_skill_visual(instance, 7);
+    let amount = properties.query_property(USER_MP_LOSE);
+    game.send_skill_system_info_with_unsigned(player_id, profile.mana_failure(), amount);
 }
 
-pub(crate) fn cancel_player_agility_family<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    execution_skill_id: u32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity),
+    profile: AgilityProfile, runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_state::<AgilityFamilyExecutionState>(player_id, execution_skill_id).copied()
-        .map(|state| state.kernel().dispatch())
-    else {
+    let Some(source) = resolve_state_move_shape(game, original_user.0, original_user.1) else { return false; };
+    let source = (source.shape().get_region_id(), source.shape().identity());
+    let player_id = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        if let Some(player_id) = player_id { game.send_skill_system_info(player_id, b"GS0278"); }
         return false;
-    };
-    let skill_id = dispatch.skill_id();
-    finish_player_agility(game, player_id, skill_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
+    }
+    let Some(player_id) = player_id else { return true; };
+    if properties.query_property(USER_MP_LOSE) == 0 { return false; }
+    let Some(mana) = game.find_player(player_id).map(CPlayer::mana) else { return false; };
+    let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+    if (remaining as i32) < 0 {
+        mana_failure(game, instance, player_id, &properties, profile);
+        return false;
+    }
+    let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
+    source.set_moveable(false);
+    true
 }
 
-pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, profile: AgilityProfile, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let terminal = |state| QueuedSkillExecutionOutcome {
-        state,
-        first_contact: false,
-    };
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. }
-            if matches!(
-                skill_id,
-                AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
-            ) => skill_id,
-        _ => return terminal(QueuedSkillExecutionState::Rejected),
-    };
-    let Some(player) = game.find_player(player_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if player.server_region_id().is_none() {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let skill_level = player.learned_skill_level(skill_id, game.skill_factory());
-    let initial_mana = player.mana();
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level)
-    else {
-        if game.player_skill_state::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()).copied().is_some() {
-            abort_player_agility(game, player_id);
-        }
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    enum FamilyBonus {
-        FullMiss(u16),
-        ElementResistance(u16),
-        BlastAttack(u16),
-    }
-    let (bonus, insufficient_mana_message): (FamilyBonus, &[u8]) = match skill_id {
-        NATURAL_SKILL_ID => (
-            FamilyBonus::ElementResistance(
-                properties.query_property(SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN) as u16,
-            ),
-            b"GS0288",
-        ),
-        RAPTURE_SKILL_ID => (
-            FamilyBonus::BlastAttack(
-                properties.query_property(SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN) as u16,
-            ),
-            b"GS0279",
-        ),
-        _ => (
-            FamilyBonus::FullMiss(properties.query_property(SKILL_USAGE_TARGET_FULL_MISS_GAIN) as u16),
-            b"GS0279",
-        ),
-    };
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME) as i32;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-
-    if game.player_skill_state::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()).copied().is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-        let cooldown_now_ms = runtime.now_milliseconds();
-        let last_used_ms = game.player_skill_last_used_ms(player_id, skill_id);
-        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
-            game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS0278");
-            abort_player_agility(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if mp_loss != 0 && initial_mana < mp_loss {
-            game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
-            game.send_skill_system_info_with_unsigned(
-                player_id,
-                insufficient_mana_message,
-                mp_loss,
-            );
-            abort_player_agility(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            if mp_loss != 0 {
-                player.set_skill_moveable(false);
-            }
-            player.set_current_skill_id(Some(skill_id));
-        }
-        game.begin_player_skill_execution(player_id, AgilityFamilyExecutionState::begin(
-            dispatch,
-            started_at_ms,
-        ));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_state::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()).copied()
-        .is_none_or(|state| state.kernel().dispatch() != dispatch)
-    {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
-        game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 2);
-        finish_player_agility(game, player_id, skill_id, player_ai, runtime);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.player_skill_state::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()).copied()
-        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
-    {
-        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if current_mana < mp_loss {
-            game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
-            game.send_skill_system_info_with_unsigned(
-                player_id,
-                insufficient_mana_message,
-                mp_loss,
-            );
-            abort_player_agility(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(current_mana.wrapping_sub(mp_loss));
-        }
-        let _ = game.update_player_current_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-        );
-        let _ = game.update_player_criminal_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-            runtime,
-        );
-        game.send_self_state_skill_cast(
-            AGILITY_EFFECT_MESSAGE,
-            player_id,
-            skill_id,
-            skill_level,
-            1,
-        );
-        if let Some(state) = game.player_skill_state_mut::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()) {
-            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-
-    let started_at_ms = game.player_skill_state::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()).copied()
-        .map(|state| state.kernel().started_at_ms())
-        .expect("исполнение семейства ловкости создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
         return terminal(QueuedSkillExecutionState::Pending);
-    }
-    game.send_self_state_skill_cast(
-        AGILITY_EFFECT_MESSAGE,
-        player_id,
-        skill_id,
-        skill_level,
-        2,
-    );
-
-    let removed_skill_id = if skill_id == AGILITY_2_SKILL_ID {
-        game.find_player_mut(player_id)
-            .and_then(CPlayer::take_agility_state_2)
-            .map(|state| state.skill_id())
-    } else {
-        game.find_player_mut(player_id)
-            .and_then(CPlayer::take_persistent_agility_family_state)
-            .map(PersistentAgilityFamilyState::skill_id)
     };
-    if let Some(removed_skill_id) = removed_skill_id {
-        if removed_skill_id != AGILITY_2_SKILL_ID {
-            send_agility_family_state_visual(
-                game,
-                player_id,
-                removed_skill_id,
-                false,
-                0,
-            );
-        }
-        let _ = game.publish_player_states(player_id);
-    }
-
-    let state_started_at_ms = runtime.now_milliseconds();
-    let client_time = if skill_id == AGILITY_2_SKILL_ID {
-        let FamilyBonus::FullMiss(full_miss) = bonus else { unreachable!() };
-        begin_agility_2_state(
-            game,
-            player_id,
-            full_miss,
-            state_started_at_ms,
-            keep_time_ms,
-            runtime,
-        )
-    } else {
-        let state = match bonus {
-            FamilyBonus::FullMiss(full_miss) => PersistentAgilityFamilyState::Agility(
-                AgilityState::persistent(full_miss),
-            ),
-            FamilyBonus::ElementResistance(gain) => {
-                PersistentAgilityFamilyState::Natural(NaturalState::new(gain))
-            }
-            FamilyBonus::BlastAttack(gain) => {
-                PersistentAgilityFamilyState::Rapture(RaptureState::new(gain))
-            }
-        };
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.begin_persistent_agility_family_state(state);
-        }
-        0
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
-    send_agility_family_state_visual(game, player_id, skill_id, true, client_time);
-    let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id);
-    if let Some(state) = game.player_skill_state_mut::<AgilityFamilyExecutionState>(player_id, dispatch.skill_id()) {
-        let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity)
+        .map(|source| (source.shape().get_region_id(), source.shape().identity()))
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if game.move_shape_health(source.0, source.1) == Some(0) {
+        game.update_registered_skill_visual(instance, 2);
+        return terminal(QueuedSkillExecutionState::RejectedAfterUse);
     }
-    finish_player_agility(game, player_id, skill_id, player_ai, runtime);
+    if stage == SkillStage::Begin {
+        if source.1.object_type != PLAYER_TYPE { return terminal(QueuedSkillExecutionState::Rejected); }
+        let Some(mana) = game.find_player(source.1.id).map(CPlayer::mana) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+        if (remaining as i32) < 0 {
+            mana_failure(game, instance, source.1.id, &properties, profile);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(player) = game.find_player_mut(source.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        player.set_mana(remaining);
+        game.publish_player_states(source.1.id);
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+    }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
+    game.update_registered_skill_visual(instance, 1);
+    if profile == AgilityProfile::Agility2 {
+        let _ = replace_agility_state_2(game, source, || {
+            let full_miss = properties.query_property(TARGET_FULL_MISS_GAIN) as u16;
+            let keep = properties.query_property(STATE_PERSIST_TIME) as i32;
+            AgilityState2::new(full_miss, 0, keep)
+        }, &mut || runtime.now_milliseconds());
+    } else {
+        let _ = replace_persistent_agility_state(game, source, || match profile {
+            AgilityProfile::Natural => PersistentAgilityFamilyState::Natural {
+                element_resistance_gain: properties.query_property(SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN) as u16,
+            },
+            AgilityProfile::Rapture => PersistentAgilityFamilyState::Rapture {
+                blast_attack_gain: properties.query_property(SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN) as u16,
+            },
+            AgilityProfile::Agility | AgilityProfile::Agility2 => PersistentAgilityFamilyState::Agility {
+                full_miss: properties.query_property(TARGET_FULL_MISS_GAIN) as u16,
+            },
+        }, &mut || runtime.now_milliseconds());
+    }
     terminal(QueuedSkillExecutionState::Completed)
 }
 
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранён только посторонний недостигнутый callback контейнера; skill-путь материализован полностью.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.h
-
-// ============================================================================
-// FUNCTION: CContainerListener::OnTraversingContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:33
-// RVA: 0x001AFCE0
-// ADDRESS: 005afce0
-// PROTOTYPE: int __thiscall OnTraversingContainer(CContainer * param_1, CBaseObject * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(profile) = AgilityProfile::from_skill_id(dispatch.skill_id()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
+        |game, instance, _player_id, runtime| original_user
+            .is_some_and(|source| check_cast(game, instance, source, profile, runtime)),
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(),
+        |game, instance, runtime| run_ai(game, instance, profile, runtime),
+    )
+}
