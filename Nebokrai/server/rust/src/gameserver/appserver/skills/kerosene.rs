@@ -92,31 +92,8 @@ pub(super) fn kerosene_path_block(
     skill_id: u32,
     properties: &CSkillBaseProperties,
 ) -> Option<bool> {
-    // GetTargetPath заново разрешает U/S. Исчезнувшая S оставляет путь к
-    // сохранённым координатам; это не повторная проверка цели начального AI.
-    let path = (|| {
-        let lifecycle = game.player_skill_lifecycle(player_id, skill_id)?;
-        let (region, identity) = lifecycle.user();
-        let source = resolve_state_move_shape(game, region, identity)?.shape();
-        let target = resolve_skill_sufferer(game, lifecycle);
-        let source_x = source.get_tile_x().ok()?;
-        let source_y = source.get_tile_y().ok()?;
-        let destination = match target {
-            Some((region, identity)) => {
-                let target = resolve_state_move_shape(game, region, identity)?.shape();
-                if target.identity() == source.identity() { return None; }
-                game.base_magic_target_point(target.get_region_id(), source_x, source_y, target.identity())?
-            }
-            None => {
-                let destination = lifecycle.destination();
-                if destination == (0, 0) || destination == (source_x, source_y) { return None; }
-                destination
-            }
-        };
-        Some(game.base_magic_path(
-            source.get_region_id(), source_x, source_y, destination.0, destination.1, None,
-        ))
-    })().unwrap_or_default();
+    let path = game.player_skill_lifecycle(player_id, skill_id)
+        .map(|lifecycle| game.skill_target_path(lifecycle)).unwrap_or_default();
     // Нулевой предел означает нулевую дальность, а не отсутствие ограничения.
     if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) < path.len() as u32 {
         return None;

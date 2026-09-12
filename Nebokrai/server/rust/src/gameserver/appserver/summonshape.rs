@@ -84,14 +84,6 @@ pub(crate) fn encode_related_phalanx_snapshot(
     lifetime_ms: u32,
     mut now_milliseconds: impl FnMut() -> u32,
 ) -> Option<Vec<u8>> {
-    let first_now = now_milliseconds();
-    let remained = if started_at_ms.wrapping_add(lifetime_ms) <= first_now {
-        0
-    } else {
-        lifetime_ms
-            .wrapping_sub(now_milliseconds())
-            .wrapping_add(started_at_ms)
-    };
     let mut payload = Vec::new();
     {
         let mut writer = LegacyWriter::new(&mut payload);
@@ -99,6 +91,14 @@ pub(crate) fn encode_related_phalanx_snapshot(
         writer.write_i32(skill_level);
         writer.write_i32(related_type);
         writer.write_i32(related_id);
+        let first_now = now_milliseconds();
+        let remained = if started_at_ms.wrapping_add(lifetime_ms) <= first_now {
+            0
+        } else {
+            lifetime_ms
+                .wrapping_sub(now_milliseconds())
+                .wrapping_add(started_at_ms)
+        };
         writer.write_u32(remained);
     }
     shape
@@ -194,7 +194,7 @@ impl SummonedSkillShape {
             Self::ThunderFire(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ChaosSphere(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::FireWall(shape) => shape.encode_client_snapshot(),
-            Self::PoisonFog(shape) => shape.encode_client_snapshot(),
+            Self::PoisonFog(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Thunder(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ThunderBlow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ThunderSlash(shape) => shape.encode_client_snapshot(&mut now_milliseconds),

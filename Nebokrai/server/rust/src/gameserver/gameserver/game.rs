@@ -32845,17 +32845,6 @@ impl CGame {
         self.player_skill_execution(player_id, skill_id).is_some_and(|execution| !execution.is_prepared())
     }
 
-    pub(crate) fn begin_poison_fog(&mut self, player_id: i32, kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) -> bool {
-        self.begin_player_skill_execution(player_id, PlayerSkillExecution::PoisonFog { kernel, destination })
-    }
-
-    pub(crate) fn poison_fog_destination(&self, player_id: i32) -> Option<(i32, i32)> {
-        match self.find_player(player_id)?.move_shape().player_execution(POISON_FOG_SKILL_ID, &self.skill_factory)? {
-            PlayerSkillExecution::PoisonFog { destination, .. } => Some(*destination),
-            _ => None,
-        }
-    }
-
     pub(crate) fn battle_fairy_execution(&self, player_id: i32, skill_id: u32) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
         self.find_player(player_id)?.move_shape().battle_fairy_execution(skill_id, &self.skill_factory)
             .map(BattleFairyExecution::kernel)
@@ -45075,8 +45064,32 @@ impl CGame {
                     Some(None)
                 }
             });
-        let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
+        // Туман продолжает обход с живым региональным владельцем: callbacks
+        // могут изменить область и источника между двумя наложениями.
+        let poison_fog = matches!(
+            owner.base().find_skill_phalanx(phalanx_id),
+            Some(SummonedSkillShape::PoisonFog(_)),
+        );
+        let phalanx = if poison_fog { None } else {
+            owner.base().find_skill_phalanx(phalanx_id).cloned()
+        };
         self.restore_region_owner(owner);
+        if poison_fog {
+            match tick {
+                Some(Some(Some(_))) => {
+                    self.apply_poison_fog_phalanx(region_id, phalanx_id, runtime);
+                }
+                Some(None) => {
+                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
+                        && let Some(phalanx) = region.find_skill_phalanx(phalanx_id)
+                    {
+                        let _ = self.send_shape_exit_around(region, phalanx.shape());
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
         let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
@@ -45348,7 +45361,6 @@ impl CGame {
             }
             return true;
         }
-        if let (Some(Some(_)), SummonedSkillShape::PoisonFog(poison_fog)) = (tick, &phalanx) { let applied = self.apply_poison_fog_phalanx(region_id, poison_fog, runtime); tracing::trace!(region_id, phalanx_id, applied, "обновлена область ядовитого тумана"); return true; }
         if let (
             Some(Some((_, sampled_at_ms))),
             SummonedSkillShape::Thunder(thunder),

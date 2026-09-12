@@ -810,6 +810,25 @@ struct RegisteredShapeResolver<'a, Resolver> {
     resolver: &'a Resolver,
 }
 
+// Для замены покрытия нужны только призванные формы. Заимствованный resolver
+// сохраняет обычный area-порядок GetShapes и работает у снятого с CGame региона.
+struct RegionSummonShapeResolver<'a>(&'a BTreeMap<i32, SummonedSkillShape>);
+
+impl ShapeResolver for RegionSummonShapeResolver<'_> {
+    fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
+        if identity.object_type != SUMMON_SHAPE_TYPE { return None; }
+        let shape = self.0.get(&identity.id)?.shape();
+        Some(ShapeView {
+            identity: shape.identity(),
+            tile_x: shape.get_tile_x().ok()?,
+            tile_y: shape.get_tile_y().ok()?,
+            pos_x_bits: shape.get_pos_x().to_bits(),
+            pos_y_bits: shape.get_pos_y().to_bits(),
+            figure: ShapeFigure::default(),
+        })
+    }
+}
+
 impl<Resolver: ShapeResolver> ShapeResolver for RegisteredShapeResolver<'_, Resolver> {
     fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
         if !self.registry.contains(identity) {
@@ -1838,11 +1857,51 @@ impl CServerRegion {
         Ok(id)
     }
 
-    pub(crate) fn add_poison_fog_phalanx<Context: ServerRegionMembershipContext>(&mut self, mut phalanx: super::skills::poisonfogphalanx::CPoisonFogPhalanx, tile_x: i32, tile_y: i32, area_width: i32, area_height: i32, now_ms: u32, context: &mut Context) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        for existing in self.owned_skill_phalanxes.values_mut() { if let SummonedSkillShape::PoisonFog(existing) = existing { existing.replace_affect_region(phalanx.skill_level(), tile_x, tile_y); } }
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
-        let id = phalanx.shape().identity().id; self.owned_skill_phalanxes.insert(id, SummonedSkillShape::PoisonFog(phalanx)); Ok(id)
+    pub(crate) fn add_poison_fog_phalanx<Context: ServerRegionMembershipContext>(
+        &mut self,
+        mut phalanx: super::skills::poisonfogphalanx::CPoisonFogPhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::poisonfogphalanx::CPoisonFogPhalanx)> {
+        if let Err(block) = self.replace_poison_fog_scopes_in_cell(
+            phalanx.skill_level(), tile_x, tile_y, area_width, area_height,
+        ) {
+            return Err((block, phalanx));
+        }
+        if let Err(block) = self.add_object(
+            phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context,
+        ) {
+            // Caller сохраняет Serialize/Send после отказа AddShape; владение
+            // непринятой областью до этого хвоста не переходит региону.
+            return Err((block, phalanx));
+        }
+        let id = phalanx.shape().identity().id;
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::PoisonFog(phalanx));
+        Ok(id)
+    }
+
+    fn replace_poison_fog_scopes_in_cell(
+        &mut self, level: i32, tile_x: i32, tile_y: i32, area_width: i32, area_height: i32,
+    ) -> Result<usize, RegionMembershipBlock> {
+        let mut shapes = Vec::new();
+        self.get_shapes(
+            tile_x, tile_y, area_width, area_height,
+            &RegionSummonShapeResolver(&self.owned_skill_phalanxes), &mut shapes,
+        )?;
+        let mut replaced = 0;
+        for shape in shapes {
+            if let Some(SummonedSkillShape::PoisonFog(existing)) =
+                self.owned_skill_phalanxes.get_mut(&shape.identity.id)
+            {
+                existing.replace_affect_region(level, tile_x, tile_y);
+                replaced += 1;
+            }
+        }
+        Ok(replaced)
     }
 
     pub(crate) fn add_god_punishment_phalanx<Context: ServerRegionMembershipContext>(
@@ -2092,11 +2151,7 @@ impl CServerRegion {
         phalanx
             .shape_mut()
             .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        for existing in self.owned_skill_phalanxes.values_mut() {
-            if let SummonedSkillShape::PoisonFog(existing) = existing {
-                existing.replace_affect_region(phalanx.skill_level(), tile_x, tile_y);
-            }
-        }
+        self.replace_poison_fog_scopes_in_cell(phalanx.skill_level(), tile_x, tile_y, area_width, area_height)?;
         self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),

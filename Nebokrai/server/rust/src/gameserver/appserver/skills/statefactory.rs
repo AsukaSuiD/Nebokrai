@@ -181,7 +181,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         POISON_FOG_STATE_ID => StateRecordLayout::typed(
             POISON_FOG_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::poisonfogstate::PoisonFogState::decode(payload, offset, _now()).ok().map(StateData::PoisonFog)
+                super::poisonfogstate::PoisonFogState::decode(payload, offset, _now).ok().map(StateData::PoisonFog)
             },
         ),
         METEOR_ARROW_MASS_SKILL_ID => StateRecordLayout::typed(

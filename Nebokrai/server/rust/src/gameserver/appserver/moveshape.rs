@@ -344,7 +344,7 @@ use crate::gameserver::appserver::skills::pillarstate::{
     PILLAR_STATE_BYTES, PillarState,
 };
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
-use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES};
+use crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState;
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
@@ -1462,7 +1462,6 @@ impl CMoveShape {
                 StateData::ChangeBody(state) => Some(state.serialized_span()),
                 StateData::Extended(state) => Some(state.serialized_span()),
                 StateData::Undead(state) => Some(state.serialized_span()),
-                StateData::PoisonFog(state) => Some(state.serialized_span()),
                 StateData::MeteorArrow(state) => Some(state.serialized_span()),
                 StateData::Ride(state) => Some(state.serialized_span()),
                 _ => None,
@@ -1541,7 +1540,7 @@ impl CMoveShape {
                 StateData::LeafCut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::LeafCut3(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Kerosene(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::PoisonFog(state) => Some(state.encoded(now_ms)),
+                StateData::PoisonFog(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::MeteorArrow(state) => {
                     if record_index.is_some() { state.update_serialized(&mut payload); }
                     None
@@ -2303,7 +2302,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<ChangeBodyState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<UndeadState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<PoisonFogState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<MeteorArrowState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|state| state.shift_serialized_offset_after(offset, amount));
     }
@@ -2357,7 +2355,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<ChangeBodyState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<UndeadState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<PoisonFogState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<MeteorArrowState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         let _ = self.state_entries.replace_at(position, state);
@@ -2524,7 +2521,6 @@ impl CMoveShape {
         // Как в save, неоднозначный ordinal не разрешает удалять чужие байты.
         let record = (runtime_count == records.len()).then(|| records[occurrence]);
         let span = self.state_entries.serialized_span(key).or_else(|| match self.state_entries.get(key)? {
-            StateData::PoisonFog(state) => state.serialized_span(),
             StateData::MeteorArrow(state) => state.serialized_span(),
             StateData::Swordship(state) => {
                 // Как в save: Replace оставляет runtime-позицию, но переносит
@@ -2839,19 +2835,6 @@ impl CMoveShape {
         self.state_entries.iter_data().filter(|state| state.is_curable())
             .map(StateData::state_id).collect()
     }
-
-    pub(crate) fn take_expired_poison_fog_state(&mut self, key: StateKey, now_ms: u32) -> Option<PoisonFogState> {
-        self.applied_state::<PoisonFogState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<PoisonFogState>(key, POISON_FOG_STATE_BYTES)?;
-        Some(state)
-    }
-    pub(crate) fn take_poison_fog_state(&mut self) -> Option<PoisonFogState> {
-        let key = self.state_entries.first_key::<PoisonFogState>()?;
-        let state = self.remove_applied_state_record::<PoisonFogState>(key, POISON_FOG_STATE_BYTES)?;
-        Some(state)
-    }
-
-
 
     pub(crate) fn meteor_arrow_state(&self) -> Option<MeteorArrowState> { self.state_entries.first::<MeteorArrowState>().copied() }
     pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<MeteorArrowState> {

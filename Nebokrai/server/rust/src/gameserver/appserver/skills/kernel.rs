@@ -132,31 +132,27 @@ macro_rules! player_skill_states {
         #[derive(Clone, Debug, Eq, PartialEq)]
         pub(crate) enum PlayerSkillExecution {
             State(SkillExecutionKernel<PlayerSkillDispatch>),
-            PoisonFog {
-                kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-                destination: (i32, i32),
-            },
             $($variant($state),)+
         }
 
         impl PlayerSkillExecution {
             pub(crate) fn kernel(&self) -> SkillExecutionKernel<PlayerSkillDispatch> {
                 match self {
-                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => *kernel,
+                    Self::State(kernel) => *kernel,
                     $(Self::$variant(state) => *state.kernel(),)+
                 }
             }
 
             pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
                 match self {
-                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel,
+                    Self::State(kernel) => kernel,
                     $(Self::$variant(state) => state.kernel_mut(),)+
                 }
             }
 
             pub(crate) fn lifecycle(&self) -> &SkillLifecycle {
                 match self {
-                    Self::State(kernel) | Self::PoisonFog { kernel, .. } => kernel.lifecycle(),
+                    Self::State(kernel) => kernel.lifecycle(),
                     $(Self::$variant(state) => state.kernel().lifecycle(),)+
                 }
             }
@@ -167,14 +163,14 @@ macro_rules! player_skill_states {
 
             pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
                 match self {
-                    Self::State(_) | Self::PoisonFog { .. } => true,
+                    Self::State(_) => true,
                     $(Self::$variant(_state) => player_skill_states!(@prepare _state, _argument $(, $prepare)?),)+
                 }
             }
 
             pub(crate) fn clear_end_paths(&mut self) {
                 match self {
-                    Self::State(_) | Self::PoisonFog { .. } => {},
+                    Self::State(_) => {},
                     $(Self::$variant(_state) => player_skill_states!(@paths _state $(, $paths)?),)+
                 }
             }
@@ -419,6 +415,12 @@ impl SkillLifecycle {
         self.destination
     }
 
+    /// Фиксирует точку вместо объекта без нового Begin и повторного чтения часов.
+    pub(crate) fn set_point_target(&mut self, destination: (i32, i32)) {
+        self.sufferer = (0, Self::EMPTY_IDENTITY);
+        self.destination = destination;
+    }
+
     pub(crate) const fn started_at_ms(&self) -> u32 {
         self.started_at_ms
     }
@@ -475,8 +477,7 @@ impl SkillLifecycle {
     ) {
         self.started_at_ms = now();
         self.user = (source.0, Self::native_identity(source.1));
-        self.sufferer = (0, Self::EMPTY_IDENTITY);
-        self.destination = destination;
+        self.set_point_target(destination);
         self.ended = false;
         self.termination = None;
     }

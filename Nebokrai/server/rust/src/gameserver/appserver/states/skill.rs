@@ -19,7 +19,7 @@ use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDis
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::skills::kernel::SkillTermination;
+use crate::gameserver::appserver::skills::kernel::{SkillLifecycle, SkillTermination};
 use crate::gameserver::appserver::skills::skillfactory::{
     SkillAfterUse, SkillCategory, SkillEndEffect, SkillEndMovement, SkillEndPathOrder,
     SkillRegionChange, UNKNOWN_SKILL_ID,
@@ -42,6 +42,33 @@ pub(crate) enum RegisteredSkillEnd {
 }
 
 impl CGame {
+    /// GetTargetPath разрешает участников заново; при исчезнувшей S использует
+    /// сохранённую точку. Ограничение дальности принадлежит конкретному навыку.
+    pub(crate) fn skill_target_path(&self, lifecycle: &SkillLifecycle) -> Vec<(i32, i32, u8)> {
+        (|| {
+            let (region, identity) = lifecycle.user();
+            let source = resolve_state_move_shape(self, region, identity)?.shape();
+            let target = resolve_skill_sufferer(self, lifecycle);
+            let source_x = source.get_tile_x().ok()?;
+            let source_y = source.get_tile_y().ok()?;
+            let destination = match target {
+                Some((region, identity)) => {
+                    let target = resolve_state_move_shape(self, region, identity)?.shape();
+                    if target.identity() == source.identity() { return None; }
+                    self.base_magic_target_point(target.get_region_id(), source_x, source_y, target.identity())?
+                }
+                None => {
+                    let destination = lifecycle.destination();
+                    if destination == (0, 0) || destination == (source_x, source_y) { return None; }
+                    destination
+                }
+            };
+            Some(self.base_magic_path(
+                source.get_region_id(), source_x, source_y, destination.0, destination.1, None,
+            ))
+        })().unwrap_or_default()
+    }
+
     pub(crate) fn registered_player_skill(&self, player_id: i32, skill_id: u32) -> Option<RegisteredSkill> {
         let player = self.find_player(player_id)?;
         self.registered_move_shape_skill(player.shape().get_region_id(), player.shape().identity(), skill_id)
@@ -251,6 +278,8 @@ impl CGame {
                     return;
                 }
             }
+            SkillVisualEffectKind::PoisonFog =>
+                crate::gameserver::appserver::skills::poisonfog::publish_poison_fog_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();
