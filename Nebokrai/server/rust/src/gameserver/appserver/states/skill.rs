@@ -335,7 +335,7 @@ impl CGame {
             SkillVisualEffectKind::SpriteBurn =>
                 crate::gameserver::appserver::skills::spriteburn::publish_sprite_burn_visual(self, skill, mode),
             SkillVisualEffectKind::LeafCut =>
-                crate::gameserver::appserver::skills::leafcut::publish_leaf_cut_visual(self, skill, mode),
+                crate::gameserver::appserver::skills::leafcutvisual::publish_leaf_cut_visual(self, skill, mode),
             SkillVisualEffectKind::Kerosene =>
                 crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {

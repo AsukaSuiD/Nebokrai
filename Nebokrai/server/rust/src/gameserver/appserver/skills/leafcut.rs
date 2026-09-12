@@ -1,113 +1,52 @@
-//! Семейство ударов листвы: допуск, расход ресурсов, задержка и наложение состояния.
+//! Семейство периодических ударов листвы LeafCut/LeafCut2/LeafCut3 (0x6B/0x80/0x8F).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/leafcut*.cpp.
 //!
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/leafcut.cpp.
-//! Общая caller-цепочка обслуживает три самостоятельных зарегистрированных
-//! навыка; различия расхода RP и порядка замены состояния остаются явными.
+//! Общий зарегистрированный Begin сохраняет раннее время и loop1 visual;
+//! отказ Check дополнительно посылает visual2 перед End(0). Объектный Check
+//! использует исходный S, координатный разрешает S после начала visual.
+//! Допуск проверяет цель, reuse, свежий путь, меч категории 2 и signed MP;
+//! только LeafCut требует ещё RP. Нулевая цена в Check не читает ресурс.
+//!
+//! AI сохраняет исходные U/S и таблицу свойств через callbacks. Смерть S
+//! проверяется перед расходом; MP, затем RP первого варианта списываются до
+//! OnChangeStates и повторной проверки меча. После CAN идут живые координаты
+//! исходных S/U, направление, visual0 и condition. Удар ждёт абсолютный
+//! unsigned срок start+delay, возвращает движение и заново строит путь по
+//! текущей базе навыка. Его карта берётся из региона Begin, не текущего U.
+//! Visual1 разрешает свежую S, а наложение получает исходную S этого AI.
+//! Leafcutapply сохраняет различия замены состояний и округление параметров.
+//! После наложения IncreaseRp(true,0) предшествует End(1), независимо от
+//! успеха Begin состояния. Общий End сбрасывает фазу до движения/AfterUse;
+//! весь AI опубликован у игрока и не извлекает каноническое исполнение.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::leafcutstate::{LeafCutState, begin_primary_leaf_cut_state};
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::leafcut2::LEAF_CUT_2_SKILL_ID;
+use super::leafcut3::LEAF_CUT_3_SKILL_ID;
+use super::leafcutapply::apply_leaf_cut_family;
+use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::skillfactory::SkillOwner;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::moveshape::{AppliedState, MoveShapeSkill};
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_skill_sufferer, resolve_state_move_shape,
+    resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
 };
-use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
-use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 pub(crate) const LEAF_CUT_SKILL_ID: u32 = 0x6b;
 const PLAYER_TYPE: i32 = 400;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const USER_MP_LOSE: u32 = 2;
 const USER_RP_LOSE: u32 = 3;
-const STATE_PERSIST_TIME: u32 = 10_002;
-const TARGET_AFFECT_FREQUENCY: u32 = 6_001;
-const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-const WEAPON_DAMAGE_LEVEL_MODIFIER: u32 = 20_018;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-pub(crate) fn is_leaf_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    dispatch.skill_id() == LEAF_CUT_SKILL_ID
-}
-
-pub(crate) fn publish_leaf_cut_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if !matches!(skill.owner(), SkillOwner::CLeafCut | SkillOwner::CLeafCut2 | SkillOwner::CLeafCut3)
-        || skill.visual_effect().is_none_or(|effect| {
-            effect.kind() != SkillVisualEffectKind::LeafCut || effect.is_ended()
-        })
-    { return; }
-    let (user_region, identity) = skill.lifecycle().user();
-    let Some(user) = resolve_state_move_shape(game, user_region, identity) else { return; };
-    let source = user.shape();
-    let identity = source.identity();
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    if matches!(mode, 2 | 7 | 8 | 10 | 11 | 13 | 14 | 15) {
-        if identity.object_type == PLAYER_TYPE {
-            message.add_byte(0);
-            message.add_byte(mode as u8);
-            let _ = message.send_to_player(game.net_server(), identity.id);
-        }
-        return;
-    }
-    let action = match mode { 0 => 1, 1 => 2, _ => return };
-    let target = if action == 2 {
-        let Some((region, target)) = resolve_skill_sufferer(game, skill.lifecycle()) else { return; };
-        let Some(target) = resolve_state_move_shape(game, region, target) else { return; };
-        Some(target.shape())
-    } else { None };
-    message.add_byte(action);
-    message.add_long(skill.id() as i32);
-    message.add_short(skill.level() as i16);
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    if let Some(target) = target {
-        let (Ok(x), Ok(y)) = (target.get_tile_x(), target.get_tile_y()) else { return; };
-        message.add_long(target.identity().object_type);
-        message.add_long(target.identity().id);
-        message.add_long(x);
-        message.add_long(y);
-    } else {
-        message.add_long(source.get_direction());
-    }
-    if let Some(region) = game.find_region(source.get_region_id()) {
-        let _ = game.send_game_shape_around(region.base(), source, None, &message);
-    }
-}
-
-pub(crate) fn cancel_leaf_cut_family<const ID: u32, Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    ai: &mut CPlayerAI,
-    _runtime: &mut Runtime,
-) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, ID)
-        .map(SkillExecutionKernel::dispatch)
-    else { return false; };
-    game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled)
-}
-
-pub(crate) fn cancel_player_leaf_cut<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> bool {
-    cancel_leaf_cut_family::<LEAF_CUT_SKILL_ID, Runtime>(game, player_id, ai, runtime)
 }
 
 fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool {
@@ -116,367 +55,189 @@ fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool {
     })
 }
 
-fn skill_target(game: &CGame, player_id: i32, skill_id: u32) -> Option<(i32, ShapeIdentity)> {
-    let lifecycle = game.player_skill_lifecycle(player_id, skill_id)?;
-    let (region, target) = resolve_skill_sufferer(game, lifecycle)?;
-    let shape = resolve_state_move_shape(game, region, target)?.shape();
-    Some((shape.get_region_id(), shape.identity()))
+fn failure(game: &mut CGame, instance: RegisteredSkill, source: ShapeIdentity, code: u32) {
+    game.update_registered_skill_visual(instance, code);
+    if source.object_type != PLAYER_TYPE { return; }
+    let text: &[u8] = match code {
+        10 => b"GS0286", 11 => b"GS0290", 13 => b"GS0278", 14 => b"GS0292", _ => return,
+    };
+    game.send_skill_system_info(source.id, text);
 }
 
-fn source_position(game: &CGame, player_id: i32) -> Option<(i32, i32, i32)> {
-    let player = game.find_player(player_id)?;
-    let y = player.shape().get_tile_y().ok()?;
-    let x = player.shape().get_tile_x().ok()?;
-    Some((player.server_region_id()?, x, y))
-}
-
-fn target_position(game: &CGame, target: (i32, ShapeIdentity)) -> Option<(i32, i32)> {
-    let shape = resolve_state_move_shape(game, target.0, target.1)?.shape();
-    let y = shape.get_tile_y().ok()?;
-    let x = shape.get_tile_x().ok()?;
-    Some((x, y))
-}
-
-fn path_block(
-    game: &CGame,
-    player_id: i32,
-    target: (i32, ShapeIdentity),
-    properties: &CSkillBaseProperties,
-) -> Option<bool> {
-    let (region, source_x, source_y) = source_position(game, player_id)?;
-    // Путь идёт к доступной клетке footprint, а направление и visual —
-    // к центральной позиции цели. Для многоклеточных целей это разные точки.
-    let (target_x, target_y) = game.base_magic_target_point(target.0, source_x, source_y, target.1)?;
-    let path = game.base_magic_path(region, source_x, source_y, target_x, target_y, None);
-    let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    if maximum != 0
-        && properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) < path.len() as u32
-    { return None; }
-    Some(path.iter().any(|cell| cell.2 == 2))
-}
-
-fn send_failure(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    code: u32,
-    amount: u32,
-    text: Option<(&[u8], &[u8])>,
+fn resource_failure(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties, usage: u32,
 ) {
-    game.update_player_skill_visual(player_id, skill_id, code);
-    if let Some((id, value)) = text {
-        game.send_skill_system_info_with_text(player_id, id, value);
-        return;
-    }
-    match code {
-        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", amount),
-        8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", amount),
-        10 => game.send_skill_system_info(player_id, b"GS0286"),
-        0x0b => game.send_skill_system_info(player_id, b"GS0290"),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        0x0e => game.send_skill_system_info(player_id, b"GS0292"),
-        _ => {}
-    }
+    let (code, text): (u32, &[u8]) = if usage == USER_MP_LOSE { (7, b"GS0288") } else { (8, b"GS0289") };
+    game.update_registered_skill_visual(instance, code);
+    let amount = properties.query_property(usage);
+    game.send_skill_system_info_with_unsigned(player_id, text, amount);
 }
 
-fn reject_begin(game: &mut CGame, player_id: i32, skill_id: u32) -> QueuedSkillExecutionOutcome {
-    // Конкретный Begin посылает второй отказ до общего End(0); отказ AI
-    // сюда не попадает и не повторяет диагностику допуска.
-    game.update_player_skill_visual(player_id, skill_id, 2);
-    terminal(QueuedSkillExecutionState::Rejected)
-}
-
-fn master_info(player: &CPlayer) -> MasterInfo {
-    let permissions = player.pk_permissions();
-    MasterInfo {
-        master_type: PLAYER_TYPE,
-        master_id: player.player_id(),
-        master_guild_id: player.faction_id(),
-        master_team_id: player.team_id(),
-        master_union_id: player.union_id(),
-        master_country_id: 0,
-        permitted_to_kill_player: i32::from(permissions.player),
-        permitted_to_kill_teammate: i32::from(permissions.teammate),
-        permitted_to_kill_guild_member: i32::from(permissions.guild_member),
-        permitted_to_kill_criminal: i32::from(permissions.criminal),
-    }
-}
-
-fn leaf_cut_factors(factor: u32, weapon_level: u32, weapon_modifier: u32) -> (f32, f32) {
-    // Модификатор сначала сохраняется во float; unsigned factor и уровень
-    // оружия сохраняют точность x87 до итогового умножения на 0.01f.
-    let weapon_modifier = weapon_modifier as f32;
-    let weapon_factor = (
-        f64::from(weapon_level) * f64::from(weapon_modifier) * f64::from(0.01_f32)
-    ) as f32;
-    let damage_factor = (f64::from(factor) * f64::from(0.01_f32)) as f32;
-    (damage_factor, weapon_factor)
-}
-
-fn new_leaf_cut_state<const ID: u32>(
-    game: &CGame,
-    player_id: i32,
-    level: i32,
-    master: MasterInfo,
-) -> Option<LeafCutState<ID>> {
-    let player = game.find_player(player_id)?;
-    let combat = player.combat_properties();
-    // Боевые поля читаются заново, но таблица свойств остаётся того уровня,
-    // который был выбран в начале AI, до callbacks PK и End старого состояния.
-    let properties = game.skill_base_properties(ID, level)?;
-    let weapon_modifier = properties.query_property(WEAPON_DAMAGE_LEVEL_MODIFIER);
-    let weapon_level = player.weapon_damage_level(game.goods_factory()) as u32;
-    let factor = properties.query_property(TARGET_DAMAGE_FACTOR);
-    let (damage_factor, weapon_factor) = leaf_cut_factors(factor, weapon_level, weapon_modifier);
-    let frequency = properties.query_property(TARGET_AFFECT_FREQUENCY);
-    let keep = properties.query_property(STATE_PERSIST_TIME);
-    Some(LeafCutState::new(
-        master, keep, frequency, damage_factor, weapon_factor,
-        combat.minimum_attack as u16, combat.maximum_attack as u16,
-        combat.add_element_attack as u16, combat.add_soul_attack,
-    ))
-}
-
-fn remove_previous(
-    game: &mut CGame,
-    target: (i32, ShapeIdentity),
-    skill_id: u32,
-    replace_in_place: bool,
-) -> Option<(usize, usize)> {
-    let shape = resolve_state_move_shape(game, target.0, target.1)?;
-    let (position, key) = shape.find_state_position(|state| state.state_id() == skill_id)?;
-    let placement = replace_in_place.then(|| shape.applied_state_replacement_location(key)).flatten();
-    let _ = end_and_destroy_state_at(game, target.0, target.1, position);
-    placement
-}
-
-fn apply_leaf_cut<const ID: u32, Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    level: i32,
-    target: (i32, ShapeIdentity),
-    runtime: &mut Runtime,
-) where LeafCutState<ID>: AppliedState {
-    let Some(player) = game.find_player(player_id) else { return; };
-    let master = master_info(player);
-    if target.1.object_type == PLAYER_TYPE
-        && let Some((_, source_x, source_y)) = source_position(game, player_id)
+fn path_is_clear(
+    game: &mut CGame, instance: RegisteredSkill, source: ShapeIdentity,
+    target: (i32, ShapeIdentity), properties: &CSkillBaseProperties, blocked_message: &[u8],
+) -> bool {
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let path = game.skill_target_path(skill.lifecycle());
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0
+        && properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) < path.len() as u32
     {
-        let _ = game.player_on_first_skill_at_position(
-            player_id, target.1.id, target.0, source_x, source_y, runtime,
-        );
+        failure(game, instance, source, 11);
+        return false;
     }
-    // Первый вариант создаёт payload до End старого состояния и занимает
-    // прежний слот. Второй и третий читают боевые свойства уже после End
-    // и добавляют новое состояние в конец, оставляя старую позицию пустой.
-    let (state, placement) = if ID == LEAF_CUT_SKILL_ID {
-        let Some(state) = new_leaf_cut_state::<ID>(game, player_id, level, master) else { return; };
-        let placement = remove_previous(game, target, ID, true);
-        (state, placement)
-    } else {
-        let _ = remove_previous(game, target, ID, false);
-        let Some(state) = new_leaf_cut_state::<ID>(game, player_id, level, master) else { return; };
-        (state, None)
-    };
-    let user = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.shape().identity()))
-    });
-    // Постройка также принимает состояние, но её собственный AI не обновляет
-    // арену состояний. Наложение не создаёт для неё отдельного периодического такта.
-    let _ = begin_primary_leaf_cut_state(
-        game, target.0, target.1, user, Some(target), state, placement,
-        &mut || runtime.now_milliseconds(),
-    );
+    if path.iter().any(|cell| cell.2 == 2) {
+        game.update_registered_skill_visual(instance, 15);
+        if source.object_type == PLAYER_TYPE {
+            let name = game.base_magic_target_name(target.0, target.1).unwrap_or_default();
+            game.send_skill_system_info_with_text(source.id, blocked_message, name);
+        }
+        return false;
+    }
+    true
 }
 
-pub(crate) fn execute_leaf_cut_family<const ID: u32, Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome
-where LeafCutState<ID>: AppliedState {
-    if dispatch.skill_id() != ID { return terminal(QueuedSkillExecutionState::Rejected); }
-    let beginning = game.player_skill_execution(player_id, ID).is_none();
-    if beginning {
-        game.replace_player_skill_visual_effect(
-            player_id, ID, SkillVisualEffect::new(SkillVisualEffectKind::LeafCut, 1),
-        );
-    }
-    let Some(level) = game.registered_player_skill(player_id, ID)
-        .and_then(|address| game.registered_skill(address)).map(MoveShapeSkill::level)
-    else { return terminal(QueuedSkillExecutionState::Rejected); };
-    if game.skill_base_properties(ID, level).is_none() {
-        return if beginning { reject_begin(game, player_id, ID) }
-            else { terminal(QueuedSkillExecutionState::Rejected) };
-    }
-    let Some(target) = skill_target(game, player_id, ID) else {
-        if beginning {
-            send_failure(game, player_id, ID, 10, 0, None);
-            return reject_begin(game, player_id, ID);
-        }
-        return terminal(QueuedSkillExecutionState::Rejected);
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
+) -> bool {
+    let Some(player) = game.find_player(player_id) else { return false; };
+    let source = player.shape().identity();
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let skill_id = skill.id();
+    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else { return false; };
+    let Some(target) = target.filter(|target| target.1 != source) else {
+        failure(game, instance, source, 10);
+        return false;
     };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        failure(game, instance, source, 13);
+        return false;
+    }
+    if !path_is_clear(game, instance, source, target, &properties, b"GS0291") { return false; }
+    let Some(player) = game.find_player(player_id) else { return false; };
+    if !weapon_is_sword(game, player) {
+        failure(game, instance, source, 14);
+        return false;
+    }
+    if properties.query_property(USER_MP_LOSE) != 0 {
+        let mana = player.mana();
+        let loss = properties.query_property(USER_MP_LOSE);
+        if (mana.wrapping_sub(loss) as i32) < 0 {
+            resource_failure(game, instance, player_id, &properties, USER_MP_LOSE);
+            return false;
+        }
+    }
+    if skill_id == LEAF_CUT_SKILL_ID && properties.query_property(USER_RP_LOSE) != 0 {
+        let rp = player.rp();
+        let loss = properties.query_property(USER_RP_LOSE);
+        if (u32::from(rp).wrapping_sub(loss) as i32) < 0 {
+            resource_failure(game, instance, player_id, &properties, USER_RP_LOSE);
+            return false;
+        }
+    }
+    let Some(player) = game.find_player_mut(player_id) else { return false; };
+    player.set_skill_moveable(false);
+    true
+}
 
-    if beginning {
-        if target.1.object_type == PLAYER_TYPE && target.1.id == player_id {
-            send_failure(game, player_id, ID, 10, 0, None);
-            return reject_begin(game, player_id, ID);
-        }
-        let started = game.player_skill_lifecycle(player_id, ID)
-            .expect("общий Begin расписания сохранил базу удара листвы").started_at_ms();
-        let properties = game.skill_base_properties(ID, level).expect("свойства допуска сохраняются");
-        let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, ID), reuse, runtime.now_milliseconds()) {
-            send_failure(game, player_id, ID, 0x0d, 0, None);
-            return reject_begin(game, player_id, ID);
-        }
-        let Some(blocked) = path_block(game, player_id, target, properties) else {
-            send_failure(game, player_id, ID, 0x0b, 0, None);
-            return reject_begin(game, player_id, ID);
-        };
-        if blocked {
-            let name = game.base_magic_target_name(target.0, target.1).unwrap_or_default().to_vec();
-            send_failure(game, player_id, ID, 0x0f, 0, Some((b"GS0291", &name)));
-            return reject_begin(game, player_id, ID);
-        }
-        let Some(player) = game.find_player(player_id) else { return reject_begin(game, player_id, ID); };
-        if !weapon_is_sword(game, player) {
-            send_failure(game, player_id, ID, 0x0e, 0, None);
-            return reject_begin(game, player_id, ID);
-        }
-        let mp_loss = properties.query_property(USER_MP_LOSE);
-        if mp_loss != 0 && (player.mana().wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
-            let amount = properties.query_property(USER_MP_LOSE);
-            send_failure(game, player_id, ID, 7, amount, None);
-            return reject_begin(game, player_id, ID);
-        }
-        if ID == LEAF_CUT_SKILL_ID {
-            let rp_loss = properties.query_property(USER_RP_LOSE);
-            if rp_loss != 0 && (u32::from(player.rp()).wrapping_sub(properties.query_property(USER_RP_LOSE)) as i32) < 0 {
-                let amount = properties.query_property(USER_RP_LOSE);
-                send_failure(game, player_id, ID, 8, amount, None);
-                return reject_begin(game, player_id, ID);
-            }
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
-        return terminal(QueuedSkillExecutionState::Begun);
-    }
-
-    if game.base_magic_target_dead(target.0, target.1) {
-        game.update_player_skill_visual(player_id, ID, 10);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    if game.player_skill_execution(player_id, ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
-        let Some(mana) = game.find_player(player_id).map(CPlayer::mana) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let properties = game.skill_base_properties(ID, level).expect("свойства активного навыка сохраняются");
-        let mp_loss = properties.query_property(USER_MP_LOSE);
-        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
-            let amount = properties.query_property(USER_MP_LOSE);
-            send_failure(game, player_id, ID, 7, amount, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(mana.wrapping_sub(mp_loss));
-        }
-        if ID == LEAF_CUT_SKILL_ID {
-            let Some(rp) = game.find_player(player_id).map(CPlayer::rp) else {
-                return terminal(QueuedSkillExecutionState::Rejected);
-            };
-            let properties = game.skill_base_properties(ID, level).expect("свойства активного навыка сохраняются");
-            let rp_loss = properties.query_property(USER_RP_LOSE);
-            if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 {
-                let amount = properties.query_property(USER_RP_LOSE);
-                send_failure(game, player_id, ID, 8, amount, None);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.set_rp(u32::from(rp).wrapping_sub(rp_loss) as u16);
-            }
-        }
-        // Расход MP, затем RP первого варианта необратим: отсутствие меча
-        // после OnChangeStates завершает навык, но не возвращает ресурсы.
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        if game.find_player(player_id).is_none_or(|player| !weapon_is_sword(game, player)) {
-            send_failure(game, player_id, ID, 0x0e, 0, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let Some(properties) = game.skill_base_properties(ID, level) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-        if let Some(kernel) = game.player_skill_execution_mut(player_id, ID) {
-            kernel.lifecycle_mut().set_available(can_be_breaked != 0);
-        }
-        let Some((target_x, target_y)) = target_position(game, target) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let Some((_, source_x, source_y)) = source_position(game, player_id) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.movement_shape_mut().set_direction(direction);
-        }
-        game.update_player_skill_visual(player_id, ID, 0);
-        if let Some(kernel) = game.player_skill_execution_mut(player_id, ID) {
-            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    let Some(properties) = game.skill_base_properties(ID, level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let Some(started) = game.player_skill_execution(player_id, ID).map(SkillExecutionKernel::started_at_ms) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
         return terminal(QueuedSkillExecutionState::Pending);
-    }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-    let Some(properties) = game.skill_base_properties(ID, level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let Some(blocked) = path_block(game, player_id, target, properties) else {
-        send_failure(game, player_id, ID, 0x0b, 0, None);
+    let skill_id = skill.id();
+    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let user = (source.shape().get_region_id(), source.shape().identity());
+    let Some(target) = resolve_skill_sufferer(game, skill.lifecycle())
+        .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
+        .map(|target| (target.shape().get_region_id(), target.shape().identity()))
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if game.move_shape_health(target.0, target.1) == Some(0) {
+        game.update_registered_skill_visual(instance, 10);
         return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if blocked {
-        let name = game.base_magic_target_name(target.0, target.1).unwrap_or_default().to_vec();
-        send_failure(game, player_id, ID, 0x0f, 0, Some((b"GS0307", &name)));
+    }
+    if stage == SkillStage::Begin {
+        if user.1.object_type == PLAYER_TYPE {
+            let Some(player) = game.find_player(user.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let mana = player.mana();
+            let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+            if (remaining as i32) < 0 {
+                resource_failure(game, instance, user.1.id, &properties, USER_MP_LOSE);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if let Some(player) = game.find_player_mut(user.1.id) { player.set_mana(remaining); }
+            if skill_id == LEAF_CUT_SKILL_ID {
+                let Some(player) = game.find_player(user.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+                let rp = player.rp();
+                let remaining = u32::from(rp).wrapping_sub(properties.query_property(USER_RP_LOSE));
+                if (remaining as i32) < 0 {
+                    resource_failure(game, instance, user.1.id, &properties, USER_RP_LOSE);
+                    return terminal(QueuedSkillExecutionState::Rejected);
+                }
+                if let Some(player) = game.find_player_mut(user.1.id) { player.set_rp(remaining as u16); }
+            }
+            game.publish_player_states(user.1.id);
+            if game.find_player(user.1.id).is_none_or(|player| !weapon_is_sword(game, player)) {
+                failure(game, instance, user.1, 14);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+        }
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let target_y = sufferer.shape().get_tile_y().unwrap_or(i32::MIN);
+        let target_x = sufferer.shape().get_tile_x().unwrap_or(i32::MIN);
+        let Some(source) = resolve_state_move_shape(game, user.0, user.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let source_y = source.shape().get_tile_y().unwrap_or(i32::MIN);
+        let source_x = source.shape().get_tile_x().unwrap_or(i32::MIN);
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) { source.shape_mut().set_direction(direction); }
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+    }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
+    if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) { source.set_moveable(true); }
+    if !path_is_clear(game, instance, user.1, target, &properties, b"GS0307") {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    game.update_player_skill_visual(player_id, ID, 1);
-    if let Some(kernel) = game.player_skill_execution_mut(player_id, ID) {
-        let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
-    }
-    let _ = game.with_published_player_ai(player_id, ai, |game| {
-        apply_leaf_cut::<ID, Runtime>(game, player_id, level, target, runtime);
-    });
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.movement_shape_mut().set_action(1);
-    }
-    if let Some(kernel) = game.player_skill_execution_mut(player_id, ID) {
-        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
-    }
+    game.update_registered_skill_visual(instance, 1);
+    apply_leaf_cut_family(game, instance, user, target, &properties, runtime);
+    if user.1.object_type == PLAYER_TYPE { game.increase_owned_player_rp(user.1.id, true, 0); }
     terminal(QueuedSkillExecutionState::Completed)
 }
 
 pub(crate) fn execute_player_leaf_cut<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    execute_leaf_cut_family::<LEAF_CUT_SKILL_ID, Runtime>(game, player_id, dispatch, ai, runtime)
+    if !matches!(dispatch.skill_id(), LEAF_CUT_SKILL_ID | LEAF_CUT_2_SKILL_ID | LEAF_CUT_3_SKILL_ID) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let original_target = if game.registered_skill(instance).is_some_and(|skill| skill.player_dispatch().is_none()) {
+        dispatch.object_target().and_then(|target| {
+            let player = game.find_player(player_id)?;
+            game.player_skill_begin_object(player.shape().get_region_id(), target)
+        })
+    } else { None };
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::LeafCut,
+        |game, instance, player_id, runtime| {
+            let target = if matches!(dispatch, PlayerSkillDispatch::Point { .. }) {
+                game.registered_skill(instance).and_then(|skill| resolve_skill_sufferer(game, skill.lifecycle()))
+            } else { original_target };
+            let accepted = check_cast(game, instance, player_id, target, runtime);
+            if !accepted { game.update_registered_skill_visual(instance, 2); }
+            accepted
+        },
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_ai,
+    )
 }

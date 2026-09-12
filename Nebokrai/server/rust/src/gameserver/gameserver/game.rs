@@ -1320,17 +1320,6 @@ use crate::gameserver::appserver::skills::ragebreak::{
 };
 use crate::gameserver::appserver::skills::flash::FLASH_SKILL_ID;
 use crate::gameserver::appserver::skills::swallow::SWALLOW_SKILL_ID;
-use crate::gameserver::appserver::skills::leafcut::{
-    cancel_player_leaf_cut, execute_player_leaf_cut, is_leaf_cut_dispatch, LEAF_CUT_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::leafcut2::{
-    cancel_player_leaf_cut_2, execute_player_leaf_cut_2, is_leaf_cut_2_dispatch,
-    LEAF_CUT_2_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::leafcut3::{
-    cancel_player_leaf_cut_3, execute_player_leaf_cut_3, is_leaf_cut_3_dispatch,
-    LEAF_CUT_3_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::jucut::{
     cancel_player_ju_cut, execute_player_ju_cut, is_ju_cut_dispatch, JU_CUT_SKILL_ID,
 };
@@ -39465,13 +39454,6 @@ impl CGame {
                 cancel_player_rage_break(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
-            LEAF_CUT_SKILL_ID => cancel_player_leaf_cut(self, player_id, &mut player_ai, runtime),
-            LEAF_CUT_2_SKILL_ID => {
-                cancel_player_leaf_cut_2(self, player_id, &mut player_ai, runtime)
-            }
-            LEAF_CUT_3_SKILL_ID => {
-                cancel_player_leaf_cut_3(self, player_id, &mut player_ai, runtime)
-            }
             JU_CUT_SKILL_ID => cancel_player_ju_cut(self, player_id, &mut player_ai, runtime),
             LIGHTNING_SWORD_SKILL_ID
             | LIGHTNING_SWORD_2_SKILL_ID
@@ -39990,9 +39972,6 @@ impl CGame {
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
-            _ if is_leaf_cut_dispatch(dispatch) => execute_player_leaf_cut,
-            _ if is_leaf_cut_2_dispatch(dispatch) => execute_player_leaf_cut_2,
-            _ if is_leaf_cut_3_dispatch(dispatch) => execute_player_leaf_cut_3,
             _ if is_ju_cut_dispatch(dispatch) => execute_player_ju_cut,
             _ if is_lightning_sword_dispatch(dispatch) => execute_player_lightning_sword,
             _ if is_fire_wall_target(dispatch) => execute_player_fire_wall,

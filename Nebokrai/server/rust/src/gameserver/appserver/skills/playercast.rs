@@ -23,7 +23,7 @@ use crate::gameserver::gameserver::game::{
 #[derive(Clone, Copy)]
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
-    Swallow, KnightCut,
+    Swallow, KnightCut, LeafCut,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -40,6 +40,8 @@ impl RegisteredPlayerCastOwner {
             super::thunderblow2::THUNDER_BLOW_2_SKILL_ID => Self::ThunderBlow2,
             super::swallow::SWALLOW_SKILL_ID => Self::Swallow,
             super::knightcut::KNIGHT_CUT_SKILL_ID => Self::KnightCut,
+            super::leafcut::LEAF_CUT_SKILL_ID | super::leafcut2::LEAF_CUT_2_SKILL_ID
+                | super::leafcut3::LEAF_CUT_3_SKILL_ID => Self::LeafCut,
             _ => return None,
         })
     }
@@ -59,6 +61,7 @@ impl RegisteredPlayerCastOwner {
             Self::ThunderBlow2 => super::thunderblow2::execute_player_thunder_blow_2::<Runtime>,
             Self::Swallow => super::swallow::execute_player_swallow::<Runtime>,
             Self::KnightCut => super::knightcut::execute_player_knight_cut::<Runtime>,
+            Self::LeafCut => super::leafcut::execute_player_leaf_cut::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

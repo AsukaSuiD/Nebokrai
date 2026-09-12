@@ -270,6 +270,8 @@ pub(crate) mod appserver {
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod leafcut;
+        pub(crate) mod leafcutapply;
+        pub(crate) mod leafcutvisual;
         pub(crate) mod leafcut2;
         pub(crate) mod leafcut3;
         pub(crate) mod leafcutstate;
