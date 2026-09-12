@@ -82,28 +82,34 @@ pub(crate) fn encode_related_phalanx_snapshot(
     related_id: i32,
     started_at_ms: u32,
     lifetime_ms: u32,
-    mut now_milliseconds: impl FnMut() -> u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) -> Option<Vec<u8>> {
-    let mut payload = Vec::new();
-    {
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_i32(skill_id);
-        writer.write_i32(skill_level);
-        writer.write_i32(related_type);
-        writer.write_i32(related_id);
-        let first_now = now_milliseconds();
-        let remained = if started_at_ms.wrapping_add(lifetime_ms) <= first_now {
-            0
-        } else {
-            lifetime_ms
-                .wrapping_sub(now_milliseconds())
-                .wrapping_add(started_at_ms)
-        };
-        writer.write_u32(remained);
-    }
+    let mut payload = encode_related_phalanx_prefix(
+        skill_id, skill_level, related_type, related_id,
+        started_at_ms, lifetime_ms, now_milliseconds,
+    );
     shape
         .add_to_byte_array(&mut payload, true)
         .then_some(payload)
+}
+
+pub(crate) fn encode_related_phalanx_prefix(
+    skill_id: i32, skill_level: i32, related_type: i32, related_id: i32,
+    started_at_ms: u32, lifetime_ms: u32, mut now_milliseconds: impl FnMut() -> u32,
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    let mut writer = LegacyWriter::new(&mut payload);
+    writer.write_i32(skill_id);
+    writer.write_i32(skill_level);
+    writer.write_i32(related_type);
+    writer.write_i32(related_id);
+    let remained = if started_at_ms.wrapping_add(lifetime_ms) <= now_milliseconds() {
+        0
+    } else {
+        lifetime_ms.wrapping_sub(now_milliseconds()).wrapping_add(started_at_ms)
+    };
+    writer.write_u32(remained);
+    payload
 }
 
 impl SummonedSkillShape {
@@ -199,7 +205,7 @@ impl SummonedSkillShape {
             Self::ThunderBlow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ThunderSlash(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Leiming2(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::Tianhuo(shape) => shape.encode_client_snapshot(),
+            Self::Tianhuo(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::SpiderMist(shape) => shape.encode_client_snapshot(),
             Self::SnowStorm(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Weak(shape) => shape.encode_client_snapshot(&mut now_milliseconds),

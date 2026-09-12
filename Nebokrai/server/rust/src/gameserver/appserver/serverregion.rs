@@ -1,4 +1,8 @@
 //! Базовое состояние GameServer-region `CServerRegion`.
+//! Громовые BF-области сохраняют заранее установленный центр и возвращают
+//! непринятый объект caller-у для обязательного хвоста сериализации.
+//! Добавление Leiming2 не выключает соседние области автоматически;
+//! замена прежнего Tianhuo принадлежит его явному caller-у до AddObject.
 //!
 //! `StartClearPlayerOut` RVA `0x0007BA50`, `ClearPlayerAI` RVA `0x00082FF0`
 //! и base `KickOutAllPlayerToReturnPoint` RVA `0x00082820`, resource forwarding
@@ -1977,24 +1981,21 @@ impl CServerRegion {
     pub(crate) fn add_thunder_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::thunderphalanx::CThunderPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::thunderphalanx::CThunderPhalanx)> {
+        if let Err(block) = self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
             area_width,
             area_height,
             now_ms,
             context,
-        )?;
+        ) {
+            return Err((block, phalanx));
+        }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes
             .insert(id, SummonedSkillShape::Thunder(phalanx));
@@ -2084,28 +2085,20 @@ impl CServerRegion {
     pub(crate) fn add_leiming2_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::thunder2phalanx::CLeimingPhalanx2,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::thunder2phalanx::CLeimingPhalanx2)> {
+        if let Err(block) = self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
             area_width,
             area_height,
             now_ms,
             context,
-        )?;
-        for existing in self.owned_skill_phalanxes.values_mut() {
-            if let SummonedSkillShape::Leiming2(existing) = existing {
-                existing.replace_affect_region(phalanx.skill_level(), tile_x, tile_y);
-            }
+        ) {
+            return Err((block, phalanx));
         }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes
@@ -2116,24 +2109,21 @@ impl CServerRegion {
     pub(crate) fn add_tianhuo_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::tianhuophalanx::CTianhuoPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::tianhuophalanx::CTianhuoPhalanx)> {
+        if let Err(block) = self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
             area_width,
             area_height,
             now_ms,
             context,
-        )?;
+        ) {
+            return Err((block, phalanx));
+        }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes
             .insert(id, SummonedSkillShape::Tianhuo(phalanx));

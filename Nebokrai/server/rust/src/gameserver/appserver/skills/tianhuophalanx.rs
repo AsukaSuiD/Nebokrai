@@ -1,7 +1,5 @@
-//! Одноклеточная область небесного огня `CTianhuoPhalanx` (`0x21A`).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/tianhuophalanx.cpp`. Пока срок жизни не истёк, область
+//! Небесный огонь CTianhuoPhalanx, gameserver.exe/GameServer.pdb,
+//! appserver/skills/tianhuophalanx.cpp. Пока собственный срок жизни не истёк, область
 //! на каждом проходе просматривает свою клетку в исходном порядке региона.
 //! После каждой допустимой атаки она помечается на удаление и немедленно
 //! отправляет `0xBF504`; один проход всё ещё обрабатывает уже полученный
@@ -11,6 +9,8 @@
 //! применение результата к независимым владельцам остаются у `CGame`.
 //! Слагаемое боевого духа и случайная база складываются в x87 до единственного
 //! усечения в `i64`, после которого читаются младшие 32 бита.
+//! Wire содержит ID/level/Master и живое оставшееся время перед CShape;
+//! совпавшая старая область завершается до регистрации новой.
 
 use super::tianhuo::{TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY};
 use super::thunder::truncate_original_i64_low;
@@ -21,12 +21,9 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
-
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TianhuoPhalanxTick {
@@ -118,6 +115,12 @@ impl CTianhuoPhalanx {
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
     pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
 
+    pub(crate) fn set_center(&mut self, x: i32, y: i32) {
+        self.shape.set_pos_xy_move_order(
+            (f64::from(x) + 0.5) as f32, (f64::from(y) + 0.5) as f32,
+        );
+    }
+
     pub(crate) fn tick(&mut self, now_ms: u32) -> TianhuoPhalanxTick {
         if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
             self.finish();
@@ -133,10 +136,13 @@ impl CTianhuoPhalanx {
         self.shape.set_change_state(SHAPE_CHANGE_DELETE);
     }
 
-    pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
-        let mut payload = Vec::new();
-        self.shape
-            .add_to_byte_array(&mut payload, true)
-            .then_some(payload)
+    pub(crate) fn encode_client_snapshot(
+        &self, now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        encode_related_phalanx_snapshot(
+            &self.shape, TIANHUO_SKILL_ID as i32, self.skill_level,
+            self.master.master_type, self.master.master_id,
+            self.started_at_ms, self.lifetime_ms, now_milliseconds,
+        )
     }
 }

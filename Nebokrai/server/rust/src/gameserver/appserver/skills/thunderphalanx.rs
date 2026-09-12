@@ -1,21 +1,27 @@
-//! Область периодической атаки грома боевого духа `CThunderPhalanx`.
+//! Периодический гром CThunderPhalanx, gameserver.exe/GameServer.pdb,
+//! appserver/skills/thunderphalanx.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/thunderphalanx.cpp`. Владелец хранит подтверждённую маску
-//! 7×7, строгие границы срока жизни и частоты, а также формулу элементального
-//! урона. Три исходные таблицы уровней по адресам `0x006A4344/78/AC`
-//! совпадают побайтно.
-//! `Initialize` сохраняет исходные повторные пары RNG для каждой цели каждого
-//! окна; одинаковая клетка может быть выбрана и обработана повторно. Снимок
-//! намеренно передаёт только исходный префикс
-//! `(m_dwLifeTime/m_dwFrequency)*m_dwNumTargets` из массива на 49 ячеек на
-//! окно. Поиск сущностей и применение атаки остаются у исполняющего владельца.
+//! Все уровни используют одну маску 7×7. AI читает отдельные часы для срока,
+//! частоты и записи lastAttack; затем обходит всю маску, X снаружи, Y внутри.
+//! Initialize читает центр после SetCenter и расходует пары RNG по окнам
+//! не более чем для 49 целей, только для клиентского массива:
+//! это не выбор серверных попаданий. Wire сохраняет исходный счётчик
+//! `(lifetime/frequency)*targetCount`, независимо от границы заполнения,
+//! и читает префикс массива на 49 ячеек на окно. При некорректном счётчике
+//! Rust ограничивает чтение буфером вместо исходного выхода за его границу.
+//! Общий префикс трёх BF-областей содержит Master, а не identity области;
+//! оставшееся время читается после ID/level/Master и до остального wire.
+//! Первый RNG использует диапазон конструктора и расходуется до свежего
+//! WarSoul/таблицы. Второй берёт живые min/max; поздний отказ сохраняет
+//! метаданные без записи урона. Нулевая частота заменяется единицей исходным
+//! конструктором, в том числе для выделения и сериализации массива.
 //! Базовый урон сохраняет расширенный порядок x87, усечение в `i64` и чтение
 //! младших 32 бит исходного результата.
 
 use super::thunder::{
     THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY, thunder_base_damage,
 };
+use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -24,12 +30,9 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
-
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const THUNDER_SCOPE_SIDE: i32 = 7;
 pub(crate) const THUNDER_SCOPE: [u8; 49] = [
@@ -63,23 +66,44 @@ pub(crate) struct CThunderPhalanx {
     _target_count: u32,
     _cch: i32,
     last_attack_ms: u32,
-    attack_count: u32,
     cells: Vec<(i32, i32)>,
 }
 
-
-pub(crate) fn calculate_owned_thunder_attack(game: &mut CGame, phalanx: &CThunderPhalanx, target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+pub(crate) fn calculate_owned_thunder_attack(
+    game: &mut CGame, phalanx: &CThunderPhalanx, target_level: u8,
+) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let master = phalanx.master();
-    if master.master_type != PLAYER_TYPE || master.master_id == 0 { return None }
     let player = game.find_player(master.master_id)?;
-    let sprite = player.war_soul_goods(game.goods_factory())?.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
     let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
     let weapon_damage_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), weapon_divisor, weapon_minimum);
-    let target_damage_factor = game.skill_base_properties(THUNDER_SKILL_ID, phalanx.skill_level())?.query_property(THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY);
-    Some(phalanx.calculate_attack(sprite, combat, occupation, attacker_level, target_damage_factor, weapon_damage_factor, &mut |maximum| game.skill_random_below(maximum)))
+    let mut attack = AttackInformation::for_master(master);
+    attack.skill_id = THUNDER_SKILL_ID;
+    attack.skill_level = phalanx.skill_level as u8;
+    attack.damage_factor = weapon_damage_factor;
+    attack.hit_modifier = 100;
+    let constructor_width = phalanx.maximum_attack.wrapping_sub(phalanx.minimum_attack)
+        .wrapping_abs().wrapping_add(1);
+    let _ = game.skill_random_below(constructor_width);
+    let goods = game.find_player(master.master_id)
+        .and_then(|player| player.war_soul_goods(game.goods_factory()));
+    let properties = game.skill_base_properties(THUNDER_SKILL_ID, phalanx.skill_level);
+    if let (Some(goods), Some(properties)) = (goods, properties) {
+        let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+        let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+        let sprite = goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
+        let target_damage_factor = properties.query_property(THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY);
+        let base_damage = thunder_base_damage(target_damage_factor, sprite);
+        let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
+        let damage = base_damage.wrapping_add(game.skill_random_below(width))
+            .wrapping_add(minimum).max(0);
+        attack.damages.push(AttackPower {
+            kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0,
+        });
+    }
+    Some((attack, combat, occupation, attacker_level))
 }
 
 impl CThunderPhalanx {
@@ -116,7 +140,6 @@ impl CThunderPhalanx {
             _target_count: target_count,
             _cch: cch,
             last_attack_ms: 0,
-            attack_count: 0,
             cells: Vec::new(),
         }
     }
@@ -126,43 +149,48 @@ impl CThunderPhalanx {
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
     pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
 
-    pub(crate) fn tick(&mut self, now_ms: u32) -> ThunderPhalanxTick {
-        if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
+    pub(crate) fn set_center(&mut self, x: i32, y: i32) {
+        self.shape.set_pos_xy_move_order(
+            (f64::from(x) + 0.5) as f32, (f64::from(y) + 0.5) as f32,
+        );
+    }
+
+    pub(crate) fn tick(
+        &mut self, lifetime_now_ms: u32, now: &mut dyn FnMut() -> u32,
+    ) -> ThunderPhalanxTick {
+        if self.started_at_ms.wrapping_add(self.lifetime_ms) < lifetime_now_ms {
             self.shape.set_change_state(SHAPE_CHANGE_DELETE);
             return ThunderPhalanxTick::Expired;
         }
-        if self.frequency_ms.wrapping_add(self.last_attack_ms) < now_ms {
-            self.last_attack_ms = now_ms;
-            self.attack_count = self.attack_count.wrapping_add(1);
-            return ThunderPhalanxTick::Attack { sampled_at_ms: now_ms };
+        if self.frequency_ms.wrapping_add(self.last_attack_ms) < now() {
+            self.last_attack_ms = now();
+            return ThunderPhalanxTick::Attack { sampled_at_ms: self.last_attack_ms };
         }
         ThunderPhalanxTick::Pending
     }
 
-    pub(crate) fn attack_cells(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let window = self.attack_count.wrapping_sub(1);
-        let start = window.wrapping_mul(49) as usize;
-        self.cells
-            .get(start..start.saturating_add(49))
-            .unwrap_or_default()
-            .iter()
-            .copied()
-            .take_while(|cell| *cell != (0, 0))
+    pub(crate) fn scope_cells(&self) -> impl Iterator<Item = (i32, i32)> {
+        let origin_x = self.shape.get_tile_x().unwrap_or(i32::MIN).wrapping_sub(3);
+        let origin_y = self.shape.get_tile_y().unwrap_or(i32::MIN).wrapping_sub(3);
+        (0..THUNDER_SCOPE_SIDE).flat_map(move |x| {
+            (0..THUNDER_SCOPE_SIDE).filter_map(move |y| {
+                (THUNDER_SCOPE[(x * THUNDER_SCOPE_SIDE + y) as usize] != 0)
+                    .then_some((origin_x.wrapping_add(x), origin_y.wrapping_add(y)))
+            })
+        })
     }
 
     pub(crate) fn initialize(
         &mut self,
-        tile_x: i32,
-        tile_y: i32,
         random_below: &mut dyn FnMut(i32) -> i32,
     ) {
         let attack_windows = self.lifetime_ms / self.frequency_ms;
         let total_cells = attack_windows.wrapping_mul(49) as usize;
         self.cells = vec![(0, 0); total_cells];
-        let origin_x = tile_x.wrapping_sub(3);
-        let origin_y = tile_y.wrapping_sub(3);
+        let origin_x = self.shape.get_tile_x().unwrap_or(i32::MIN).wrapping_sub(3);
+        let origin_y = self.shape.get_tile_y().unwrap_or(i32::MIN).wrapping_sub(3);
         for window in 0..attack_windows {
-            for target in 0..self._target_count {
+            for target in 0..self._target_count.min(49) {
                 let (x, y) = loop {
                     let x = random_below(THUNDER_SCOPE_SIDE);
                     let y = random_below(THUNDER_SCOPE_SIDE);
@@ -185,21 +213,12 @@ impl CThunderPhalanx {
         &self,
         mut now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        let first_now = now_milliseconds();
-        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first_now {
-            0
-        } else {
-            let second_now = now_milliseconds();
-            self.lifetime_ms.wrapping_sub(second_now).wrapping_add(self.started_at_ms)
-        };
-        let mut payload = Vec::new();
+        let mut payload = encode_related_phalanx_prefix(
+            THUNDER_SKILL_ID as i32, self.skill_level, self.master.master_type, self.master.master_id,
+            self.started_at_ms, self.lifetime_ms, &mut now_milliseconds,
+        );
         {
             let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_i32(THUNDER_SKILL_ID as i32);
-            writer.write_i32(self.skill_level);
-            writer.write_i32(self.shape.identity().object_type);
-            writer.write_i32(self.shape.identity().id);
-            writer.write_u32(remained);
             writer.write_u32(self.lifetime_ms);
             writer.write_u32(self.frequency_ms);
             let serialized_count =
@@ -213,51 +232,4 @@ impl CThunderPhalanx {
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 
-    #[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]
-    pub(crate) fn calculate_attack(
-        &self,
-        sprite: i32,
-        combat: PlayerCombatProperties,
-        occupation: u8,
-        attacker_level: u8,
-        target_damage_factor: u32,
-        weapon_damage_factor: f32,
-        random_below: &mut dyn FnMut(i32) -> i32,
-    ) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-        let constructor_delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
-        let constructor_width = constructor_delta.wrapping_abs().wrapping_add(1);
-        let _discarded_constructor_roll = random_below(constructor_width);
-        let base_damage = thunder_base_damage(target_damage_factor, sprite);
-        let property_delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
-        let property_width = property_delta.wrapping_abs().wrapping_add(1);
-        let damage = base_damage
-            .wrapping_add(random_below(property_width))
-            .wrapping_add(self.minimum_attack)
-            .max(0);
-        (
-            AttackInformation {
-                skill_id: THUNDER_SKILL_ID,
-                skill_level: self.skill_level as u8,
-                attacker_type: self.master.master_type,
-                attacker_id: self.master.master_id,
-                attacker_team_id: self.master.master_team_id,
-                attacker_faction_id: self.master.master_guild_id,
-                attacker_union_id: self.master.master_union_id,
-                hit_modifier: 100,
-                damage_factor: weapon_damage_factor,
-                damage_modifier: 0,
-                critical: false,
-                blast_attack: false,
-                full_miss: 0,
-                damages: vec![AttackPower {
-                    kind: AttackPowerType::Element,
-                    hp_damage: damage,
-                    mp_damage: 0,
-                }],
-            },
-            combat,
-            occupation,
-            attacker_level,
-        )
-    }
 }

@@ -153,14 +153,18 @@ impl CGame {
         dispatch: BattleFairySkillDispatch,
         ai: &mut CPlayerAI,
         runtime: &mut Runtime,
-    ) {
+    ) -> Option<(i32, ShapeIdentity)> {
         let needs_begin = (0x212..=0x224).contains(&dispatch.skill_id())
             && !self.battle_fairy_skill_execution_is_materialized(player_id, ai);
-        if !needs_begin { return; }
-        let Some(instance) = instance else { return; };
+        if !needs_begin { return None; }
+        let instance = instance?;
         self.with_published_player_ai(player_id, ai, |game| {
-            if !game.begin_battle_fairy_skill_lifecycle(player_id, instance, dispatch, runtime.now_milliseconds()) {
-                return;
+            let player = game.find_player(player_id)?;
+            let source = (player.shape().get_region_id(), player.shape().identity());
+            let target = dispatch.object_target()
+                .and_then(|target| game.player_skill_begin_object(source.0, target));
+            if !game.begin_battle_fairy_skill_lifecycle(instance, source, target, runtime.now_milliseconds()) {
+                return None;
             }
             game.enter_player_combat_state(player_id);
             // OnBeginSkill может удалить регистрацию. Его продолжение не
@@ -173,7 +177,10 @@ impl CGame {
                     ),
                 );
             }
-        });
+            // Check некоторых владельцев принимает именно аргумент Begin,
+            // а не сохранённую прежнюю S при Begin(NULL) или новую S после callback.
+            target
+        })
     }
 
     pub(super) fn reject_battle_fairy_skill_schedule(

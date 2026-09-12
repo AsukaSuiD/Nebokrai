@@ -1,15 +1,12 @@
-//! Однократная область грома `CLeimingPhalanx2` (`0x21B`).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/thunder2phalanx.cpp`. Все три подтверждённые маски и их
-//! размеры равны одной активной ячейке. По истечении срока область обходит
+//! Однократный гром CLeimingPhalanx2, gameserver.exe/GameServer.pdb,
+//! appserver/skills/thunder2phalanx.cpp. Все уровни имеют одну активную ячейку.
+//! По истечении собственного срока область обходит
 //! эту ячейку, поражает каждую найденную цель один раз и удаляется. Формула
 //! урона делает один вызов legacy RNG лишь при наличии боевого духа и таблицы
 //! свойств; их отсутствие оставляет заполненные метаданные без составляющих урона.
-//! Поиск целей и применение атаки к независимым владельцам остаются у `CGame`. Виртуальный
-//! `ReplaceAffectRegion` вызывается региональным owner-ом после успешного
-//! добавления новой формы и до её публикации: поскольку все level-маски 1×1,
-//! совпавшая клетка старой области становится неактивной.
+//! End помечает удаление только после всех попаданий. ReplaceAffectRegion
+//! выключает совпавшую клетку; создание Leiming2 и общий AddObject его не
+//! вызывают. Wire содержит Master и живое оставшееся время перед CShape.
 //! Базовый урон использует общий с `CThunderPhalanx` расширенный порядок x87,
 //! усечение в `i64` и чтение младших 32 бит.
 
@@ -17,40 +14,21 @@ use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use super::thunder::thunder_base_damage;
 use super::thunder2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
-
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Leiming2PhalanxTick {
     Pending,
     AttackAndExpire { sampled_at_ms: u32 },
 }
-// ============================================================================
-// FUNCTION: CLeimingPhalanx2::ReplaceAffectRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2phalanx.cpp:187
-// RVA: 0x001E4520
-// ADDRESS: 005e4520
-// PROTOTYPE: void __thiscall ReplaceAffectRegion(long param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CLeimingPhalanx2 {
     shape: CShape,
@@ -136,6 +114,12 @@ impl CLeimingPhalanx2 {
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
     pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
 
+    pub(crate) fn set_center(&mut self, x: i32, y: i32) {
+        self.shape.set_pos_xy_move_order(
+            (f64::from(x) + 0.5) as f32, (f64::from(y) + 0.5) as f32,
+        );
+    }
+
     pub(crate) fn replace_affect_region(&mut self, _level: i32, tile_x: i32, tile_y: i32) {
         if self.shape.get_tile_x() == Ok(tile_x) && self.shape.get_tile_y() == Ok(tile_y) {
             self.scope_active = false;
@@ -146,7 +130,6 @@ impl CLeimingPhalanx2 {
 
     pub(crate) fn tick(&mut self, now_ms: u32) -> Leiming2PhalanxTick {
         if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
             return Leiming2PhalanxTick::AttackAndExpire {
                 sampled_at_ms: now_ms,
             };
@@ -156,28 +139,12 @@ impl CLeimingPhalanx2 {
 
     pub(crate) fn encode_client_snapshot(
         &self,
-        mut now_milliseconds: impl FnMut() -> u32,
+        now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        let first_now = now_milliseconds();
-        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first_now {
-            0
-        } else {
-            let second_now = now_milliseconds();
-            self.lifetime_ms
-                .wrapping_sub(second_now)
-                .wrapping_add(self.started_at_ms)
-        };
-        let mut payload = Vec::new();
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_i32(LEIMING2_SKILL_ID as i32);
-            writer.write_i32(self.skill_level);
-            writer.write_i32(self.shape.identity().object_type);
-            writer.write_i32(self.shape.identity().id);
-            writer.write_u32(remained);
-        }
-        self.shape
-            .add_to_byte_array(&mut payload, true)
-            .then_some(payload)
+        encode_related_phalanx_snapshot(
+            &self.shape, LEIMING2_SKILL_ID as i32, self.skill_level,
+            self.master.master_type, self.master.master_id,
+            self.started_at_ms, self.lifetime_ms, now_milliseconds,
+        )
     }
 }

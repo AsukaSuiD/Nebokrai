@@ -1,4 +1,8 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Призывы боевого духа получают исходный объектный аргумент Check из
+//! локального Begin, отдельно от изменяемой S базы. Области живут независимо
+//! от навыка: Thunder обходит маску, Tianhuo завершает прежние формы своей
+//! клетки до добавления новой, Leiming2 завершает область после обхода целей.
 //! Запись addon ресурса equipment использует общий CGoods setter с живыми
 //! таблицами опыта и перезагрузкой уже существующих fairy-проекций.
 //! Потерянный catalog на этой границе безопасно прерывает ресурсный шаг
@@ -32800,10 +32804,10 @@ impl CGame {
         true
     }
 
-    fn begin_battle_fairy_skill_lifecycle(&mut self, player_id: i32, instance: RegisteredSkill, dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> bool {
-        let Some(player) = self.find_player(player_id) else { return false };
-        let source = (player.shape().get_region_id(), player.shape().identity());
-        let target = dispatch.object_target().and_then(|target| self.player_skill_begin_object(source.0, target));
+    fn begin_battle_fairy_skill_lifecycle(
+        &mut self, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+        target: Option<(i32, ShapeIdentity)>, started_at_ms: u32,
+    ) -> bool {
         let Some(skill) = self.registered_skill_mut(instance) else { return false };
         // WarSoul даже для координатного запроса вызывает объектный Begin(null).
         skill.lifecycle_mut().begin_objects(Some(source), target, || started_at_ms);
@@ -39925,7 +39929,7 @@ impl CGame {
             } else {
                 let dispatch = fairy_execution.expect("проверен фоновый экземпляр WarSoul").dispatch();
                 let outcome = self.execute_battle_fairy_skill_owner(
-                    player_id, instance, dispatch, &mut player_ai, runtime,
+                    player_id, instance, dispatch, None, &mut player_ai, runtime,
                 );
                 self.apply_battle_fairy_skill_contacts(player_id, dispatch, &mut player_ai, &outcome, runtime);
                 outcome
@@ -40446,6 +40450,7 @@ impl CGame {
         player_id: i32,
         instance: Option<RegisteredSkill>,
         dispatch: BattleFairySkillDispatch,
+        begin_target: Option<(i32, ShapeIdentity)>,
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
@@ -40463,6 +40468,20 @@ impl CGame {
                 state: QueuedSkillExecutionState::Pending,
                 first_contact: false,
             };
+        }
+        let summon_execute: Option<fn(
+            &mut Self, i32, RegisteredSkill, BattleFairySkillDispatch,
+            Option<(i32, ShapeIdentity)>, &mut Runtime,
+        ) -> QueuedSkillExecutionOutcome> = match dispatch.skill_id() {
+            TIANHUO_SKILL_ID => Some(execute_battle_fairy_tianhuo),
+            LEIMING2_SKILL_ID => Some(execute_battle_fairy_leiming2),
+            THUNDER_SKILL_ID => Some(execute_battle_fairy_thunder),
+            _ => None,
+        };
+        if let Some(execute) = summon_execute {
+            return self.with_published_player_ai(player_id, player_ai, |game| {
+                execute(game, player_id, instance, dispatch, begin_target, runtime)
+            });
         }
         let registered_execute: Option<fn(
             &mut Self, i32, RegisteredSkill, BattleFairySkillDispatch, &mut Runtime,
@@ -40487,9 +40506,6 @@ impl CGame {
             &mut Runtime,
         ) -> QueuedSkillExecutionOutcome = match dispatch.skill_id() {
             FATAL_BLOW_SKILL_ID => execute_battle_fairy_fatal_blow,
-            TIANHUO_SKILL_ID => execute_battle_fairy_tianhuo,
-            LEIMING2_SKILL_ID => execute_battle_fairy_leiming2,
-            THUNDER_SKILL_ID => execute_battle_fairy_thunder,
             POISON_ARROW_SKILL_ID => execute_battle_fairy_poison_arrow,
             BLOOD_LOSS_SKILL_ID => execute_battle_fairy_blood_loss,
             BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => execute_battle_fairy_base_magic,
@@ -40544,21 +40560,21 @@ impl CGame {
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
                 && !self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
-            if !schedule_rejected {
-                self.begin_battle_fairy_skill_schedule(player_id, instance, dispatch, player_ai, runtime);
-            }
+            let begin_target = if !schedule_rejected {
+                self.begin_battle_fairy_skill_schedule(player_id, instance, dispatch, player_ai, runtime)
+            } else { None };
             let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
                     first_contact: false,
                 }
             } else {
-                self.execute_battle_fairy_skill_owner(player_id, instance, dispatch, player_ai, runtime)
+                self.execute_battle_fairy_skill_owner(player_id, instance, dispatch, begin_target, player_ai, runtime)
             };
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
             let outcome = if begin_completed {
                 player_ai.begin_battle_fairy_fighting(runtime.now_milliseconds());
-                self.execute_battle_fairy_skill_owner(player_id, instance, dispatch, player_ai, runtime)
+                self.execute_battle_fairy_skill_owner(player_id, instance, dispatch, None, player_ai, runtime)
             } else {
                 outcome
             };
@@ -44011,6 +44027,24 @@ impl CGame {
         !war_soul_hit
     }
 
+    pub(super) fn replace_tianhuo_phalanxes_in_cell(&mut self, region_id: i32, tile_x: i32, tile_y: i32) {
+        let mut shapes = Vec::new();
+        if let Some(owner) = self.find_region(region_id) {
+            let _ = owner.base().get_shapes(
+                tile_x, tile_y, self.area_width, self.area_height, self, &mut shapes,
+            );
+        }
+        for shape in shapes {
+            if shape.identity.object_type != SUMMON_SHAPE_TYPE { continue; }
+            let replaced = self.find_region(region_id)
+                .and_then(|owner| owner.base().find_skill_phalanx(shape.identity.id))
+                .is_some_and(|phalanx| matches!(phalanx, SummonedSkillShape::Tianhuo(phalanx)
+                    if phalanx.shape().get_tile_x() == Ok(tile_x)
+                        && phalanx.shape().get_tile_y() == Ok(tile_y)));
+            if replaced { self.end_damage_phalanx(region_id, shape.identity.id); }
+        }
+    }
+
     fn end_damage_phalanx(&mut self, region_id: i32, phalanx_id: i32) {
         let shape = {
             let Some(phalanx) = self.find_region_mut(region_id)
@@ -44159,7 +44193,7 @@ impl CGame {
                     }
                 }
                 SummonedSkillShape::PoisonFog(phalanx) => match phalanx.tick(lifetime_now_ms) { PoisonFogPhalanxTick::Scan => Some(Some((phalanx.shape().identity(), lifetime_now_ms))), PoisonFogPhalanxTick::Expired => None },
-                SummonedSkillShape::Thunder(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                SummonedSkillShape::Thunder(phalanx) => match phalanx.tick(lifetime_now_ms, &mut || runtime.now_milliseconds()) {
                     ThunderPhalanxTick::Pending => Some(None),
                     ThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((
                         phalanx.shape().identity(),
@@ -44391,7 +44425,7 @@ impl CGame {
             return true;
         }
         if let (Some(Some(_)), SummonedSkillShape::Thunder(thunder)) = (tick, &phalanx) {
-            for (x, y) in thunder.attack_cells() {
+            for (x, y) in thunder.scope_cells() {
                 self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
             return true;
