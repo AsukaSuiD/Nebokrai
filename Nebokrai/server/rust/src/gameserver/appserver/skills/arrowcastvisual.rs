@@ -1,9 +1,11 @@
-//! Общий visual CLightingArrow и CLightingArrow2.
+//! Общий visual CLightingArrow, CLightingArrow2 и CMeteorArrow.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightingarrow.cpp
-//! и lightingarrow2.cpp. Подготовка передаёт направление свежего U; выпуск
+//! lightingarrow2.cpp и meteorarrow.cpp. Подготовка передаёт направление свежего U; выпуск
 //! заново разрешает S, её X/Y либо базовую точку. Очистка сохранённой identity
 //! не запрещает GetS найти фигуру по координатам. Только E7 добавляет время
-//! полёта и поддерживает mode3 с направлением U. Ошибки — BYTE0/BYTEcode.
+//! полёта и поддерживает mode3 с направлением U. MeteorArrow всегда передаёт
+//! нулевые type/id цели, сохраняя свежие координаты, и добавляет ошибку 4.
+//! Ошибки — BYTE0/BYTEcode.
 //! Around требует действительной связи U с регионом; общий dispatcher
 //! сохраняет базовый visual-tail даже без производного сообщения.
 
@@ -16,13 +18,15 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) fn publish_arrow_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if !matches!(skill.owner(), SkillOwner::CLightingArrow | SkillOwner::CLightingArrow2)
+    if !matches!(skill.owner(), SkillOwner::CLightingArrow | SkillOwner::CLightingArrow2 | SkillOwner::CMeteorArrow)
         || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::ArrowCast || effect.is_ended())
     { return; }
     let (region, identity) = skill.lifecycle().user();
     let Some(user) = resolve_state_move_shape(game, region, identity) else { return; };
     let source = user.shape();
-    if matches!(mode, 2 | 7 | 10 | 11 | 13 | 14 | 15) {
+    if matches!(mode, 2 | 7 | 10 | 11 | 13 | 14 | 15)
+        || (skill.owner() == SkillOwner::CMeteorArrow && mode == 4)
+    {
         if source.identity().object_type == 400 {
             let mut message = CMessage::new(0x000b_fe01);
             message.add_byte(0);
@@ -54,8 +58,9 @@ pub(crate) fn publish_arrow_cast_visual(game: &CGame, skill: &MoveShapeSkill, mo
     message.add_long(source.identity().object_type);
     message.add_long(source.identity().id);
     if let Some((kind, id, x, y)) = target {
-        message.add_long(kind);
-        message.add_long(id);
+        let anonymous_target = skill.owner() == SkillOwner::CMeteorArrow;
+        message.add_long(if anonymous_target { 0 } else { kind });
+        message.add_long(if anonymous_target { 0 } else { id });
         message.add_long(x);
         message.add_long(y);
         if second {

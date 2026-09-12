@@ -105,8 +105,6 @@ use super::lightning::LightningExecutionState;
 use super::littleflash::LittleFlashExecutionState;
 use super::littlestar::PlayerLittleStarExecutionState;
 use super::lordfastattack::LordFastAttackExecutionState;
-use super::meteorarrow::MeteorArrowExecutionState;
-use super::meteorarrowmass::MeteorArrowMassExecutionState;
 use super::monsterthorn::PlayerMonsterThornExecutionState;
 use super::poisonmoth::PoisonMothExecutionState;
 use super::rage::RageExecutionState;
@@ -224,8 +222,6 @@ player_skill_states! {
     HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end) paths(clear_end_paths),
     LightingArrow(LightingArrowExecutionState) paths(clear_end_paths),
     LightingArrow2(LightingArrow2ExecutionState) paths(clear_end_paths),
-    MeteorArrowMass(MeteorArrowMassExecutionState),
-    MeteorArrow(MeteorArrowExecutionState),
     RainArrow(RainArrowExecutionState) paths(clear_end_paths),
     PoisonMoth(PoisonMothExecutionState) paths(clear_end_paths),
     BloodRose(BloodRoseExecutionState) paths(clear_end_paths),

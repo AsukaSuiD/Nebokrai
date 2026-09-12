@@ -8,8 +8,9 @@
 //! повторного использования,
 //! дальность, непроходимые клетки, лук и ненулевую стоимость MP. В AI MP
 //! списывается до повторной проверки лука и накопленного состояния; эта
-//! частичная мутация необратима. После задержки состояние `0xCC` атомарно
-//! изымается, публикуется пакет выстрела и создаётся область с сетевым ID `0xCD`.
+//! частичная мутация необратима. После задержки первый слот `0xCC` уничтожается
+//! напрямую: destructor публикует снятие, но End и UpdateProperty не вызываются.
+//! Ненулевой signed-запас разрешает выстрел и область с сетевым ID `0xCD`.
 //! Формулы, два вызова RNG на стрелу и пакеты принадлежат владельцам навыка;
 //! `CGame` только связывает player, region и доставку.
 //! `End(true)` фиксирует cooldown после создания области; `End(false)` только
@@ -24,9 +25,10 @@ use super::basemagic::{
 };
 use super::fallingstarphalanx::create_falling_star_phalanx;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::meteorarrow::{master_info, target_snapshot, weapon_is_valid};
-use super::meteorarrowmass::send_meteor_arrow_state_remove;
+use super::meteorarrowstate::{consume_meteor_arrow_count, first_meteor_arrow_count};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
@@ -42,6 +44,28 @@ const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 const TARGET_AFFECT_FREQUENCY: u32 = 6_001;
+
+fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
+    player.equipment().get_goods(2).is_some_and(|weapon|
+        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3)
+}
+
+fn master_info(player: &CPlayer) -> MasterInfo {
+    let p = player.pk_permissions();
+    MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(),
+        master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()),
+        permitted_to_kill_player: i32::from(p.player), permitted_to_kill_teammate: i32::from(p.teammate),
+        permitted_to_kill_guild_member: i32::from(p.guild_member), permitted_to_kill_criminal: i32::from(p.criminal) }
+}
+
+fn target_snapshot(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<(i32, i32, bool)> {
+    match target.object_type {
+        PLAYER_TYPE => game.find_player(target.id).and_then(|p| Some((p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.is_dead()))),
+        MONSTER_TYPE => game.find_region(region_id).and_then(|r| { let m = r.base().find_monster_by_id(target.id)?;
+            Some((m.move_shape().shape().get_tile_x().ok()?, m.move_shape().shape().get_tile_y().ok()?, m.hit_points() == 0)) }),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FallingStarExecutionState {
@@ -301,11 +325,10 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             abort_player_falling_star(game, player_id);
             return outcome(QueuedSkillExecutionState::Rejected);
         }
-        if game.find_player(player_id).is_none_or(|player| {
-            player
-                .meteor_arrow_state()
-                .is_none_or(|state| state.arrows() == 0)
-        }) {
+        if game.find_player(player_id)
+            .and_then(|player| first_meteor_arrow_count(game, (region_id, player.shape().identity())))
+            .is_none_or(|count| count == 0)
+        {
             send_failure(game, player_id, 4, mp_loss);
             abort_player_falling_star(game, player_id);
             return outcome(QueuedSkillExecutionState::Rejected);
@@ -332,17 +355,13 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
         return outcome(QueuedSkillExecutionState::Pending);
     }
-    let arrows = game
-        .find_player_mut(player_id)
-        .and_then(CPlayer::take_meteor_arrow_state)
-        .map_or(0, |state| state.arrows().max(0) as u32);
+    let source = game.find_player(player_id).map(|player| player.shape().identity());
+    let arrows = source.map_or(0, |source| consume_meteor_arrow_count(game, (region_id, source)));
     if arrows == 0 {
         send_failure(game, player_id, 4, mp_loss);
         abort_player_falling_star(game, player_id);
         return outcome(QueuedSkillExecutionState::Rejected);
     }
-    send_meteor_arrow_state_remove(game, player_id);
-    let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
     send_fire(game, player_id, level, destination.0, destination.1);
 
     let Some(player) = game.find_player(player_id) else {
@@ -364,23 +383,13 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
         i32::from(combat.add_soul_attack),
         i32::from(combat.cch),
         hit_modifier,
-        arrows,
+        arrows as u32,
         destination.0,
         destination.1,
         |maximum| game.skill_random_below(maximum),
     );
-    phalanx.shape_mut().set_region_id(region_id);
-    let result = game.add_meteor_arrow_phalanx(
-        region_id,
-        phalanx,
-        destination.0,
-        destination.1,
-        now_ms,
-        runtime,
-    );
-    if result.is_some_and(|result| result.is_ok()) {
-        let _ = game.send_meteor_arrow_phalanx_entry(region_id, summon_id, runtime);
-    }
+    phalanx.shape_mut().set_pos_xy_base(destination.0 as f32 + 0.5, destination.1 as f32 + 0.5);
+    let _ = game.spawn_meteor_arrow_phalanx(region_id, phalanx, now_ms, runtime);
     if let Some(state) = game.player_skill_state_mut::<FallingStarExecutionState>(player_id, FALLING_STAR_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);

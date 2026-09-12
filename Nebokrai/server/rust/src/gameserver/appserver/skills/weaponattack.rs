@@ -54,7 +54,7 @@ enum WeaponPowerMode {
 }
 
 #[derive(Clone, Copy)]
-enum SourceProperty {
+pub(super) enum SourceProperty {
     Minimum,
     Maximum,
     Element,
@@ -62,7 +62,7 @@ enum SourceProperty {
     CriticalChance,
 }
 
-fn source_property(game: &CGame, source: (i32, ShapeIdentity), property: SourceProperty) -> Option<u32> {
+pub(super) fn source_property(game: &CGame, source: (i32, ShapeIdentity), property: SourceProperty) -> Option<u32> {
     resolve_state_move_shape(game, source.0, source.1)?;
     match source.1.object_type {
         400 => {

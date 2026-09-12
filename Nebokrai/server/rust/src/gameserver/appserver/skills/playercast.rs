@@ -24,7 +24,7 @@ use crate::gameserver::gameserver::game::{
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
-    AgilityFamily, LightingArrow, LightingArrow2,
+    AgilityFamily, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -57,6 +57,8 @@ impl RegisteredPlayerCastOwner {
                 | super::natural::NATURAL_SKILL_ID | super::rapture::RAPTURE_SKILL_ID => Self::AgilityFamily,
             super::lightingarrow::LIGHTING_ARROW_SKILL_ID => Self::LightingArrow,
             super::lightingarrow2::LIGHTING_ARROW_2_SKILL_ID => Self::LightingArrow2,
+            super::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID => Self::MeteorArrowMass,
+            super::meteorarrow::METEOR_ARROW_SKILL_ID => Self::MeteorArrow,
             _ => return None,
         })
     }
@@ -86,6 +88,8 @@ impl RegisteredPlayerCastOwner {
             Self::AgilityFamily => super::agility::execute_player_agility_family::<Runtime>,
             Self::LightingArrow => super::lightingarrow::execute_player_lighting_arrow::<Runtime>,
             Self::LightingArrow2 => super::lightingarrow2::execute_player_lighting_arrow_2::<Runtime>,
+            Self::MeteorArrowMass => super::meteorarrowmass::execute_player_meteor_arrow_mass::<Runtime>,
+            Self::MeteorArrow => super::meteorarrow::execute_player_meteor_arrow::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

@@ -319,7 +319,7 @@ use crate::gameserver::appserver::skills::pillarstate::{
 };
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::poisonfogstate::PoisonFogState;
-use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_STATE_BYTES};
+use crate::gameserver::appserver::skills::meteorarrowstate::MeteorArrowState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
 use crate::gameserver::appserver::skills::spiderwebstate::{
@@ -1537,7 +1537,6 @@ impl CMoveShape {
                 StateData::ChangeBody(state) => Some(state.serialized_span()),
                 StateData::Extended(state) => Some(state.serialized_span()),
                 StateData::Undead(state) => Some(state.serialized_span()),
-                StateData::MeteorArrow(state) => Some(state.serialized_span()),
                 StateData::Ride(state) => Some(state.serialized_span()),
                 _ => None,
             });
@@ -1616,10 +1615,7 @@ impl CMoveShape {
                 StateData::LeafCut3(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Kerosene(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::PoisonFog(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::MeteorArrow(state) => {
-                    if record_index.is_some() { state.update_serialized(&mut payload); }
-                    None
-                }
+                StateData::MeteorArrow(state) => Some(state.encoded().to_vec()),
                 StateData::Script(state) => Some(state.encoded(&mut timed_state_now_milliseconds)),
                 StateData::ConsumableRestore(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Blind(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
@@ -2210,7 +2206,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<ChangeBodyState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<UndeadState>(|state| state.shift_serialized_offset_after(offset, amount));
-        self.state_entries.for_each_mut::<MeteorArrowState>(|state| state.shift_serialized_offset_after(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|state| state.shift_serialized_offset_after(offset, amount));
     }
 
@@ -2256,7 +2251,6 @@ impl CMoveShape {
         self.state_entries.for_each_mut::<ExtendedState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<ChangeBodyState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         self.state_entries.for_each_mut::<UndeadState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
-        self.state_entries.for_each_mut::<MeteorArrowState>(|known| known.shift_serialized_offset_for_insert(offset, amount));
         self.state_entries.for_each_mut::<RideState>(|known| { known.shift_serialized_offset_for_insert(offset, amount); });
         let _ = self.state_entries.replace_at(position, state);
         let key = self.state_entries.address(position)?;
@@ -2422,7 +2416,6 @@ impl CMoveShape {
         // Как в save, неоднозначный ordinal не разрешает удалять чужие байты.
         let record = (runtime_count == records.len()).then(|| records[occurrence]);
         let span = self.state_entries.serialized_span(key).or_else(|| match self.state_entries.get(key)? {
-            StateData::MeteorArrow(state) => state.serialized_span(),
             StateData::Swordship(state) => {
                 // Как в save: Replace оставляет runtime-позицию, но переносит
                 // DB-запись в хвост. Ordinal повторного ID уже не задаёт экземпляр.
@@ -2592,33 +2585,6 @@ impl CMoveShape {
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
         self.state_entries.iter_data().filter(|state| state.is_curable())
             .map(StateData::state_id).collect()
-    }
-
-    pub(crate) fn meteor_arrow_state(&self) -> Option<MeteorArrowState> { self.state_entries.first::<MeteorArrowState>().copied() }
-    pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<MeteorArrowState> {
-        if let Some(key) = self.state_entries.first_key::<MeteorArrowState>() {
-            let state = self.applied_state_mut::<MeteorArrowState>(key)?;
-            if !state.add_arrows(amount) { return None }
-            let state = *state;
-            state.update_serialized(&mut self.ex_states);
-            return Some(state);
-        }
-        let mut state = MeteorArrowState::new(maximum);
-        if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); }
-        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-        state.append_serialized(&mut self.ex_states);
-        let key = self.state_entries.append(state);
-        let state = self.applied_state_mut::<MeteorArrowState>(key)?;
-        if !state.add_arrows(amount) { return None }
-        let state = *state;
-        state.update_serialized(&mut self.ex_states);
-        Some(state)
-    }
-    pub(crate) fn take_meteor_arrow_state(&mut self) -> Option<MeteorArrowState> {
-        let key = self.state_entries.first_key::<MeteorArrowState>()?;
-        let state = self.remove_applied_state_record::<MeteorArrowState>(key, METEOR_ARROW_STATE_BYTES)?;
-        Some(state)
     }
 
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {

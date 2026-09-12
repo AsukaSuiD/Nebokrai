@@ -1,4 +1,4 @@
-//! Общие ForceMove, End и допуск для принадлежащих региону призванных форм.
+//! Общие сообщения, ForceMove, End и допуск региональных призванных форм.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/summonshape.cpp.
 //! CSummonShape отправляет BF604 до базового SetTileXY, без ожидания AI
 //! и перестройки spatial membership CMoveShape. Регион берётся из живой
@@ -12,6 +12,22 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 
 impl CGame {
+    pub(super) fn publish_summoned_shape_entry(&mut self, shape: &CShape, payload: &[u8]) -> Option<()> {
+        let identity = shape.identity();
+        let mut message = CMessage::new(0x000b_f502);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add_guid(identity.ex_id);
+        message.add_long(i32::try_from(payload.len()).ok()?);
+        message.base_mut().add(payload);
+        message.base_mut().add_char(0);
+        if shape.is_assigned_to_server_region() {
+            let (x, y) = (shape.get_tile_x().ok()?, shape.get_tile_y().ok()?);
+            let _ = self.send_shape_position_around(shape.get_region_id(), x, y, &message);
+        }
+        Some(())
+    }
+
     pub(super) fn end_summoned_shape(&mut self, holder_region: i32, id: i32) {
         let Some(shape) = self.mark_damage_phalanx_deleted(holder_region, id) else { return; };
         if shape.is_assigned_to_server_region()

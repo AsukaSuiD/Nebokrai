@@ -1,10 +1,11 @@
 //! Общий visual навыков на себя: EnergyHolding, Pillar, Roar, Callosity1/2
-//! и семейства Agility/Agility2/Natural/Rapture.
+//! и семейств Agility/Agility2/Natural/Rapture, MeteorArrowMass.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые owners appserver/skills.
 //!
 //! Подготовка передаёт направление свежего U, выпуск повторяет его type/id
 //! и X/Y. S и точка Begin не используются, даже когда AI допускает запасную S.
-//! Ошибки 2/7/13 общие; Roar добавляет 14, Pillar и Callosity — 8.
+//! Ошибки 2/7/13 общие; Roar добавляет 14, MeteorArrowMass — 4/14,
+//! Pillar и Callosity — 8.
 //! Ошибка 8 имеет LONG0/BYTE8 вместо BYTE0/BYTEcode. Другие режимы не создают пакет.
 //! Around требует действительной связи U с регионом; общий dispatcher
 //! сохраняет базовый visual-tail независимо от производной публикации.
@@ -19,7 +20,8 @@ use crate::nets::netserver::message::CMessage;
 pub(crate) fn publish_self_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
     if !matches!(skill.owner(), SkillOwner::CEnergyHolding | SkillOwner::CPillar | SkillOwner::CRoar
         | SkillOwner::CCallosity | SkillOwner::CCallosity2 | SkillOwner::CAgility
-        | SkillOwner::CAgility2 | SkillOwner::CNatural | SkillOwner::CRapture)
+        | SkillOwner::CAgility2 | SkillOwner::CNatural | SkillOwner::CRapture
+        | SkillOwner::CMeteorArrowMass)
         || skill.visual_effect().is_none_or(|effect| effect.kind() != SkillVisualEffectKind::SelfCast || effect.is_ended())
     { return; }
     let (region, identity) = skill.lifecycle().user();
@@ -29,6 +31,7 @@ pub(crate) fn publish_self_cast_visual(game: &CGame, skill: &MoveShapeSkill, mod
     let long_failure = matches!(skill.owner(), SkillOwner::CPillar | SkillOwner::CCallosity | SkillOwner::CCallosity2) && mode == 8;
     if matches!(mode, 2 | 7 | 13) || long_failure
         || (skill.owner() == SkillOwner::CRoar && mode == 14)
+        || (skill.owner() == SkillOwner::CMeteorArrowMass && matches!(mode, 4 | 14))
     {
         if source.identity().object_type == 400 {
             if long_failure { message.add_long(0); } else { message.add_byte(0); }

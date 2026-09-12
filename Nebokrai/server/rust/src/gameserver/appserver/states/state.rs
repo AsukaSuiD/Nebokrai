@@ -15,6 +15,9 @@
 //! Клиентские getters читаются по порядку без Serialize и поиска записи по ID;
 //! их параметры могут отличаться от BFE03 конкретного визуального эффекта.
 //! Базовые getters возвращают ноль, а неизвестный AI не становится no-op.
+//! Destructor — отдельный переход, а не повтор End: его visual вызывается
+//! перед освобождением того же ключа. Прямой расход не меняет ended и не
+//! вызывает UpdateProperty; RemoveState добавляет этот callback после удаления.
 //! Неперенесённые контракты сохранены адресно в RAW ниже.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -317,7 +320,7 @@ pub(crate) fn end_base_applied_state(
 /// В Rust уникальный StateKey действует только внутри одной арены.
 pub(crate) fn remove_applied_state_from(
     game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
-    (target_region, target): (i32, ShapeIdentity), bytes: usize,
+    (target_region, target): (i32, ShapeIdentity), _bytes: usize,
 ) -> bool {
     // Ключ локален арене. RemoveState(pointer) другого User не должен удалить
     // совпавший численно ключ чужого контейнера: такого указателя там нет.
@@ -325,12 +328,25 @@ pub(crate) fn remove_applied_state_from(
         .zip(resolve_state_move_shape(game, target_region, target))
         .is_some_and(|(arena, target)| std::ptr::eq(arena, target));
     if !same_holder { return false; }
-    let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
-    let removed = shape.remove_applied_state_data(key, bytes).is_some();
+    let removed = destroy_move_shape_state(game, region_id, holder, key);
     if removed {
         let _ = game.update_move_shape_properties(target_region, target);
     }
     removed
+}
+
+/// Прямое уничтожение выбранного объекта: concrete destructor до удаления
+/// payload и DB-проекции. Состояние остаётся доступным его visual; ended,
+/// User::RemoveState и пересчёт свойств этим переходом не вызываются.
+pub(crate) fn destroy_move_shape_state(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
+) -> bool {
+    let Some(callback) = resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_data(key)).map(state_destructor)
+    else { return false; };
+    if let Some(callback) = callback { callback(game, region_id, holder, key); }
+    resolve_state_move_shape_mut(game, region_id, holder)
+        .is_some_and(|shape| shape.remove_applied_state(key).is_some())
 }
 
 /// Прямой virtual +0x1C, без искусственного deadline и без удержания payload
@@ -360,9 +376,10 @@ pub(crate) fn end_and_destroy_state_at(
         .state_at(index).map(|(key, _)| key);
     if let Some(key) = key {
         end_move_shape_state(game, region_id, holder, key);
-        let shape = resolve_state_move_shape_mut(game, region_id, holder)?;
-        if let Some((remaining, _)) = shape.state_at(index) {
-            shape.remove_applied_state(remaining);
+        let remaining = resolve_state_move_shape(game, region_id, holder)?
+            .state_at(index).map(|(remaining, _)| remaining);
+        if let Some(remaining) = remaining {
+            destroy_move_shape_state(game, region_id, holder, remaining);
         }
     }
     Some(())
@@ -521,10 +538,12 @@ impl StateClientRecord<'_> {
     }
 }
 
-// Один список задаёт AI/End/Begin/OnUpdateProperties/SetRegion, клиентскую
+// Один список задаёт AI/End/Begin/destructor/OnUpdateProperties/SetRegion, клиентскую
 // проекцию и остаточное состояние visual после runtime Begin. Внутри общего
 // lifecycle-семейства client-clause относится к конкретному typed payload.
 macro_rules! state_callbacks {
+    (@destructor) => { None };
+    (@destructor $destructor:path) => { Some($destructor) };
     (@region) => { set_state_user_region };
     (@region $set_region:path) => { $set_region };
     (@visual) => { |_state: &StateData| Some((1, false)) };
@@ -540,13 +559,17 @@ macro_rules! state_callbacks {
     ($($(
         StateData::$variant:ident(_)
         $(; client = |$state:ident, $team:ident, $now:ident| $client:block)?
-    )|+ => ($ai:expr, $end:path, $restart:path, $property:expr $(, $set_region:path)?) $(; visual = $visual:expr)?),+ $(,)?) => {
+    )|+ => ($ai:expr, $end:path, $restart:path, $property:expr $(, $set_region:path)?) $(; visual = $visual:expr)? $(; destructor = $destructor:path)?),+ $(,)?) => {
         fn state_ai<Runtime: GameMainLoopRuntime>(state: &StateData) -> StateAi<Runtime> {
             match state { $($(StateData::$variant(_))|+ => $ai),+ }
         }
 
         fn state_end(state: &StateData) -> fn(&mut CGame, i32, ShapeIdentity, StateKey) -> bool {
             match state { $($(StateData::$variant(_))|+ => $end),+ }
+        }
+
+        fn state_destructor(state: &StateData) -> Option<fn(&mut CGame, i32, ShapeIdentity, StateKey)> {
+            match state { $($(StateData::$variant(_))|+ => state_callbacks!(@destructor $($destructor)?)),+ }
         }
 
         fn state_restart(state: &StateData) -> StateRestart {
@@ -629,7 +652,7 @@ state_callbacks! {
         skills::meteorarrowstate::end_meteor_arrow_state,
         skills::meteorarrowstate::restart_meteor_arrow_state,
         |_, _, _, _, _| true
-    ),
+    ); destructor = skills::meteorarrowstate::destroy_meteor_arrow_state_visual,
     StateData::EnergyHolding(_) => (
         |_, _, _, _, _| {},
         skills::energyholdingstate::end_energy_holding_state,

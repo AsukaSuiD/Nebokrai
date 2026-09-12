@@ -1071,18 +1071,7 @@ use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     CHeartlessArrowPhalanx, HeartlessArrowPhalanxTick,
     calculate_owned_heartless_arrow_attack,
 };
-use crate::gameserver::appserver::skills::meteorarrow::{
-    cancel_player_meteor_arrow, complete_player_meteor_arrow,
-    execute_player_meteor_arrow, is_meteor_arrow_dispatch, METEOR_ARROW_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::meteorarrowmass::{
-    cancel_player_meteor_arrow_mass, complete_player_meteor_arrow_mass,
-    execute_player_meteor_arrow_mass, is_meteor_arrow_mass_dispatch,
-    METEOR_ARROW_MASS_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::meteorarrowphalanx::{
-    calculate_meteor_arrow_attack, MeteorArrowPhalanxTick,
-};
+use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::skills::rainarrow::{
     cancel_player_rain_arrow, complete_player_rain_arrow, execute_player_rain_arrow,
     is_rain_arrow_dispatch,
@@ -39104,18 +39093,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                METEOR_ARROW_MASS_SKILL_ID => Some(complete_player_meteor_arrow_mass(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                METEOR_ARROW_SKILL_ID => Some(complete_player_meteor_arrow(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 RAIN_ARROW_SKILL_ID => Some(complete_player_rain_arrow(
                     self,
                     player_id,
@@ -39498,12 +39475,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            METEOR_ARROW_MASS_SKILL_ID => {
-                cancel_player_meteor_arrow_mass(self, player_id, &mut player_ai, runtime)
-            }
-            METEOR_ARROW_SKILL_ID => {
-                cancel_player_meteor_arrow(self, player_id, &mut player_ai, runtime)
-            }
             RAIN_ARROW_SKILL_ID => {
                 cancel_player_rain_arrow(self, player_id, &mut player_ai, runtime)
             }
@@ -39855,8 +39826,6 @@ impl CGame {
             } => execute_player_archery,
             _ if is_heartless_arrow_dispatch(dispatch) => execute_player_heartless_arrow,
             _ if is_heartless_arrow_area_dispatch(dispatch) => execute_player_heartless_arrow_area,
-            _ if is_meteor_arrow_mass_dispatch(dispatch) => execute_player_meteor_arrow_mass,
-            _ if is_meteor_arrow_dispatch(dispatch) => execute_player_meteor_arrow,
             _ if is_rain_arrow_dispatch(dispatch) => execute_player_rain_arrow,
             _ if is_poison_moth_dispatch(dispatch) => execute_player_poison_moth,
             _ if is_kerosene_dispatch(dispatch) => execute_player_kerosene,
@@ -43529,7 +43498,7 @@ impl CGame {
                 calculate_owned_archery_attack(self, phalanx, target_level)
             }
             SummonedSkillShape::LightingArrow(_) => None,
-            SummonedSkillShape::MeteorArrow(phalanx) => Some(calculate_meteor_arrow_attack(self, phalanx)),
+            SummonedSkillShape::MeteorArrow(_) => None,
             SummonedSkillShape::RainArrow(phalanx) => calculate_rain_arrow_attack(self, phalanx, target_level),
             SummonedSkillShape::BaseMagic(phalanx) => {
                 calculate_owned_base_magic_attack(self, phalanx, target_level)
@@ -43769,6 +43738,12 @@ impl CGame {
         {
             return self.run_lighting_arrow_phalanx(region_id, phalanx_id, runtime);
         }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::MeteorArrow(_)))
+        {
+            return self.run_meteor_arrow_phalanx(region_id, phalanx_id, runtime);
+        }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -43776,7 +43751,6 @@ impl CGame {
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
         let mut thunder_fire_tick = None;
-        let mut meteor_arrow_tick = None;
         let mut rain_arrow_tick = None;
         let mut heartless_arrow_tick = None;
         let tick = owner
@@ -43794,10 +43768,7 @@ impl CGame {
                     }
                 }
                 SummonedSkillShape::LightingArrow(_) => Some(None),
-                SummonedSkillShape::MeteorArrow(phalanx) => {
-                    meteor_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
-                    Some(None)
-                }
+                SummonedSkillShape::MeteorArrow(_) => Some(None),
                 SummonedSkillShape::RainArrow(phalanx) => { rain_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds())); Some(None) }
                 SummonedSkillShape::BaseMagic(phalanx) => {
                     match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
@@ -43967,12 +43938,6 @@ impl CGame {
                     }
                 }
                 HeartlessArrowPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
-            }
-            return true;
-        }
-        if let (Some(meteor_arrow_tick), SummonedSkillShape::MeteorArrow(_)) = (meteor_arrow_tick, &phalanx) {
-            if let MeteorArrowPhalanxTick::Attack { cell: (x, y), sampled_at_ms } = meteor_arrow_tick {
-                self.apply_meteor_arrow_cell(region_id, phalanx_id, x, y, sampled_at_ms, runtime);
             }
             return true;
         }
@@ -44170,7 +44135,7 @@ impl CGame {
                 }
             }
         }
-        if !matches!(&phalanx, SummonedSkillShape::Archery(_) | SummonedSkillShape::MeteorArrow(_) | SummonedSkillShape::RainArrow(_))
+        if !matches!(&phalanx, SummonedSkillShape::Archery(_) | SummonedSkillShape::RainArrow(_))
             && let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
         {
             let _ = self.send_shape_exit_around(region, phalanx.shape());

@@ -5588,9 +5588,6 @@ impl CPlayer {
         self.move_shape.curable_state_ids()
     }
 
-    pub(crate) fn meteor_arrow_state(&self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.meteor_arrow_state() }
-    pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.add_meteor_arrows(maximum, amount) }
-    pub(crate) fn take_meteor_arrow_state(&mut self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.take_meteor_arrow_state() }
 
 
 

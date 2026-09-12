@@ -45,21 +45,9 @@ impl CGame {
             Ok(id) => self.lighting_arrow_phalanx(region_id, id)?,
             Err((_, phalanx)) => { failed = phalanx; &failed }
         };
-        let shape = phalanx.shape();
-        let identity = shape.identity();
         let payload = phalanx.encode_client_snapshot(|| runtime.now_milliseconds())?;
-        let mut message = CMessage::new(0x000b_f502);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.base_mut().add_guid(identity.ex_id);
-        message.add_long(i32::try_from(payload.len()).ok()?);
-        message.base_mut().add(&payload);
-        message.base_mut().add_char(0);
-        if shape.is_assigned_to_server_region() {
-            let (x, y) = (shape.get_tile_x().ok()?, shape.get_tile_y().ok()?);
-            let _ = self.send_shape_position_around(shape.get_region_id(), x, y, &message);
-        }
-        Some(())
+        let shape = phalanx.shape().clone();
+        self.publish_summoned_shape_entry(&shape, &payload)
     }
 
     fn lighting_arrow_phalanx(&self, region_id: i32, id: i32) -> Option<&CLightingArrowPhalanx> {

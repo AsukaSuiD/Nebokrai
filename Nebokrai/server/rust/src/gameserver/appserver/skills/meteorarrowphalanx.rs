@@ -1,135 +1,223 @@
-//! Область падающих метеорных стрел `CMeteorArrowPhalanx` (`0xCD`).
+//! Область падающих метеорных стрел CMeteorArrowPhalanx (0xCD).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrowphalanx.cpp;
+//! Initialize и wire разделены линкером с fallingstarphalanx.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/meteorarrowphalanx.cpp`. Владелец хранит боевой снимок
-//! стрелка, заранее выбирает по два значения MSVCRT RNG на каждую попытку
-//! клетки и раз в заданную частоту обрабатывает одну клетку. `CGame` оставляет
-//! за собой только разрешение региональных identity и применение удара.
-//! Критический множитель вычисляется в расширенной точности x87 и усекается к
-//! нулю при записи результата в `i32`.
+//! Форма хранит неизменный снимок атаки и срок frequency*count+10 с DWORD
+//! переполнением. Конструктор выделяет клетки; Initialize после SetTileXY
+//! читает фактические X/Y и выбирает две координаты MSVCRT RNG для каждой
+//! стрелы. Все три уровня и запасной первый уровень имеют полную маску 3×3.
+//! FallingStar передаёт собственные заранее выбранные клетки через from_cells.
+//!
+//! AI читает часы срока, затем частоты. При наступлении частоты третьи часы
+//! записываются до проверки числа стрел и разрешения фактического региона.
+//! GetShapes сохраняет список одной клетки; свежий CMoveShape и player-допуск
+//! проверяются перед каждым контактом. Счётчик увеличивается после всей
+//! клетки даже при NULL регионе; после последней клетки немедленного End нет.
+//! Общий региональный runtime держит форму опубликованной во время callbacks.
+//!
+//! Attack проверяет IsDied и сохраняет PK-снимок только для master типа 400.
+//! Calculate не читает живого стрелка, таблицу навыка или weapon modifier:
+//! единичный коэффициент, abs(MAX-MIN)+1, три неотрицательные компонента,
+//! второй RNG критического удара и усечение расширенного произведения к нулю.
+//! Контакт не начисляет RP, не накладывает яд и не устраняет повторные цели.
+//!
+//! Wire: skill/level/master type/id/remained, полный lifetime/frequency/count,
+//! затем пары клеток и CShape. Vec заменяет массив и освобождает всю память;
+//! статическая маска не требует отдельного выделенного CScope. Серверный decode
+//! не имеет достигнутого caller-а и сохраняется адресно ниже.
+//! Число стрел сохраняет DWORD-биты без знакового ограничения; нехватка памяти
+//! остаётся фатальной границей, а переполнение размера native-массива не переносится.
 
 use super::fightdefense::truncate_original;
 use super::meteorarrow::METEOR_ARROW_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 
-const SCOPE_LENGTH: i32 = 7;
-const SCOPE_HEIGHT: i32 = 7;
-const SCOPE: [u8; 49] = [
-    0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0,
-    0, 0, 1, 1, 1, 0, 0,
-];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MeteorArrowPhalanxTick { Pending, Attack { cell: (i32, i32), sampled_at_ms: u32 }, Expired }
+const SCOPE_LENGTH: i32 = 3;
+const SCOPE_HEIGHT: i32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMeteorArrowPhalanx {
-    shape: CShape, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
-    frequency_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32,
-    element_attack: i32, soul_attack: i32, critical_chance: i32, hit_modifier: i32,
-    cells: Vec<(i32, i32)>, last_attack_at_ms: u32, attack_count: usize,
+    shape: CShape,
+    started_at_ms: u32,
+    lifetime_ms: u32,
+    frequency_ms: u32,
+    attack: MeteorArrowAttack,
+    cells: Vec<(i32, i32)>,
+    last_attack_at_ms: u32,
+    attack_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MeteorArrowAttack {
+    master: MasterInfo,
+    skill_level: i32,
+    minimum_attack: i32,
+    maximum_attack: i32,
+    element_attack: i32,
+    soul_attack: i32,
+    critical_chance: i32,
+    hit_modifier: i32,
 }
 
 impl CMeteorArrowPhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
-    pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, frequency_ms: u32,
+    #[allow(clippy::too_many_arguments, reason = "снимки соответствуют аргументам конструктора EXE")]
+    pub(crate) fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32, frequency_ms: u32,
         skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_attack: i32,
         soul_attack: i32, critical_chance: i32, hit_modifier: i32, arrow_count: u32,
-        center_x: i32, center_y: i32, mut random_below: impl FnMut(i32) -> i32) -> Self {
+    ) -> Self {
+        Self::from_cells(
+            id, master, started_at_ms, frequency_ms, skill_level, minimum_attack,
+            maximum_attack, element_attack, soul_attack, critical_chance,
+            hit_modifier, vec![(0, 0); arrow_count as usize],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "совместимый владелец передаёт собственные клетки")]
+    pub(crate) fn from_cells(
+        id: i32, master: MasterInfo, started_at_ms: u32, frequency_ms: u32,
+        skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_attack: i32,
+        soul_attack: i32, critical_chance: i32, hit_modifier: i32, cells: Vec<(i32, i32)>,
+    ) -> Self {
         let mut shape = CShape::with_constructor_defaults();
-        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
+        shape.set_identity(ShapeIdentity {
+            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
+        });
+        let arrow_count = cells.len() as u32;
+        Self {
+            shape, started_at_ms,
+            lifetime_ms: frequency_ms.wrapping_mul(arrow_count).wrapping_add(10),
+            frequency_ms,
+            attack: MeteorArrowAttack {
+                master, skill_level, minimum_attack, maximum_attack, element_attack,
+                soul_attack, critical_chance, hit_modifier,
+            },
+            cells,
+            last_attack_at_ms: 0, attack_count: 0,
+        }
+    }
+
+    pub(crate) fn initialize_cells(&mut self, mut random_below: impl FnMut(i32) -> i32) {
+        // Native FISTP при непредставимой координате даёт integer indefinite.
+        let center_x = self.shape.get_tile_x().unwrap_or(i32::MIN);
+        let center_y = self.shape.get_tile_y().unwrap_or(i32::MIN);
         let start_x = center_x.wrapping_sub(SCOPE_LENGTH >> 1);
         let start_y = center_y.wrapping_sub(SCOPE_HEIGHT >> 1);
-        let mut cells = Vec::with_capacity(arrow_count as usize);
-        for _ in 0..arrow_count {
-            let (scope_x, scope_y) = loop {
-                let x = random_below(SCOPE_LENGTH); let y = random_below(SCOPE_HEIGHT);
-                let index = y.wrapping_mul(SCOPE_LENGTH).wrapping_add(x);
-                if usize::try_from(index).ok().is_some_and(|index| SCOPE.get(index).copied() == Some(1)) { break (x, y) }
-            };
-            cells.push((start_x.wrapping_add(scope_x), start_y.wrapping_add(scope_y)));
+        for cell in &mut self.cells {
+            let x = random_below(SCOPE_LENGTH);
+            let y = random_below(SCOPE_HEIGHT);
+            *cell = (start_x.wrapping_add(x), start_y.wrapping_add(y));
         }
-        Self { shape, master, started_at_ms, lifetime_ms: frequency_ms.wrapping_mul(arrow_count).wrapping_add(10),
-            frequency_ms, skill_level, minimum_attack, maximum_attack, element_attack, soul_attack,
-            critical_chance, hit_modifier, cells, last_attack_at_ms: 0, attack_count: 0 }
     }
-    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
-    pub(crate) fn from_cells(id: i32, master: MasterInfo, started_at_ms: u32, frequency_ms: u32,
-        skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_attack: i32,
-        soul_attack: i32, critical_chance: i32, hit_modifier: i32, cells: Vec<(i32, i32)>) -> Self {
-        let mut shape = CShape::with_constructor_defaults();
-        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
-        let arrow_count = cells.len() as u32;
-        Self { shape, master, started_at_ms, lifetime_ms: frequency_ms.wrapping_mul(arrow_count).wrapping_add(10),
-            frequency_ms, skill_level, minimum_attack, maximum_attack, element_attack, soul_attack,
-            critical_chance, hit_modifier, cells, last_attack_at_ms: 0, attack_count: 0 }
-    }
+
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
-    pub(crate) const fn master(&self) -> MasterInfo { self.master }
-    pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
-    pub(crate) const fn minimum_attack(&self) -> i32 { self.minimum_attack }
-    pub(crate) const fn maximum_attack(&self) -> i32 { self.maximum_attack }
-    pub(crate) const fn element_attack(&self) -> i32 { self.element_attack }
-    pub(crate) const fn soul_attack(&self) -> i32 { self.soul_attack }
-    pub(crate) const fn critical_chance(&self) -> i32 { self.critical_chance }
-    pub(crate) const fn hit_modifier(&self) -> i32 { self.hit_modifier }
-    pub(crate) fn finish(&mut self) { self.shape.set_change_state(SHAPE_CHANGE_DELETE); }
-    pub(crate) fn tick(&mut self, lifetime_now_ms: u32, attack_now_ms: impl FnOnce() -> u32) -> MeteorArrowPhalanxTick {
-        if self.started_at_ms.wrapping_add(self.lifetime_ms) < lifetime_now_ms || self.cells.is_empty() {
-            self.finish(); return MeteorArrowPhalanxTick::Expired;
-        }
-        let now_ms = attack_now_ms();
-        if now_ms <= self.last_attack_at_ms.wrapping_add(self.frequency_ms) { return MeteorArrowPhalanxTick::Pending }
-        self.last_attack_at_ms = now_ms;
-        let Some(&cell) = self.cells.get(self.attack_count) else { self.finish(); return MeteorArrowPhalanxTick::Expired };
-        self.attack_count = self.attack_count.wrapping_add(1);
-        MeteorArrowPhalanxTick::Attack { cell, sampled_at_ms: now_ms }
+    pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
+    pub(crate) const fn attack_snapshot(&self) -> MeteorArrowAttack { self.attack }
+
+    pub(crate) const fn expired_at(&self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms
     }
-    pub(crate) fn encode_client_snapshot(&self, mut now_milliseconds: impl FnMut() -> u32) -> Option<Vec<u8>> {
-        let first_now = now_milliseconds();
-        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first_now { 0 }
-            else { self.lifetime_ms.wrapping_sub(now_milliseconds()).wrapping_add(self.started_at_ms) };
-        let x = self.shape.get_tile_x().ok()?; let y = self.shape.get_tile_y().ok()?;
-        let mut payload = Vec::new();
-        { let mut writer = LegacyWriter::new(&mut payload);
-          writer.write_i32(METEOR_ARROW_SKILL_ID as i32); writer.write_i32(self.skill_level);
-          writer.write_i32(x); writer.write_i32(y); writer.write_u32(remained);
-          writer.write_i32(METEOR_ARROW_SKILL_ID as i32); writer.write_u32(self.frequency_ms);
-          writer.write_i32(i32::try_from(self.cells.len()).ok()?);
-          for &(cell_x, cell_y) in &self.cells { writer.write_i32(cell_x); writer.write_i32(cell_y); } }
+
+    pub(crate) const fn attack_due_at(&self, now_ms: u32) -> bool {
+        self.last_attack_at_ms.wrapping_add(self.frequency_ms) < now_ms
+    }
+
+    pub(crate) fn mark_attack_at(&mut self, now_ms: u32) { self.last_attack_at_ms = now_ms; }
+
+    pub(crate) fn attack_cells_finished(&self) -> bool {
+        self.cells.len() as u32 <= self.attack_count
+    }
+
+    pub(crate) fn current_cell(&self) -> Option<(i32, i32)> {
+        self.cells.get(self.attack_count as usize).copied()
+    }
+
+    pub(crate) fn advance_attack_cell(&mut self) {
+        self.attack_count = self.attack_count.wrapping_add(1);
+    }
+
+    pub(crate) fn encode_client_snapshot(
+        &self, now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        let mut payload = encode_related_phalanx_prefix(
+            METEOR_ARROW_SKILL_ID as i32, self.attack.skill_level,
+            self.attack.master.master_type, self.attack.master.master_id,
+            self.started_at_ms, self.lifetime_ms, now_milliseconds,
+        );
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u32(self.lifetime_ms);
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.cells.len() as u32);
+        for &(x, y) in &self.cells {
+            writer.write_i32(x);
+            writer.write_i32(y);
+        }
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
+    }
+
+}
+
+impl MeteorArrowAttack {
+    fn attack_master(self) -> MasterInfo {
+        if self.master.master_type == 400 { return self.master; }
+        MasterInfo {
+            master_type: self.master.master_type, master_id: self.master.master_id,
+            ..MasterInfo::default()
+        }
     }
 }
 
-pub(crate) fn calculate_meteor_arrow_attack(game: &mut CGame, phalanx: &CMeteorArrowPhalanx)
-    -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-    let delta = phalanx.maximum_attack().wrapping_sub(phalanx.minimum_attack());
-    let width = if delta < 0 { delta.wrapping_neg() } else { delta }.wrapping_add(1);
-    let physical = phalanx.minimum_attack().wrapping_add(game.skill_random_below(width)).max(0);
-    let master = phalanx.master();
-    let mut attack = AttackInformation { skill_id: METEOR_ARROW_SKILL_ID, skill_level: phalanx.skill_level() as u8,
-        attacker_type: master.master_type, attacker_id: master.master_id, attacker_team_id: master.master_team_id,
-        attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id,
-        hit_modifier: phalanx.hit_modifier(), damage_factor: 1.0, damage_modifier: 0, critical: false,
-        blast_attack: false, full_miss: 0, damages: vec![
-            AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Element, hp_damage: phalanx.element_attack().max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: phalanx.soul_attack().max(0), mp_damage: 0 },
-        ] };
-    if game.skill_random_below(100) < phalanx.critical_chance() { attack.critical = true; let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } }
-    let combat = game.find_player(master.master_id).map_or_else(PlayerCombatProperties::default, |player| player.combat_properties());
-    let occupation = game.find_player(master.master_id).map_or(0, |player| player.occupation());
-    let level = game.find_player(master.master_id).map_or(0, |player| player.level());
-    (attack, combat, occupation, level)
+fn calculate_meteor_arrow_attack(
+    game: &mut CGame, phalanx: MeteorArrowAttack,
+) -> AttackInformation {
+    let mut attack = AttackInformation::for_master(phalanx.attack_master());
+    attack.skill_id = METEOR_ARROW_SKILL_ID;
+    attack.skill_level = phalanx.skill_level as u8;
+    attack.damage_modifier = 0;
+    attack.damage_factor = 1.0;
+    attack.hit_modifier = phalanx.hit_modifier;
+    let width = phalanx.maximum_attack.wrapping_sub(phalanx.minimum_attack)
+        .wrapping_abs().wrapping_add(1);
+    let physical = phalanx.minimum_attack.wrapping_add(game.skill_random_below(width)).max(0);
+    attack.damages = vec![
+        AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
+        AttackPower { kind: AttackPowerType::Element, hp_damage: phalanx.element_attack.max(0), mp_damage: 0 },
+        AttackPower { kind: AttackPowerType::Soul, hp_damage: phalanx.soul_attack.max(0), mp_damage: 0 },
+    ];
+    if game.skill_random_below(100) < phalanx.critical_chance {
+        attack.critical = true;
+        let rate = game.globe_setup().critical_rate();
+        for power in &mut attack.damages {
+            power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
+        }
+    }
+    attack
 }
+
+pub(crate) fn apply_meteor_arrow_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, attack: MeteorArrowAttack,
+    region_id: i32, target: ShapeIdentity, runtime: &mut Runtime,
+) {
+    if game.move_shape_health(region_id, target).is_none_or(|hp| hp == 0) { return; }
+    let information = calculate_meteor_arrow_attack(game, attack);
+    game.apply_owned_skill_contact(attack.attack_master(), target, region_id, information, runtime);
+}
+
+// Неиспользуемый server decode: Meteor VT+14 и CFallingStarPhalanx разделяют
+// функцию 0x005F7010. Нет достигнутого server caller-а; клиентский encoder
+// не заменяет её. RAW не задаёт корректный Rust-контракт владения старым массивом.
+//
+// FUNCTION: CFallingStarPhalanx::DecordFromByteArray
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// SOURCE: appserver/skills/fallingstarphalanx.cpp:316
+// RVA: 0x001F7010
+// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
