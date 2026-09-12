@@ -524,7 +524,6 @@ fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) ->
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
-            | YAKSHA_SLASH_SKILL_ID
             | SNOW_STORM_SKILL_ID
     ) || MonsterImmediateSkill::from_skill_id(skill_id).is_some()
 }
@@ -1016,6 +1015,7 @@ fn owned_target_state_executor<Runtime: GameMainLoopRuntime>(
     match skill_id {
         KNOCK_OUT_SKILL_ID => Some(execute_owned_monster_knock_out),
         SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
+        YAKSHA_SLASH_SKILL_ID => Some(execute_owned_monster_yaksha_slash),
         SPIDER_POISON_SKILL_ID => Some(execute_owned_spider_poison),
         PROMOTION_SKILL_ID => Some(execute_owned_monster_promotion),
         CURE_SKILL_ID => Some(execute_owned_monster_cure),
@@ -1431,10 +1431,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             game, owner, monster_id, skill_id, i32::from(skill_level), runtime,
         );
         return executed;
-    }
-    if skill_id == YAKSHA_SLASH_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_monster_yaksha_slash(game, owner, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime);
     }
     if skill_id == SNOW_STORM_SKILL_ID {
         let skill_properties = skill_properties.clone();

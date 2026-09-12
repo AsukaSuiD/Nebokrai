@@ -57,6 +57,10 @@
 //! End разделён вокруг синхронной доставки: очистка concrete owner-а → его
 //! эффект → reuse и снятие Attack → OnLoseTarget. LittleStar (0x005355F0)
 //! посылает action 3 на этой границе; это не отложенная очередь эффектов.
+//! Прицельные Strike/Yaksha завершаются через точный ключ зарегистрированного
+//! навыка при опубликованном регионе. End(4) и его callbacks видят живую
+//! очередь; только IsEnded того же экземпляра разрешает снять Attack.
+//! Исчезнувший экземпляр не заменяется новым одноимённым, reuse не повторяется.
 //! Отказ Begin — отдельный результат owner-а, не ожидание и не End AI.
 //! Расписание после него вызывает virtual OnLoseTarget, затем ставит
 //! SearchEnemy с новым timestamp: CMonsterAI 0x005DD07F (и thunk
@@ -82,6 +86,8 @@ use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::appserver::skills::kernel::SkillTermination;
+use crate::gameserver::appserver::skills::skillfactory::SkillOwner;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
@@ -126,18 +132,41 @@ pub(crate) fn finish_monster_skill_call<Runtime: GameMainLoopRuntime>(
 
 pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    owner: &mut Option<ServerRegionOwner>,
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> PassiveStiffenAction {
-    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+    let Some(monster) = owner.as_mut()
+        .and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id))
+    else {
         return PassiveStiffenAction::None;
     };
     let action = monster.begin_reached_stiffen_action();
     if action.interrupts_attack() {
-        while let Some((release_target, ended_skill)) = region.find_monster_by_id_mut(monster_id)
-            .and_then(|monster| monster.prepare_stiffen_attack(game.skill_factory()))
-        {
+        loop {
+            let registered = owner.as_ref().and_then(|region| {
+                let monster = region.base().find_monster_by_id(monster_id)?;
+                if !monster.selected_base_ai()?.stiffen_attack_needs_end() { return None; }
+                let skill = monster.move_shape().current_skill(game.skill_factory())?;
+                matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash)
+                    .then_some((region.region_id(), monster.move_shape().shape().identity(), skill.id()))
+            });
+            let (release_target, ended_skill) = if let Some((region, source, skill_id)) = registered {
+                let ended = game.with_published_region(owner, |game| {
+                    let Some(instance) = game.registered_move_shape_skill(region, source, skill_id) else { return false; };
+                    let _ = game.end_registered_instance(instance, 4, SkillTermination::Cancelled, runtime);
+                    game.registered_skill(instance).is_none_or(|skill| skill.lifecycle().is_ended())
+                });
+                if ended != Some(true) { break; }
+                (true, None)
+            } else {
+                let Some(prepared) = owner.as_mut()
+                    .and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id))
+                    .and_then(|monster| monster.prepare_stiffen_attack(game.skill_factory()))
+                else { break; };
+                prepared
+            };
+            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { break; };
             if ended_skill == Some(crate::gameserver::appserver::skills::littlestar::LITTLE_STAR_SKILL_ID)
                 && let Some(monster) = region.find_monster_by_id(monster_id)
                 && let Some(skill) = monster.move_shape().current_skill(game.skill_factory())
@@ -157,7 +186,8 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
             }
         }
     }
-    region.find_monster_by_id_mut(monster_id).map_or(PassiveStiffenAction::None, |monster| {
+    owner.as_mut().and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id))
+        .map_or(PassiveStiffenAction::None, |monster| {
         monster.finish_reached_stiffen_action(action, || runtime.now_milliseconds())
     })
 }

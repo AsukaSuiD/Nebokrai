@@ -23,6 +23,7 @@
 //! добавку после физического урона, непосредственно перед живым ELEMENT.
 //! Первые два удара Scorpion сохраняют живой weapon modifier без запроса
 //! skill factor; третий использует обычный WeaponUsage. RP остаётся у caller-а.
+//! Strike меняет знак hit modifier сразу после запроса, до компонентов и RNG.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -50,6 +51,9 @@ enum PlayerWeaponDamageFactor {
     WeaponOnly,
     WeaponUsage(u32),
 }
+
+#[derive(Clone, Copy)]
+enum WeaponHitSign { Bonus, Penalty }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WeaponPowerMode {
@@ -107,7 +111,7 @@ pub(super) fn source_master(game: &CGame, source: (i32, ShapeIdentity)) -> Optio
 fn fill_player_weapon_attack(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     target: (i32, ShapeIdentity), factor: PlayerWeaponDamageFactor, roll: PlayerWeaponRoll,
-    power_mode: WeaponPowerMode, attack: &mut AttackInformation,
+    power_mode: WeaponPowerMode, hit_sign: WeaponHitSign, attack: &mut AttackInformation,
 ) {
     let Some(skill) = game.registered_skill(instance) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return; };
@@ -137,6 +141,9 @@ fn fill_player_weapon_attack(
         }
     };
     attack.hit_modifier = properties.query_property(USER_HIT_MODIFIER) as i32;
+    if matches!(hit_sign, WeaponHitSign::Penalty) {
+        attack.hit_modifier = attack.hit_modifier.wrapping_neg();
+    }
     let multiplier = if power_mode == WeaponPowerMode::EnergyHolding {
         consume_energy_holding_multiplier(game, source)
     } else { 1.0 };
@@ -208,7 +215,7 @@ pub(super) fn calculate_player_weapon_attack(
 ) -> Option<(MasterInfo, AttackInformation)> {
     calculate_player_weapon_attack_with_factor(
         game, instance, source, target, PlayerWeaponDamageFactor::WeaponUsage(damage_factor_usage), roll,
-        WeaponPowerMode::Ordinary,
+        WeaponPowerMode::Ordinary, WeaponHitSign::Bonus,
     )
 }
 
@@ -218,18 +225,28 @@ pub(super) fn calculate_unscaled_weapon_attack(
 ) -> Option<(MasterInfo, AttackInformation)> {
     calculate_player_weapon_attack_with_factor(
         game, instance, source, target, PlayerWeaponDamageFactor::WeaponOnly, roll,
-        WeaponPowerMode::Ordinary,
+        WeaponPowerMode::Ordinary, WeaponHitSign::Bonus,
+    )
+}
+
+pub(super) fn calculate_penalized_weapon_attack(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), damage_factor_usage: u32, roll: PlayerWeaponRoll,
+) -> Option<(MasterInfo, AttackInformation)> {
+    calculate_player_weapon_attack_with_factor(
+        game, instance, source, target, PlayerWeaponDamageFactor::WeaponUsage(damage_factor_usage), roll,
+        WeaponPowerMode::Ordinary, WeaponHitSign::Penalty,
     )
 }
 
 fn calculate_player_weapon_attack_with_factor(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     target: (i32, ShapeIdentity), factor: PlayerWeaponDamageFactor, roll: PlayerWeaponRoll,
-    power_mode: WeaponPowerMode,
+    power_mode: WeaponPowerMode, hit_sign: WeaponHitSign,
 ) -> Option<(MasterInfo, AttackInformation)> {
     let master = source_master(game, source)?;
     let mut attack = AttackInformation::for_master(master);
-    fill_player_weapon_attack(game, instance, source, target, factor, roll, power_mode, &mut attack);
+    fill_player_weapon_attack(game, instance, source, target, factor, roll, power_mode, hit_sign, &mut attack);
     Some((master, attack))
 }
 
@@ -257,6 +274,7 @@ fn apply_player_weapon_attack_with_factor<Runtime: GameMainLoopRuntime>(
 ) {
     let Some((master, attack)) = calculate_player_weapon_attack_with_factor(
         game, instance, source, target, factor, PlayerWeaponRoll::AbsoluteRange, WeaponPowerMode::Ordinary,
+        WeaponHitSign::Bonus,
     ) else { return; };
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
     if source.1.object_type == 400 { game.increase_owned_player_rp(source.1.id, true, 0); }
@@ -269,7 +287,7 @@ pub(super) fn apply_front_cell_weapon_attack<Runtime: GameMainLoopRuntime>(
     let mode = if inverse { WeaponPowerMode::EnergyHolding } else { WeaponPowerMode::Dexterity };
     let Some((master, attack)) = calculate_player_weapon_attack_with_factor(
         game, instance, source, target, PlayerWeaponDamageFactor::WeaponUsage(20_003),
-        PlayerWeaponRoll::AbsoluteRange, mode,
+        PlayerWeaponRoll::AbsoluteRange, mode, WeaponHitSign::Bonus,
     ) else { return; };
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
     if !inverse && source.1.object_type == 400 { game.increase_owned_player_rp(source.1.id, true, 0); }

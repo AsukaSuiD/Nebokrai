@@ -1,8 +1,9 @@
 //! Общие проверки и расход MP для совместимых лучных и арбалетных casts.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp,
 //! meteorarrowmass.cpp, rainarrow.cpp, lightingarrow.cpp, lightingarrow2.cpp,
-//! poisonmoth.cpp, bloodrose.cpp, explosivearrow{,2,3}.cpp, scorpion.cpp
-//! и boalock.cpp. Общие проверки пути и MP доступны также BoaLock без оружия.
+//! poisonmoth.cpp, bloodrose.cpp, explosivearrow{,2,3}.cpp, scorpion.cpp,
+//! boalock.cpp и strike.cpp. Общие проверки пути и MP доступны также
+//! BoaLock/Strike без требования к оружию.
 //! Check удерживает исходного U, читает reuse и свежий путь по политике навыка.
 //! Проверка самонацеливания, если она нужна, выполняется caller-ом раньше.
 //! Non-player проходит без Move0; игроку нужны категория 3/4, ненулевая MP-цена

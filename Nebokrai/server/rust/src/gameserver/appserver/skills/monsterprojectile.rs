@@ -1,14 +1,12 @@
 //! Общий снарядный путь монстров для навыков с прямой траекторией.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходные владельцы
-//! `CSkeletonArchery`, `CChuckStone` и `CYakshaSlash`, подтверждает общий
+//! `CSkeletonArchery` и `CChuckStone`, подтверждает общий
 //! порядок подготовки, проверки преград, расчёта времени полёта и удара по
 //! клетке. Конкретный владелец сохраняет идентификатор навыка, а начало полёта
 //! отдельно занимает attack-speed timestamp ИИ; выбор цели, защита и
 //! последствия смерти остаются у существующих владельцев боя и `CGame`.
-//! Коэффициент `CYakshaSlash` вычисляется в x87 из полного unsigned `u32` и
-//! `0.01_f32`, без подмены нулевого свойства единицей, затем сохраняется как
-//! `f32`. Оба остальных исходных `CalculateAttackPower` берут elemental damage из virtual
+//! Оба исходных `CalculateAttackPower` берут elemental damage из virtual
 //! `CMonster::GetAddElementAtk == 0`, поэтому ресурсный element range здесь не
 //! участвует и между physical и critical roll нет дополнительного RNG.
 //! Защита и попадание читают часы внутри общего OnBeenAttacked. Reuse отдельно
@@ -56,7 +54,6 @@ const BLOCK_SHAPE: u8 = 3;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_TARGET_MIN_DISTANCE: u32 = 5_004;
 const SKILL_USAGE_MISSILE_FLYING_TIME: u32 = 10_008;
-const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MonsterProjectileDispatch {
@@ -67,30 +64,6 @@ pub(crate) struct MonsterProjectileDispatch {
     skill_level: u16,
     properties: CSkillBaseProperties,
     property: MonsterProperties,
-    damage_factor: f32,
-}
-
-impl MonsterProjectileDispatch {
-    /// Собирает object-target удар для навыка, который сам ведёт полёт и
-    /// визуальную фазу, но использует общий monster attack tail.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn object_target(
-        monster_id: i32,
-        skill_id: u32,
-        target_x: i32,
-        target_y: i32,
-        skill_level: u16,
-        properties: CSkillBaseProperties,
-        property: MonsterProperties,
-    ) -> Self {
-        let damage_factor = (f64::from(
-            properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
-        ) * f64::from(0.01_f32)) as f32;
-        Self {
-            monster_id, skill_id, impact_x: target_x, impact_y: target_y,
-            skill_level, properties, property, damage_factor,
-        }
-    }
 }
 
 fn send_projectile_visual(
@@ -341,7 +314,6 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
         skill_level,
         properties: properties.clone(),
         property,
-        damage_factor: 1.0,
     });
     true
 }
@@ -422,7 +394,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
         hit_modifier: dispatch
             .properties
             .query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: dispatch.damage_factor,
+        damage_factor: 1.0,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,

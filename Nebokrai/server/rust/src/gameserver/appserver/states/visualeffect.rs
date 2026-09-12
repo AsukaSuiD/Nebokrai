@@ -43,7 +43,7 @@ pub(crate) enum SkillVisualEffectKind {
     GhostCut,
     Mosou,
     ThunderBlow2,
-    Strike,
+    TargetedProjectile,
     KnockOut,
     SpiderWeb,
     SpiderPoison,

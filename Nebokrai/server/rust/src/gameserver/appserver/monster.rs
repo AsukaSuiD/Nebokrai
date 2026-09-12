@@ -305,6 +305,7 @@ use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
+use super::skills::targetedprojectile::TargetedProjectileProgress;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
 use super::skills::yunshenglightning::YunShengLightningProgress;
@@ -384,6 +385,8 @@ monster_skill_progress! {
         prepare(|state: &mut MonsterFastAttackProgress| *state = MonsterFastAttackProgress::default()),
     Projectile(MonsterProjectileProgress)
         prepare(MonsterProjectileProgress::prepare_derived_end),
+    TargetedProjectile(TargetedProjectileProgress)
+        prepare(|state: &mut TargetedProjectileProgress| *state = TargetedProjectileProgress::default()),
     PathProjectile(PathProjectileProgress) paths(clear_end_paths),
     BossFiendPenetrate(BossFiendPenetrateProgress) paths(clear_end_paths),
     LittleStar(LittleStarProgress) paths(clear_end_paths),
@@ -2071,7 +2074,6 @@ impl CMonster {
             | super::skills::archery::ARCHERY_SKILL_ID
             | super::skills::basemagic::BASE_MAGIC_SKILL_ID
             | super::skills::snowstorm::SNOW_STORM_SKILL_ID
-            | super::skills::yakshaslash::YAKSHA_SLASH_SKILL_ID
             | super::skills::bossfiendpenetrate::BOSS_FIEND_PENETRATE_SKILL_ID)
     }
 

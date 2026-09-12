@@ -322,6 +322,7 @@ pub(crate) mod appserver {
         pub(crate) mod boalockstate;
         pub(crate) mod fallingstar;
         pub(crate) mod strike;
+        pub(crate) mod targetedprojectile;
         pub(crate) mod strikestate;
         pub(crate) mod promotion;
         pub(crate) mod promotionstate;

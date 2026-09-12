@@ -777,6 +777,30 @@ impl MoveShapeSkill {
         }
     }
 
+    /// Один payload полёта находится в активной ветви исполнения владельца.
+    /// Player и Monster не копируют его друг у друга при callbacks.
+    pub(crate) fn targeted_projectile_progress(&self) -> Option<&super::skills::targetedprojectile::TargetedProjectileProgress> {
+        match &self.execution {
+            RegisteredSkillExecution::Player(PlayerSkillExecution::TargetedProjectile(state)) => Some(state.progress()),
+            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_ref()? {
+                super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn targeted_projectile_progress_mut(&mut self) -> Option<&mut super::skills::targetedprojectile::TargetedProjectileProgress> {
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(PlayerSkillExecution::TargetedProjectile(state)) => Some(state.progress_mut()),
+            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_mut()? {
+                super::monster::MonsterSkillProgress::TargetedProjectile(state) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub(crate) fn execution_stage(&self) -> Option<super::skills::kernel::SkillStage> {
         match &self.execution {
             RegisteredSkillExecution::Player(execution) => Some(execution.kernel().stage()),

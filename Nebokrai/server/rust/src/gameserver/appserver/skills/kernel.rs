@@ -114,11 +114,10 @@ use super::sevenshootingstar::SevenShootingStarExecutionState;
 use super::spidermist::PlayerSpiderMistExecutionState;
 use super::spiderweb::PlayerSpiderWebExecutionState;
 use super::spriteburn::SpriteBurnExecutionState;
-use super::strike::StrikeExecutionState;
+use super::targetedprojectile::TargetedProjectileExecutionState;
 use super::summoncreatureskill::PlayerSummonCreatureExecutionState;
 use super::swallow::SwallowExecutionState;
 use super::thunderblow2::ThunderBlow2Execution;
-use super::yakshaslash::YakshaSlashExecutionState;
 use super::yunshenglightning::PlayerYunShengLightningExecutionState;
 
 // Типы игровых данных перечислены один раз: из них выводятся хранение,
@@ -224,8 +223,7 @@ player_skill_states! {
     PoisonMoth(PoisonMothExecutionState) paths(clear_end_paths),
     Scorpion(ScorpionExecutionState) prepare(prepare_derived_end),
     BoaLock(BoaLockExecutionState) prepare(prepare_derived_end),
-    Strike(StrikeExecutionState),
-    YakshaSlash(YakshaSlashExecutionState),
+    TargetedProjectile(TargetedProjectileExecutionState) prepare(prepare_derived_end),
     BaseMagic(BaseMagicExecutionState),
     ChainLightning(ChainLightningExecutionState),
     KnightCut(KnightCutExecutionState),

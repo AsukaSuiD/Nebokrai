@@ -270,8 +270,6 @@ impl CGame {
             | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
             | SOUL_MIRROR_SKILL_ID
-            | STRIKE_SKILL_ID
-            | YAKSHA_SLASH_SKILL_ID
             | DAUB_POISON_SKILL_ID
             | IGNITION_SKILL_ID
             | KEROSENE_SKILL_ID
