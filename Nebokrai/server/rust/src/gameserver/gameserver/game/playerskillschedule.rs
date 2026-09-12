@@ -257,6 +257,7 @@ impl CGame {
             | SPIDER_WEB_SKILL_ID
             | KNOCK_OUT_SKILL_ID
             | SPIDER_POISON_SKILL_ID
+            | PROMOTION_SKILL_ID
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
@@ -306,7 +307,6 @@ impl CGame {
             | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
             HEARTEN_SKILL_ID
             | CURE_SKILL_ID
-            | PROMOTION_SKILL_ID
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID

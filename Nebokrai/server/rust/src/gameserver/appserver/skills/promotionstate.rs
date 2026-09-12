@@ -131,9 +131,7 @@ pub(crate) fn begin_or_restart_promotion_state(
     game: &mut CGame,
     user: Option<(i32, ShapeIdentity)>,
     sufferer: (i32, ShapeIdentity),
-    keep_time_ms: u32,
-    magic_attack_factor: u16,
-    heal_recover_factor: u16,
+    new_parameters: impl FnOnce() -> (u32, u16, u16),
     now: &mut dyn FnMut() -> u32,
 ) -> Option<bool> {
     let shape = resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
@@ -145,6 +143,7 @@ pub(crate) fn begin_or_restart_promotion_state(
         state.restart(now());
         return Some(false);
     }
+    let (keep_time_ms, magic_attack_factor, heal_recover_factor) = new_parameters();
     let mut state = PromotionState::new(
         0, keep_time_ms, magic_attack_factor, heal_recover_factor,
     );

@@ -342,6 +342,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::knockoutruntime::publish_knock_out_visual(self, skill, mode),
             SkillVisualEffectKind::SpiderWeb =>
                 crate::gameserver::appserver::skills::spiderweb::publish_spider_web_visual(self, skill, mode),
+            SkillVisualEffectKind::SpiderPoison =>
+                crate::gameserver::appserver::skills::spiderpoison::publish_spider_poison_visual(self, skill, mode),
+            SkillVisualEffectKind::Promotion =>
+                crate::gameserver::appserver::skills::promotion::publish_promotion_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

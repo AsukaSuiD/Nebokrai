@@ -67,12 +67,12 @@
 //! Явный результат подключён к MonsterThorn, MonsterRangeAttack и общей группе широких атак;
 //! прежний bool остальных
 //! owners ещё не отличает отказ Begin от ожидания расписания.
-//! Начальный Tracing для KnockOut/SpiderWeb сохраняет CBaseAI из baseai.cpp:
+//! Начальный Tracing подключённых навыков состояний сохраняет CBaseAI из baseai.cpp:
 //! включительный диапазон, отход от слишком близкой цели и обычный MoveTo
 //! без проверки прямого пути. Мечевые стражи используют свой унаследованный
 //! override из cityguardwithsword.cpp, включая ForceMove; прочие concrete навыки пока
 //! остаются на прежнем адаптере подхода. Часы сравнения интервала и записи
-//! timestamp CMonsterAI читаются раздельно перед Begin этих двух навыков.
+//! timestamp CMonsterAI читаются раздельно перед Begin.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
@@ -553,7 +553,7 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
     false
 }
 
-/// Virtual Tracing перед новым Begin KnockOut/SpiderWeb. Стоящий питомец и
+/// Virtual Tracing перед новым Begin навыков с базовым диапазоном. Стоящий питомец и
 /// стационарный OnSchedule проверяют свой диапазон снаружи без вызова Tracing.
 pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -578,7 +578,6 @@ pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let (skill_id, skill_level) = (skill.id(), skill.level());
-    if !matches!(skill_id, 0x192 | 0x199) { return false; }
     let target = monster.ai_target()
         .and_then(|identity| crate::gameserver::appserver::skills::monsterattack::resolve_owned_monster_attack_target(
             game, owner, identity,

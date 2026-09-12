@@ -796,17 +796,25 @@ impl MoveShapeSkill {
         }
     }
 
-    pub(crate) fn player_kernel(&self) -> Option<super::skills::kernel::SkillExecutionKernel<super::player::PlayerSkillDispatch>> {
+    pub(crate) fn execution_stage(&self) -> Option<super::skills::kernel::SkillStage> {
         match &self.execution {
-            RegisteredSkillExecution::Player(execution) => Some(execution.kernel()),
-            _ => None,
+            RegisteredSkillExecution::Player(execution) => Some(execution.kernel().stage()),
+            RegisteredSkillExecution::Monster(execution) => Some(execution.kernel.stage()),
+            RegisteredSkillExecution::BattleFairy(execution) => Some(execution.kernel().stage()),
+            RegisteredSkillExecution::Inactive(_) => None,
         }
     }
 
-    pub(crate) fn player_kernel_mut(&mut self) -> Option<&mut super::skills::kernel::SkillExecutionKernel<super::player::PlayerSkillDispatch>> {
+    pub(crate) fn advance_execution(
+        &mut self,
+        from: super::skills::kernel::SkillStage,
+        to: super::skills::kernel::SkillStage,
+    ) -> bool {
         match &mut self.execution {
-            RegisteredSkillExecution::Player(execution) => Some(execution.kernel_mut()),
-            _ => None,
+            RegisteredSkillExecution::Player(execution) => execution.kernel_mut().advance(from, to),
+            RegisteredSkillExecution::Monster(execution) => execution.kernel.advance(from, to),
+            RegisteredSkillExecution::BattleFairy(execution) => execution.kernel_mut().advance(from, to),
+            RegisteredSkillExecution::Inactive(_) => false,
         }
     }
 

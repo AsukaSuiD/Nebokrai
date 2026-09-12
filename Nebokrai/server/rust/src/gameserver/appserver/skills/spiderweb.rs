@@ -19,12 +19,12 @@
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::blindstate::begin_primary_blind_state;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, PlayerSkillExecution, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::skillfactory::SkillOwner;
 use super::spiderwebstate::SpiderWebState;
-use crate::gameserver::appserver::ai::monsterai::{
-    MonsterSkillCallOutcome, finish_monster_skill_call,
+use super::stateskill::{
+    RegisteredStateSkill, end_state_skill, execute_owned_state_skill, execute_player_state_skill,
+    finish_player_state_skill, publish_state_skill_visual, state_skill_outcome as terminal,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
@@ -32,15 +32,14 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_skill_sufferer,
+    end_and_destroy_state_at, resolve_skill_sufferer,
     resolve_state_move_shape, resolve_state_move_shape_mut,
 };
-use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
     ServerRegionOwner,
 };
-use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const BLOCK_UNFLY: u8 = 2;
@@ -88,19 +87,6 @@ impl SpiderWebProgress {
     }
 }
 
-fn stage(skill: &MoveShapeSkill) -> Option<SkillStage> {
-    skill.player_state::<PlayerSpiderWebExecutionState>().map(|state| state.kernel.stage())
-        .or_else(|| skill.monster_kernel().map(|kernel| kernel.stage()))
-}
-
-fn advance(skill: &mut MoveShapeSkill, from: SkillStage, to: SkillStage) -> bool {
-    if let Some(state) = skill.player_state_mut::<PlayerSpiderWebExecutionState>() {
-        state.kernel.advance(from, to)
-    } else {
-        skill.monster_kernel_mut().is_some_and(|kernel| kernel.advance(from, to))
-    }
-}
-
 fn flight(skill: &MoveShapeSkill) -> u32 {
     skill.player_state::<PlayerSpiderWebExecutionState>().map(|state| &state.flight)
         .or_else(|| skill.monster_progress::<SpiderWebProgress>())
@@ -116,48 +102,7 @@ fn set_flight(skill: &mut MoveShapeSkill, milliseconds: u32) {
 }
 
 pub(crate) fn publish_spider_web_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if skill.owner() != SkillOwner::CSpiderWeb
-        || skill.visual_effect().is_none_or(|effect| {
-            effect.kind() != SkillVisualEffectKind::SpiderWeb || effect.is_ended()
-        })
-    { return; }
-    let (region, identity) = skill.lifecycle().user();
-    let Some(source) = resolve_state_move_shape(game, region, identity).map(|shape| shape.shape()) else { return; };
-    let mut message = CMessage::new(0x000b_fe01);
-    if matches!(mode, 2 | 7 | 10 | 11 | 13 | 15) {
-        if source.identity().object_type == 400 {
-            message.add_byte(0);
-            message.add_byte(mode as u8);
-            let _ = message.send_to_player(game.net_server(), source.identity().id);
-        }
-        return;
-    }
-    let target = match mode {
-        0 => None,
-        1 => {
-            let Some((region, identity)) = resolve_skill_sufferer(game, skill.lifecycle()) else { return; };
-            let Some(target) = resolve_state_move_shape(game, region, identity) else { return; };
-            Some(target.shape())
-        }
-        _ => return,
-    };
-    message.add_byte(if mode == 0 { 1 } else { 2 });
-    message.add_long(skill.id() as i32);
-    message.add_short(skill.level() as i16);
-    message.add_long(source.identity().object_type);
-    message.add_long(source.identity().id);
-    if let Some(target) = target {
-        message.add_long(target.identity().object_type);
-        message.add_long(target.identity().id);
-        message.add_long(target.get_tile_x().unwrap_or(i32::MIN));
-        message.add_long(target.get_tile_y().unwrap_or(i32::MIN));
-        message.add_ulong(flight(skill));
-    } else {
-        message.add_long(source.get_direction());
-    }
-    if let Some(region) = game.find_region(source.get_region_id()) {
-        let _ = game.send_game_shape_around(region.base(), source, None, &message);
-    }
+    publish_state_skill_visual::<SpiderWebSkill>(game, skill, mode);
 }
 
 fn install_state<Runtime: GameMainLoopRuntime>(
@@ -187,18 +132,6 @@ fn install_state<Runtime: GameMainLoopRuntime>(
         game, target_region, target.1, Some(user), Some((target_region, target.1)),
         state, &mut || runtime.now_milliseconds(),
     );
-}
-
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-fn end<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, address: RegisteredSkill, success: bool, runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    let termination = if success { SkillTermination::Completed } else { SkillTermination::Rejected };
-    let _ = game.end_registered_instance(address, i32::from(success), termination, runtime);
-    terminal(if success { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
@@ -232,35 +165,17 @@ fn check_cast<Runtime: GameMainLoopRuntime>(
     true
 }
 
-fn begin<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    let Some(skill) = game.registered_skill_mut(address) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    skill.replace_visual_effect(SkillVisualEffect::new(SkillVisualEffectKind::SpiderWeb, 1));
-    if !check_cast(game, address, runtime) {
-        game.update_registered_skill_visual(address, 2);
-        return end(game, address, false, runtime);
-    }
-    if let Some(skill) = game.registered_skill_mut(address) {
-        set_flight(skill, 0);
-        let _ = advance(skill, SkillStage::Idle, SkillStage::Begin);
-    }
-    terminal(QueuedSkillExecutionState::Begun)
-}
-
 fn run_ai<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let Some(skill) = game.registered_skill(address) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if stage(skill).is_none_or(|stage| stage == SkillStage::Idle) {
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
-        return end(game, address, false, runtime);
+        return end_state_skill(game, address, 0, runtime);
     };
     let (region, identity) = skill.lifecycle().user();
     let user = resolve_state_move_shape(game, region, identity)
@@ -270,13 +185,13 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
             .map(|shape| (shape.shape().get_region_id(), shape.shape().identity()))
     });
     let (Some(user), Some(target)) = (user, target) else {
-        return end(game, address, false, runtime);
+        return end_state_skill(game, address, 0, runtime);
     };
     if game.move_shape_health(target.0, target.1) == Some(0) {
         game.update_registered_skill_visual(address, 10);
-        return end(game, address, false, runtime);
+        return end_state_skill(game, address, 0, runtime);
     }
-    if game.registered_skill(address).and_then(stage) == Some(SkillStage::Begin) {
+    if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) == Some(SkillStage::Begin) {
         if let Some(skill) = game.registered_skill_mut(address) {
             skill.lifecycle_mut().set_available(properties.query_property(SKILL_USAGE_CAN_BE_BREAKED) != 0);
         }
@@ -295,10 +210,10 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         }
         game.update_registered_skill_visual(address, 0);
         if let Some(skill) = game.registered_skill_mut(address) {
-            let _ = advance(skill, SkillStage::Begin, SkillStage::Check);
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
         }
     }
-    if game.registered_skill(address).and_then(stage) == Some(SkillStage::Check) {
+    if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) == Some(SkillStage::Check) {
         let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
         let Some(started) = game.registered_skill(address).map(|skill| skill.lifecycle().started_at_ms()) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -312,11 +227,11 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         let source_level = game.move_shape_level(user.0, user.1);
         let target_level = game.move_shape_level(target.0, target.1);
         let (Some(source_level), Some(target_level)) = (source_level, target_level) else {
-            return end(game, address, false, runtime);
+            return end_state_skill(game, address, 0, runtime);
         };
         if u32::from(source_level) + 10 < u32::from(target_level) {
             game.update_registered_skill_visual(address, 2);
-            return end(game, address, true, runtime);
+            return end_state_skill(game, address, 1, runtime);
         }
         let Some(skill) = game.registered_skill(address) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -326,11 +241,11 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
             && properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) < path.len() as u32
         {
             game.update_registered_skill_visual(address, 11);
-            return end(game, address, false, runtime);
+            return end_state_skill(game, address, 0, runtime);
         }
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             game.update_registered_skill_visual(address, 15);
-            return end(game, address, false, runtime);
+            return end_state_skill(game, address, 0, runtime);
         }
         let milliseconds = properties.query_property(SKILL_USAGE_MISSILE_FLYING_TIME)
             .wrapping_mul(path.len() as u32);
@@ -339,14 +254,14 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         }
         game.update_registered_skill_visual(address, 1);
         if let Some(skill) = game.registered_skill_mut(address) {
-            let _ = advance(skill, SkillStage::Check, SkillStage::Calculate);
+            let _ = skill.advance_execution(SkillStage::Check, SkillStage::Calculate);
             skill.lifecycle_mut().mark_prepared();
         }
     }
     let Some(skill) = game.registered_skill(address) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if stage(skill) != Some(SkillStage::Calculate) {
+    if skill.execution_stage() != Some(SkillStage::Calculate) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -355,7 +270,38 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     install_state(game, user, target, &properties, runtime);
-    end(game, address, true, runtime)
+    end_state_skill(game, address, 1, runtime)
+}
+
+struct SpiderWebSkill;
+
+impl RegisteredStateSkill for SpiderWebSkill {
+    const ID: u32 = SPIDER_WEB_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::SpiderWeb;
+
+    fn visual_flight_time(skill: &MoveShapeSkill) -> Option<u32> {
+        Some(flight(skill))
+    }
+
+    fn player_execution(dispatch: PlayerSkillDispatch, started: u32) -> PlayerSkillExecution {
+        PlayerSpiderWebExecutionState::before_check(dispatch, started).into()
+    }
+
+    fn prepare_monster(skill: &mut MoveShapeSkill) {
+        set_flight(skill, 0);
+    }
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> bool {
+        check_cast(game, address, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        run_ai(game, address, runtime)
+    }
 }
 
 pub(crate) const fn is_player_spider_web_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -369,90 +315,23 @@ pub(crate) fn cancel_player_spider_web<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, ai: &mut CPlayerAI,
     nonzero_end: bool, runtime: &mut Runtime,
 ) -> bool {
-    let Some(address) = game.registered_player_skill(player_id, SPIDER_WEB_SKILL_ID) else { return false; };
-    let Some(dispatch) = game.registered_skill(address).and_then(MoveShapeSkill::player_dispatch) else { return false; };
-    game.with_published_player_ai(player_id, ai, |game| {
-        let _ = game.end_registered_instance(
-            address, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
-        );
-    });
-    game.finish_registered_player_command(Some(address), ai, dispatch, SkillTermination::Cancelled)
+    finish_player_state_skill::<SpiderWebSkill, Runtime>(
+        game, player_id, ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
+    )
 }
 
 pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
     ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if !is_player_spider_web_dispatch(dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let Some(address) = game.registered_player_skill(player_id, SPIDER_WEB_SKILL_ID) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let Some(skill) = game.registered_skill(address) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if skill.player_state::<PlayerSpiderWebExecutionState>().is_none() {
-        let started = skill.lifecycle().started_at_ms();
-        if !game.begin_player_skill_execution(
-            player_id, PlayerSpiderWebExecutionState::before_check(dispatch, started),
-        ) {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        return game.with_published_player_ai(player_id, ai, |game| begin(game, address, runtime));
-    }
-    if skill.player_dispatch() != Some(dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    game.with_published_player_ai(player_id, ai, |game| run_ai(game, address, runtime))
+    execute_player_state_skill::<SpiderWebSkill, Runtime>(game, player_id, dispatch, ai, runtime)
 }
 
 pub(crate) fn execute_owned_spider_web<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
     target_identity: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
 ) -> bool {
-    let Some(region_owner) = owner.as_mut() else { return false; };
-    let Some(monster) = region_owner.base().find_monster_by_id(monster_id) else { return false; };
-    let region_id = monster.move_shape().shape().get_region_id();
-    let source = monster.move_shape().shape().identity();
-    let cast = monster.current_active_attack_cast(game.skill_factory());
-    if let Some(cast) = cast {
-        if cast.dispatch().skill_id != SPIDER_WEB_SKILL_ID { return false; }
-        return game.with_published_region(owner, |game| {
-            let Some(address) = game.registered_move_shape_skill(region_id, source, SPIDER_WEB_SKILL_ID) else { return false; };
-            let _ = run_ai(game, address, runtime);
-            true
-        }).unwrap_or(false);
-    }
-    let target_object = resolve_owned_skill_begin_object(game, region_owner.base(), target_identity);
-    let started = runtime.now_milliseconds();
-    if !region_owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
-        monster.prepare_base_attack_cast(
-            target_identity, SPIDER_WEB_SKILL_ID, skill_level, started, target_object, game.skill_factory(),
-        )
-    }) { return false; }
-    let outcome = game.with_published_region(owner, |game| {
-        let Some(address) = game.registered_move_shape_skill(region_id, source, SPIDER_WEB_SKILL_ID) else {
-            return MonsterSkillCallOutcome::NotHandled;
-        };
-        let Some(skill) = game.registered_skill_mut(address) else {
-            return MonsterSkillCallOutcome::NotHandled;
-        };
-        let Some(kernel) = skill.monster_kernel_mut() else {
-            return MonsterSkillCallOutcome::NotHandled;
-        };
-        kernel.clear_phase_for_end();
-        set_flight(skill, 0);
-        if begin(game, address, runtime).state != QueuedSkillExecutionState::Begun {
-            return MonsterSkillCallOutcome::BeginRejected;
-        }
-        if let Some(monster) = game.find_region_mut(region_id)
-            .and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id))
-        {
-            monster.enqueue_base_attack_cast(runtime.now_milliseconds());
-        }
-        MonsterSkillCallOutcome::Handled
-    }).unwrap_or(MonsterSkillCallOutcome::Handled);
-    let Some(region_owner) = owner.as_mut() else { return true; };
-    finish_monster_skill_call(game, region_owner.base_mut(), monster_id, outcome, runtime)
+    execute_owned_state_skill::<SpiderWebSkill, Runtime>(
+        game, owner, monster_id, target_identity, skill_level, runtime,
+    )
 }

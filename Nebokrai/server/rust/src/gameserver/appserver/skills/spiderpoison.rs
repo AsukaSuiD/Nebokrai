@@ -1,108 +1,84 @@
-//! Ядовитая атака паука `CSpiderPoison` (`0x191`) для игрока и монстра.
-//! На время прямого удара настоящий CPlayerAI опубликован в CPlayer:
-//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
-//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
-//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
-//! End очищает своё исполнение, не выбранный навык игрока; m_pCurrentSkill
-//! меняют OnChangeSkill/OnLoseTarget. Общий CSkill::End вызывает пустой
-//! callback CPlayer +0x158 (0x00485540).
-//!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
-//! `appserver/skills/spiderpoison.cpp`. Объектный путь сохраняет проверку
-//! длины пути, задержку повторного применения, блокировку движения, прямой удар
-//! с двумя RNG-вызовами и отдельный бросок вероятности `CSpiderPoisonState`.
-//! `Attack` создаёт `tagAttackInformation` со штатными skill-id `0x7fffffff`
-//! и уровнем `1`; `CalculateAttackPower` заполняет урон, не меняя эти поля.
-//! Player-критический множитель переводится в `int` с x87 усечением к нулю;
-//! monster-вызов сохраняет RNG, но его виртуальный critical chance равен нулю.
-//! Состояние заменяется после удара и только при отсутствии `Cure`;
-//! `CGame` координирует владельцев и применение рассчитанных последствий.
-//! Хвост AI (0x00586020): probability читается до RNG; signed JG 0x0058621E
-//! отвергает только roll > probability. MasterInfo оставляет country=0,
-//! затем CONST/frequency/keep и ctor предшествуют старому
-//! End. Первый слот 0x191 перечитывается и очищается после callback; новый
-//! Begin с живыми часами возвращается в ту же позицию. Без старого — append.
-//! Стрелковый перенос использует иной порядок cleanup и принадлежит своему
-//! caller-у; общий concrete owner отвечает только за Begin/visual/регистрацию.
-//! Координатный `Begin` по точному EXE использует общий
-//! `CState::GetSufferer`: выбирает первый `CMoveShape` клетки и продолжает
-//! через тот же объектный pipeline.
-//! Player reuse-gate использует exact `CSkill::IsRestored`; cast delay — elapsed.
-//! End (0x00546090) возвращает движение перед оружейным AfterUseSkill;
-//! callback игрока +0x158 пуст: общий End не пересчитывает свойства.
+//! Ядовитый удар CSpiderPoison (0x191), gameserver.exe + GameServer.pdb,
+//! исходный owner appserver/skills/spiderpoison.cpp; payload — spiderpoisonstate.cpp.
+//! Общая обвязка stateskill обслуживает Begin/End игрока и монстра.
+//! Здесь остаются собственные CheckCast, AI, прямой удар и позднее наложение яда;
+//! состояния принадлежат аренам получателей, а не исполнению навыка.
 
-//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
-//! Заимствование базы не переживает эту границу; продолжение заново получает
-//! оставшегося владельца, не создавая замену исчезнувшему региону.
-
-use crate::gameserver::gameserver::game::ServerRegionOwner;
-
-use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
-};
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillTermination, skill_is_restored};
-use super::monsterattack::{
-    apply_owned_monster_attack_hit,
-    resolve_owned_monster_attack_target,
-};
+use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoisonstate::{
-    SpiderPoisonState, begin_primary_spider_poison_state,
-};
-use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
+use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
+use super::stateskill::{
+    RegisteredStateSkill, end_state_skill, execute_owned_state_skill, execute_player_state_skill,
+    finish_player_state_skill, publish_state_skill_visual, state_skill_outcome,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::kernel::SkillStage;
-use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_skill_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
 };
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
+};
 use crate::public::tools::get_line_direction;
+use crate::setup::monsterlist::MonsterProperties;
 
-const MONSTER_TYPE: i32 = 600;
+pub(crate) const SPIDER_POISON_SKILL_ID: u32 = 0x191;
 const PLAYER_TYPE: i32 = 400;
 const CURE_SKILL_ID: u32 = 0x131;
-const DEFAULT_CONTACT_SKILL_ID: u32 = i32::MAX as u32;
-const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
-const SKILL_USAGE_CONST: u32 = 20_010;
-const SKILL_USAGE_BASE_PROBABILITY: u32 = 40_001;
-pub(crate) const SPIDER_POISON_SKILL_ID: u32 = 0x191;
-
-fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
-}
+const DELAY: u32 = 10_001;
+const PERSIST: u32 = 10_002;
+const REUSE: u32 = 10_005;
+const CAN_BREAK: u32 = 10_006;
+const FREQUENCY: u32 = 6_001;
+const HP_LOSS: u32 = 20_010;
+const PROBABILITY: u32 = 40_001;
 
 pub(crate) const fn is_player_spider_poison_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(
-        dispatch,
-        PlayerSkillDispatch::Point { skill_id: SPIDER_POISON_SKILL_ID, .. }
-            | PlayerSkillDispatch::Object {
-                skill_id: SPIDER_POISON_SKILL_ID,
-                target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
-            }
-    )
+    dispatch.skill_id() == SPIDER_POISON_SKILL_ID
 }
 
-fn player_target(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
-    match dispatch {
-        PlayerSkillDispatch::Object { target, .. } => Some(target),
-        PlayerSkillDispatch::Point { skill_id, x, y } if skill_id == SPIDER_POISON_SKILL_ID => {
-            let target = resolve_coordinate_sufferer(game, region_id, x, y)?;
-            matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE).then_some(target)
-        }
-        _ => None,
+fn participant(game: &CGame, value: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
+    let shape = resolve_state_move_shape(game, value.0, value.1)?.shape();
+    Some((shape.get_region_id(), shape.identity()))
+}
+
+pub(crate) fn publish_spider_poison_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    publish_state_skill_visual::<SpiderPoison>(game, skill, mode);
+}
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> bool {
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let lifecycle = *skill.lifecycle();
+    let Some(user) = participant(game, lifecycle.user()) else { return false; };
+    if resolve_skill_sufferer(game, &lifecycle).is_none() { return false; }
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return false; };
+    let reuse = properties.query_property(REUSE);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        return false;
     }
+    let path = game.skill_target_path(&lifecycle);
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0
+        && properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) < path.len() as u32
+    {
+        game.update_registered_skill_visual(instance, 11);
+        return false;
+    }
+    if let Some(shape) = resolve_state_move_shape_mut(game, user.0, user.1) {
+        shape.set_moveable(false);
+    }
+    true
 }
 
 fn player_master(player: &CPlayer) -> MasterInfo {
@@ -121,402 +97,214 @@ fn player_master(player: &CPlayer) -> MasterInfo {
     }
 }
 
-fn send_player_visual(
-    game: &mut CGame,
-    player_id: i32,
-    skill_level: i32,
-    action: u8,
-    target: Option<(ShapeIdentity, i32, i32)>,
-) {
-    let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(action);
-    message.add_long(SPIDER_POISON_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if action == 1 {
-        message.add_long(direction);
-    } else if let Some((identity, x, y)) = target {
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(x);
-        message.add_long(y);
+fn master(game: &CGame, source: (i32, ShapeIdentity)) -> Option<MasterInfo> {
+    if source.1.object_type == PLAYER_TYPE {
+        Some(player_master(game.find_player(source.1.id)?))
     } else {
-        return;
+        Some(MasterInfo { master_type: source.1.object_type, master_id: source.1.id, ..MasterInfo::default() })
     }
-    let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn send_player_failure(game: &CGame, player_id: i32, action: u8) {
-    game.send_self_state_skill_failure(0x000b_fe01, player_id, action);
+fn monster_properties(game: &CGame, source: (i32, ShapeIdentity)) -> Option<&MonsterProperties> {
+    let monster = game.find_region(source.0)?.base().find_monster_by_id(source.1.id)?;
+    game.find_monster_property_by_origin_name(monster.base_property_key()?)
 }
 
-fn finish_player_spider_poison<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    runtime: &mut Runtime,
-    successful: bool,
+fn bounds(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(u32, u32)> {
+    if source.1.object_type == PLAYER_TYPE {
+        let combat = game.find_player(source.1.id)?.combat_properties();
+        Some((combat.minimum_attack, combat.maximum_attack))
+    } else {
+        let monster = game.find_region(source.0)?.base().find_monster_by_id(source.1.id)?;
+        let properties = monster_properties(game, source)?;
+        Some(monster.state_attack_bounds(properties.minimum_attack, properties.maximum_attack))
+    }
+}
+
+fn calculate_attack(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity), attack: &mut AttackInformation,
 ) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-    if successful {
-        game.after_use_player_skill(player_id, SPIDER_POISON_SKILL_ID, runtime);
-    }
-}
-
-pub(crate) fn cancel_player_spider_poison<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, SPIDER_POISON_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_spider_poison(game, player_id, runtime, false);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
-
-fn calculate_player_attack(game: &mut CGame, player_id: i32) -> Option<(MasterInfo, AttackInformation)> {
-    let player = game.find_player(player_id)?;
-    let combat = player.combat_properties();
-    let master = player_master(player);
-    let minimum = combat.minimum_attack as i32;
-    let maximum = combat.maximum_attack as i32;
-    let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
-    let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
-    let mut attack = AttackInformation {
-        skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: PLAYER_TYPE,
-        attacker_id: player_id, attacker_team_id: master.master_team_id,
-        attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id,
-        hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false,
-        blast_attack: false, full_miss: 0,
-        damages: vec![
-            AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 },
-        ],
+    let Some(skill) = game.registered_skill(instance) else { return; };
+    if game.skill_base_properties(skill.id(), skill.level()).is_none() { return; }
+    attack.damage_modifier = 0;
+    attack.damage_factor = 1.0;
+    attack.hit_modifier = 0;
+    let Some((_, maximum)) = bounds(game, source) else { return; };
+    let Some((minimum, _)) = bounds(game, source) else { return; };
+    let span = (maximum as i32).wrapping_sub(minimum as i32).unsigned_abs().wrapping_add(1) as i32;
+    let random = game.skill_random_below(span);
+    let Some((minimum, _)) = bounds(game, source) else { return; };
+    attack.damages.push(AttackPower {
+        kind: AttackPowerType::Physical, hp_damage: (minimum as i32).wrapping_add(random).max(0), mp_damage: 0,
+    });
+    let element = if source.1.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(source.1.id) else { return; };
+        player.combat_properties().add_element_attack as i32
+    } else {
+        // GetAddElementAtk монстра, не его независимый GetElementModify.
+        0
     };
-    if game.skill_random_below(100) < i32::from(combat.cch) {
+    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: element.max(0), mp_damage: 0 });
+    let soul = if source.1.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(source.1.id) else { return; };
+        player.combat_properties().add_soul_attack
+    } else {
+        let Some(monster) = game.find_region(source.0).and_then(|region| region.base().find_monster_by_id(source.1.id)) else { return; };
+        let Some(properties) = monster_properties(game, source) else { return; };
+        monster.soul_attack(properties)
+    };
+    attack.damages.push(AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul), mp_damage: 0 });
+    let critical_chance = if source.1.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(source.1.id) else { return; };
+        player.combat_properties().cch
+    } else { 0 };
+    // Нулевой CMonster::GetCCH не устраняет второй RNG Calculate.
+    if game.skill_random_below(100) < i32::from(critical_chance) {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage =
-                truncate_original(f64::from(power.hp_damage) * f64::from(rate));
+            power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
         }
     }
-    Some((master, attack))
 }
 
-pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    if !is_player_spider_poison_dispatch(dispatch) {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let Some((region_id, source_x, source_y, skill_level)) = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(SPIDER_POISON_SKILL_ID, game.skill_factory())))
-    }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(target) = player_target(game, region_id, dispatch) else {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let Some(properties) = game.skill_base_properties(SPIDER_POISON_SKILL_ID, skill_level).cloned() else {
-        if game.player_skill_execution(player_id, SPIDER_POISON_SKILL_ID).is_some() { finish_player_spider_poison(game, player_id, runtime, false); }
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let target_position = game.move_shape_target_tile(Some(region_id), target);
-    let Some((target_x, target_y)) = target_position else {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if game.player_skill_execution(player_id, SPIDER_POISON_SKILL_ID).is_none() {
-        let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, SPIDER_POISON_SKILL_ID), reuse_delay, now_ms) {
-            send_player_failure(game, player_id, 0x0d);
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None);
-        if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            send_player_failure(game, player_id, 0x0b);
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(SPIDER_POISON_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
-        return player_terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, SPIDER_POISON_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    }
-    if game.periodic_state_target_dead(region_id, target) {
-        send_player_failure(game, player_id, 10);
-        finish_player_spider_poison(game, player_id, runtime, false);
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    }
-    if game.player_skill_execution(player_id, SPIDER_POISON_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.movement_shape_mut().set_direction(direction);
-        }
-        send_player_visual(game, player_id, skill_level, 1, None);
-        if let Some(execution) = game.player_skill_execution_mut(player_id, SPIDER_POISON_SKILL_ID) {
-            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    let started_at_ms = game.player_skill_execution(player_id, SPIDER_POISON_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
-        return player_terminal(QueuedSkillExecutionState::Pending);
-    }
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    let path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None);
-    if maximum_distance != 0 && path.len() > maximum_distance as usize {
-        send_player_failure(game, player_id, 0x0b);
-        finish_player_spider_poison(game, player_id, runtime, false);
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    }
-    send_player_visual(game, player_id, skill_level, 2, Some((target, target_x, target_y)));
-    if let Some(execution) = game.player_skill_execution_mut(player_id, SPIDER_POISON_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-    }
-    if let Some((master, attack)) = calculate_player_attack(game, player_id) {
-        match target.object_type {
-            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
-            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
-            _ => {}
-        }
-    }
-    if let Some(user) = game.find_player(player_id).map(|player| player.shape().identity()) {
-        game.with_published_player_ai(player_id, player_ai, |game| {
-            apply_spider_poison(game, region_id, user, target, &properties,
-                &mut || runtime.now_milliseconds());
-        });
-    }
-    if let Some(execution) = game.player_skill_execution_mut(player_id, SPIDER_POISON_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_spider_poison(game, player_id, runtime, true);
-    player_terminal(QueuedSkillExecutionState::Completed)
-}
-
-fn send_visual(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &crate::gameserver::appserver::shape::CShape,
-    monster_id: i32,
-    skill_level: u16,
-    action: u8,
-    target: Option<(ShapeIdentity, i32, i32)>,
+fn attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), runtime: &mut Runtime,
 ) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(action);
-    message.add_long(SPIDER_POISON_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(monster_id);
-    if action == 1 {
-        message.add_long(source.get_direction());
-    } else if let Some((identity, x, y)) = target {
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(x);
-        message.add_long(y);
-    } else {
-        return;
-    }
-    let _ = game.send_game_shape_around(region, source, None, &message);
+    let Some(master) = master(game, source) else { return; };
+    // NULL таблица Calculate не отменяет приём пустого UNKNOWN/1.
+    let mut attack = AttackInformation::for_master(master);
+    calculate_attack(game, instance, source, &mut attack);
+    game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
 }
 
-pub(crate) fn target_has_cure(
-    game: &CGame,
-    region: &CServerRegion,
-    target: ShapeIdentity,
-) -> bool {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_some_and(|player| player.has_state_by_skill_id(CURE_SKILL_ID)),
-        MONSTER_TYPE => region.find_monster_by_id(target.id).is_some_and(|monster| monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID)),
-        _ => false,
-    }
-}
-
-fn apply_spider_poison(
-    game: &mut CGame,
-    region_id: i32,
-    user: ShapeIdentity,
-    target: ShapeIdentity,
-    properties: &CSkillBaseProperties,
-    now: &mut dyn FnMut() -> u32,
+fn apply_poison<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
+    properties: &CSkillBaseProperties, runtime: &mut Runtime,
 ) {
-    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return };
+    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return; };
     if shape.has_state_by_skill_id(CURE_SKILL_ID) { return; }
-    let sufferer = (shape.shape().get_region_id(), shape.shape().identity());
-    let probability = properties.query_property(SKILL_USAGE_BASE_PROBABILITY);
+    // DWORD probability сравнивается знаково; равенство сохраняет успех.
+    let probability = properties.query_property(PROBABILITY);
     if game.skill_random_below(100) > probability as i32 { return; }
-    let Some(shape) = resolve_state_move_shape(game, region_id, user) else { return };
-    let user = (shape.shape().get_region_id(), shape.shape().identity());
-    let master = if user.1.object_type == PLAYER_TYPE {
-        let Some(player) = game.find_player(user.1.id) else { return };
-        MasterInfo { master_country_id: 0, ..player_master(player) }
-    } else {
-        MasterInfo { master_type: user.1.object_type, master_id: user.1.id, ..MasterInfo::default() }
-    };
-    let hp_loss = properties.query_property(SKILL_USAGE_CONST);
-    let frequency = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
-    let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let Some(master) = master(game, source) else { return; };
+    // В отличие от прямого удара, поздний MasterInfo не получает country.
+    let master = MasterInfo { master_country_id: 0, ..master };
+    let hp_loss = properties.query_property(HP_LOSS);
+    let frequency = properties.query_property(FREQUENCY);
+    let keep = properties.query_property(PERSIST);
+    // Ctor предшествует старому End; после callback очищается свежий остаток
+    // того же слота, затем полный Begin регистрируется в прежней позиции.
     let state = SpiderPoisonState::new(master, keep, frequency, hp_loss);
-    let Some(shape) = resolve_state_move_shape(game, sufferer.0, sufferer.1) else { return };
-    let location = if let Some((position, key)) = shape.find_state_position(|state| state.state_id() == SPIDER_POISON_SKILL_ID) {
-        let Some(location) = shape.applied_state_replacement_location(key) else { return };
-        let _ = end_and_destroy_state_at(game, sufferer.0, sufferer.1, position);
-        Some(location)
-    } else {
-        None
-    };
+    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return; };
+    let previous = shape.find_state_position(|state| state.state_id() == SPIDER_POISON_SKILL_ID);
+    let placement = previous.and_then(|(_, key)| shape.applied_state_replacement_location(key));
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
+    }
     let _ = begin_primary_spider_poison_state(
-        game, sufferer.0, sufferer.1, Some(user), Some(sufferer), state, location, now,
+        game, target.0, target.1, Some(source), Some(target), state, placement,
+        &mut || runtime.now_milliseconds(),
     );
 }
 
-#[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
-pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    owner: &mut Option<ServerRegionOwner>,
-    monster_id: i32,
-    target_identity: ShapeIdentity,
-    skill_level: u16,
-    properties: &CSkillBaseProperties,
-    now_ms: u32,
-    runtime: &mut Runtime,
+/// Some(0/1) — буквальный End; None оставляет экземпляр следующему AI.
+fn execute_stage<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> Option<i32> {
+    let skill = game.registered_skill(instance)?;
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) { return None; }
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return Some(0); };
+    let Some(source) = participant(game, skill.lifecycle().user()) else { return Some(0); };
+    let Some(target) = resolve_skill_sufferer(game, skill.lifecycle()).and_then(|value| participant(game, value)) else { return Some(0); };
+    if game.base_magic_target_dead(target.0, target.1) {
+        game.update_registered_skill_visual(instance, 10);
+        return Some(0);
+    }
+    if game.registered_skill(instance)?.execution_stage() == Some(SkillStage::Begin) {
+        game.registered_skill_mut(instance)?.lifecycle_mut().set_available(properties.query_property(CAN_BREAK) != 0);
+        let target_shape = resolve_state_move_shape(game, target.0, target.1)?.shape();
+        let target_y = target_shape.get_tile_y().unwrap_or(i32::MIN);
+        let target_x = target_shape.get_tile_x().unwrap_or(i32::MIN);
+        let source_shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
+        let source_y = source_shape.get_tile_y().unwrap_or(i32::MIN);
+        let source_x = source_shape.get_tile_x().unwrap_or(i32::MIN);
+        resolve_state_move_shape_mut(game, source.0, source.1)?.shape_mut()
+            .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let delay = properties.query_property(DELAY);
+    let started = game.registered_skill(instance)?.lifecycle().started_at_ms();
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return None; }
+    resolve_state_move_shape_mut(game, source.0, source.1)?.set_moveable(true);
+    let path = game.skill_target_path(game.registered_skill(instance)?.lifecycle());
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0
+        && properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) < path.len() as u32
+    {
+        game.update_registered_skill_visual(instance, 11);
+        return Some(0);
+    }
+    // Путь и visual разрешают S заново; gameplay использует S начала AI.
+    game.update_registered_skill_visual(instance, 1);
+    if let Some(skill) = game.registered_skill_mut(instance) {
+        let _ = skill.advance_execution(SkillStage::Check, SkillStage::Calculate);
+        let _ = skill.advance_execution(SkillStage::Calculate, SkillStage::Attack);
+    }
+    attack(game, instance, source, target, runtime);
+    // После удара нет IsDied/IsAttackAble: только живой Cure и бросок яда.
+    apply_poison(game, source, target, &properties, runtime);
+    if let Some(skill) = game.registered_skill_mut(instance) {
+        let _ = skill.advance_execution(SkillStage::Attack, SkillStage::Apply);
+    }
+    Some(1)
+}
+
+struct SpiderPoison;
+
+impl RegisteredStateSkill for SpiderPoison {
+    const ID: u32 = SPIDER_POISON_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::SpiderPoison;
+    const VISUAL_FAILURES: &'static [u32] = &[2, 7, 8, 10, 11, 13, 14, 15];
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> bool {
+        check_cast(game, instance, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        match execute_stage(game, instance, runtime) {
+            Some(argument) => end_state_skill(game, instance, argument, runtime),
+            None => state_skill_outcome(QueuedSkillExecutionState::Pending),
+        }
+    }
+}
+
+pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    execute_player_state_skill::<SpiderPoison, Runtime>(game, player_id, dispatch, ai, runtime)
+}
+
+pub(crate) fn cancel_player_spider_poison<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI,
+    nonzero_end: bool, runtime: &mut Runtime,
 ) -> bool {
-    let Some(region_owner) = owner.as_mut() else { return false; };
-    let Some((source_shape, property, pet_attack, cast, last_used_ms)) =
-        region_owner.base().find_monster_by_id(monster_id).and_then(|monster| {
-            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
-            let pet_attack = monster.is_tamed().then(|| monster.pet_attack_properties(&property));
-            Some((monster.move_shape().shape().clone(), property, pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID, game.skill_factory())))
-        })
-    else { return false };
-    let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity) else {
-        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-            if cast.is_none_or(|execution| execution.termination().is_some()) {
-                monster.move_shape_mut().set_moveable(true);
-            }
-            monster.clear_ai_target(game.skill_factory());
-        }
-        return true;
-    };
-    if target.dead {
-        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-            if cast.is_none_or(|execution| execution.termination().is_some()) {
-                monster.move_shape_mut().set_moveable(true);
-            }
-            monster.clear_ai_target(game.skill_factory());
-        }
-        return true;
-    }
-    let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (
-        source_shape.get_tile_x(), source_shape.get_tile_y(), target.shape.get_tile_x(), target.shape.get_tile_y(),
-    ) else { return true };
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let path_too_long = maximum_distance != 0
-        && region_owner.base_mut().straight_skill_path(source_x, source_y, target_x, target_y, None).len() > maximum_distance as usize;
-    if cast.is_none() {
-        if !approach_attack_range(
-            game,
-            region_owner.base_mut(),
-            monster_id,
-            MonsterTraceTarget::Shape(target.view),
-            maximum_distance,
-            runtime,
-        ) {
-            return true;
-        }
-        if path_too_long {
-            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target(game.skill_factory());
-            }
-            return true;
-        }
-        let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        let attack_interval = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
-        let schedule_ready = schedule_attack_interval(property.ai, attack_interval)
-            .is_none_or(|interval| {
-                region_owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
-                    monster.begin_ai_attack_attempt(now_ms, interval)
-                })
-            });
-        if !schedule_ready
-            || !crate::gameserver::appserver::skills::kernel::skill_is_restored(
-                    last_used_ms,
-                    reuse_delay,
-                    now_ms,
-                )
-        {
-            return true;
-        }
-        let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
-        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().shape_mut().set_direction(direction);
-            monster.move_shape_mut().set_moveable(false);
-            monster.begin_base_attack_cast(target_identity, SPIDER_POISON_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
-        }
-        let source = region_owner.base().find_monster_by_id(monster_id).map(|monster| monster.move_shape().shape()).unwrap_or(&source_shape);
-        send_visual(game, region_owner.base(), source, monster_id, skill_level, 1, None);
-        return true;
-    }
-    let cast = cast.expect("выполнение ядовитой атаки проверено выше");
-    if cast.dispatch().skill_id != SPIDER_POISON_SKILL_ID || cast.dispatch().target != target_identity { return false; }
-    if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) { return true; }
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
-    if path_too_long {
-        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
-        return true;
-    }
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory()); }
-    send_visual(game, region_owner.base(), &source_shape, monster_id, skill_level, 2, Some((target_identity, target_x, target_y)));
-    let Some(monster) = region_owner.base().find_monster_by_id(monster_id) else { return true };
-    let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
-    let (minimum, maximum, element) = (minimum as i32, maximum as i32, monster.element_modifier() as i32);
-    let soul_attack = monster.soul_attack(&property);
-    let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
-    let physical = minimum.wrapping_add(game.skill_random_below(span));
-    let _critical_roll = game.skill_random_below(100);
-    let attack = AttackInformation {
-        skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: MONSTER_TYPE,
-        attacker_id: monster_id, attacker_team_id: 0, attacker_faction_id: 0,
-        attacker_union_id: 0, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0,
-        critical: false, blast_attack: false, full_miss: 0,
-        damages: vec![
-            AttackPower { kind: AttackPowerType::Physical, hp_damage: physical.max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Element, hp_damage: element.max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul_attack), mp_damage: 0 },
-        ],
-    };
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
-    }
-    apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
-    let Some(region_owner) = owner.as_mut() else { return true; };
-    let region_id = region_owner.base().id;
-    let Some(user) = region_owner.base().find_monster_by_id(monster_id)
-        .map(|monster| monster.move_shape().shape().identity()) else { return true };
-    let _ = game.with_published_region(owner, |game| {
-        apply_spider_poison(game, region_id, user, target_identity, properties,
-            &mut || runtime.now_milliseconds());
-    });
-    let Some(region_owner) = owner.as_mut() else { return true; };
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().shape_mut().set_action(1);
-        let _ = monster.finish_base_attack_cast_with_clock(SPIDER_POISON_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
-    }
-    true
+    finish_player_state_skill::<SpiderPoison, Runtime>(
+        game, player_id, ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
+    )
+}
+
+pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<SpiderPoison, Runtime>(game, owner, monster_id, target, skill_level, runtime)
 }

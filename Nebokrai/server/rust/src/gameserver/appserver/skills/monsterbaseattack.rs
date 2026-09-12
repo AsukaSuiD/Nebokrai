@@ -28,7 +28,7 @@
 //! дальности перенесены в первый AI его owner-а (0x005B39B0).
 //! Общий lookup не поглощает этот отказ живого cast; до Begin свойства
 //! по-прежнему необходимы расписанию для расчёта диапазона.
-//! KnockOut/SpiderWeb сохраняют собственные getters диапазона при отсутствии
+//! Зарегистрированные навыки состояний ниже сохраняют getters диапазона при отсутствии
 //! свойств. Новый Begin идёт после диапазона либо Tracing и интервала ИИ;
 //! уже начатый навык получает AI без повторного допуска расписанием.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
@@ -1018,6 +1018,8 @@ fn owned_target_state_executor<Runtime: GameMainLoopRuntime>(
     match skill_id {
         KNOCK_OUT_SKILL_ID => Some(execute_owned_monster_knock_out),
         SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
+        SPIDER_POISON_SKILL_ID => Some(execute_owned_spider_poison),
+        PROMOTION_SKILL_ID => Some(execute_owned_monster_promotion),
         _ => None,
     }
 }
@@ -1324,7 +1326,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if (pet_ai && pet_action == 2) || (!pet_ai && uses_stationary_attack_schedule(property.ai)) {
             let Some(target_view) = schedule_target_view else { return false; };
             let distance = monster_view.real_distance(Some(target_view));
-            // Оба owner-а наследуют minimum=1 и signed-положительный maximum.
+            // Эти owner-ы наследуют minimum=1 и signed-положительный maximum.
             // NULL properties допускает дистанцию 1 до собственного CheckCast.
             if distance < 1 || distance > game.skill_base_properties(skill_id, i32::from(skill_level))
                 .map(|properties| properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32)
@@ -1431,19 +1433,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == FURY_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_fury(
-            game,
-            owner,
-            monster_id,
-            target,
-            skill_level,
-            &skill_properties,
-            now_ms,
-            runtime,
-        );
-    }
-    if skill_id == PROMOTION_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_monster_promotion(
             game,
             owner,
             monster_id,
@@ -1674,19 +1663,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let Some(region_owner) = owner.as_mut() else { return true; };
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
             game, region_owner.base_mut(), monster_id, outcome, runtime,
-        );
-    }
-    if skill_id == SPIDER_POISON_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_spider_poison(
-            game,
-            owner,
-            monster_id,
-            target,
-            skill_level,
-            &skill_properties,
-            now_ms,
-            runtime,
         );
     }
     if skill_id == SPIDER_MIST_SKILL_ID {

@@ -39566,7 +39566,7 @@ impl CGame {
                 cancel_player_spider_web(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             SPIDER_POISON_SKILL_ID => {
-                cancel_player_spider_poison(self, player_id, &mut player_ai, runtime)
+                cancel_player_spider_poison(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => {
                 cancel_player_summon_creature(self, player_id, skill_id, &mut player_ai, runtime)
@@ -39720,7 +39720,7 @@ impl CGame {
             }
             CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, runtime),
             PROMOTION_SKILL_ID => {
-                cancel_player_promotion(self, player_id, &mut player_ai, runtime)
+                cancel_player_promotion(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             PETS_CONTROL_SKILL_ID => {
                 cancel_player_pets_control(self, player_id, &mut player_ai, runtime)
@@ -40113,14 +40113,7 @@ impl CGame {
                     skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE
                 }
             } => execute_player_hearten,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == PROMOTION_SKILL_ID,
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == PROMOTION_SKILL_ID
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                }
-            } => execute_player_promotion,
+            _ if dispatch.skill_id() == PROMOTION_SKILL_ID => execute_player_promotion,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. } => is_heal_skill(skill_id),

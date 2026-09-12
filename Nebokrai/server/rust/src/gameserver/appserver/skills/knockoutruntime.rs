@@ -13,11 +13,11 @@
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::blindstate::begin_primary_blind_state_at;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
+use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
 use super::knockoutstate::KnockOutState;
-use super::skillfactory::SkillOwner;
-use crate::gameserver::appserver::ai::monsterai::{
-    MonsterSkillCallOutcome, finish_monster_skill_call,
+use super::stateskill::{
+    RegisteredStateSkill, end_state_skill, execute_owned_state_skill, execute_player_state_skill,
+    finish_player_state_skill, publish_state_skill_visual, state_skill_outcome,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -27,14 +27,13 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_skill_sufferer,
+    end_and_destroy_state_at, resolve_skill_sufferer,
     resolve_state_move_shape, resolve_state_move_shape_mut,
 };
-use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
-use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -76,66 +75,8 @@ fn sufferer(game: &CGame, instance: RegisteredSkill) -> Option<(i32, ShapeIdenti
     participant(game, resolve_skill_sufferer(game, game.registered_skill(instance)?.lifecycle())?)
 }
 
-fn stage(game: &CGame, instance: RegisteredSkill) -> Option<SkillStage> {
-    let skill = game.registered_skill(instance)?;
-    skill.monster_kernel().map(|kernel| kernel.stage()).or_else(|| {
-        skill.player_kernel().map(|kernel| kernel.stage())
-    })
-}
-
-fn advance(game: &mut CGame, instance: RegisteredSkill, from: SkillStage, to: SkillStage) {
-    let Some(skill) = game.registered_skill_mut(instance) else { return; };
-    if let Some(kernel) = skill.monster_kernel_mut() {
-        let _ = kernel.advance(from, to);
-    } else if let Some(kernel) = skill.player_kernel_mut() {
-        let _ = kernel.advance(from, to);
-    }
-}
-
 pub(crate) fn publish_knock_out_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if skill.owner() != SkillOwner::CKnockOut
-        || skill.visual_effect().is_none_or(|effect| {
-            effect.kind() != SkillVisualEffectKind::KnockOut || effect.is_ended()
-        })
-    { return; }
-    let Some(user) = participant(game, skill.lifecycle().user()) else { return; };
-    let Some(source) = resolve_state_move_shape(game, user.0, user.1).map(|shape| shape.shape()) else { return; };
-    let mut message = CMessage::new(0x000b_fe01);
-    match mode {
-        2 | 7 | 10 | 11 | 13 | 15 => {
-            if user.1.object_type == PLAYER_TYPE {
-                message.add_byte(0);
-                message.add_byte(mode as u8);
-                let _ = message.send_to_player(game.net_server(), user.1.id);
-            }
-            return;
-        }
-        0 | 1 => {
-            message.add_byte(if mode == 0 { 1 } else { 2 });
-            message.add_long(skill.id() as i32);
-            message.add_short(skill.level() as i16);
-            message.add_long(user.1.object_type);
-            message.add_long(user.1.id);
-            if mode == 0 {
-                message.add_long(source.get_direction());
-            } else {
-                let Some(target) = resolve_skill_sufferer(game, skill.lifecycle()) else { return; };
-                let Some(shape) = resolve_state_move_shape(game, target.0, target.1).map(|shape| shape.shape()) else { return; };
-                let (x, y) = (
-                    shape.get_tile_x().unwrap_or(i32::MIN),
-                    shape.get_tile_y().unwrap_or(i32::MIN),
-                );
-                message.add_long(shape.identity().object_type);
-                message.add_long(shape.identity().id);
-                message.add_long(x);
-                message.add_long(y);
-            }
-        }
-        _ => return,
-    }
-    if let Some(region) = game.find_region(user.0) {
-        let _ = game.send_game_shape_around(region.base(), source, None, &message);
-    }
+    publish_state_skill_visual::<KnockOutSkill>(game, skill, mode);
 }
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
@@ -292,7 +233,7 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
 ) -> Option<i32> {
     let skill = game.registered_skill(instance)?;
     if skill.lifecycle().is_ended()
-        || stage(game, instance).is_none_or(|stage| stage == SkillStage::Idle)
+        || game.registered_skill(instance).and_then(MoveShapeSkill::execution_stage).is_none_or(|stage| stage == SkillStage::Idle)
     { return None; }
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return Some(0); };
     let Some(source) = participant(game, skill.lifecycle().user()) else { return Some(0); };
@@ -301,7 +242,7 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
         game.update_registered_skill_visual(instance, 10);
         return Some(0);
     }
-    if stage(game, instance) == Some(SkillStage::Begin) {
+    if game.registered_skill(instance).and_then(MoveShapeSkill::execution_stage) == Some(SkillStage::Begin) {
         game.registered_skill_mut(instance)?.lifecycle_mut().set_available(properties.query_property(CAN_BREAK) != 0);
         let target_shape = resolve_state_move_shape(game, target.0, target.1)?.shape();
         let (target_x, target_y) = (
@@ -316,7 +257,7 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
         resolve_state_move_shape_mut(game, source.0, source.1)?.shape_mut()
             .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
         game.update_registered_skill_visual(instance, 0);
-        advance(game, instance, SkillStage::Begin, SkillStage::Check);
+        let _ = game.registered_skill_mut(instance).map(|skill| skill.advance_execution(SkillStage::Begin, SkillStage::Check));
     }
     let delay = properties.query_property(DELAY);
     let started = game.registered_skill(instance)?.lifecycle().started_at_ms();
@@ -338,8 +279,8 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
     let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
     let chance = knock_out_hit_chance(source_hit, target_dodge, source_level, target_level, base, magnify, level_rate);
     if chance <= game.skill_random_below(100) { return Some(0); }
-    advance(game, instance, SkillStage::Check, SkillStage::Calculate);
-    advance(game, instance, SkillStage::Calculate, SkillStage::Attack);
+    let _ = game.registered_skill_mut(instance).map(|skill| skill.advance_execution(SkillStage::Check, SkillStage::Calculate));
+    let _ = game.registered_skill_mut(instance).map(|skill| skill.advance_execution(SkillStage::Calculate, SkillStage::Attack));
     attack(game, instance, source, target, runtime);
     if resolve_state_move_shape(game, target.0, target.1)
         .is_some_and(|shape| !shape.has_state_by_skill_id(CURE_SKILL_ID))
@@ -347,131 +288,60 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
         let state = KnockOutState::new(0, properties.query_property(PERSIST));
         install(game, source, target, state, runtime);
     }
-    advance(game, instance, SkillStage::Attack, SkillStage::Apply);
+    let _ = game.registered_skill_mut(instance).map(|skill| skill.advance_execution(SkillStage::Attack, SkillStage::Apply));
     Some(1)
 }
 
-fn end<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, argument: i32,
-    termination: SkillTermination, runtime: &mut Runtime,
-) {
-    // End не имеет IsEnded-gate: внешний AI завершает тот же живой экземпляр
-    // и после вложенного End. Поколение ключа защищает только его замену.
-    let _ = game.end_registered_instance(instance, argument, termination, runtime);
-}
+struct KnockOutSkill;
 
-fn result(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
+impl RegisteredStateSkill for KnockOutSkill {
+    const ID: u32 = KNOCK_OUT_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::KnockOut;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> bool {
+        check_cast(game, address, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        match execute_stage(game, address, runtime) {
+            Some(argument) => end_state_skill(game, address, argument, runtime),
+            None => state_skill_outcome(QueuedSkillExecutionState::Pending),
+        }
+    }
 }
 
 pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
     ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if dispatch.skill_id() != KNOCK_OUT_SKILL_ID { return result(QueuedSkillExecutionState::Rejected); }
-    let Some(instance) = game.registered_player_skill(player_id, KNOCK_OUT_SKILL_ID) else {
-        return result(QueuedSkillExecutionState::Rejected);
-    };
-    game.with_published_player_ai(player_id, ai, |game| {
-        if game.registered_skill(instance).and_then(MoveShapeSkill::player_dispatch).is_none() {
-            game.replace_player_skill_visual_effect(
-                player_id, KNOCK_OUT_SKILL_ID, SkillVisualEffect::new(SkillVisualEffectKind::KnockOut, 1),
-            );
-            if !check_cast(game, instance, runtime) {
-                game.update_registered_skill_visual(instance, 2);
-                end(game, instance, 0, SkillTermination::Rejected, runtime);
-                return result(QueuedSkillExecutionState::Rejected);
-            }
-            let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
-                return result(QueuedSkillExecutionState::Rejected);
-            };
-            game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
-            return result(QueuedSkillExecutionState::Begun);
-        }
-        if game.registered_skill(instance).and_then(MoveShapeSkill::player_dispatch) != Some(dispatch) {
-            return result(QueuedSkillExecutionState::Rejected);
-        }
-        match execute_stage(game, instance, runtime) {
-            Some(argument) => {
-                let (termination, outcome) = if argument == 0 {
-                    (SkillTermination::Rejected, QueuedSkillExecutionState::Rejected)
-                } else {
-                    (SkillTermination::Completed, QueuedSkillExecutionState::Completed)
-                };
-                end(game, instance, argument, termination, runtime);
-                result(outcome)
-            }
-            None => result(QueuedSkillExecutionState::Pending),
-        }
-    })
-}
-
-fn finish_player<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, argument: i32,
-    termination: SkillTermination, runtime: &mut Runtime,
-) -> bool {
-    let Some(instance) = game.registered_player_skill(player_id, KNOCK_OUT_SKILL_ID) else { return false; };
-    let Some(dispatch) = game.registered_skill(instance).and_then(MoveShapeSkill::player_dispatch) else { return false; };
-    game.with_published_player_ai(player_id, ai, |game| end(game, instance, argument, termination, runtime));
-    game.finish_registered_player_command(Some(instance), ai, dispatch, termination)
+    execute_player_state_skill::<KnockOutSkill, Runtime>(game, player_id, dispatch, ai, runtime)
 }
 
 pub(crate) fn complete_player_knock_out<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> bool {
-    finish_player(game, player_id, ai, 1, SkillTermination::Completed, runtime)
+    finish_player_state_skill::<KnockOutSkill, Runtime>(
+        game, player_id, ai, 1, SkillTermination::Completed, runtime,
+    )
 }
 
 pub(crate) fn cancel_player_knock_out<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, nonzero_end: bool, runtime: &mut Runtime,
 ) -> bool {
-    finish_player(game, player_id, ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime)
+    finish_player_state_skill::<KnockOutSkill, Runtime>(
+        game, player_id, ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
+    )
 }
 
 pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
     target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut() else { return false; };
-    let Some(monster) = region.base().find_monster_by_id(monster_id) else { return false; };
-    let source = (region.region_id(), monster.move_shape().shape().identity());
-    let beginning = monster.current_active_attack_cast(game.skill_factory()).is_none();
-    if beginning {
-        let target_object = resolve_owned_skill_begin_object(game, region.base(), target);
-        let started = runtime.now_milliseconds();
-        let Some(monster) = region.base_mut().find_monster_by_id_mut(monster_id) else { return false; };
-        if !monster.prepare_base_attack_cast(target, KNOCK_OUT_SKILL_ID, skill_level, started, target_object, game.skill_factory()) {
-            return false;
-        }
-        monster.move_shape_mut().replace_skill_visual_effect(
-            KNOCK_OUT_SKILL_ID, game.skill_factory(), SkillVisualEffect::new(SkillVisualEffectKind::KnockOut, 1),
-        );
-    }
-    let outcome = game.with_published_region(owner, |game| {
-        let Some(instance) = game.registered_move_shape_skill(source.0, source.1, KNOCK_OUT_SKILL_ID) else {
-            return MonsterSkillCallOutcome::NotHandled;
-        };
-        if beginning {
-            if let Some(kernel) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::monster_kernel_mut) {
-                kernel.clear_phase_for_end();
-            }
-            if !check_cast(game, instance, runtime) {
-                game.update_registered_skill_visual(instance, 2);
-                end(game, instance, 0, SkillTermination::Rejected, runtime);
-                return MonsterSkillCallOutcome::BeginRejected;
-            }
-            advance(game, instance, SkillStage::Idle, SkillStage::Begin);
-            if let Some(monster) = game.find_region_mut(source.0).and_then(|region| region.base_mut().find_monster_by_id_mut(monster_id)) {
-                monster.enqueue_base_attack_cast(runtime.now_milliseconds());
-            }
-            return MonsterSkillCallOutcome::Handled;
-        }
-        if let Some(argument) = execute_stage(game, instance, runtime) {
-            let termination = if argument == 0 { SkillTermination::Rejected } else { SkillTermination::Completed };
-            end(game, instance, argument, termination, runtime);
-        }
-        MonsterSkillCallOutcome::Handled
-    }).unwrap_or(MonsterSkillCallOutcome::Handled);
-    let Some(region) = owner.as_mut() else { return true; };
-    finish_monster_skill_call(game, region.base_mut(), monster_id, outcome, runtime)
+    execute_owned_state_skill::<KnockOutSkill, Runtime>(
+        game, owner, monster_id, target, skill_level, runtime,
+    )
 }
