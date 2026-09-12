@@ -23,7 +23,7 @@ use crate::gameserver::gameserver::game::{
 #[derive(Clone, Copy)]
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
-    Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar,
+    Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -50,6 +50,7 @@ impl RegisteredPlayerCastOwner {
             super::energyholding::ENERGY_HOLDING_SKILL_ID => Self::EnergyHolding,
             super::pillar::PILLAR_SKILL_ID => Self::Pillar,
             super::roar::ROAR_SKILL_ID => Self::Roar,
+            super::thunderslash::THUNDER_SLASH_SKILL_ID => Self::ThunderSlash,
             _ => return None,
         })
     }
@@ -74,6 +75,7 @@ impl RegisteredPlayerCastOwner {
             Self::EnergyHolding => super::energyholding::execute_player_energy_holding::<Runtime>,
             Self::Pillar => super::pillar::execute_player_pillar::<Runtime>,
             Self::Roar => super::roar::execute_player_roar::<Runtime>,
+            Self::ThunderSlash => super::thunderslash::execute_player_thunder_slash::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

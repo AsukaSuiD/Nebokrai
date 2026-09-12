@@ -1993,15 +1993,17 @@ impl CServerRegion {
     pub(crate) fn add_thunder_slash_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::thunderslashphalanx::CThunderSlashPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::thunderslashphalanx::CThunderSlashPhalanx)> {
+        if let Err(block) = self.add_object(
+            phalanx.shape_mut(), ShapeRuntimeFacts::default(),
+            area_width, area_height, now_ms, context,
+        ) {
+            return Err((block, phalanx));
+        }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes.insert(id, SummonedSkillShape::ThunderSlash(phalanx));
         Ok(id)

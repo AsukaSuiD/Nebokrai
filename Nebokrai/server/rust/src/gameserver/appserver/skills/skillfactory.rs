@@ -264,7 +264,7 @@ skill_owners! {
     CSwordship: State, COMMON, Weapon => 0x06f,
     CLightningSword: Attack, USER_RESET_PHASE, Weapon => 0x070,
     CLittleFlash: Attack, USER_RESET_PHASE, Weapon => 0x071,
-    CThunderSlash: Summon, USER, Weapon => 0x072,
+    CThunderSlash: Summon, USER_RESET_PHASE, Weapon => 0x072,
     CRush: State, USER_PATHS_AFTER_MOVEMENT, Weapon => 0x073,
     CPillar: State, USER_RESET_PHASE, Weapon => 0x074,
     CCallosity: State, USER, Weapon => 0x075,

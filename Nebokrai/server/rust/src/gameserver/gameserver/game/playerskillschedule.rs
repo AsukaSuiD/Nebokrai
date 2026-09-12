@@ -235,7 +235,6 @@ impl CGame {
             | FIRE_BALL_SKILL_ID
             | FIRE_WALL_SKILL_ID
             | SEVEN_SHOOTING_STAR_SKILL_ID
-            | THUNDER_SLASH_SKILL_ID
             | CHAIN_LIGHTNING_SKILL_ID
             | THUNDER_BLOW_SKILL_ID
             | INFERNOL_SKILL_ID

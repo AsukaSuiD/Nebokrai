@@ -219,6 +219,7 @@ pub(crate) mod appserver {
         pub(crate) mod thunderblow2visual;
         pub(crate) mod thunderblowphalanx;
         pub(crate) mod thunderslash;
+        pub(crate) mod thunderslashvisual;
         pub(crate) mod thunderslashphalanx;
         pub(crate) mod thunderphalanx;
         pub(crate) mod thunder2;

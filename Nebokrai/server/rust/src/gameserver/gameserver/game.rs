@@ -1172,13 +1172,6 @@ use crate::gameserver::appserver::skills::thunderblow::{
 use crate::gameserver::appserver::skills::thunderblowphalanx::{
     calculate_owned_thunder_blow_attack, ThunderBlowPhalanxTick,
 };
-use crate::gameserver::appserver::skills::thunderslash::{
-    cancel_player_thunder_slash, execute_player_thunder_slash, is_thunder_slash_dispatch,
-    THUNDER_SLASH_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::thunderslashphalanx::{
-    calculate_owned_thunder_slash_attack, thunder_slash_target, ThunderSlashPhalanxTick,
-};
 use crate::gameserver::appserver::skills::pillar::PILLAR_SKILL_ID;
 use crate::gameserver::appserver::skills::roar::ROAR_SKILL_ID;
 use crate::gameserver::appserver::skills::energyholding::ENERGY_HOLDING_SKILL_ID;
@@ -39407,9 +39400,6 @@ impl CGame {
                 cause.uses_nonzero_end(),
                 runtime,
             ),
-            THUNDER_SLASH_SKILL_ID => {
-                cancel_player_thunder_slash(self, player_id, &mut player_ai, runtime)
-            }
             CHAIN_LIGHTNING_SKILL_ID => {
                 cancel_player_chain_lightning(self, player_id, &mut player_ai, runtime)
             }
@@ -39930,7 +39920,6 @@ impl CGame {
             _ if is_item_skill_2_dispatch(dispatch) => execute_player_item_skill_2,
             _ if is_chain_lightning_dispatch(dispatch) => execute_player_chain_lightning,
             _ if is_thunder_blow_dispatch(dispatch) => execute_player_thunder_blow,
-            _ if is_thunder_slash_dispatch(dispatch) => execute_player_thunder_slash,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
@@ -43630,9 +43619,7 @@ impl CGame {
             SummonedSkillShape::ThunderBlow(phalanx) => {
                 calculate_owned_thunder_blow_attack(self, phalanx, target_level)
             }
-            SummonedSkillShape::ThunderSlash(phalanx) => {
-                calculate_owned_thunder_slash_attack(self, phalanx)
-            }
+            SummonedSkillShape::ThunderSlash(_) => None,
             SummonedSkillShape::SnowStorm(phalanx) => {
                 calculate_owned_snow_storm_attack(self, phalanx)
             }
@@ -43696,16 +43683,6 @@ impl CGame {
             return false;
         }
         let master = phalanx.master();
-        let thunder_slash_source = if matches!(phalanx, SummonedSkillShape::ThunderSlash(_)) {
-            self.find_player(master.master_id).map(|player| player.shape().identity())
-        } else { None };
-        // Только ThunderSlash проверяет IsAttackAble внутри Attack. Остальные
-        // caller-ы проверяют допуск при сканировании либо вовсе не проверяют его.
-        if let Some(source) = thunder_slash_source
-            && !self.live_skill_target_attackable(region_id, source, target)
-        {
-            return false;
-        }
         if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
             heartless.prepare_target(self, region_id, target, &mut || runtime.now_milliseconds());
         }
@@ -43730,9 +43707,6 @@ impl CGame {
                 region_id, target, attack, runtime,
             ),
             _ => return false,
-        }
-        if let Some(source) = thunder_slash_source {
-            self.increase_owned_player_rp(source.id, true, 0);
         }
         true
     }
@@ -43794,14 +43768,14 @@ impl CGame {
         }
     }
 
+    fn mark_damage_phalanx_deleted(&mut self, region_id: i32, phalanx_id: i32) -> Option<CShape> {
+        let phalanx = self.find_region_mut(region_id)?.base_mut().find_skill_phalanx_mut(phalanx_id)?;
+        phalanx.shape_mut().set_change_state(SHAPE_CHANGE_DELETE);
+        Some(phalanx.shape().clone())
+    }
+
     fn end_damage_phalanx(&mut self, region_id: i32, phalanx_id: i32) {
-        let shape = {
-            let Some(phalanx) = self.find_region_mut(region_id)
-                .and_then(|owner| owner.base_mut().find_skill_phalanx_mut(phalanx_id))
-            else { return; };
-            phalanx.shape_mut().set_change_state(SHAPE_CHANGE_DELETE);
-            phalanx.shape().clone()
-        };
+        let Some(shape) = self.mark_damage_phalanx_deleted(region_id, phalanx_id) else { return; };
         if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
             let _ = self.send_shape_exit_around(region, &shape);
         }
@@ -43847,6 +43821,12 @@ impl CGame {
         phalanx_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::ThunderSlash(_)))
+        {
+            return self.run_thunder_slash_phalanx(region_id, phalanx_id, runtime);
+        }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -43956,16 +43936,7 @@ impl CGame {
                     ))),
                     ThunderBlowPhalanxTick::Expired => None,
                 },
-                SummonedSkillShape::ThunderSlash(phalanx) => match phalanx.tick(
-                    lifetime_now_ms,
-                    || runtime.now_milliseconds(),
-                ) {
-                    ThunderSlashPhalanxTick::Pending => Some(None),
-                    ThunderSlashPhalanxTick::Scan { sampled_at_ms } => Some(Some((
-                        phalanx.shape().identity(), sampled_at_ms,
-                    ))),
-                    ThunderSlashPhalanxTick::Expired => None,
-                },
+                SummonedSkillShape::ThunderSlash(_) => Some(None),
                 SummonedSkillShape::SnowStorm(phalanx) => match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
                     SnowStormPhalanxTick::Pending => Some(None),
                     SnowStormPhalanxTick::Attack { sampled_at_ms } => Some(Some((
@@ -44197,12 +44168,6 @@ impl CGame {
         if let (Some(Some(_)), SummonedSkillShape::ThunderBlow(thunder)) = (tick, &phalanx) {
             if let (Ok(x), Ok(y)) = (thunder.shape().get_tile_x(), thunder.shape().get_tile_y()) {
                 self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
-            }
-            return true;
-        }
-        if let (Some(Some(_)), SummonedSkillShape::ThunderSlash(thunder)) = (tick, &phalanx) {
-            if let Some(target) = thunder_slash_target(self, region_id, thunder) {
-                self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
             }
             return true;
         }
