@@ -327,9 +327,9 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let region_id = region.id;
-    let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
+    let Some(region_owner) = owner.as_mut() else { return false; };
+    let region_id = region_owner.base().id;
+    let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region_owner.base_mut()
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
@@ -347,28 +347,28 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
         return false;
     }
     if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity) else {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target(game.skill_factory());
             }
             return true;
         };
         if !approach_attack_range(
-            game, region, monster_id, MonsterTraceTarget::Shape(target.view),
+            game, region_owner.base_mut(), monster_id, MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE), runtime,
         ) {
             return true;
         }
         if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
-            && !region.find_monster_by_id_mut(monster_id).is_some_and(|monster| {
+            && !region_owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
                 monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
             })
         {
             return true;
         }
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
         let started_at_ms = runtime.now_milliseconds();
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if !monster.prepare_base_attack_cast(
                 target_identity, SPRITE_BURN_SKILL_ID, skill_level, started_at_ms,
                 target_object, game.skill_factory(),
@@ -389,19 +389,19 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
                     );
                 }
             });
-            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+            let Some(region_owner) = owner.as_mut() else { return true; };
             return finish_monster_skill_call(
-                game, region, monster_id, MonsterSkillCallOutcome::BeginRejected, runtime,
+                game, region_owner.base_mut(), monster_id, MonsterSkillCallOutcome::BeginRejected, runtime,
             );
         }
         let queued_at_ms = runtime.now_milliseconds();
-        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let Some(region_owner) = owner.as_mut() else { return true; };
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.enqueue_base_attack_cast(queued_at_ms);
         }
         let can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-        if let Some(lifecycle) = region.find_monster_by_id_mut(monster_id)
+        let Some(region_owner) = owner.as_mut() else { return true; };
+        if let Some(lifecycle) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
             .and_then(|monster| monster.move_shape_mut().skill_lifecycle_mut(SPRITE_BURN_SKILL_ID, game.skill_factory()))
         {
             lifecycle.set_available(can_be_breaked != 0);

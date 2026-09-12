@@ -16,7 +16,7 @@
 //! как `CSkill::End` (0x4d84c0).
 //! Cell Skeleton/Chuck (0x005392B0/0x0053DA40) не вызывает IsAttackAble перед
 //! Calculate; проверка первой BLOCK_SHAPE остаётся отдельной границей полёта.
-//! Исходный RTTI допускает все CMoveShape, но текущий resolver ещё только 400/600.
+//! Полный регион сохраняет исходный RTTI всех CMoveShape и порядок клеточного снимка.
 //! End `0x0056A330` и `0x0057B810` обнуляет четыре derived DWORD
 //! `+0x4C/+0x50/+0x54/+0x58` до возврата движения. Общий зарегистрированный
 //! End снимает фазу kernel, а этот owner сбрасывает fired и время полёта.
@@ -34,13 +34,13 @@ use super::baseattack::{
 };
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::public::guid::CGuid;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -127,7 +127,7 @@ fn send_projectile_visual(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт полёта")]
 pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_owner: &mut ServerRegionOwner,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_id: u32,
@@ -137,7 +137,8 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     dispatch: &mut Option<MonsterProjectileDispatch>,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((source, property, master, tamed, cast, progress)) = region
+    let region = region_owner.base_mut();
+    let Some((source, property, tamed, cast, progress)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -146,7 +147,6 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 property,
-                monster.master_info(),
                 monster.is_tamed(),
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_progress::<MonsterProjectileProgress>(skill_id, game.skill_factory()).copied(),
@@ -156,7 +156,8 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let detached_impact = progress.and_then(MonsterProjectileProgress::detached_impact);
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let region = region_owner.base_mut();
     if target.is_none() && detached_impact.is_none() {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
@@ -277,17 +278,16 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
             let blocked = if block == BLOCK_UNFLY {
                 true
             } else if block == BLOCK_SHAPE {
-                monster_attack_cell_candidates(game, region, monster_id, x, y)
-                    .into_iter()
-                    .next()
-                    .and_then(|identity| {
-                        let target = resolve_owned_monster_attack_target(game, region, identity)?;
-                        owned_monster_attackable(
-                            game, region.id, &property, tamed, master, identity, &target,
-                        )
-                        .then_some(())
-                    })
-                    .is_some()
+                let (area_width, area_height) = game.area_dimensions();
+                let resolver = crate::gameserver::gameserver::game::RegionShapeResolver { game, owner: region_owner };
+                region_owner.base().get_shape(x, y, area_width, area_height, &resolver)
+                    .ok().flatten()
+                    .filter(|target| matches!(target.identity.object_type, 400 | 500 | 600 | 1100 | 1200))
+                    .is_some_and(|target| game.live_skill_target_attackable_in(
+                        region_owner,
+                        ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID },
+                        target.identity,
+                    ))
             } else {
                 false
             };
@@ -299,6 +299,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
                 break;
             }
         }
+        let region = region_owner.base_mut();
         let missile_flying_time_ms = properties
             .query_property(SKILL_USAGE_MISSILE_FLYING_TIME)
             .wrapping_mul(path_index as u32);
@@ -389,10 +390,11 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
     identity: ShapeIdentity,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    if resolve_owned_monster_attack_target(game, region, identity).is_none() {
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    if resolve_owned_monster_attack_target(game, region_owner, identity).is_none() {
         return false;
     }
+    let region = region_owner.base();
     let Some(monster) = region.find_monster_by_id(dispatch.monster_id) else { return false };
     let bounds = monster.state_attack_bounds(
         dispatch.property.minimum_attack,

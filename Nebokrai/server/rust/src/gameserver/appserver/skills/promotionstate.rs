@@ -12,11 +12,16 @@
 //! timestamp: прежние длительность и коэффициенты сохраняются без нового пакета.
 //! `AI` получает ключ достигнутого экземпляра из общего обхода состояний:
 //! истечение удаляет только этот Promotion, не соседний одноимённый щит.
+//! Primary Begin проверяет S, читает часы базы при U и отправляет одноразовый
+//! visual до append. Запись хранит действительные U/S и собственный DB-span.
 
 use super::promotion::PROMOTION_SKILL_ID;
+use super::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -120,20 +125,50 @@ impl PromotionState {
 
 }
 
-pub(crate) fn send_promotion_state_begin(
+/// Повторный AI вызывает только Restart; новый primary проходит
+/// CState::Begin(U,S) → visual loop0/Update0 → append в общую арену.
+pub(crate) fn begin_or_restart_promotion_state(
     game: &mut CGame,
-    region_id: i32,
-    target: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: PromotionState,
-    now_milliseconds: impl FnMut() -> u32,
-) {
+    user: Option<(i32, ShapeIdentity)>,
+    sufferer: (i32, ShapeIdentity),
+    keep_time_ms: u32,
+    magic_attack_factor: u16,
+    heal_recover_factor: u16,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<bool> {
+    let shape = resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
+    let sufferer = (shape.shape().get_region_id(), shape.shape().identity());
+    if let Some(key) = shape.defense_shield_key(PROMOTION_SKILL_ID) {
+        let state = resolve_state_move_shape_mut(game, sufferer.0, sufferer.1)?
+            .applied_state_mut::<DefenseShieldState>(key)?;
+        let DefenseShieldState::Promotion(state) = state else { return None; };
+        state.restart(now());
+        return Some(false);
+    }
+    let mut state = PromotionState::new(
+        0, keep_time_ms, magic_attack_factor, heal_recover_factor,
+    );
+    if user.is_some() { state.restart(now()); }
+    let user = match user {
+        Some((region, identity)) => {
+            let shape = resolve_state_move_shape(game, region, identity)?.shape();
+            Some((shape.get_region_id(), shape.identity()))
+        }
+        None => None,
+    };
     let mut message = CMessage::new(PROMOTION_STATE_BEGIN_MESSAGE);
-    message.add_long(target.object_type);
-    message.add_long(target.id);
+    message.add_long(sufferer.1.object_type);
+    message.add_long(sufferer.1.id);
     message.add_long(state.skill_id() as i32);
-    message.add_long(state.client_time(now_milliseconds));
+    message.add_long(state.client_time(&mut *now));
     message.add_long(0);
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
+    let record = state.encoded_for_install();
+    let shape = resolve_state_move_shape_mut(game, sufferer.0, sufferer.1)?;
+    let key = shape.append_applied_state_record(DefenseShieldState::Promotion(state), &record);
+    shape.mark_applied_state_begun(key);
+    shape.set_applied_state_user(key, user);
+    shape.set_applied_state_sufferer(key, Some(sufferer));
+    // Общий каталог хранит уже завершённый loop0 visual после Update(0).
+    Some(true)
 }

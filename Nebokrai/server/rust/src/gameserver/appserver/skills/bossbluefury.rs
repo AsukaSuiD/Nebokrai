@@ -313,8 +313,8 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false };
-    let Some((source, cast, last_used_ms)) = region
+    let Some(region_owner) = owner.as_mut() else { return false };
+    let Some((source, cast, last_used_ms)) = region_owner.base_mut()
         .find_monster_by_id(monster_id)
         .map(|monster| {
             (
@@ -328,16 +328,16 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     };
 
     if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
+        let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity)
         else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target(game.skill_factory());
             }
             return true;
         };
         if !approach_attack_range(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
@@ -353,8 +353,8 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
-        let target_object = resolve_owned_skill_begin_object(game, region, self_identity(monster_id));
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), self_identity(monster_id));
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.begin_base_attack_cast(
                 self_identity(monster_id),
                 BOSS_BLUE_FURY_SKILL_ID,
@@ -364,7 +364,7 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
                 game.skill_factory(),
             );
         }
-        send_cast_start(game, region, &source, skill_level);
+        send_cast_start(game, region_owner.base_mut(), &source, skill_level);
         return true;
     }
 
@@ -380,8 +380,8 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    send_cast_fire(game, region, &source, skill_level);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    send_cast_fire(game, region_owner.base_mut(), &source, skill_level);
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
@@ -392,9 +392,9 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as i32,
         properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER),
     );
-    let previous = region.find_monster_by_id(monster_id)
+    let previous = region_owner.base().find_monster_by_id(monster_id)
         .and_then(|monster| monster.move_shape().applied_state_key::<BossBlueFuryState>());
-    let region_id = region.id;
+    let region_id = region_owner.base().id;
     if let Some(previous) = previous {
         let _ = game.with_published_region(owner, |game| {
             super::bossbluefurystate::end_boss_blue_fury_state(
@@ -402,8 +402,8 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
             )
         });
     }
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
-    let Some(monster) = region.find_monster_by_id_mut(monster_id) else { return true };
+    let Some(region_owner) = owner.as_mut() else { return true };
+    let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) else { return true };
     monster.move_shape_mut().set_moveable(false);
     monster.move_shape_mut().set_fightable(false);
     monster.move_shape_mut().begin_boss_blue_fury_state(state);
@@ -411,8 +411,8 @@ pub(crate) fn execute_owned_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     let _ = game.with_published_region(owner, |game| {
         game.update_move_shape_properties(region_id, source.identity())
     });
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(region_owner) = owner.as_mut() else { return true };
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(BOSS_BLUE_FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
         let _ = monster.finish_base_attack_cast_with_clock(BOSS_BLUE_FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }

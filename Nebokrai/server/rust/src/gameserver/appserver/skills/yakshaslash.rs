@@ -9,8 +9,8 @@
 //! конкретного `CMoveShape`. Объектная ветвь достигнута и для игрока, и для
 //! монстра; `CGame` только разрешает владельцев, применяет готовый удар и
 //! выполняет доставку.
-//! Monster GetS пока разрешает только 400/600; остальные исходные RTTI
-//! CMoveShape не подключены. Attack (0x00543030) не добавляет IsAttackAble.
+//! Monster GetS разрешает также NPC/build/gate; путь выбирает точку footprint
+//! через общий GetBeAttackedPoint. Attack не добавляет IsAttackAble.
 //! Беззнаковый skill factor сохраняется в x87 до единственной записи в
 //! `float`. Критический множитель переводится в `int` с x87 rounding-control
 //! `11`, то есть усечением к нулю после умножения каждого боевого компонента.
@@ -152,10 +152,10 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 /// по числу клеток и общий monster defence/death tail.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((source, source_view, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_progress::<MonsterProjectileProgress>(YAKSHA_SLASH_SKILL_ID, game.skill_factory()).copied()))) else { return false };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(region_owner) = owner.as_mut() else { return false; };
+    let Some((source, source_view, tamed, cast, progress)) = region_owner.base().find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_progress::<MonsterProjectileProgress>(YAKSHA_SLASH_SKILL_ID, game.skill_factory()).copied()))) else { return false };
+    let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity) else {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
@@ -164,7 +164,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         return true;
     };
     if target.dead || (target_identity.object_type == MONSTER_TYPE && target_identity.id == monster_id) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
@@ -173,12 +173,14 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         return true;
     }
     let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (source.get_tile_x(), source.get_tile_y(), target.shape.get_tile_x(), target.shape.get_tile_y()) else { return true };
-    let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
+    let Some((path_x, path_y)) = game.base_magic_target_point_in(region_owner, source_x, source_y, target_identity)
+    else { return true; };
+    let path = region_owner.base().straight_skill_path(source_x, source_y, path_x, path_y, None);
     if cast.is_none() {
-        let attack_interval = if tamed { region.find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
-        if schedule_attack_interval(property.ai, attack_interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
+        let attack_interval = if tamed { region_owner.base().find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
+        if schedule_attack_interval(property.ai, attack_interval).is_some_and(|interval| region_owner.base_mut().find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(YAKSHA_SLASH_SKILL_ID, game.skill_factory())).unwrap_or_default();
+        let last_used = region_owner.base().find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(YAKSHA_SLASH_SKILL_ID, game.skill_factory())).unwrap_or_default();
         if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used, reuse, now_ms,
             )
@@ -187,16 +189,16 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         }
         let maximum = properties.query_property(TARGET_MAX_DISTANCE);
         if (maximum != 0 && source_view.real_distance(Some(target.view)) > maximum as i32) || path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction); monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(target_identity, YAKSHA_SLASH_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory()); monster.set_skill_progress(YAKSHA_SLASH_SKILL_ID, MonsterProjectileProgress::default(), game.skill_factory());
         }
-        send_monster_cast(game, region, monster_id, skill_level, target_identity, (target_x, target_y), None);
+        send_monster_cast(game, region_owner.base_mut(), monster_id, skill_level, target_identity, (target_x, target_y), None);
         return true;
     }
     let cast = cast.expect("ветвь активного полёта проверена выше");
@@ -206,22 +208,22 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
     if !progress.fired() {
         if !time_reached(now_ms, cast.started_at_ms(), delay) { return true; }
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let flying_time = properties.query_property(MISSILE_FLYING_TIME).wrapping_mul(path.len() as u32);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(true); progress.fire(flying_time, None);
             *monster.skill_progress_mut::<MonsterProjectileProgress>(YAKSHA_SLASH_SKILL_ID, game.skill_factory()).expect("состояние полёта принадлежит текущему навыку") = progress;
             let _ = monster.advance_base_attack_cast(YAKSHA_SLASH_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
-        send_monster_cast(game, region, monster_id, skill_level, target_identity, (target_x, target_y), Some(flying_time));
+        send_monster_cast(game, region_owner.base_mut(), monster_id, skill_level, target_identity, (target_x, target_y), Some(flying_time));
     }
     if !time_reached(now_ms, cast.started_at_ms(), delay.wrapping_add(progress.missile_flying_time_ms())) { return true; }
     let dispatch = MonsterProjectileDispatch::object_target(monster_id, YAKSHA_SLASH_SKILL_ID, target_x, target_y, skill_level, properties.clone(), property.clone());
     let _ = execute_owned_monster_projectile_target(game, owner, &dispatch, target_identity, runtime);
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-    finish_owned_monster_attack_impact(region, dispatch.monster_id, dispatch.skill_id, game.skill_factory(), runtime);
+    let Some(region_owner) = owner.as_mut() else { return true; };
+    finish_owned_monster_attack_impact(region_owner.base_mut(), dispatch.monster_id, dispatch.skill_id, game.skill_factory(), runtime);
     true
 }
 

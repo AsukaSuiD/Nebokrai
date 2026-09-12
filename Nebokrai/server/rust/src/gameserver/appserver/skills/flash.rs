@@ -126,10 +126,11 @@ fn target_position(game: &CGame, region_id: i32, player_id: i32, dispatch: Playe
 }
 
 pub(super) fn cell_views(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<crate::gameserver::appserver::shape::ShapeView> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let Some(owner) = game.find_region(region_id) else { return Vec::new() };
+    let resolver = crate::gameserver::gameserver::game::RegionShapeResolver { game, owner };
     let (area_width, area_height) = game.area_dimensions();
     let mut views = Vec::new();
-    if region.get_shapes(x, y, area_width, area_height, game, &mut views).is_err() { return Vec::new() }
+    if owner.base().get_shapes(x, y, area_width, area_height, &resolver, &mut views).is_err() { return Vec::new() }
     views
 }
 

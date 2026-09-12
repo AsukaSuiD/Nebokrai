@@ -51,7 +51,7 @@ use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
+    monster_attack_cell_candidates, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
@@ -59,6 +59,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::public::guid::CGuid;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -484,33 +485,18 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     skill_level: u16,
     properties: &CSkillBaseProperties,
-    attacker_property: &crate::setup::monsterlist::MonsterProperties,
-    attacker_master: MasterInfo,
-    attacker_tamed: bool,
     path: &[(i32, i32, u8)],
 ) {
     for &(cell_x, cell_y, block) in path {
         if block == BLOCK_UNFLY {
             break;
         }
-        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
-        for identity in monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y) {
-            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
-            let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
-                continue;
-            };
-            if !owned_monster_attackable(
-                    game,
-                    region.id,
-                    attacker_property,
-                    attacker_tamed,
-                    attacker_master,
-                    identity,
-                    &target,
-                )
-            {
-                continue;
-            }
+        let Some(region_owner) = owner.as_ref() else { return; };
+        for identity in monster_attack_cell_candidates(game, region_owner, monster_id, cell_x, cell_y) {
+            let Some(region_owner) = owner.as_ref() else { return; };
+            if !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) { continue; }
+            let source = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
+            if !game.live_skill_target_attackable_in(region_owner, source, identity) { continue; }
             let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
             let span = (properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32)
                 .wrapping_sub(minimum)
@@ -560,8 +546,6 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     let Some((
         source,
         property,
-        master,
-        tamed,
         attack_interval_ms,
         cast,
         progress,
@@ -579,8 +563,6 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 property,
-                monster.master_info(),
-                monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_progress::<LittleStarProgress>(LITTLE_STAR_SKILL_ID, game.skill_factory()).cloned(),
@@ -590,7 +572,9 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Ok(source_x) = source.get_tile_x() else {
         return true;
     };
@@ -683,8 +667,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
 
     if progress.attack_due(now_ms, properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY)) {
         attack_path(
-            game, owner, runtime, monster_id, skill_level, properties, &property,
-            master, tamed, &progress.path,
+            game, owner, runtime, monster_id, skill_level, properties, &progress.path,
         );
         let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
         progress.record_attack(runtime.now_milliseconds());

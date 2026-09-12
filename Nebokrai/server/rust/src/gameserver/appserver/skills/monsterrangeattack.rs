@@ -23,8 +23,8 @@
 //! Каждая клетка читается после предыдущих повреждений; IsAttackAble вызывается
 //! перед дедупликацией, цель добавляется в список после Attack. Общий регион,
 //! Vec и kernel заменяют только указатели, STL и хранение исполнения.
-//! Monster-обход пока разрешает только владельцев 400/600; исходный RTTI
-//! допускает остальные CMoveShape, для которых ещё нужна полная spatial-граница.
+//! Monster-обход разрешает все CMoveShape через полный производный регион;
+//! допуск читает живые source/target, а не снимки PK-политики.
 //!
 //! Расчёт (VA `0x00512170`) сохраняет RNG `abs(max-min)+1`, элементальный
 //! урон и x87-усечение EM-бонуса с исходной константой `0.01_f32`.
@@ -57,6 +57,7 @@ use crate::gameserver::appserver::ai::monsterai::MonsterSkillCallOutcome;
 use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::public::guid::CGuid;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::skills::kernel::SkillTermination;
@@ -65,7 +66,7 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::skills::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable,
+    monster_attack_cell_candidates,
     resolve_owned_monster_attack_target,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
@@ -216,7 +217,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
                 match target.object_type {
                     PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
                     MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
-                    1100 | 1200 => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, target, attack, runtime)),
+                    1100 | 1200 => game.with_published_player_ai(player_id, player_ai, |game| game.receive_stationary_build_skill_attack(region_id, target, attack, runtime)),
                     _ => {}
                 }
             }
@@ -274,12 +275,12 @@ pub(crate) fn range_attack_scope_cells() -> impl Iterator<Item = (i32, i32)> {
 /// читается только после применения предыдущих ударов и их последствий смерти.
 pub(crate) fn range_attack_cell_candidates(
     game: &CGame,
-    region: &CServerRegion,
+    region_owner: &ServerRegionOwner,
     monster_id: i32,
     tile_x: i32,
     tile_y: i32,
 ) -> Vec<ShapeIdentity> {
-    monster_attack_cell_candidates(game, region, monster_id, tile_x, tile_y)
+    monster_attack_cell_candidates(game, region_owner, monster_id, tile_x, tile_y)
 }
 
 pub(crate) fn calculate_monster_range_attack(
@@ -330,9 +331,6 @@ pub(crate) struct MonsterRangeAttackDispatch {
     pub(crate) monster_id: i32,
     pub(crate) skill_level: u16,
     properties: CSkillBaseProperties,
-    property: crate::setup::monsterlist::MonsterProperties,
-    attacker_master: crate::gameserver::appserver::masterinfo::MasterInfo,
-    attacker_tamed: bool,
     pub(crate) center_x: i32,
     pub(crate) center_y: i32,
 }
@@ -375,15 +373,12 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     dispatch: &mut Option<MonsterRangeAttackDispatch>,
 ) -> bool {
-    let Some((shape, property, cast, attacker_master, attacker_tamed)) = region
+    let Some((shape, cast)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             Some((
                 monster.move_shape().shape().clone(),
-                game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
                 monster.current_active_attack_cast(game.skill_factory())?,
-                monster.master_info(),
-                monster.is_tamed(),
             ))
         })
     else {
@@ -426,9 +421,6 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
         monster_id,
         skill_level: cast.dispatch().skill_level,
         properties: properties.clone(),
-        property,
-        attacker_master,
-        attacker_tamed,
         center_x: tile_x,
         center_y: tile_y,
     });
@@ -443,19 +435,12 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     attacked: &[ShapeIdentity],
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    if resolve_owned_monster_attack_target(game, region_owner, identity).is_none() {
         return false;
-    };
-    if !owned_monster_attackable(
-        game,
-        region.id,
-        &dispatch.property,
-        dispatch.attacker_tamed,
-        dispatch.attacker_master,
-        identity,
-        &target,
-    ) {
+    }
+    let source = ShapeIdentity { object_type: MONSTER_TYPE, id: dispatch.monster_id, ex_id: CGuid::GUID_INVALID };
+    if !game.live_skill_target_attackable_in(region_owner, source, identity) {
         return false;
     }
     if attacked.contains(&identity) { return false; }

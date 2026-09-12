@@ -42,7 +42,7 @@ use super::fightdefense::truncate_original;
 use super::flash::master_info;
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    owned_monster_attackable, resolve_owned_monster_attack_target,
+    resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
@@ -182,8 +182,6 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
     let Some((
         source,
         property,
-        master,
-        tamed,
         attack_interval_ms,
         cast,
         progress,
@@ -201,8 +199,6 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 property,
-                monster.master_info(),
-                monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_progress::<YunShengLightningProgress>(YUNSHENG_LIGHTNING_SKILL_ID, game.skill_factory()).copied(),
@@ -212,7 +208,9 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let (Ok(source_x), Ok(source_y)) = (source.get_tile_x(), source.get_tile_y()) else {
         return true;
     };
@@ -326,10 +324,10 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    if let Some(target) = target
-        && owned_monster_attackable(
-            game, region.id, &property, tamed, master, target_identity, &target,
-        )
+    let Some(region_owner) = owner.as_ref() else { return true; };
+    if target.is_some()
+        && matches!(target_identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+        && game.live_skill_target_attackable_in(region_owner, source.identity(), target_identity)
     {
         // Windows `CMonster::GetAddElementAtk` возвращает ноль даже для
         // приручённого монстра; поэтому здесь остаётся ровно один RNG-вызов.

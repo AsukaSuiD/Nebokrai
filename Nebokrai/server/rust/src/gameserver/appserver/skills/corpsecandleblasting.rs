@@ -7,7 +7,7 @@
 //! визуальные пакеты и самоубийственный жизненный цикл находятся здесь; `CGame`
 //! остаётся владельцем защиты, применения смерти и сценарной очереди.
 //! Scan допускает RTTI CMoveShape, а Attack отдельно отвергает 600 → 600.
-//! Общий пространственный resolver пока не передаёт NPC и постройки.
+//! Полный производный регион сохраняет этот RTTI-допуск и порядок клеток.
 //! End (0x00582810, общий со SporeBlasting) сбрасывает флаги, снимает один
 //! запрет движения и вызывает CAttackSkill::End. Общая очистка CMonster
 //! выполняет его после сообщения смерти либо при отмене/Stiffen без взрыва;
@@ -23,7 +23,7 @@ use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_objec
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable,
+    monster_attack_cell_candidates,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -129,8 +129,6 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
     let Some((
         source,
         property,
-        master,
-        tamed,
         attack_interval_ms,
         script_file,
         cast,
@@ -148,8 +146,6 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
             Some((
                 monster.move_shape().shape().clone(),
                 property,
-                monster.master_info(),
-                monster.is_tamed(),
                 attack_interval_ms,
                 monster.script_file().to_vec(),
                 monster.current_active_attack_cast(game.skill_factory()),
@@ -160,8 +156,12 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
         return false;
     };
 
+    let initial_target = if cast.is_none() {
+        owner.as_ref().and_then(|region_owner| resolve_owned_monster_attack_target(game, region_owner, target_identity))
+    } else { None };
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
+        let Some(target) = initial_target
         else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target(game.skill_factory());
@@ -234,26 +234,11 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
             }
             let cell_x = center_x.wrapping_sub(1).wrapping_add(x);
             let cell_y = center_y.wrapping_sub(1).wrapping_add(y);
-            let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
-            let candidates = monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y);
+            let Some(region_owner) = owner.as_ref() else { return true; };
+            let candidates = monster_attack_cell_candidates(game, region_owner, monster_id, cell_x, cell_y);
             for identity in candidates {
-                let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-                let Some(target) = resolve_owned_monster_attack_target(game, region, identity)
-                else {
-                    continue;
-                };
-                if !owned_monster_attackable(
-                        game,
-                        region.id,
-                        &property,
-                        tamed,
-                        master,
-                        identity,
-                        &target,
-                    )
-                {
-                    continue;
-                }
+                let Some(region_owner) = owner.as_ref() else { return true; };
+                if !game.live_skill_target_attackable_in(region_owner, source.identity(), identity) { continue; }
                 // В scan вызывается IsAttackAble; отдельный Attack отвергает 600 → 600.
                 if identity.object_type == MONSTER_TYPE { continue; }
                 let attack = calculate_attack(game, monster_id, skill_level, properties);

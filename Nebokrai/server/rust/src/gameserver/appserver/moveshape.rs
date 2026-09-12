@@ -317,9 +317,7 @@ use crate::gameserver::appserver::skills::machineshieldstate::{
 use crate::gameserver::appserver::skills::manashieldstate::{
     ManaShieldState, MANA_SHIELD_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::promotionstate::{
-    PromotionState, PROMOTION_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::promotionstate::PROMOTION_STATE_BYTES;
 use crate::gameserver::appserver::skills::knockoutstate::{
     KNOCK_OUT_STATE_BYTES, KnockOutState,
 };
@@ -2163,22 +2161,6 @@ impl CMoveShape {
         self.append_serialized_state_record(&state.encoded_for_install());
         self.state_entries.append(DefenseShieldState::Life(state));
         previous
-    }
-
-    /// Повторное наложение вызывает Restart прежнего состояния без замены
-    /// его параметров и без нового Begin.
-    pub(crate) fn begin_promotion_state(&mut self, state: PromotionState) -> bool {
-        if let Some(key) = self.defense_shield_key(state.skill_id()) {
-            if let Some(StateData::DefenseShield(DefenseShieldState::Promotion(previous))) =
-                self.state_entries.get_mut(key)
-            {
-                previous.restart(state.started_at_ms());
-            }
-            return false;
-        }
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(DefenseShieldState::Promotion(state));
-        true
     }
 
     pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {

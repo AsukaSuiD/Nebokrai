@@ -17,6 +17,8 @@
 //! и запись в прежний слот либо append при отсутствии совпадения. MasterInfo
 //! берётся у живого source на каждом наложении; country остаётся нулём.
 //! Callback публикует настоящий derived region, без копии base/состояния.
+//! Общий AI (0x0053A230): RTTI CMoveShape → IsDied → живой IsAttackAble
+//! → Cure → AddState. Дополнительного god-фильтра и ограничения 400/600 нет.
 
 use crate::gameserver::appserver::states::state::{
     end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
@@ -25,11 +27,11 @@ use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED};
 use super::flash::{cell_views, master_info};
 use super::monsterattack::{
-    monster_attack_cell_candidates, owned_monster_attackable,
+    monster_attack_cell_candidates,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoison::{SPIDER_POISON_SKILL_ID, target_has_cure};
+use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 use super::spiderpoisonstate::{SpiderPoisonState, begin_primary_spider_poison_state};
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
@@ -136,9 +138,9 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let region_id = region.id;
-    let Some((source, property, master, tamed, attack_interval_ms, cast, last_used_ms)) = region
+    let Some(region_owner) = owner.as_mut() else { return false; };
+    let region_id = region_owner.base().id;
+    let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region_owner.base_mut()
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -151,8 +153,6 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 property,
-                monster.master_info(),
-                monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(CORPSE_PTOMAINE_SKILL_ID, game.skill_factory()),
@@ -163,16 +163,16 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     };
 
     if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
+        let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity)
         else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target(game.skill_factory());
             }
             return true;
         };
         if !approach_attack_range(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
@@ -182,7 +182,7 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
         }
         if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
         {
-            let attack_started = region
+            let attack_started = region_owner.base_mut()
                 .find_monster_by_id_mut(monster_id)
                 .is_some_and(|monster| {
                     monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
@@ -199,8 +199,8 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.begin_base_attack_cast(
                 target_identity,
                 CORPSE_PTOMAINE_SKILL_ID,
@@ -210,7 +210,7 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
                 game.skill_factory(),
             );
         }
-        send_start(game, region, &source, skill_level);
+        send_start(game, region_owner.base_mut(), &source, skill_level);
         return true;
     }
 
@@ -228,40 +228,29 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     let (Ok(center_x), Ok(center_y)) = (source.get_tile_x(), source.get_tile_y()) else {
         return true;
     };
-    send_fire(game, region, &source, skill_level, center_x, center_y);
+    send_fire(game, region_owner.base_mut(), &source, skill_level, center_x, center_y);
     for offset_x in -1..=1 {
         for offset_y in -1..=1 {
-            let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
-            let candidates = monster_attack_cell_candidates(
-                game,
-                region,
+            let Some(region_owner) = owner.as_mut() else { return true; };
+            let candidates = monster_attack_cell_candidates(game, region_owner,
                 monster_id,
                 center_x.wrapping_add(offset_x),
                 center_y.wrapping_add(offset_y),
             );
             for identity in candidates {
-                let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
-                let Some(target) = resolve_owned_monster_attack_target(game, region, identity)
+                let Some(region_owner) = owner.as_mut() else { return true; };
+                let Some(target) = resolve_owned_monster_attack_target(game, region_owner, identity)
                 else {
                     continue;
                 };
                 if target.dead
-                    || target.god
-                    || target.city_dead
-                    || target_has_cure(game, region, identity)
-                    || !owned_monster_attackable(
-                        game,
-                        region.id,
-                        &property,
-                        tamed,
-                        master,
-                        identity,
-                        &target,
-                    )
+                    || !game.live_skill_target_attackable_in(region_owner, source.identity(), identity)
                 {
                     continue;
                 }
                 let _ = game.with_published_region(owner, |game| {
+                    let Some(target) = resolve_state_move_shape(game, region_id, identity) else { return; };
+                    if target.has_state_by_skill_id(super::cure::CURE_SKILL_ID) { return; }
                     add_corpse_poison_state(
                         game, region_id, source.identity(), identity, properties,
                         &mut || runtime.now_milliseconds(),
@@ -270,8 +259,8 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
             }
         }
     }
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(region_owner) = owner.as_mut() else { return true; };
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(CORPSE_PTOMAINE_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(CORPSE_PTOMAINE_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(CORPSE_PTOMAINE_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
@@ -299,13 +288,22 @@ pub(crate) fn execute_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game:
     if game.player_skill_execution(player_id, CORPSE_PTOMAINE_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) { let current = game.find_player(player_id).map_or(0, CPlayer::mana); if (current.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_start(game, player_id, level); if let Some(state) = game.player_skill_execution_mut(player_id, CORPSE_PTOMAINE_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); } }
     let started = game.player_skill_execution(player_id, CORPSE_PTOMAINE_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default(); if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) }
     send_player_fire(game, player_id, level, (center_x, center_y));
-    let Some(master) = game.find_player(player_id).map(master_info) else { restore_player(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
-    let mut targets = Vec::new(); for offset_x in -1..=1 { for offset_y in -1..=1 { for view in cell_views(game, region_id, center_x.wrapping_add(offset_x), center_y.wrapping_add(offset_y)) { let identity = view.identity; if matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) && game.owned_player_skill_target_attackable(master, identity, region_id) && !game.periodic_state_target_dead(region_id, identity) { targets.push(identity); } } } }
     let source = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
-    for identity in targets {
-        let Some(region) = game.find_region(region_id) else { break; };
-        if target_has_cure(game, region.base(), identity) { continue; }
-        add_corpse_poison_state(game, region_id, source, identity, &properties, &mut || runtime.now_milliseconds());
+    for offset_x in -1..=1 {
+        for offset_y in -1..=1 {
+            for view in cell_views(game, region_id, center_x.wrapping_add(offset_x), center_y.wrapping_add(offset_y)) {
+                let identity = view.identity;
+                if !matches!(identity.object_type, PLAYER_TYPE | 500 | MONSTER_TYPE | 1100 | 1200)
+                    || game.base_magic_target_dead(region_id, identity)
+                    || !game.live_skill_target_attackable(region_id, source, identity)
+                { continue; }
+                let Some(target) = resolve_state_move_shape(game, region_id, identity) else { continue; };
+                if target.has_state_by_skill_id(super::cure::CURE_SKILL_ID) { continue; }
+                game.with_published_player_ai(player_id, ai, |game| {
+                    add_corpse_poison_state(game, region_id, source, identity, &properties, &mut || runtime.now_milliseconds());
+                });
+            }
+        }
     }
     if let Some(state) = game.player_skill_execution_mut(player_id, CORPSE_PTOMAINE_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, ai, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }

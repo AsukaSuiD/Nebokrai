@@ -78,8 +78,6 @@ pub(crate) struct CBuild {
     pub(crate) max_hp: u32,
     pub(crate) defence: u32,
     pub(crate) width_increment: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
     pub(crate) height_increment: i32,
     pub(crate) element_resistance: u32,
     pub(crate) script: Vec<u8>,
@@ -122,8 +120,6 @@ impl CBuild {
             max_hp: init.max_hp as u32,
             defence: init.defence as u32,
             width_increment: init.width_increment,
-            tile_x,
-            tile_y,
             height_increment: init.height_increment,
             element_resistance: init.element_resistance as u32,
             script: Vec::new(),
@@ -147,8 +143,8 @@ impl CBuild {
         self.move_shape.shape_mut().set_action(action);
         Some(BuildBlockUpdate {
             region_id: self.region_id(),
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
+            tile_x: self.tile_x(),
+            tile_y: self.tile_y(),
             width_increment: self.width_increment as u8,
             height_increment: self.height_increment as u8,
             block: if action == 6 { 0 } else { 3 },
@@ -224,12 +220,22 @@ impl CBuild {
         self.move_shape.shape().base_object().get_name()
     }
 
+    // Клетка читается из единственного CShape, в том числе после ForceMove.
+    // Некорректное float-преобразование сохраняет native integer-indefinite.
+    pub(crate) fn tile_x(&self) -> i32 {
+        self.move_shape.shape().get_tile_x().unwrap_or(i32::MIN)
+    }
+
+    pub(crate) fn tile_y(&self) -> i32 {
+        self.move_shape.shape().get_tile_y().unwrap_or(i32::MIN)
+    }
+
     pub(crate) fn shape_view(&self) -> ShapeView {
         let shape = self.move_shape.shape();
         ShapeView {
             identity: shape.identity(),
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
+            tile_x: self.tile_x(),
+            tile_y: self.tile_y(),
             pos_x_bits: shape.get_pos_x().to_bits(),
             pos_y_bits: shape.get_pos_y().to_bits(),
             figure: ShapeFigure::from_directions([
@@ -246,8 +252,8 @@ impl CBuild {
     /// Chebyshev-дистанции диагональное направление уступает прямому.
     pub(crate) fn be_attacked_point(&self, attacker_x: i32, attacker_y: i32) -> (i32, i32) {
         CMoveShape::nearest_figure_attack_point(
-            self.tile_x,
-            self.tile_y,
+            self.tile_x(),
+            self.tile_y(),
             self.shape_view().figure,
             attacker_x,
             attacker_y,
@@ -257,8 +263,8 @@ impl CBuild {
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
             region_id: self.region_id(),
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
+            tile_x: self.tile_x(),
+            tile_y: self.tile_y(),
             width_increment: self.width_increment as u8,
             height_increment: self.height_increment as u8,
             block: if self.action() == 6 { 0 } else { 3 },
@@ -308,12 +314,12 @@ impl CBuild {
         let width_increment = reader.read_i32().map_err(BuildDecodeError::Property)?;
         let height_increment = reader.read_i32().map_err(BuildDecodeError::Property)?;
         let element_resistance = reader.read_u32().map_err(BuildDecodeError::Property)?;
-        let tile_x = self
+        self
             .move_shape
             .shape()
             .get_tile_x()
             .map_err(BuildDecodeError::Coordinate)?;
-        let tile_y = self
+        self
             .move_shape
             .shape()
             .get_tile_y()
@@ -324,8 +330,6 @@ impl CBuild {
         self.max_hp = max_hp;
         self.defence = defence;
         self.width_increment = width_increment;
-        self.tile_x = tile_x;
-        self.tile_y = tile_y;
         self.height_increment = height_increment;
         self.element_resistance = element_resistance;
         Ok(())

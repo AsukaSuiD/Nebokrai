@@ -49,7 +49,7 @@ use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable,
+    monster_attack_cell_candidates,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -76,7 +76,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
-use crate::setup::monsterlist::MonsterProperties;
+use crate::public::guid::CGuid;
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
@@ -787,9 +787,6 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
     spec: PathProjectileSpec,
     skill_level: u16,
     properties: &CSkillBaseProperties,
-    attacker_property: &MonsterProperties,
-    attacker_master: MasterInfo,
-    attacker_tamed: bool,
     center_x: i32,
     center_y: i32,
     progress: &mut PathProjectileProgress,
@@ -808,36 +805,20 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
         for offset_y in -scope_radius..=scope_radius {
             let cell_x = center_x.wrapping_add(offset_x);
             let cell_y = center_y.wrapping_add(offset_y);
-            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return did_attack; };
+            let Some(region_owner) = owner.as_ref() else { return did_attack; };
             for identity in monster_attack_cell_candidates(
-                game, region, monster_id, cell_x, cell_y,
+                game, region_owner, monster_id, cell_x, cell_y,
             ) {
-                let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return did_attack; };
-                if attacked.contains(&identity) {
-                    continue;
-                }
-                let Some(target) = resolve_owned_monster_attack_target(game, region, identity)
-                else {
-                    continue;
-                };
-                if target.dead {
-                    continue;
-                }
+                let Some(region_owner) = owner.as_ref() else { return did_attack; };
+                let Some(target) = resolve_owned_monster_attack_target(game, region_owner, identity)
+                else { continue; };
+                if target.dead || attacked.contains(&identity) { continue; }
                 if cell_x == center_x && cell_y != 0 && progress.visual_target.is_none() {
                     progress.visual_target = Some(identity);
                 }
-                if !owned_monster_attackable(
-                        game,
-                        region.id,
-                        attacker_property,
-                        attacker_tamed,
-                        attacker_master,
-                        identity,
-                        &target,
-                    )
-                {
-                    continue;
-                }
+                if !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) { continue; }
+                let source = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
+                if !game.live_skill_target_attackable_in(region_owner, source, identity) { continue; }
 
                 // Для monster-owner-а `GetAddElementAtk` и `ElementModify`
                 // равны нулю; недостигнутый `CSoulCollectState` не выдумывается.
@@ -893,8 +874,6 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     let Some((
         source,
         property,
-        master,
-        tamed,
         attack_interval_ms,
         cast,
         progress,
@@ -912,8 +891,6 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 property,
-                monster.master_info(),
-                monster.is_tamed(),
                 attack_interval_ms,
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_progress::<PathProjectileProgress>(spec.skill_id, game.skill_factory()).cloned(),
@@ -923,7 +900,9 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let (Ok(source_x), Ok(source_y)) = (source.get_tile_x(), source.get_tile_y()) else {
         return true;
     };
@@ -1077,9 +1056,6 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 spec,
                 skill_level,
                 properties,
-                &property,
-                master,
-                tamed,
                 cell_x,
                 cell_y,
                 &mut progress,

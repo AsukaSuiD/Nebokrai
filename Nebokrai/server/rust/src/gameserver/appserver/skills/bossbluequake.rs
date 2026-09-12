@@ -24,9 +24,11 @@
 //! расширенной точности x87 из `u32` и `0.01_f32` до единственной записи `f32`.
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
-//! Исходный monster cell допускает RTTI CMoveShape; пространственный resolver
-//! пока ограничен 400/600, подключение остальных derived-целей не завершено.
-//! Для monster-цели `time_percent` отдельно сохраняется в `f32`, после чего
+//! Обход разрешает все RTTI CMoveShape через полный регион. После прежнего End
+//! и destructor остатка новый Begin предшествует записи в тот же слот;
+//! без прежнего состояния выполняется append. Затем RP и общий ForceMove
+//! читают актуальные координаты, не снимок до callback состояния.
+//! Для любой цели, кроме type400, `time_percent` отдельно сохраняется в `f32`, после чего
 //! unsigned duration масштабируется в x87 и усекается к нулю. Обе ветви
 //! проверяют восстановление абсолютным сроком `CSkill::IsRestored`, сохраняя
 //! elapsed-семантику общей задержки.
@@ -37,17 +39,20 @@
 //! death/End callback. После такого вызова регион разрешается заново;
 //! исчезнувший owner прекращает проход без подмены базовым регионом.
 
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
+};
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
-use super::bossbluequakestate::BossBlueQuakeState;
+use super::blindstate::begin_primary_blind_state_at;
+use super::bossbluequakestate::{BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_ID};
 use super::fightdefense::truncate_original;
 use super::flash::cell_views;
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
+    monster_attack_cell_candidates, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
@@ -63,7 +68,7 @@ use crate::gameserver::appserver::skills::kernel::{
     skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::state::send_owned_state_visual;
+use crate::public::guid::CGuid;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -251,18 +256,6 @@ pub(crate) fn cancel_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
 }
 
-fn player_target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).map(CPlayer::level),
-        MONSTER_TYPE => game.find_region(region_id).and_then(|owner| {
-            let monster = owner.base().find_monster_by_id(target.id)?;
-            game.find_monster_property_by_origin_name(monster.base_property_key()?)
-                .map(|property| property.level as u8)
-        }),
-        _ => None,
-    }
-}
-
 fn calculate_player_attack(
     game: &mut CGame,
     player_id: i32,
@@ -351,25 +344,30 @@ fn player_front_targets(
         .into_iter()
         .map(|view| view.identity)
         .filter(|identity| {
-            matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+            matches!(identity.object_type, PLAYER_TYPE | 500 | MONSTER_TYPE | 1100 | 1200)
                 && !(identity.object_type == PLAYER_TYPE && identity.id == player_id)
         })
         .collect()
 }
 
-fn player_knockback_destination(
+pub(crate) fn quake_knockback_destination(
     game: &CGame,
     region_id: i32,
-    source_x: i32,
-    source_y: i32,
+    source: ShapeIdentity,
+    target_region: i32,
     target: ShapeIdentity,
     back_steps: u32,
 ) -> Option<(i32, i32, u32)> {
-    let target_view = game.base_magic_target_view(region_id, target)?;
-    let direction = get_line_direction(source_x, source_y, target_view.tile_x, target_view.tile_y);
+    let source_shape = resolve_state_move_shape(game, region_id, source)?.shape();
+    let source_x = source_shape.get_tile_x().ok()?;
+    let source_y = source_shape.get_tile_y().ok()?;
+    let target_shape = resolve_state_move_shape(game, target_region, target)?.shape();
+    let target_x = target_shape.get_tile_x().ok()?;
+    let target_y = target_shape.get_tile_y().ok()?;
+    let direction = get_line_direction(source_x, source_y, target_x, target_y);
     let mut position = ShapeAreaCoordinates {
-        x: target_view.tile_x,
-        y: target_view.tile_y,
+        x: target_x,
+        y: target_y,
     };
     let region = game.find_region(region_id)?.base();
     let mut moved = 0_u32;
@@ -536,35 +534,25 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
     }
 
-    let owner = game.find_player(player_id).map(player_master).unwrap_or_default();
+    let source = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
     for target in player_front_targets(game, region_id, player_id, direction) {
-        if !game.owned_player_skill_target_attackable(owner, target, region_id) {
+        if game.base_magic_target_dead(region_id, target)
+            || !game.live_skill_target_attackable(region_id, source, target)
+        {
             continue;
         }
-        let Some(target_level) = player_target_level(game, region_id, target) else {
-            continue;
-        };
         let Some((master, attack)) =
             calculate_player_attack(game, player_id, level, &properties)
         else {
             continue;
         };
-        match target.object_type {
-            PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(
-                master, target.id, region_id, attack, runtime,
-            )),
-            MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(
-                master, target.id, region_id, attack, runtime,
-            )),
-            _ => continue,
-        }
-        if game.periodic_state_target_dead(region_id, target)
-            || !game.owned_player_skill_target_attackable(owner, target, region_id)
-        {
-            continue;
-        }
-        let source_level = game.find_player(player_id).map_or(0, CPlayer::level);
-        if target_level >= source_level {
+        game.with_published_player_ai(player_id, player_ai, |game| {
+            game.apply_owned_skill_contact(master, target, region_id, attack, runtime);
+            game.increase_owned_player_rp(player_id, true, 0);
+        });
+        let Some(source_level) = game.move_shape_level(region_id, source) else { continue; };
+        let Some(target_level) = game.move_shape_level(region_id, target) else { continue; };
+        if target_level >= source_level || !game.live_skill_target_attackable(region_id, source, target) {
             continue;
         }
         let base_duration = if target.object_type == PLAYER_TYPE {
@@ -581,22 +569,12 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         } else {
             reduced_duration
         };
-        let Some((destination_x, destination_y, moved)) = player_knockback_destination(
-            game, region_id, source_x, source_y, target, back_steps,
-        ) else {
-            continue;
-        };
-        let state_now_ms = runtime.now_milliseconds();
-        let _ = game.apply_boss_blue_quake_control(
-            region_id,
-            player_id,
-            target,
-            BossBlueQuakeState::new(state_now_ms, duration),
-            destination_x,
-            destination_y,
-            move_speed.wrapping_mul(moved),
-            runtime,
-        );
+        game.with_published_player_ai(player_id, player_ai, |game| {
+            game.apply_boss_blue_quake_control(
+                region_id, player_id, target, BossBlueQuakeState::new(0, duration),
+                back_steps, move_speed, runtime,
+            );
+        });
     }
     if let Some(state) = game.player_skill_state_mut::<PlayerBossBlueQuakeExecutionState>(player_id, BOSS_BLUE_QUAKE_SKILL_ID) {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
@@ -625,69 +603,23 @@ fn send_visual(game: &CGame, region: &CServerRegion, source: &CShape, level: u16
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
-fn target_level(game: &CGame, region: &CServerRegion, identity: ShapeIdentity) -> Option<u8> {
-    match identity.object_type {
-        PLAYER_TYPE => game.find_player(identity.id).map(|player| player.level()),
-        MONSTER_TYPE => region.find_monster_by_id(identity.id).and_then(|monster| {
-            game.find_monster_property_by_origin_name(monster.base_property_key()?)
-                .map(|property| property.level as u8)
-        }),
-        _ => None,
-    }
-}
-
 pub(crate) fn replace_quake_state(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_id: i32,
     identity: ShapeIdentity,
+    source: (i32, ShapeIdentity),
     state: BossBlueQuakeState,
-    now_milliseconds: impl FnMut() -> u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) {
-    let Some((shape, previous)) = (if identity.object_type == PLAYER_TYPE {
-        game.find_player_mut(identity.id).and_then(|target| {
-            let shape = target.shape().clone();
-            let previous = target.take_boss_blue_quake_state();
-            Some((shape, previous))
-        })
-    } else {
-        region.find_monster_by_id_mut(identity.id).and_then(|target| {
-            let shape = target.move_shape().shape().clone();
-            let previous = target.move_shape_mut().take_boss_blue_quake_state();
-            Some((shape, previous))
-        })
-    }) else { return };
-    if let Some(previous) = previous {
-        send_owned_state_visual(game, region, &shape, previous.skill_id(), false, 0, 0);
-    }
-    if identity.object_type == PLAYER_TYPE {
-        if let Some(target) = game.find_player_mut(identity.id) {
-            if previous.is_some() {
-                target.set_skill_moveable(true);
-                target.set_skill_fightable(true);
-            }
-            let replaced = target.replace_boss_blue_quake_state(state);
-            debug_assert!(replaced.is_none());
-            target.set_skill_moveable(false);
-            target.set_skill_fightable(false);
-        }
-    } else if let Some(target) = region.find_monster_by_id_mut(identity.id) {
-        if previous.is_some() {
-            target.move_shape_mut().set_moveable(true);
-            target.move_shape_mut().set_fightable(true);
-        }
-        let replaced = target.move_shape_mut().replace_boss_blue_quake_state(state);
-        debug_assert!(replaced.is_none());
-        target.move_shape_mut().set_moveable(false);
-        target.move_shape_mut().set_fightable(false);
-    }
-    send_owned_state_visual(
-        game,
-        region,
-        &shape,
-        state.skill_id(),
-        true,
-        state.client_time(now_milliseconds),
-        0,
+    let Some(shape) = resolve_state_move_shape(game, region_id, identity) else { return; };
+    let placement = if let Some((index, key)) = shape.find_state_position(|state| state.state_id() == BOSS_BLUE_QUAKE_STATE_ID) {
+        let Some(location) = shape.applied_state_replacement_location(key) else { return; };
+        end_and_destroy_state_at(game, region_id, identity, index);
+        Some(location)
+    } else { None };
+    begin_primary_blind_state_at(
+        game, region_id, identity, Some(source), Some((region_id, identity)), state, placement,
+        &mut now_milliseconds,
     );
 }
 
@@ -696,22 +628,18 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
-    now_ms: u32,
     monster_id: i32,
     level: u16,
     properties: &CSkillBaseProperties,
     attacker_property: &crate::setup::monsterlist::MonsterProperties,
-    master: MasterInfo,
-    tamed: bool,
     identity: ShapeIdentity,
-    source_x: i32,
-    source_y: i32,
 ) {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else { return };
-    if target.dead || !owned_monster_attackable(
-        game, region.id, attacker_property, tamed, master, identity, &target,
-    ) { return; }
+    let Some(region_owner) = owner.as_ref() else { return; };
+    let region_id = region_owner.region_id();
+    let Some(target) = resolve_owned_monster_attack_target(game, region_owner, identity) else { return; };
+    let source = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
+    if target.dead || !game.live_skill_target_attackable_in(region_owner, source, identity) { return; }
+    let region = region_owner.base();
     let Some(monster) = region.find_monster_by_id(monster_id) else { return };
     let bounds = monster.state_attack_bounds(attacker_property.minimum_attack, attacker_property.maximum_attack);
     let soul_attack = monster.soul_attack(attacker_property);
@@ -754,52 +682,29 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     };
     apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
 
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
-    let Some(live_target) = resolve_owned_monster_attack_target(game, region, identity) else {
-        return;
-    };
-    if target_level(game, region, identity).is_some_and(|target_level| target_level < attacker_property.level as u8) {
-        if !owned_monster_attackable(
-            game,
-            region.id,
-            attacker_property,
-            tamed,
-            master,
-            identity,
-            &live_target,
-        ) {
-            return;
-        }
+    let _ = game.with_published_region(owner, |game| {
+        let Some(source_level) = game.move_shape_level(region_id, source) else { return; };
+        let Some(target_level) = game.move_shape_level(region_id, identity) else { return; };
+        if target_level >= source_level
+            || !game.live_skill_target_attackable(region_id, source, identity)
+        { return; }
+        let Some(target_region) = resolve_state_move_shape(game, region_id, identity)
+            .map(|shape| shape.shape().get_region_id()) else { return; };
         let persist = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
         let duration = if identity.object_type == PLAYER_TYPE { persist } else {
-            scaled_monster_duration(
-                persist,
-                properties.query_property(SKILL_USAGE_TIME_PERCENT),
-            )
+            scaled_monster_duration(persist, properties.query_property(SKILL_USAGE_TIME_PERCENT))
         };
         replace_quake_state(
-            game,
-            region,
-            identity,
-            BossBlueQuakeState::new(now_ms, duration),
+            game, target_region, identity, (region_id, source), BossBlueQuakeState::new(0, duration),
             || runtime.now_milliseconds(),
         );
-
-        let Ok(target_x) = target.shape.get_tile_x() else { return };
-        let Ok(target_y) = target.shape.get_tile_y() else { return };
-        let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        let mut position = ShapeAreaCoordinates { x: target_x, y: target_y };
-        let mut moved = 0_u32;
-        let back_steps = properties.query_property(SKILL_USAGE_TARGET_BACK_STEP);
-        while moved < back_steps {
-            let Ok(next) = CShape::get_direction_position(direction, position) else { break };
-            if region.region.get_block(next.x, next.y).map_or(true, |block| block & 7 != 0) { break; }
-            position = next;
-            moved = moved.wrapping_add(1);
-        }
+        let Some((x, y, moved)) = quake_knockback_destination(
+            game, region_id, source, target_region, identity,
+            properties.query_property(SKILL_USAGE_TARGET_BACK_STEP),
+        ) else { return; };
         let duration_ms = properties.query_property(SKILL_USAGE_TARGET_MOVE_SPEED).wrapping_mul(moved);
-        let _ = game.force_move_owned_shape(region, identity, position.x, position.y, duration_ms);
-    }
+        let _ = game.force_move_skill_target(target_region, identity, x, y, duration_ms);
+    });
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и последствия всех целей клетки")]
@@ -814,12 +719,15 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((mut source, property, master, tamed, cast, last_used_ms)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((
+    let Some((mut source, property, cast, last_used_ms)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((
         monster.move_shape().shape().clone(),
         game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-        monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID, game.skill_factory()),
+        monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID, game.skill_factory()),
     ))) else { return false };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
+    let Some(target) = target else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     };
@@ -863,11 +771,9 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     }
     send_visual(game, region, &source, level, false);
     let Ok(face) = source.get_face_position() else { return true };
-    let source_x = source.get_tile_x().unwrap_or_default();
-    let source_y = source.get_tile_y().unwrap_or_default();
-    for identity in monster_attack_cell_candidates(game, region, monster_id, face.x, face.y) {
-        attack_target(game, owner, runtime, now_ms, monster_id, level, properties, &property,
-            master, tamed, identity, source_x, source_y);
+    let Some(region_owner) = owner.as_ref() else { return true; };
+    for identity in monster_attack_cell_candidates(game, region_owner, monster_id, face.x, face.y) {
+        attack_target(game, owner, runtime, monster_id, level, properties, &property, identity);
         if owner.is_none() { return true; }
     }
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };

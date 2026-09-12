@@ -25,8 +25,8 @@ impl CGame {
             MONSTER_TYPE => self.receive_monster_skill_attack(
                 master, target.id, region_id, attack, runtime,
             ),
-            1100 | 1200 => self.apply_direct_player_skill_attack_to_stationary_build(
-                master.master_id, region_id, target, attack, runtime,
+            1100 | 1200 => self.receive_stationary_build_skill_attack(
+                region_id, target, attack, runtime,
             ),
             _ => {}
         }
@@ -42,8 +42,30 @@ impl CGame {
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
         let actual_region = resolve_state_move_shape(self, region_id, target)?.shape().get_region_id();
         let mut owner = self.take_region_owner(actual_region)?;
-        let result = self.force_move_owned_shape(owner.base_mut(), target, x, y, duration_ms);
+        let result = if matches!(target.object_type, 1100 | 1200) {
+            self.force_move_stationary_build(&mut owner, target, x, y, duration_ms)
+        } else {
+            self.force_move_owned_shape(owner.base_mut(), target, x, y, duration_ms)
+        };
         self.restore_region_owner(owner);
         result
+    }
+
+    fn force_move_stationary_build(
+        &mut self, owner: &mut ServerRegionOwner, target: ShapeIdentity,
+        x: i32, y: i32, duration_ms: u32,
+    ) -> Option<Result<bool, MoveShapeCommandBlock>> {
+        let (build, region) = owner.stationary_build_and_region_mut(target)?;
+        let (area_width, area_height) = self.area_dimensions();
+        let facts = crate::gameserver::appserver::moveshape::MoveShapePositionFacts {
+            current_hit_points: build.hp(),
+            figure: build.shape_view().figure,
+            current_area: None,
+            area_width,
+            area_height,
+        };
+        let around = GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)?;
+        // У постройки нет CBaseAI: общий ForceMove не добавляет ожидание AI.
+        Some(build.move_shape_mut().force_move(Some(region), x, y, duration_ms, facts, &around))
     }
 }

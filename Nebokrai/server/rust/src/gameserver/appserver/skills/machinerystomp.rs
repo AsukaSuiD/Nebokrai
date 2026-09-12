@@ -65,7 +65,7 @@ use super::flash::{cell_views, master_info};
 use super::fightdefense::truncate_original;
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable,
+    monster_attack_cell_candidates,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -74,6 +74,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::public::guid::CGuid;
 use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -601,14 +602,12 @@ pub(crate) struct WideArcAttackDispatch {
     skill_level: u16,
     properties: CSkillBaseProperties,
     property: MonsterProperties,
-    attacker_master: MasterInfo,
-    attacker_tamed: bool,
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт")]
 pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_owner: &mut ServerRegionOwner,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_id: u32,
@@ -618,7 +617,8 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     dispatch: &mut Option<WideArcAttackDispatch>,
 ) -> MonsterSkillCallOutcome {
-    let Some((source, property, master, tamed, pet_attack, cast, last_used_ms)) = region
+    let region = region_owner.base_mut();
+    let Some((source, property, pet_attack, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -627,8 +627,6 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             Some((
                 monster.move_shape().shape().clone(),
                 property.clone(),
-                monster.master_info(),
-                monster.is_tamed(),
                 monster.is_tamed().then(|| monster.pet_attack_properties(&property)),
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(skill_id, game.skill_factory()),
@@ -642,7 +640,8 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     {
         return MonsterSkillCallOutcome::NotHandled;
     }
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let region = region_owner.base_mut();
     if cast.is_some() && target.as_ref().is_none_or(|target| target.dead) {
         let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game.skill_factory());
         return MonsterSkillCallOutcome::Handled;
@@ -766,8 +765,6 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         skill_level,
         properties: properties.clone(),
         property,
-        attacker_master: master,
-        attacker_tamed: tamed,
     });
     MonsterSkillCallOutcome::Handled
 }
@@ -820,12 +817,12 @@ fn wide_arc_attack(
 
 pub(crate) fn wide_arc_attack_cell_candidates(
     game: &CGame,
-    region: &CServerRegion,
+    region_owner: &ServerRegionOwner,
     dispatch: &WideArcAttackDispatch,
     tile_x: i32,
     tile_y: i32,
 ) -> Vec<ShapeIdentity> {
-    monster_attack_cell_candidates(game, region, dispatch.monster_id, tile_x, tile_y)
+    monster_attack_cell_candidates(game, region_owner, dispatch.monster_id, tile_x, tile_y)
 }
 
 pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>(
@@ -835,23 +832,12 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
     identity: ShapeIdentity,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
-        return false;
-    };
-    if !owned_monster_attackable(
-            game,
-            region.id,
-            &dispatch.property,
-            dispatch.attacker_tamed,
-            dispatch.attacker_master,
-            identity,
-            &target,
-        )
-    {
-        return false;
-    }
-    let Some(attack) = wide_arc_attack(game, region, dispatch) else { return false };
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    if !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) { return false; }
+    if resolve_owned_monster_attack_target(game, region_owner, identity).is_none() { return false; }
+    let source = ShapeIdentity { object_type: MONSTER_TYPE, id: dispatch.monster_id, ex_id: CGuid::GUID_INVALID };
+    if !game.live_skill_target_attackable_in(region_owner, source, identity) { return false; }
+    let Some(attack) = wide_arc_attack(game, region_owner.base(), dispatch) else { return false; };
     apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
     true
 }

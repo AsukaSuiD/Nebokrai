@@ -1,23 +1,16 @@
-//! Каноническое состояние оглушения `CKnockOutState` (`0x192`).
-//! Истечение получает ключ конкретного экземпляра общей арены; проверка
-//! срока и End не подменяют его первым состоянием с тем же ID.
-//! Общий CBlindState::AI (0x005d5ba0) сравнивает абсолютный wrapping deadline
-//! строго с now, в том числе при нулевом сроке; elapsed здесь неэквивалентен.
+//! Оглушение CKnockOutState (0x192): запрет движения и боя до истечения
+//! срока либо защитного действия. Источник: gameserver.exe + GameServer.pdb,
+//! исходный владелец appserver/skills/knockoutstate.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/knockoutstate.cpp`. Таблица виртуальных методов EXE
-//! подтверждает, что `AI`, `End`, `OnAction`, `Serialize` и `Unserialize`
-//! буквально используют реализацию `CBlindState`. Достигнутый путь сохраняет
-//! беззнаковую проверку срока, снимает запреты движения и боя при истечении
-//! либо защитном действии и публикует `0xBFE03/0xBFE04`. Persisted-запись
-//! `ID + remaining time` декодируется, активируется StartAllStates после 8F801 и
-//! удаляется вместе с canonical state. Невостребованные координатные
-//! перегрузки сохранены ниже.
-//! Monster-визуал получает явного владельца региона, поэтому сохраняет around-
-//! доставку и тогда, когда AI временно извлёк регион из `CGame`.
-//! Защитное снятие проходит через опубликованный owner и общий CBlindState::End:
-//! visual → unlock → RemoveState → virtual UpdateProperty. Отдельного
-//! монстрового End без последнего callback больше нет.
+//! Vtable наследует AI/End/OnAction/codec от CBlindState. Строгий wrapping
+//! deadline действует и при нулевом сроке; ключ арены отличает одноимённые
+//! экземпляры. End: visual → fight/move-unlock → RemoveState → UpdateProperty.
+//! Общий объектный Begin требует S, обновляет timestamp при U,
+//! отправляет BFE03 и ставит оба запрета до публикации в выбранном caller-ом слоте.
+//! Опубликованный derived region сохраняет доставку и callback для всех целей.
+//! DB-запись ID/remaining занимает 8 байт; StartAllStates восстанавливает
+//! блокировки после загрузки. RAW координатной и типизированной перегрузок
+//! Begin (0x005F5020/0x005F5100) сохранён отдельно от объектного пути.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -54,6 +47,13 @@ impl KnockOutState {
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
+}
+
+impl super::blindstate::BlindStatePayload for KnockOutState {
+    fn blind_state_id(&self) -> u32 { KNOCK_OUT_STATE_ID }
+    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
+    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_time(now) as u32 }
+    fn install_record(&self) -> [u8; KNOCK_OUT_STATE_BYTES] { self.encoded_for_install() }
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]

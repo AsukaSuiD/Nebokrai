@@ -30,6 +30,8 @@
 //! уже созданного phalanx не сокращается при завершении cast.
 //! Reuse записывается отдельным чтением часов внутри общего End после
 //! публикации phalanx; раннее время AI и начало жизни снаряда не подменяют его.
+//! Monster-путь читает GetBeAttackedPoint из полного owner-а региона;
+//! длина Summon и время полёта используют RealDistance с footprint цели.
 
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::archeryphalanx::CArcheryPhalanx;
@@ -46,7 +48,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::monsterattack::{
-    owned_monster_attackable, resolve_owned_monster_attack_target,
+    resolve_owned_monster_attack_target,
 };
 use crate::gameserver::appserver::skills::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
@@ -112,7 +114,7 @@ fn send_monster_base_projectile_visual(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет monster AI, skill и region owners")]
 pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_owner: &mut crate::gameserver::gameserver::game::ServerRegionOwner,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
@@ -126,14 +128,13 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
     else {
         return false;
     };
-    let Some((source, property, master, tamed, cast, last_used_ms)) = region
+    let Some((source, property, tamed, cast, last_used_ms)) = region_owner.base()
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             Some((
                 monster.move_shape().shape().clone(),
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?
                     .clone(),
-                monster.master_info(),
                 monster.is_tamed(),
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_last_used_ms(skill_id, game.skill_factory()),
@@ -149,8 +150,8 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         return false;
     }
     let now_ms = runtime.now_milliseconds();
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity) else {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
@@ -165,17 +166,9 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         || (cast.is_none()
             && (target.god
                 || target.city_dead
-                || !owned_monster_attackable(
-                    game,
-                    region.id,
-                    &property,
-                    tamed,
-                    master,
-                    target_identity,
-                    &target,
-                )))
+                || !game.live_skill_target_attackable_in(region_owner, ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: crate::public::guid::CGuid::GUID_INVALID }, target_identity)))
     {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
@@ -193,7 +186,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         target.shape.get_tile_y(),
     ) else {
         if cast.is_some()
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+            && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
         {
             let _ = monster.finish_base_attack_cast_without_reuse(skill_id, game.skill_factory());
         }
@@ -203,7 +196,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
     if cast.is_none() {
         if !approach_attack_range(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             maximum_distance,
@@ -212,7 +205,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             return true;
         }
         let attack_interval = if tamed {
-            region
+            region_owner.base_mut()
                 .find_monster_by_id(monster_id)
                 .map(|monster| monster.pet_attack_properties(&property).attack_interval)
                 .unwrap_or(property.attack_speed)
@@ -220,7 +213,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             property.attack_speed
         };
         if schedule_attack_interval(property.ai, attack_interval).is_some_and(|interval| {
-            region
+            region_owner.base_mut()
                 .find_monster_by_id_mut(monster_id)
                 .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
         }) {
@@ -235,7 +228,9 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
         {
             return true;
         }
-        let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
+        let Some((path_x, path_y)) = game.base_magic_target_point_in(region_owner, source_x, source_y, target_identity)
+        else { return true; };
+        let path = region_owner.base().straight_skill_path(source_x, source_y, path_x, path_y, None);
         let maximum_distance_allowance = usize::from(matches!(kind, MonsterBaseProjectileKind::Archery));
         if maximum_distance != 0
             && path.len() > maximum_distance as usize + maximum_distance_allowance
@@ -248,8 +243,8 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(
@@ -261,11 +256,11 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                 game.skill_factory(),
             );
         }
-        let source = region
+        let source = region_owner.base()
             .find_monster_by_id(monster_id)
             .map(|monster| monster.move_shape().shape())
             .unwrap_or(&source);
-        send_monster_base_projectile_visual(game, region, source, kind, skill_level, 1, None);
+        send_monster_base_projectile_visual(game, region_owner.base(), source, kind, skill_level, 1, None);
         return true;
     }
     let cast = cast.expect("monster base projectile cast проверен выше");
@@ -276,26 +271,30 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
     ) {
         return true;
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().set_moveable(true);
     }
-    let attack_time = real_distance(source_x, source_y, target_x, target_y)
+    let Some(source_view) = game.shape_view_in_owner(region_owner, source.identity()) else { return true; };
+    let attack_time = source_view.real_distance(Some(target.view))
         .wrapping_mul(properties.query_property(SKILL_USAGE_SUMMONED_SPEED) as i32);
     send_monster_base_projectile_visual(
         game,
-        region,
+        region_owner.base_mut(),
         &source,
         kind,
         skill_level,
         2,
         Some((target_identity, target_x, target_y, attack_time)),
     );
-    let forced_distance = real_distance(source_x, source_y, target_x, target_y) as u32;
-    let path = region.straight_skill_path(
+    let Some(source_view) = game.shape_view_in_owner(region_owner, source.identity()) else { return true; };
+    let forced_distance = source_view.real_distance(Some(target.view)) as u32;
+    let Some((path_x, path_y)) = game.base_magic_target_point_in(region_owner, source_x, source_y, target_identity)
+    else { return true; };
+    let path = region_owner.base().straight_skill_path(
         source_x,
         source_y,
-        target_x,
-        target_y,
+        path_x,
+        path_y,
         Some(forced_distance),
     );
     if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {
@@ -319,8 +318,8 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                     attack_time as u32,
                     target_identity,
                 );
-                phalanx.shape_mut().set_region_id(region.id);
-                let _ = region.add_archery_phalanx(
+                phalanx.shape_mut().set_region_id(region_owner.base().id);
+                let _ = region_owner.base_mut().add_archery_phalanx(
                     phalanx,
                     tile_x,
                     tile_y,
@@ -343,8 +342,8 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
                     attack_time as u32,
                     target_identity,
                 );
-                phalanx.shape_mut().set_region_id(region.id);
-                let _ = region.add_base_magic_phalanx(
+                phalanx.shape_mut().set_region_id(region_owner.base_mut().id);
+                let _ = region_owner.base_mut().add_base_magic_phalanx(
                     phalanx,
                     tile_x,
                     tile_y,
@@ -356,7 +355,7 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             }
         }
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());

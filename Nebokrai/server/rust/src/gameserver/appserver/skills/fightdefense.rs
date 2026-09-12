@@ -226,10 +226,12 @@ pub(crate) fn defend_monster_base_attack(
 }
 
 /// Ветка общего `CFightDefense::Defense` для `CBuild`: target не является
-/// player/monster, поэтому level modifier, PvP factor, avoid и state hooks не
-/// применяются. При этом player-attacker сохраняет свои blast/critical scales
+/// player/monster, поэтому level modifier, PvP factor и avoid не применяются.
+/// PreDefense сохраняет все Promotion по порядку состояний; ресурсные щиты
+/// требуют игрока и пропускаются. Player-attacker сохраняет blast/critical scales
 /// и исходный порядок RNG: hit, затем по одному blast-броску для physical и
 /// element damage.
+#[allow(clippy::too_many_arguments, reason = "граница сохраняет источник, защиту и упорядоченные Promotion цели")]
 pub(crate) fn defend_build_base_attack(
     attack: &mut AttackInformation,
     attacker: PlayerCombatProperties,
@@ -237,6 +239,7 @@ pub(crate) fn defend_build_base_attack(
     defense: u32,
     element_resistance: u32,
     setup: &GlobeSetupSnapshot,
+    promotion_factors: &[u16],
     random: &mut dyn FnMut(i32) -> i32,
 ) {
     let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
@@ -250,6 +253,11 @@ pub(crate) fn defend_build_base_attack(
     }
 
     for power in &mut attack.damages {
+        for &factor in promotion_factors {
+            power.hp_damage = apply_monster_promotion(
+                attack.skill_id, Some(factor), power.kind, power.hp_damage,
+            );
+        }
         match power.kind {
             AttackPowerType::Physical => {
                 if random(100) < i32::from(attacker.blast_attack) {
@@ -323,6 +331,55 @@ pub(crate) fn defend_build_base_attack(
                 f64::from(power.hp_damage) * f64::from(attack.damage_factor),
             )
             .max(1);
+        }
+    }
+}
+
+/// Источник-монстр против постройки использует общий monster hit range.
+/// У CBuild нет full-miss, avoid и soul resistance. Promotion действует до
+/// обычной защиты; физический и стихийный урон может уменьшиться до нуля.
+pub(crate) fn defend_build_from_monster_base_attack(
+    attack: &mut AttackInformation,
+    defense: u32,
+    element_resistance: u32,
+    setup: &GlobeSetupSnapshot,
+    promotion_factors: &[u16],
+    random: &mut dyn FnMut(i32) -> i32,
+) {
+    let (minimum_hit, maximum_hit) = setup.monster_hit_limits();
+    let hit = maximum_hit
+        .wrapping_add(attack.hit_modifier)
+        .clamp(minimum_hit, maximum_hit);
+    if hit <= random(100) {
+        clear_miss_sensitive_damage(attack);
+        attack.full_miss = 2;
+        return;
+    }
+
+    for power in &mut attack.damages {
+        for &factor in promotion_factors {
+            power.hp_damage = apply_monster_promotion(
+                attack.skill_id, Some(factor), power.kind, power.hp_damage,
+            );
+        }
+        match power.kind {
+            AttackPowerType::Physical => {
+                power.hp_damage = subtract_non_player_defense(
+                    power.hp_damage, defense, attack.critical, setup.critical_rate(),
+                ).max(0);
+            }
+            AttackPowerType::Element => {
+                power.hp_damage = subtract_non_player_defense(
+                    power.hp_damage, element_resistance, attack.critical, setup.critical_rate(),
+                ).max(0);
+            }
+            AttackPowerType::Soul => power.hp_damage = power.hp_damage.max(0),
+            AttackPowerType::Poison => {}
+        }
+        if power.hp_damage > 0 {
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(attack.damage_factor),
+            ).max(1);
         }
     }
 }

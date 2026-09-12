@@ -19,8 +19,7 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::FixedArcherTarget;
 use crate::gameserver::appserver::ai::guardwithbow::{
     select_guard_monster_target, select_guard_with_bow_target,
 };
-use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, ServerRegionOwner};
 use crate::setup::monsterlist::MonsterProperties;
 
 fn consider_other_country_target(
@@ -48,11 +47,12 @@ fn consider_other_country_target(
 /// затем для типов `13/20` преступник и монстр, а для типа `14` только монстр.
 pub(crate) fn select_country_guard_target(
     game: &CGame,
-    region: &CServerRegion,
+    owner: &ServerRegionOwner,
     monster_id: i32,
     property: &MonsterProperties,
     minimum_skill_distance: i32,
 ) -> Option<crate::gameserver::appserver::shape::ShapeIdentity> {
+    let region = owner.base();
     let monster = region.find_monster_by_id(monster_id)?;
     let monster_view = monster.shape_view(property)?;
     let area_index = monster.move_shape().shape().area_index()?;
@@ -88,7 +88,7 @@ pub(crate) fn select_country_guard_target(
     if matches!(property.ai, 17 | 100) {
         select_guard_with_bow_target(
             game,
-            region,
+            owner,
             monster_id,
             property,
             minimum_skill_distance,
@@ -96,7 +96,7 @@ pub(crate) fn select_country_guard_target(
     } else {
         select_guard_monster_target(
             game,
-            region,
+            owner,
             monster_id,
             property,
             minimum_skill_distance,
@@ -108,10 +108,11 @@ pub(crate) fn select_country_guard_target(
 /// не назначая нападавшего целью общей ветвью `CMonsterAI`.
 pub(crate) fn retarget_special_guard_after_hurt(
     game: &CGame,
-    region: &mut CServerRegion,
+    owner: &mut ServerRegionOwner,
     monster_id: i32,
     property: &MonsterProperties,
 ) {
+    let region = owner.base();
     if !matches!(property.ai, 8 | 17 | 100 | 101)
         || region
             .find_monster_by_id(monster_id)
@@ -140,7 +141,7 @@ pub(crate) fn retarget_special_guard_after_hurt(
     let selected = if property.ai == 8 {
         select_guard_with_bow_target(
             game,
-            region,
+            owner,
             monster_id,
             property,
             minimum_skill_distance,
@@ -148,14 +149,14 @@ pub(crate) fn retarget_special_guard_after_hurt(
     } else {
         select_country_guard_target(
             game,
-            region,
+            owner,
             monster_id,
             property,
             minimum_skill_distance,
         )
     };
     if let (Some(selected), Some(monster)) =
-        (selected, region.find_monster_by_id_mut(monster_id))
+        (selected, owner.base_mut().find_monster_by_id_mut(monster_id))
     {
         monster.set_ai_target(selected);
     }

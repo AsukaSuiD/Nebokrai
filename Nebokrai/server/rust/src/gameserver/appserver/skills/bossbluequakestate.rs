@@ -1,34 +1,17 @@
-//! Каноническое состояние землетрясения синего босса `CBossBlueQuakeState` (`0x1f8`).
+//! Блокировка землетрясения CBossBlueQuakeState (0x1f8).
+//! Источник: gameserver.exe + GameServer.pdb, исходный владелец
+//! appserver/skills/bossbluequakestate.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/bossbluequakestate.cpp`. Состояние хранится только в
-//! `CanonicalStateStorage`: замена сначала завершает прежнюю блокировку, затем
-//! запрещает движение и бой до строгой границы срока. Пакеты начала и завершения
-//! сохраняют `0xBFE03/04`; истечение для игрока и монстра, а также снятие
-//! очищением проходят через того же канонического владельца. Vtable exact EXE
-//! направляет `GetRemainedTime` на общее тело `CBlindState` по `0x005F2CD0`:
-//! положительный остаток использует отдельное второе чтение системных часов.
-//! Persisted-запись `ID + remaining time` занимает 8 байт; spatial login
-//! восстанавливает оба запрета и curable lifecycle.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! Загрузка добавляет обе вложенные блокировки для каждого экземпляра.
-//! Exact vtable 0x0065F934: End 0x005EA9A0 выполняет visual →
-//! GetSufferer → SetFightable(true) → SetMoveable(true) → RemoveState.
-//! Прямой End, очищение и AI используют этот exact-key хвост без чтения часов.
-
-//! Restart воспроизводит только Begin(NULL, holder) (0x005E8860):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
-//! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
-//! concrete Update(0) → базовый visual-хвост; только getter пакета читает часы.
-//! После visual добавляются запреты движения, затем боя, для каждого экземпляра.
-
-//! Unserialize 0x005EAAC0 сохраняет один собственный clock в timestamp;
-//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
-
-//! Exact vtable 0x0065F934 +0x24 указывает на 0x0047B150:
-//! OnUpdateProperties возвращает 1 без target lookup, visual, часов и блокировок.
+//! Объектный Begin использует общий Blind-адаптер: timestamp
+//! меняется только при U; loop1/Update0 предшествует move/fight-lock и записи
+//! в арену. Restart передаёт NULL U и holder, сохраняя payload, срок и ключ;
+//! после загрузки каждый экземпляр добавляет обе вложенные блокировки.
+//! End: visual → S → fight-unlock → move-unlock → RemoveState
+//! того же ключа, без чтения часов. Истечение использует строгий wrapping deadline.
+//! GetRemainedTime читает часы второй раз при положительном остатке.
+//! DB-запись ID/remaining занимает 8 байт; Load получает отдельный timestamp,
+//! который Restart не заменяет. OnUpdateProperties возвращает 1
+//! без изменения свойств, визуала или блокировок.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -98,6 +81,13 @@ impl BossBlueQuakeState {
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
+}
+
+impl super::blindstate::BlindStatePayload for BossBlueQuakeState {
+    fn blind_state_id(&self) -> u32 { BOSS_BLUE_QUAKE_STATE_ID }
+    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
+    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_time(now) as u32 }
+    fn install_record(&self) -> [u8; BOSS_BLUE_QUAKE_STATE_BYTES] { self.encoded_for_install() }
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точную точку круговой доставки состояния")]

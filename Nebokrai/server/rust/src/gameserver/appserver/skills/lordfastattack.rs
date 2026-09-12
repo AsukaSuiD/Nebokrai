@@ -316,8 +316,8 @@ fn apply_attack<Runtime: GameMainLoopRuntime>(
             attack,
             runtime,
         ),
-        BUILD_TYPE | CITY_GATE_TYPE => game.apply_owned_skill_attack_to_stationary_build(
-            player_id, region_id, target, attack, runtime,
+        BUILD_TYPE | CITY_GATE_TYPE => game.receive_stationary_build_skill_attack(
+            region_id, target, attack, runtime,
         ),
         _ => return,
     }

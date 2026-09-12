@@ -2698,9 +2698,8 @@ impl CMonster {
 // ============================================================================
 // FUNCTION: CMonster::IsAttackAble
 // STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// MATERIALIZED: player-attacker, monster-attacker и carriage/tamed ветви
-// связаны через `CGame::monster_attackable_by_player`,
-// `monster_attackable_by_monster` и `carriage_attackable_by_monster`.
+// Игровой допуск, включая владельцев питомцев и повозок, находится в
+// `CGame::live_skill_target_attackable_in` и читает полный живой регион.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1028

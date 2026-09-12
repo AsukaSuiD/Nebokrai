@@ -1,6 +1,6 @@
 //! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`) для игрока и монстра.
-//! Monster cell (0x0052BC80) допускает RTTI CMoveShape; текущий пространственный
-//! resolver ограничен владельцами 400/600, остальные derived-цели не подключены.
+//! Monster cell (0x0052BC80) разрешает все RTTI CMoveShape через полный регион;
+//! живой IsAttackAble предшествует проверке и записи списка уже поражённых целей.
 //! На время применения удара настоящий AI источника опубликован в CPlayer;
 //! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Monster-End освобождает локальный снимок пути и поражённых целей перед
@@ -51,7 +51,7 @@ use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
+    monster_attack_cell_candidates, resolve_owned_monster_attack_target,
 };
 use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -848,14 +848,12 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((source, property, master, tamed, cast, progress, last_used_ms)) = region
+    let Some((source, property, cast, progress, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             Some((
                 monster.move_shape().shape().clone(),
                 game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
-                monster.master_info(),
-                monster.is_tamed(),
                 monster.current_active_attack_cast(game.skill_factory()),
                 monster.skill_progress::<BossFiendPenetrateProgress>(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory()).cloned(),
                 monster.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID, game.skill_factory()),
@@ -867,7 +865,9 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     let (Ok(source_x), Ok(source_y)) = (source.get_tile_x(), source.get_tile_y()) else {
         return true;
     };
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
+    let Some(region_owner) = owner.as_ref() else { return false; };
+    let target = resolve_owned_monster_attack_target(game, region_owner, target_identity);
+    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let live_destination = target.as_ref().and_then(|target| {
         (!target.dead).then_some((target.shape.get_tile_x().ok()?, target.shape.get_tile_y().ok()?))
     });
@@ -1023,23 +1023,10 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     let Some(&(cell_x, cell_y, _)) = progress.path.get(progress.current_cell) else {
         return true;
     };
-    for identity in monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y) {
-        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-        let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
-            continue;
-        };
-        if !owned_monster_attackable(
-                game,
-                region.id,
-                &property,
-                tamed,
-                master,
-                identity,
-                &target,
-            )
-        {
-            continue;
-        }
+    let Some(region_owner) = owner.as_ref() else { return true; };
+    for identity in monster_attack_cell_candidates(game, region_owner, monster_id, cell_x, cell_y) {
+        let Some(region_owner) = owner.as_ref() else { return true; };
+        if !game.live_skill_target_attackable_in(region_owner, source.identity(), identity) { continue; }
         if progress.attacked.contains(&identity) {
             continue;
         }

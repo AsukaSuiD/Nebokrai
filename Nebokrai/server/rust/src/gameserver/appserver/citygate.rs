@@ -93,8 +93,8 @@ impl CCityGate {
         self.build.move_shape_mut().shape_mut().set_action(action);
         Some(BuildBlockUpdate {
             region_id: self.region_id(),
-            tile_x: self.build.tile_x,
-            tile_y: self.build.tile_y,
+            tile_x: self.build.tile_x(),
+            tile_y: self.build.tile_y(),
             width_increment: self.build.width_increment as u8,
             height_increment: self.build.height_increment as u8,
             block: if action == 6 || action == 7 { 0 } else { 3 },
@@ -122,8 +122,8 @@ impl CCityGate {
     pub(crate) fn footprint(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
             region_id: self.region_id(),
-            tile_x: self.build.tile_x,
-            tile_y: self.build.tile_y,
+            tile_x: self.build.tile_x(),
+            tile_y: self.build.tile_y(),
             width_increment: self.build.width_increment as u8,
             height_increment: self.build.height_increment as u8,
             block: 0,
@@ -137,8 +137,8 @@ impl CCityGate {
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
             region_id: self.region_id(),
-            tile_x: self.build.tile_x,
-            tile_y: self.build.tile_y,
+            tile_x: self.build.tile_x(),
+            tile_y: self.build.tile_y(),
             width_increment: self.build.width_increment as u8,
             height_increment: self.build.height_increment as u8,
             block: if self.action() == 6 || self.action() == 7 {

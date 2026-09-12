@@ -226,7 +226,6 @@ use super::monsterfastattack::{
 };
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
-    owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use super::monsterrangeattack::{
@@ -705,10 +704,11 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// начинается атака в том же такте.
 pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_owner: &mut ServerRegionOwner,
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
+    let region = region_owner.base_mut();
     if region.find_monster_by_id(monster_id).is_some_and(|monster| {
         matches!(monster.active_ai(), Some(ActiveMonsterAi::Carriage
             | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)))
@@ -768,7 +768,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         }
         return true;
     }
-    let Some((owner, area_index, skill, master)) = region
+    let Some((owner, area_index, skill)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let owner = monster.shape_view(&property)?;
@@ -779,7 +779,6 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 owner,
                 area_index,
                 skill,
-                monster.master_info(),
             ))
         })
     else {
@@ -822,16 +821,36 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         game.skill_base_properties(skill_id, skill_level)
             .map_or(0, |properties| properties.query_property(5_004) as i32)
     });
+    if matches!(property.ai, 0 | 3) {
+        let selected = select_gladiator_enemy(game, region_owner, owner, area_index, &property);
+        if let Some(selected) = selected
+            && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
+        {
+            monster.set_ai_target(selected);
+        }
+        return true;
+    }
+    if matches!(property.ai, 8 | 9 | 17 | 100 | 101) {
+        let Some(minimum_skill_distance) = minimum_skill_distance else {
+            return false;
+        };
+        let selected = if matches!(property.ai, 8 | 9) {
+            select_guard_with_bow_target(
+                game, region_owner, monster_id, &property, minimum_skill_distance,
+            )
+        } else {
+            select_country_guard_target(
+                game, region_owner, monster_id, &property, minimum_skill_distance,
+            )
+        };
+        if let Some(selected) = selected
+            && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
+        {
+            monster.set_ai_target(selected);
+        }
+        return true;
+    }
     let selected = match property.ai {
-        0 | 3 => select_gladiator_enemy(
-            game,
-            region,
-            owner,
-            area_index,
-            &property,
-            false,
-            master,
-        ),
         4 => select_archer_enemy(
             game,
             region,
@@ -868,18 +887,6 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             );
             return true;
         }
-        8 | 9 => {
-            let Some(minimum_skill_distance) = minimum_skill_distance else {
-                return false;
-            };
-            select_guard_with_bow_target(
-                game,
-                region,
-                monster_id,
-                &property,
-                minimum_skill_distance,
-            )
-        }
         10 | 11 => {
             let Some(minimum_skill_distance) = minimum_skill_distance else {
                 return false;
@@ -893,18 +900,6 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 minimum_skill_distance,
             )
             .map(|selected| selected.identity)
-        }
-        17 | 100 | 101 => {
-            let Some(minimum_skill_distance) = minimum_skill_distance else {
-                return false;
-            };
-            select_country_guard_target(
-                game,
-                region,
-                monster_id,
-                &property,
-                minimum_skill_distance,
-            )
         }
         14 | 15 => select_country_war_enemy(
             game,
@@ -1020,14 +1015,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
     snow_storm_entry: &mut Option<i32>,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some(active_ai) = region.find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
+    let Some(region_owner) = owner.as_mut() else { return false; };
+    let Some(active_ai) = region_owner.base().find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
         return false;
     };
     let carriage_ai = matches!(active_ai, ActiveMonsterAi::Carriage
         | ActiveMonsterAi::Primary(MonsterAiKind::Carriage));
     let pet_ai = matches!(active_ai, ActiveMonsterAi::Pet);
-    let immediate = region.find_monster_by_id(monster_id).and_then(|monster| {
+    let immediate = region_owner.base().find_monster_by_id(monster_id).and_then(|monster| {
         if !monster.active_ai_attack_pending() {
             return None;
         }
@@ -1040,7 +1035,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if let Some((immediate, skill_id, skill_level)) = immediate {
         return immediate.execute(game, owner, monster_id, skill_id, skill_level, runtime);
     }
-    if region.find_monster_by_id(monster_id)
+    if region_owner.base().find_monster_by_id(monster_id)
         .and_then(|monster| monster.current_active_attack_cast(game.skill_factory()))
         .is_some_and(|cast| cast.dispatch().skill_id == COMMON_BASE_ATTACK_SKILL_ID)
     {
@@ -1059,7 +1054,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         stop_frame,
         area_index,
         pet_action,
-    )) = region.find_monster_by_id(monster_id).and_then(|monster| {
+    )) = region_owner.base().find_monster_by_id(monster_id).and_then(|monster| {
         let property = game
             .find_monster_property_by_origin_name(monster.base_property_key()?)?
             .clone();
@@ -1095,22 +1090,22 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     }
     if !pet_ai && property.ai == 20 && target.is_none() && cast.is_none()
-        && !ensure_jiumai_twin(game, region, monster_id, &property)
+        && !ensure_jiumai_twin(game, region_owner.base_mut(), monster_id, &property)
     {
         return false;
     }
     if cast.is_none() && target.is_some() && (pet_ai || property.ai != 7)
-        && region.find_monster_by_id(monster_id)
+        && region_owner.base().find_monster_by_id(monster_id)
             .is_some_and(|monster| !monster.move_shape().can_fight())
     {
         if pet_ai || property.ai != 20 {
-            release_owned_monster_target(game, region, monster_id, runtime);
+            release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
         }
         return true;
     }
     if !pet_ai && MonsterAiKind::from_ai_type(property.ai).has_guard_station() {
         if target.is_none() && cast.is_none()
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+            && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
             && monster.primary_ai_queues_idle()
             && let Some(state) = monster.guard_station_ai_mut()
             && state.station().is_none()
@@ -1124,21 +1119,21 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && !pet_ai
         && hibernates_without_nearby_players(
             property.ai,
-            region
+            region_owner.base()
                 .find_monster_by_id(monster_id)
                 .and_then(CMonster::smart_gladiator_ai)
                 .is_some_and(|state| !state.has_queued_steps()),
         )
         && let Some(area_index) = area_index
-        && region.player_ids_around_area(area_index).is_empty()
+        && region_owner.base().player_ids_around_area(area_index).is_empty()
     {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.hibernate_ai(runtime.now_milliseconds());
             return true;
         }
     }
     if target.is_none() && cast.is_none() && !pet_ai && property.ai == 2
-        && region.find_monster_by_id(monster_id)
+        && region_owner.base().find_monster_by_id(monster_id)
             .and_then(CMonster::smart_gladiator_ai)
             .is_some_and(|state| state.has_queued_steps())
     {
@@ -1150,7 +1145,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && matches!(property.ai, 5 | 8 | 11 | 13 | 17 | 100 | 101 | 103)
     {
         return queue_stationary_guard_idle(
-            region,
+            region_owner.base_mut(),
             monster_id,
             stop_frame,
             runtime,
@@ -1162,25 +1157,25 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 9 | 10 | 12 | 14 | 15 | 16 | 18 | 19 | 20 | 104)
             || MonsterAiKind::is_generic_ai_type(property.ai))
     {
-        return queue_monster_idle(game, region, monster_id, &property, runtime);
+        return queue_monster_idle(game, region_owner.base_mut(), monster_id, &property, runtime);
     }
     if target.is_none() && cast.is_none() && pet_ai {
-        return queue_pet_idle(region, monster_id, stop_frame, game.skill_factory(), runtime);
+        return queue_pet_idle(region_owner.base_mut(), monster_id, stop_frame, game.skill_factory(), runtime);
     }
     let schedule_target_view = if cast.is_none() && let Some(target) = target {
         let Some(schedule_target) =
-            resolve_owned_monster_attack_target(game, region, target)
+            resolve_owned_monster_attack_target(game, region_owner, target)
         else {
             if pet_ai {
                 lose_pet_target_and_search(
-                    region,
+                    region_owner.base_mut(),
                     monster_id,
                     runtime,
                 );
             } else {
-                release_owned_monster_target(game, region, monster_id, runtime);
+                release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
                 if has_owned_search_enemy(property.ai, pet_ai)
-                    && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+                    && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
                 {
                     monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
                 }
@@ -1188,27 +1183,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         };
         if pet_ai && schedule_target.dead {
-            lose_pet_target_and_search(region, monster_id, runtime);
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
             return true;
         }
         if pet_ai && pet_action == 0 {
-            let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region, attacker_master)
+            let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region_owner.base_mut(), attacker_master)
                 .unwrap_or((monster_view.tile_x, monster_view.tile_y));
             let anchor_distance = schedule_target.shape.distance_to_point(anchor_x, anchor_y);
             if game.globe_setup().maximum_pet_tracing_distance() as i32 <= anchor_distance {
-                lose_pet_target_and_search(region, monster_id, runtime);
+                lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
                 return true;
             }
         }
-        let attackable = (!pet_ai && uses_stationary_attack_schedule(property.ai)) || owned_monster_attackable(
-            game,
-            region.id,
-            &property,
-            tamed,
-            attacker_master,
-            target,
-            &schedule_target,
-        );
+        let attackable = (!pet_ai && uses_stationary_attack_schedule(property.ai)) || game.live_skill_target_attackable_in(region_owner, monster_shape.identity(), target);
         if schedule_target.dead
             || ((pet_ai || !uses_stationary_attack_schedule(property.ai))
                 && (schedule_target.god || schedule_target.city_dead || !attackable))
@@ -1224,7 +1211,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 } else if target.object_type == MONSTER_TYPE {
                     release_reciprocal_monster_target(
                         game,
-                        region,
+                        region_owner.base_mut(),
                         target.id,
                         pet_identity,
                         runtime,
@@ -1233,14 +1220,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             if pet_ai {
                 lose_pet_target_and_search(
-                    region,
+                    region_owner.base_mut(),
                     monster_id,
                     runtime,
                 );
             } else {
-                release_owned_monster_target(game, region, monster_id, runtime);
+                release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
                 if has_owned_search_enemy(property.ai, pet_ai)
-                    && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+                    && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
                 {
                     monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
                 }
@@ -1253,7 +1240,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     };
     let selected_skill_id = if let Some(cast) = cast {
         cast.dispatch().skill_id as u16
-    } else if let Some(skill_id) = region
+    } else if let Some(skill_id) = region_owner.base()
         .find_monster_by_id(monster_id)
         .and_then(|monster| monster.move_shape().current_skill(game.skill_factory()))
         .map(|skill| skill.id())
@@ -1262,20 +1249,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     } else if target.is_none() {
         // Собственный выбор босса в OnIdle не подменяется боевым OnSchedule.
         let Some(selected) = select_and_store_monster_attack_skill(
-            game, region, monster_id, &property, monster_health, runtime,
+            game, region_owner.base_mut(), monster_id, &property, monster_health, runtime,
         ) else {
             return false;
         };
         selected
     } else {
-        if !change_owned_monster_attack_skill(game, region, monster_id, runtime) {
+        if !change_owned_monster_attack_skill(game, region_owner.base_mut(), monster_id, runtime) {
             return false;
         }
-        let Some(selected) = region.find_monster_by_id(monster_id)
+        let Some(selected) = region_owner.base().find_monster_by_id(monster_id)
             .and_then(|monster| monster.move_shape().current_skill(game.skill_factory()))
             .map(|skill| skill.id() as u16)
         else {
-            release_owned_monster_target(game, region, monster_id, runtime);
+            release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
             return true;
         };
         selected
@@ -1283,7 +1270,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let (skill_id, skill_level) = if let Some(cast) = cast {
         (cast.dispatch().skill_id, cast.dispatch().skill_level)
     } else {
-        let Some(skill) = region.find_monster_by_id(monster_id)
+        let Some(skill) = region_owner.base().find_monster_by_id(monster_id)
             .and_then(|monster| monster.move_shape().skill(u32::from(selected_skill_id), game.skill_factory()))
         else {
             return false;
@@ -1300,7 +1287,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && cast.is_none()
         && !pet_ai
         && matches!(property.ai, 21 | 23)
-        && queue_boss_idle(game, region, monster_id, &property, runtime)
+        && queue_boss_idle(game, region_owner.base_mut(), monster_id, &property, runtime)
     {
         return true;
     }
@@ -1316,7 +1303,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID)
             && cast.is_some()
         {
-            return super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game.skill_factory());
+            return super::monsterattack::end_owned_monster_skill_without_reuse(region_owner.base_mut(), monster_id, skill_id, game.skill_factory());
         }
         return false;
     };
@@ -1331,10 +1318,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32;
         if distance < minimum_distance || distance > maximum_distance {
             if pet_ai {
-                lose_pet_target_and_search(region, monster_id, runtime);
+                lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
             } else {
-                release_owned_monster_target(game, region, monster_id, runtime);
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                release_owned_monster_target(game, region_owner.base_mut(), monster_id, runtime);
+                if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                     monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
                 }
             }
@@ -1349,31 +1336,31 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
             );
             if attack_interval.is_some_and(|interval| {
-                region
+                region_owner.base_mut()
                     .find_monster_by_id_mut(monster_id)
                     .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
             }) {
                 return true;
             }
             let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-            let last_used_ms = region
+            let last_used_ms = region_owner.base()
                 .find_monster_by_id(monster_id)
                 .map(|monster| monster.skill_last_used_ms(skill_id, game.skill_factory()))
                 .unwrap_or_default();
             if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
                 return true;
             }
-            let target_object = resolve_owned_skill_begin_object(game, region, monster_shape.identity());
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), monster_shape.identity());
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.move_shape_mut().begin_immediate_skill(skill_id, game.skill_factory());
                 monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, target_object, game.skill_factory());
             }
             return true;
         }
-        if region.find_monster_by_id(monster_id)
+        if region_owner.base().find_monster_by_id(monster_id)
             .is_some_and(|monster| monster.move_shape().immediate_skill_ended(skill_id, game.skill_factory()))
         {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.finish_active_immediate_skill(game.skill_factory());
             }
             return true;
@@ -1400,7 +1387,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_monster_promotion(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
@@ -1419,12 +1406,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if skill_id == SNOW_STORM_SKILL_ID {
         let skill_properties = skill_properties.clone();
-        return execute_owned_monster_snow_storm(game, region, monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
+        return execute_owned_monster_snow_storm(game, region_owner.base_mut(), monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
     }
     if matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID) {
         return execute_owned_monster_base_projectile(
             game,
-            region,
+            region_owner,
             monster_id,
             target,
             skill_level,
@@ -1440,7 +1427,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return prepare_owned_monster_projectile(
             game,
-            region,
+            region_owner,
             monster_id,
             target,
             skill_id,
@@ -1494,7 +1481,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_spore_blasting(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
@@ -1572,7 +1559,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         let outcome = prepare_owned_wide_arc_attack(
             game,
-            region,
+            region_owner,
             monster_id,
             target,
             skill_id,
@@ -1583,7 +1570,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             wide_arc_dispatch,
         );
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
-            game, region, monster_id, outcome, runtime,
+            game, region_owner.base_mut(), monster_id, outcome, runtime,
         );
     }
     if skill_id == BOSS_BLUE_FURY_SKILL_ID {
@@ -1630,9 +1617,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
             runtime,
         );
-        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+        let Some(region_owner) = owner.as_mut() else { return true; };
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
-            game, region, monster_id, outcome, runtime,
+            game, region_owner.base_mut(), monster_id, outcome, runtime,
         );
     }
     if skill_id == SPIDER_POISON_SKILL_ID {
@@ -1652,7 +1639,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_spider_mist(
             game,
-            region,
+            region_owner,
             monster_id,
             target,
             skill_level,
@@ -1665,7 +1652,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_spider_web(
             game,
-            region,
+            owner,
             monster_id,
             target,
             skill_level,
@@ -1684,7 +1671,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_summon_creature(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             target,
             skill_id,
@@ -1698,7 +1685,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return prepare_owned_monster_range_cast(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             &skill_properties,
             runtime,
@@ -1709,13 +1696,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let target_snapshot = super::monsterattack::resolve_owned_monster_attack_target(
-        game, region, target,
-    ).filter(|snapshot| {
+    let target_snapshot = super::monsterattack::resolve_owned_monster_attack_target(game, region_owner, target,
+    ).filter(|_| {
         target.object_type != MONSTER_TYPE
-            || super::monsterattack::owned_monster_attackable(
-                game, region.id, &property, tamed, attacker_master, target, snapshot,
-            )
+            || game.live_skill_target_attackable_in(region_owner, monster_shape.identity(), target)
     });
     let Some(super::monsterattack::OwnedMonsterAttackTarget {
         shape: target_shape,
@@ -1727,8 +1711,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }) = target_snapshot
     else {
         if pet_ai {
-            lose_pet_target_and_search(region, monster_id, runtime);
-        } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
+        } else if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
         return true;
@@ -1740,17 +1724,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 || (!tamed
                     && property.kind == 5
                     && target.object_type == PLAYER_TYPE
-                    && !game.player_attackable_by_monster(
-                        target.id,
-                        region.id,
-                        &property,
-                        tamed,
-                        attacker_master,
-                    ))))
+                    && !game.live_skill_target_attackable_in(region_owner, monster_shape.identity(), target))))
     {
         if pet_ai {
-            lose_pet_target_and_search(region, monster_id, runtime);
-        } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
+        } else if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
         return true;
@@ -1770,7 +1748,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && attacker_master.master_id != 0
         && game
             .find_player(attacker_master.master_id)
-            .is_some_and(|master| master.server_region_id() == Some(region.id))
+            .is_some_and(|master| master.server_region_id() == Some(region_owner.base().id))
     {
         let pet_identity = ShapeIdentity {
             object_type: MONSTER_TYPE,
@@ -1782,12 +1760,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         {
             game.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
             game.release_reciprocal_player_target(target.id, pet_identity, runtime);
-            lose_pet_target_and_search(region, monster_id, runtime);
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
             return true;
         }
         if !game.player_base_attackable(attacker_master.master_id, target.id) {
             game.release_reciprocal_player_target(target.id, pet_identity, runtime);
-            lose_pet_target_and_search(region, monster_id, runtime);
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
             return true;
         }
     }
@@ -1796,7 +1774,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && cast.is_none()
         && trace_city_sword_target(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             monster_view,
             target_view,
@@ -1825,7 +1803,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         ) {
             let first_time = skill_properties.query_property(SKILL_USAGE_FIRST_TIME);
             let second_time = skill_properties.query_property(SKILL_USAGE_SECOND_TIME);
-            let Some(mut progress) = region
+            let Some(mut progress) = region_owner.base()
                 .find_monster_by_id(monster_id)
                 .and_then(|monster| monster.skill_progress::<MonsterFastAttackProgress>(dispatch.skill_id, game.skill_factory()).copied())
             else {
@@ -1839,9 +1817,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     target_x,
                     target_y,
                 );
-                let _ = game.send_game_shape_around(region, &monster_shape, None, &fire);
+                let _ = game.send_game_shape_around(region_owner.base_mut(), &monster_shape, None, &fire);
                 progress.mark_visual_started();
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                     *monster
                         .skill_progress_mut::<MonsterFastAttackProgress>(dispatch.skill_id, game.skill_factory())
                         .expect("состояние быстрой атаки принадлежит текущему cast") = progress;
@@ -1863,7 +1841,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             if !progress.first_attack_done() && first_due {
                 progress.mark_first_attack_done();
                 hits += 1;
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                     *monster
                         .skill_progress_mut::<MonsterFastAttackProgress>(dispatch.skill_id, game.skill_factory())
                         .expect("состояние быстрой атаки принадлежит текущему cast") = progress;
@@ -1877,7 +1855,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             (hits, second_due)
         } else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 let _ = monster
                     .advance_base_attack_cast(dispatch.skill_id, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
             }
@@ -1891,25 +1869,17 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             fire.add_long(target.id);
             fire.add_long(target_x);
             fire.add_long(target_y);
-            let _ = game.send_game_shape_around(region, &monster_shape, None, &fire);
+            let _ = game.send_game_shape_around(region_owner.base_mut(), &monster_shape, None, &fire);
             (1, true)
         };
 
         for hit_index in 0..hit_count {
-            let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-            if hit_index != 0 {
-                let target_health = if target.object_type == PLAYER_TYPE {
-                    let Some(player) = game.find_player(target.id) else { break; };
-                    player.health()
-                } else {
-                    let Some(monster) = region.find_monster_by_id(target.id) else { break; };
-                    monster.hit_points()
-                };
-                if target_health == 0 {
-                    break;
-                }
-            }
-            let Some(monster) = region.find_monster_by_id(monster_id) else { break };
+            let Some(region_owner) = owner.as_mut() else { return true; };
+            if hit_index != 0
+                && resolve_owned_monster_attack_target(game, region_owner, target)
+                    .is_none_or(|target| target.dead)
+            { break; }
+            let Some(monster) = region_owner.base().find_monster_by_id(monster_id) else { break };
             let (minimum, maximum) = monster.state_attack_bounds(
                 property.minimum_attack,
                 property.maximum_attack,
@@ -1959,7 +1929,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 attack.skill_id = dispatch.skill_id;
                 attack.skill_level = dispatch.skill_level as u8;
             }
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 if matches!(
                     dispatch.skill_id,
                     MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID
@@ -1979,9 +1949,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             apply_owned_monster_attack_hit(game, owner, runtime, target, attack);
         }
-        let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
+        let Some(region_owner) = owner.as_mut() else { return true; };
         if finish_cast
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+            && let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id)
         {
             if dispatch.skill_id != MONSTER_BASE_ATTACK_SKILL_ID {
                 monster.move_shape_mut().shape_mut().set_action(1);
@@ -1993,14 +1963,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
 
     if !approach_attack_range(
         game,
-        region,
+        region_owner.base_mut(),
         monster_id,
         MonsterTraceTarget::Shape(target_view),
         maximum_distance,
         runtime,
     ) {
         if pet_ai && pet_action == 2 {
-            lose_pet_target_and_search(region, monster_id, runtime);
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
         }
         return true;
     }
@@ -2009,7 +1979,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
     );
     if let Some(attack_interval) = attack_interval {
-        let attack_started = region
+        let attack_started = region_owner.base_mut()
             .find_monster_by_id_mut(monster_id)
             .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval));
         if !attack_started {
@@ -2018,29 +1988,29 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID {
         let outcome = super::monsterrangeattack::begin_owned_monster_range_cast(
-            region, monster_id, skill_level, &skill_properties, now_ms, game.skill_factory(), runtime,
+            region_owner.base_mut(), monster_id, skill_level, &skill_properties, now_ms, game.skill_factory(), runtime,
         );
         return crate::gameserver::appserver::ai::monsterai::finish_monster_skill_call(
-            game, region, monster_id, outcome, runtime,
+            game, region_owner.base_mut(), monster_id, outcome, runtime,
         );
     }
     if skill_id == COMMON_BASE_ATTACK_SKILL_ID {
-        super::baseattack::begin_owned_monster_base_attack(game, region, monster_id, target, skill_level, runtime);
+        super::baseattack::begin_owned_monster_base_attack(game, region_owner.base_mut(), monster_id, target, skill_level, runtime);
         return true;
     }
-    let last_used_ms = region
+    let last_used_ms = region_owner.base()
         .find_monster_by_id(monster_id)
         .map(|monster| monster.skill_last_used_ms(skill_id, game.skill_factory()))
         .unwrap_or_default();
     if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
         if pet_ai {
-            lose_pet_target_and_search(region, monster_id, runtime);
+            lose_pet_target_and_search(region_owner.base_mut(), monster_id, runtime);
         }
         return true;
     }
     let direction = get_line_direction(monster_x, monster_y, target_x, target_y);
-    let target_object = resolve_owned_skill_begin_object(game, region, target);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target);
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         monster
             .move_shape_mut()
             .shape_mut()
@@ -2057,6 +2027,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     start.add_long(MONSTER_TYPE);
     start.add_long(monster_id);
     start.add_long(direction);
-    let _ = game.send_game_shape_around(region, &monster_shape, None, &start);
+    let _ = game.send_game_shape_around(region_owner.base_mut(), &monster_shape, None, &start);
     true
 }

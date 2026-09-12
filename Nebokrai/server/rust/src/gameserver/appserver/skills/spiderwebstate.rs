@@ -1,20 +1,16 @@
-//! Каноническое состояние паутины `CSpiderWebState` (`0x199`).
-//! Истечение получает ключ конкретного экземпляра общей арены; проверка
-//! срока и End не подменяют его первым состоянием с тем же ID.
-//! Vtable 0x0065fbcc, слот +0x0c: CBlindState::AI (0x005d5ba0).
-//! Срок проверяется как start.wrapping_add(keep) < now, включая keep == 0;
-//! elapsed-сравнение не сохраняет исходный переход DWORD через ноль.
+//! Паутина CSpiderWebState (0x199): запрет движения и боя, снимаемый
+//! истечением или Cure, но не защитным действием. Источник: gameserver.exe
+//! + GameServer.pdb, исходный владелец appserver/skills/spiderwebstate.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/spiderwebstate.cpp`. Состояние сохраняет wrapping-время,
-//! запрещает движение и бой через счётчики `CMoveShape`, снимает оба запрета
-//! при замене, истечении или Cure и публикует `0xBFE03/0xBFE04`.
-//! End +0x1C наследует CBlindState, но OnAction +0x34→0x00601A70
-//! является ret 4: защитное действие само по себе паутину не снимает.
-//! Persisted-запись `ID + remaining time` декодируется, активируется при
-//! StartAllStates после 8F801 и удаляется вместе с canonical state. Vtable exact EXE
-//! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0`,
-//! включая отдельное чтение clock для положительного остатка.
+//! Vtable наследует AI/End от CBlindState, а OnAction
+//! пуст. Строгий wrapping deadline действует при нулевом сроке; End адресует
+//! конкретный ключ общей арены и снимает по одному запрету движения и боя.
+//! Объектный primary использует общий Blind Begin: timestamp при U,
+//! BFE03 и move/fight-lock предшествуют публикации нового экземпляра.
+//! DB-запись ID/remaining занимает 8 байт; StartAllStates восстанавливает
+//! блокировки. GetRemainedTime сохраняет отдельное второе чтение
+//! часов при положительном остатке. RAW координатной и типизированной
+//! перегрузок Begin (0x005EA7D0/0x005EA8B0) сохранён отдельно от объектного пути.
 
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
@@ -67,6 +63,13 @@ impl SpiderWebState {
     }
 }
 
+impl super::blindstate::BlindStatePayload for SpiderWebState {
+    fn blind_state_id(&self) -> u32 { SPIDER_WEB_SKILL_ID }
+    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
+    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_time(now) as u32 }
+    fn install_record(&self) -> [u8; SPIDER_WEB_STATE_BYTES] { self.encoded_for_install() }
+}
+
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
 pub(crate) fn send_spider_web_state_visual(
     game: &mut CGame,
@@ -107,11 +110,6 @@ pub(crate) fn finish_player_spider_web_state_on_defense(
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderwebstate.cpp
-
-// ============================================================================
-// FUNCTION: CSpiderWebState::CSpiderWebState(long)
-// STATUS: IMPLEMENTED
-// `SpiderWebState::new` хранит исходную wrapping-длительность и ID `0x199`.
 
 // ============================================================================
 // FUNCTION: CSpiderWebState::CSpiderWebState
@@ -168,17 +166,5 @@ pub(crate) fn finish_player_spider_web_state_on_defense(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CSpiderWebState::Begin(CMoveShape *, CMoveShape *)
-// STATUS: IMPLEMENTED
-// Установка через `execute_owned_spider_web` атомарно заменяет каноническое
-// состояние, счётчики движения и боя и начальный визуальный эффект.
-
-// ============================================================================
-// FUNCTION: CSpiderWebStateVisualEffect::UpdateVisualEffect
-// STATUS: IMPLEMENTED
-// `send_spider_web_state_visual` сохраняет точные begin/end payload и момент
-// круговой доставки.
 
 // COMPONENT_VARIANT_END: GameServer

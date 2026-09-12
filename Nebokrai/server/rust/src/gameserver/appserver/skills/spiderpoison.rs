@@ -395,16 +395,16 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
+    let Some(region_owner) = owner.as_mut() else { return false; };
     let Some((source_shape, property, pet_attack, cast, last_used_ms)) =
-        region.find_monster_by_id(monster_id).and_then(|monster| {
+        region_owner.base().find_monster_by_id(monster_id).and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
             let pet_attack = monster.is_tamed().then(|| monster.pet_attack_properties(&property));
             Some((monster.move_shape().shape().clone(), property, pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID, game.skill_factory())))
         })
     else { return false };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity) else {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
@@ -413,7 +413,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if target.dead {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
             }
@@ -426,11 +426,11 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     ) else { return true };
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let path_too_long = maximum_distance != 0
-        && region.straight_skill_path(source_x, source_y, target_x, target_y, None).len() > maximum_distance as usize;
+        && region_owner.base_mut().straight_skill_path(source_x, source_y, target_x, target_y, None).len() > maximum_distance as usize;
     if cast.is_none() {
         if !approach_attack_range(
             game,
-            region,
+            region_owner.base_mut(),
             monster_id,
             MonsterTraceTarget::Shape(target.view),
             maximum_distance,
@@ -439,7 +439,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             return true;
         }
         if path_too_long {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target(game.skill_factory());
             }
             return true;
@@ -448,7 +448,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         let attack_interval = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
         let schedule_ready = schedule_attack_interval(property.ai, attack_interval)
             .is_none_or(|interval| {
-                region.find_monster_by_id_mut(monster_id).is_some_and(|monster| {
+                region_owner.base_mut().find_monster_by_id_mut(monster_id).is_some_and(|monster| {
                     monster.begin_ai_attack_attempt(now_ms, interval)
                 })
             });
@@ -462,27 +462,27 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(target_identity, SPIDER_POISON_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
         }
-        let source = region.find_monster_by_id(monster_id).map(|monster| monster.move_shape().shape()).unwrap_or(&source_shape);
-        send_visual(game, region, source, monster_id, skill_level, 1, None);
+        let source = region_owner.base().find_monster_by_id(monster_id).map(|monster| monster.move_shape().shape()).unwrap_or(&source_shape);
+        send_visual(game, region_owner.base(), source, monster_id, skill_level, 1, None);
         return true;
     }
     let cast = cast.expect("выполнение ядовитой атаки проверено выше");
     if cast.dispatch().skill_id != SPIDER_POISON_SKILL_ID || cast.dispatch().target != target_identity { return false; }
     if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) { return true; }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
     if path_too_long {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory()); }
-    send_visual(game, region, &source_shape, monster_id, skill_level, 2, Some((target_identity, target_x, target_y)));
-    let Some(monster) = region.find_monster_by_id(monster_id) else { return true };
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory()); }
+    send_visual(game, region_owner.base(), &source_shape, monster_id, skill_level, 2, Some((target_identity, target_x, target_y)));
+    let Some(monster) = region_owner.base().find_monster_by_id(monster_id) else { return true };
     let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
     let (minimum, maximum, element) = (minimum as i32, maximum as i32, monster.element_modifier() as i32);
     let soul_attack = monster.soul_attack(&property);
@@ -500,21 +500,21 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul_attack), mp_damage: 0 },
         ],
     };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
     }
     apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
-    let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
-    let region_id = region.id;
-    let Some(user) = region.find_monster_by_id(monster_id)
+    let Some(region_owner) = owner.as_mut() else { return true; };
+    let region_id = region_owner.base().id;
+    let Some(user) = region_owner.base().find_monster_by_id(monster_id)
         .map(|monster| monster.move_shape().shape().identity()) else { return true };
     let _ = game.with_published_region(owner, |game| {
         apply_spider_poison(game, region_id, user, target_identity, properties,
             &mut || runtime.now_milliseconds());
     });
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(region_owner) = owner.as_mut() else { return true; };
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);
         let _ = monster.finish_base_attack_cast_with_clock(SPIDER_POISON_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }

@@ -1,12 +1,13 @@
 //! Межвладельческое применение состояния и отбрасывания `CBossBlueQuake`.
 //!
-//! Формулу, длительность и конечную клетку вычисляет владелец навыка. `CGame`
-//! временно извлекает регион только для атомарного доступа к цели, канонической
-//! замены состояния, круговой доставки и последующего `ForceMove`.
+//! Формулу, длительность и геометрию задаёт владелец навыка. `CGame`
+//! адресует опубликованную actual-цель для канонической замены состояния,
+//! круговой доставки и последующего `ForceMove`.
 
 use super::*;
-use crate::gameserver::appserver::skills::bossbluequake::replace_quake_state;
+use crate::gameserver::appserver::skills::bossbluequake::{quake_knockback_destination, replace_quake_state};
 use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState;
+use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 
 impl CGame {
     #[allow(
@@ -19,26 +20,32 @@ impl CGame {
         source_player_id: i32,
         target: ShapeIdentity,
         state: BossBlueQuakeState,
-        destination_x: i32,
-        destination_y: i32,
-        duration_ms: u32,
+        back_steps: u32,
+        move_speed: u32,
         runtime: &mut Runtime,
     ) -> bool {
-        let Some(mut owner) = self.take_region_owner(region_id) else {
+        let Some(source_region) = self.find_player(source_player_id)
+            .and_then(CPlayer::server_region_id) else { return false; };
+        if self.find_region(source_region).is_none() {
             return false;
-        };
-        replace_quake_state(self, owner.base_mut(), target, state, || {
+        }
+        let source = ShapeIdentity { object_type: 400, id: source_player_id, ex_id: CGuid::GUID_INVALID };
+        let Some(target_region) = resolve_state_move_shape(self, region_id, target)
+            .map(|shape| shape.shape().get_region_id()) else { return false; };
+        replace_quake_state(self, target_region, target, (source_region, source), state, || {
             runtime.now_milliseconds()
         });
         self.increase_owned_player_rp(source_player_id, true, 0);
-        let _ = self.force_move_owned_shape(
-            owner.base_mut(),
+        let Some((destination_x, destination_y, moved)) = quake_knockback_destination(
+            self, source_region, source, target_region, target, back_steps,
+        ) else { return false; };
+        let _ = self.force_move_skill_target(
+            target_region,
             target,
             destination_x,
             destination_y,
-            duration_ms,
+            move_speed.wrapping_mul(moved),
         );
-        self.restore_region_owner(owner);
         true
     }
 }

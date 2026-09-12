@@ -5039,13 +5039,6 @@ impl CPlayer {
         self.move_shape.replace_hearten_state(state)
     }
 
-    pub(crate) fn begin_promotion_state(
-        &mut self,
-        state: super::skills::promotionstate::PromotionState,
-    ) -> bool {
-        self.move_shape.begin_promotion_state(state)
-    }
-
     pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
         self.move_shape.promotion_heal_recover_factor()
     }
@@ -15903,7 +15896,7 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // FUNCTION: CPlayer::IsAttackAble
 // STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // MATERIALIZED: player/player ветвь находится в `CGame::player_base_attackable`
-// и level gate, player/monster — в `CGame::player_attackable_by_monster`.
+// и level gate; общий живой допуск — в `CGame::live_skill_target_attackable_in`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10335

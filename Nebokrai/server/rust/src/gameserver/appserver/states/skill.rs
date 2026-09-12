@@ -95,7 +95,7 @@ impl CGame {
                 self.find_monster_property_by_origin_name(monster.base_property_key()?)
                     .map(|property| property.level as u8)
             }
-            1100 | 1200 => resolve_state_move_shape(self, region_id, target).map(|_| 1),
+            500 | 1100 | 1200 => resolve_state_move_shape(self, region_id, target).map(|_| 1),
             _ => None,
         }
     }

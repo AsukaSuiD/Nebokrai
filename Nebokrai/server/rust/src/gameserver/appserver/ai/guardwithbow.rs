@@ -22,10 +22,8 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::{
     FixedArcherTarget, consider_fixed_archer_target,
 };
 use crate::gameserver::appserver::moveshape::CMoveShape;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::monsterattack::monster_attackable_by_monster;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, ServerRegionOwner};
 use crate::setup::monsterlist::MonsterProperties;
 
 /// Выполняет подтверждённый порядок `SearchCriminal → SearchMonster`.
@@ -33,11 +31,12 @@ use crate::setup::monsterlist::MonsterProperties;
 /// владельца цикла после завершения неизменяемого обхода индексов региона.
 pub(crate) fn select_guard_with_bow_target(
     game: &CGame,
-    region: &CServerRegion,
+    owner: &ServerRegionOwner,
     monster_id: i32,
     property: &MonsterProperties,
     minimum_skill_distance: i32,
 ) -> Option<ShapeIdentity> {
+    let region = owner.base();
     let monster = region.find_monster_by_id(monster_id)?;
     let monster_view = monster.shape_view(property)?;
     let area_index = monster.move_shape().shape().area_index()?;
@@ -51,12 +50,10 @@ pub(crate) fn select_guard_with_bow_target(
         if player.server_region_id() != Some(region.id)
             || player.is_dead()
             || !player.is_badman(game.globe_setup().pk_count_per_kill())
-            || !game.player_attackable_by_monster(
-                player_id,
-                region.id,
-                property,
-                false,
-                monster.master_info(),
+            || !game.live_skill_target_attackable_in(
+                owner,
+                monster_view.identity,
+                player.shape().identity(),
             )
         {
             continue;
@@ -78,23 +75,23 @@ pub(crate) fn select_guard_with_bow_target(
         return Some(selected.identity);
     }
 
-    select_guard_monster_target(game, region, monster_id, property, minimum_skill_distance)
+    select_guard_monster_target(game, owner, monster_id, property, minimum_skill_distance)
 }
 
 /// Общая запасная ветвь охранников: ближайший неохранный монстр, которого
 /// допускает действующая политика `CMonster::IsAttackAble`.
 pub(crate) fn select_guard_monster_target(
     game: &CGame,
-    region: &CServerRegion,
+    owner: &ServerRegionOwner,
     monster_id: i32,
     property: &MonsterProperties,
     minimum_skill_distance: i32,
 ) -> Option<ShapeIdentity> {
+    let region = owner.base();
     let monster = region.find_monster_by_id(monster_id)?;
     let monster_view = monster.shape_view(property)?;
     let area_index = monster.move_shape().shape().area_index()?;
     let guard_range = property.guard_range as i32;
-    let attacker_master = monster.master_info();
     let mut selected = None;
     for target_id in region.monster_ids_around_area(area_index) {
         let Some(target) = region.find_monster_by_id(target_id) else {
@@ -109,15 +106,10 @@ pub(crate) fn select_guard_monster_target(
         if target_property.kind == 5 || CMoveShape::is_died(target.hit_points()) {
             continue;
         }
-        if !monster_attackable_by_monster(
-            game,
-            property,
-            false,
-            attacker_master,
-            target_property,
-            target.is_tamed(),
-            target.master_info(),
-            region.id,
+        if !game.live_skill_target_attackable_in(
+            owner,
+            monster_view.identity,
+            target.move_shape().shape().identity(),
         ) {
             continue;
         }

@@ -7,9 +7,11 @@
 //! End выполняет visual → актуальная S → fight-unlock → move-unlock →
 //! RemoveState того же объекта. Отсутствующая S не снимает запреты держателя.
 //!
-//! Строгий wrapping deadline и восьмибайтный ID/remaining codec общие.
-//! Load читает часы перед remaining, Save — после ID. Общая цепочка обслуживает
-//! также KnockOut/SpiderWeb/Seal/Strike, сохраняя их самостоятельные payload.
+//! Строгий wrapping deadline действует и при нулевом сроке. Восьмибайтный
+//! ID/remaining codec читает часы перед remaining при Load и после ID при Save.
+//! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike. Для primary
+//! KnockOut/SpiderWeb/BossBlueQuake payload-адаптер сохраняет тот же Begin;
+//! caller выбирает append либо освобождённый прежний слот без второго хранилища.
 //! OnAction не объединён: Blind/KnockOut/Seal заканчиваются при Defense,
 //! Rush/Rush2/SpiderWeb/Strike ничего не делают.
 
@@ -80,6 +82,21 @@ impl<const ID: u32> BlindState<ID> {
     }
 }
 
+pub(crate) trait BlindStatePayload: AppliedState {
+    fn blind_state_id(&self) -> u32;
+    fn begin_at(&mut self, now_ms: u32);
+    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32;
+    fn install_record(&self) -> [u8; BLIND_STATE_BYTES];
+}
+
+impl<const ID: u32> BlindStatePayload for BlindState<ID>
+where BlindState<ID>: AppliedState {
+    fn blind_state_id(&self) -> u32 { ID }
+    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
+    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_state_time(now) }
+    fn install_record(&self) -> [u8; BLIND_STATE_BYTES] { self.encoded_for_install() }
+}
+
 fn has_blind_lifecycle(state: &StateData) -> bool {
     state.is_blind() || matches!(state, StateData::Rush(_) | StateData::Rush2(_))
 }
@@ -99,38 +116,54 @@ fn begin_visual_message(
 }
 
 #[allow(clippy::too_many_arguments, reason = "User, Sufferer и держатель арены независимы")]
-pub(crate) fn begin_primary_blind_state<const ID: u32>(
+pub(crate) fn begin_primary_blind_state<T: BlindStatePayload>(
     game: &mut CGame,
     holder_region: i32,
     holder: ShapeIdentity,
     user: Option<(i32, ShapeIdentity)>,
     sufferer: Option<(i32, ShapeIdentity)>,
-    mut state: BlindState<ID>,
+    state: T,
     now: &mut dyn FnMut() -> u32,
-) -> Option<StateKey>
-where
-    BlindState<ID>: AppliedState,
-{
+) -> Option<StateKey> {
+    begin_primary_blind_state_at(game, holder_region, holder, user, sufferer, state, None, now)
+}
+
+#[allow(clippy::too_many_arguments, reason = "место публикации задаёт конкретный caller после End старого состояния")]
+pub(crate) fn begin_primary_blind_state_at<T: BlindStatePayload>(
+    game: &mut CGame,
+    holder_region: i32,
+    holder: ShapeIdentity,
+    user: Option<(i32, ShapeIdentity)>,
+    sufferer: Option<(i32, ShapeIdentity)>,
+    mut state: T,
+    placement: Option<(usize, usize)>,
+    now: &mut dyn FnMut() -> u32,
+) -> Option<StateKey> {
     let sufferer = sufferer?;
     resolve_state_move_shape(game, holder_region, holder)?;
     resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
-    if user.is_some() { state.started_at_ms = now(); }
+    if user.is_some() { state.begin_at(now()); }
     let participant = |(region, identity)| {
         let shape = resolve_state_move_shape(game, region, identity)?.shape();
         Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
     };
     let user = match user { Some(user) => Some(participant(user)?), None => None };
     let sufferer = participant(sufferer)?;
-    let message = begin_visual_message(sufferer.1, ID, || state.client_state_time(&mut *now));
+    let message = begin_visual_message(sufferer.1, state.blind_state_id(), || state.remaining(&mut *now));
     let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
     let target = resolve_state_move_shape_mut(game, sufferer.0, sufferer.1)?;
     target.set_moveable(false);
     target.set_fightable(false);
     // После Begin(1)/Update(0) loop1 остаётся незавершённым. Общая арена
     // создаёт этот visual лишь после полного Begin, без повторного пакета.
-    let record = state.encoded_for_install();
+    let record = state.install_record();
     let shape = resolve_state_move_shape_mut(game, holder_region, holder)?;
-    let key = shape.append_applied_state_record(state, &record);
+    let key = match placement {
+        Some(location) => shape.insert_replacement_state_record(state, &record, location)?,
+        None => shape.append_applied_state_record(state, &record),
+    };
+    shape.begin_applied_state_visual(key, 1);
+    shape.update_applied_state_visual_base(key);
     shape.mark_applied_state_begun(key);
     shape.set_applied_state_user(key, user);
     shape.set_applied_state_sufferer(key, Some(sufferer));

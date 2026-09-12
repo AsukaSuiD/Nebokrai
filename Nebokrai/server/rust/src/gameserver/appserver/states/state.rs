@@ -23,7 +23,7 @@ use crate::gameserver::appserver::skills;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillLifecycle;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
@@ -1047,7 +1047,8 @@ pub(crate) fn resolve_coordinate_sufferer(
     if tile_x == 0 && tile_y == 0 {
         return None;
     }
-    let region = game.find_region(region_id)?.base();
+    let owner = game.find_region(region_id)?;
+    let region = owner.base();
     let (area_width, area_height) = game.area_dimensions();
     let mut shapes = Vec::new();
     region
@@ -1056,7 +1057,7 @@ pub(crate) fn resolve_coordinate_sufferer(
             tile_y,
             area_width,
             area_height,
-            game,
+            &RegionShapeResolver { game, owner },
             &mut shapes,
         )
         .ok()?;

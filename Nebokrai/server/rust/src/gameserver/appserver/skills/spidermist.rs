@@ -379,7 +379,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
-    region: &mut CServerRegion,
+    region_owner: &mut crate::gameserver::gameserver::game::ServerRegionOwner,
     monster_id: i32,
     target: ShapeIdentity,
     skill_level: u16,
@@ -387,7 +387,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((source_shape, cast, progress, last_used_ms, ai_type, attack_interval)) = region
+    let Some((source_shape, cast, progress, last_used_ms, ai_type, attack_interval)) = region_owner.base()
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -414,7 +414,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             return false;
         }
         let Some(progress) = progress else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
                 monster.cancel_base_attack_cast(game.skill_factory());
             }
             return true;
@@ -426,13 +426,13 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         ) {
             return true;
         }
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(true);
             let _ = monster.advance_base_attack_cast(SPIDER_MIST_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         }
         send_fire(
             game,
-            region,
+            region_owner.base_mut(),
             &source_shape,
             monster_id,
             skill_level,
@@ -455,7 +455,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             properties.query_property(SKILL_USAGE_CONST),
         );
         let (area_width, area_height) = game.area_dimensions();
-        if let Ok(phalanx_id) = region.add_spider_mist_phalanx(
+        if let Ok(phalanx_id) = region_owner.base_mut().add_spider_mist_phalanx(
             phalanx,
             progress.destination_x,
             progress.destination_y,
@@ -464,9 +464,9 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             phalanx_started_at_ms,
             runtime,
         ) {
-            send_phalanx_entry(game, region, phalanx_id);
+            send_phalanx_entry(game, region_owner.base_mut(), phalanx_id);
         }
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SPIDER_MIST_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
             let _ = monster.advance_base_attack_cast(SPIDER_MIST_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
             let _ = monster.finish_base_attack_cast_with_clock(SPIDER_MIST_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
@@ -474,7 +474,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    let Some(target_owner) = resolve_owned_monster_attack_target(game, region, target) else {
+    let Some(target_owner) = resolve_owned_monster_attack_target(game, region_owner, target) else {
         return true;
     };
     let target_shape = &target_owner.shape;
@@ -487,7 +487,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if !approach_attack_range(
         game,
-        region,
+        region_owner.base_mut(),
         monster_id,
         MonsterTraceTarget::Shape(target_owner.view),
         maximum_distance,
@@ -495,14 +495,14 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     ) {
         return true;
     }
-    let path = region.straight_skill_path(source_x, source_y, destination_x, destination_y, None);
+    let path = region_owner.base_mut().straight_skill_path(source_x, source_y, destination_x, destination_y, None);
     if (maximum_distance != 0 && path.len() > maximum_distance as usize)
         || path.iter().any(|cell| cell.2 == BLOCK_UNFLY)
     {
         return true;
     }
     let schedule_ready = schedule_attack_interval(ai_type, attack_interval).is_none_or(|interval| {
-        region
+        region_owner.base_mut()
             .find_monster_by_id_mut(monster_id)
             .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, interval))
     });
@@ -519,17 +519,17 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let direction = get_line_direction(source_x, source_y, destination_x, destination_y);
-    let target_object = resolve_owned_skill_begin_object(game, region, target);
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target);
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
         monster.begin_base_attack_cast(target, SPIDER_MIST_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
         monster.set_skill_progress(SPIDER_MIST_SKILL_ID, SpiderMistProgress { destination_x, destination_y }, game.skill_factory());
     }
-    let source = region
+    let source = region_owner.base()
         .find_monster_by_id(monster_id)
         .map(|monster| monster.move_shape().shape())
         .unwrap_or(&source_shape);
-    send_start(game, region, source, monster_id, skill_level);
+    send_start(game, region_owner.base(), source, monster_id, skill_level);
     true
 }

@@ -1,4 +1,4 @@
-//! Рабочий владелец исполнения `CKnockOut` (`0x192`) с объектом-целью.
+//! Рабочий владелец исполнения `CKnockOut` (`0x192`) с движущейся целью.
 //! На время применения удара настоящий AI источника опубликован в CPlayer;
 //! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
@@ -21,17 +21,23 @@
 //! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
 //! Заимствование базы не переживает эту границу; продолжение заново получает
 //! оставшегося владельца, не создавая замену исчезнувшему региону.
+//! Координатный вход выбирает первый CMoveShape, включая NPC и постройку;
+//! путь идёт к GetBeAttackedPoint. После удара Cure читается заново. Новый
+//! payload создаётся до End старого состояния и занимает тот же слот после
+//! полного Begin; при отсутствии старого состояния добавляется в конец.
 
 use crate::gameserver::gameserver::game::ServerRegionOwner;
 
-use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_coordinate_sufferer, resolve_identity_sufferer,
+    resolve_owned_skill_begin_object, resolve_state_move_shape,
+};
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::knockoutstate::{
-    KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
-};
+use super::blindstate::begin_primary_blind_state_at;
+use super::knockoutstate::KnockOutState;
 use super::monsterattack::{
     apply_owned_monster_attack_hit,
     resolve_owned_monster_attack_target,
@@ -81,33 +87,35 @@ fn knock_out_hit_chance(
 const CAN_BREAK: u32 = 10_006;
 
 #[derive(Clone, Copy)]
-struct Target { identity: ShapeIdentity, x: i32, y: i32, level: u8, dodge: u16, dead: bool, cured: bool }
+struct Target { identity: ShapeIdentity, x: i32, y: i32, level: u8, dodge: u16, dead: bool }
 
 fn result(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
 fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<Target> {
-    match identity.object_type {
-        PLAYER_TYPE => {
-            let player = game.find_player(identity.id)?;
-            (player.server_region_id() == Some(region_id)).then_some(Target {
-                identity, x: player.shape().get_tile_x().ok()?, y: player.shape().get_tile_y().ok()?,
-                level: player.level(), dodge: player.combat_properties().dodge,
-                dead: player.is_dead(), cured: player.has_state_by_skill_id(CURE_SKILL_ID),
-            })
-        }
+    let shape = game.shape_view_in_owner(game.find_region(region_id)?, identity)?;
+    let dodge = match identity.object_type {
+        PLAYER_TYPE => game.find_player(identity.id)?.combat_properties().dodge,
         MONSTER_TYPE => {
             let monster = game.find_region(region_id)?.base().find_monster_by_id(identity.id)?;
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            Some(Target {
-                identity, x: monster.move_shape().shape().get_tile_x().ok()?, y: monster.move_shape().shape().get_tile_y().ok()?,
-                level: property.level as u8, dodge: monster.dodge(property), dead: monster.hit_points() == 0,
-                cured: monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID),
-            })
+            monster.dodge(property)
         }
-        _ => None,
-    }
+        500 | 1_100 | 1_200 => 0,
+        _ => return None,
+    };
+    Some(Target {
+        identity, x: shape.tile_x, y: shape.tile_y,
+        level: game.move_shape_level(region_id, identity)?, dodge,
+        dead: game.base_magic_target_dead(region_id, identity),
+    })
+}
+
+fn player_target_path_len(game: &CGame, player_id: i32, region_id: i32, x: i32, y: i32, target: ShapeIdentity) -> u32 {
+    if target.object_type == PLAYER_TYPE && target.id == player_id { return 0; }
+    game.base_magic_target_point(region_id, x, y, target)
+        .map_or(0, |point| game.base_magic_path(region_id, x, y, point.0, point.1, None).len() as u32)
 }
 
 fn failure(game: &CGame, player_id: i32, action: u8) {
@@ -236,14 +244,6 @@ fn monster_attack(
     Some(attack)
 }
 
-fn owned_target_has_cure(game: &CGame, region: &CServerRegion, target: ShapeIdentity) -> bool {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_some_and(|player| player.has_state_by_skill_id(CURE_SKILL_ID)),
-        MONSTER_TYPE => region.find_monster_by_id(target.id).is_some_and(|monster| monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID)),
-        _ => true,
-    }
-}
-
 /// Generic object-target ветвь `CKnockOut::AI` для monster-owner-а: общий
 /// reuse/range lifecycle, блокировка движения до delay, отдельный hit RNG,
 /// затем concrete attack, replacement состояния и monster death tail.
@@ -259,28 +259,31 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((source, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(region_owner) = owner.as_mut() else { return false; };
+    let Some((source, tamed, cast)) = region_owner.base().find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
+    let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity) else {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
     if target.dead {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
         return true;
     }
     let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (source.get_tile_x(), source.get_tile_y(), target.shape.get_tile_x(), target.shape.get_tile_y()) else { return true };
-    let path_len = region.straight_skill_path(source_x, source_y, target_x, target_y, None).len() as u32;
+    let path_len = if source.identity() == target_identity { 0 } else {
+        game.base_magic_target_point_in(region_owner, source_x, source_y, target_identity)
+            .map_or(0, |point| region_owner.base().straight_skill_path(source_x, source_y, point.0, point.1, None).len() as u32)
+    };
     let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if cast.is_none() {
-        let interval = if tamed { region.find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
-        if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
+        let interval = if tamed { region_owner.base().find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
+        if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region_owner.base_mut().find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(REUSE);
-        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(KNOCK_OUT_SKILL_ID, game.skill_factory())).unwrap_or_default();
+        let last_used = region_owner.base().find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(KNOCK_OUT_SKILL_ID, game.skill_factory())).unwrap_or_default();
         if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used, reuse, now_ms,
             )
@@ -288,39 +291,39 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
             return true;
         }
         if maximum != 0 && maximum.wrapping_add(1) < path_len {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
+            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
-        let target_object = resolve_owned_skill_begin_object(game, region, target_identity);
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), target_identity);
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(target_identity, KNOCK_OUT_SKILL_ID, skill_level, now_ms, target_object, game.skill_factory());
         }
-        monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, false);
+        monster_cast(game, region_owner.base_mut(), monster_id, target_identity, target_x, target_y, skill_level, false);
         return true;
     }
     let cast = cast.expect("активное оглушение проверено выше");
     if cast.dispatch().skill_id != KNOCK_OUT_SKILL_ID || cast.dispatch().target != target_identity { return false; }
     if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(DELAY)) { return true; }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
     if maximum != 0 && maximum.wrapping_add(1) < path_len {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { monster.clear_ai_target(game.skill_factory()); }
         return true;
     }
-    monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, true);
-    let target_level = if target_identity.object_type == PLAYER_TYPE {
-        game.find_player(target_identity.id).map_or(0, CPlayer::level)
-    } else {
-        target.monster_property.as_ref().map_or(0, |property| property.level as u8)
+    monster_cast(game, region_owner.base_mut(), monster_id, target_identity, target_x, target_y, skill_level, true);
+    let target_level = match target_identity.object_type {
+        PLAYER_TYPE => game.find_player(target_identity.id).map_or(1, CPlayer::level),
+        MONSTER_TYPE => target.monster_property.as_ref().map_or(1, |property| property.level as u8),
+        _ => 1,
     };
     let target_dodge = if target_identity.object_type == PLAYER_TYPE {
         target.player_properties.map_or(0, |combat| combat.dodge)
     } else {
-        region.find_monster_by_id(target_identity.id).zip(target.monster_property.as_ref()).map_or(0, |(monster, property)| monster.dodge(property))
+        region_owner.base().find_monster_by_id(target_identity.id).zip(target.monster_property.as_ref()).map_or(0, |(monster, property)| monster.dodge(property))
     };
-    let source_hit = region.find_monster_by_id(monster_id).map_or(1, |monster| monster.hit(property));
+    let source_hit = region_owner.base().find_monster_by_id(monster_id).map_or(1, |monster| monster.hit(property));
     let source_level = property.level as u8;
     let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
     let chance = knock_out_hit_chance(
@@ -333,54 +336,44 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         level_rate,
     );
     if chance <= game.skill_random_below(100) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(KNOCK_OUT_SKILL_ID, game.skill_factory()); }
+        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(KNOCK_OUT_SKILL_ID, game.skill_factory()); }
         return true;
     }
-    let Some(attack) = monster_attack(game, region, monster_id, property) else { return true };
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    let Some(attack) = monster_attack(game, region_owner.base_mut(), monster_id, property) else { return true };
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
+    let region_id = region_owner.region_id();
     apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-    if !owned_target_has_cure(game, region, target_identity) {
-        let state_now = runtime.now_milliseconds();
-        let state = KnockOutState::new(state_now, properties.query_property(PERSIST));
-        match target_identity.object_type {
-            PLAYER_TYPE => { let _ = replace_player_knock_out_state(game, target_identity.id, state, state_now); }
-            MONSTER_TYPE => { let _ = replace_monster_knock_out_state(game, region, target_identity.id, state, state_now); }
-            _ => {}
+    let _ = game.with_published_region(owner, |game| {
+        if resolve_state_move_shape(game, region_id, target_identity)
+            .is_some_and(|shape| !shape.has_state_by_skill_id(CURE_SKILL_ID))
+        {
+            let state = KnockOutState::new(0, properties.query_property(PERSIST));
+            install(game, region_id, source.identity(), target_identity, state, runtime);
         }
-    }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+    });
+    let Some(region_owner) = owner.as_mut() else { return true; };
+    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
         let _ = monster.finish_base_attack_cast_with_clock(KNOCK_OUT_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
     }
     true
 }
 
-fn install(game: &mut CGame, region_id: i32, target: Target, state: KnockOutState, now_ms: u32) {
-    match target.identity.object_type {
-        PLAYER_TYPE => {
-            let _ = replace_player_knock_out_state(game, target.identity.id, state, now_ms);
-        }
-        MONSTER_TYPE => {
-            let mut owner = game.take_region_owner(region_id);
-            if let Some(owner) = owner.as_mut() {
-                let _ = replace_monster_knock_out_state(
-                    game,
-                    owner.base_mut(),
-                    target.identity.id,
-                    state,
-                    now_ms,
-                );
-            }
-            if let Some(owner) = owner {
-                game.restore_region_owner(owner);
-            }
-        }
-        _ => {}
+fn install<Runtime: GameMainLoopRuntime>(game: &mut CGame, region_id: i32, user: ShapeIdentity, target: ShapeIdentity, state: KnockOutState, runtime: &mut Runtime) {
+    let Some(shape) = resolve_state_move_shape(game, region_id, target) else { return; };
+    let target_region = shape.shape().get_region_id();
+    let previous = shape.find_state_position(|state| state.state_id() == KNOCK_OUT_SKILL_ID);
+    let placement = previous.and_then(|(_, key)| shape.applied_state_replacement_location(key));
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, target_region, target, position);
     }
+    let _ = begin_primary_blind_state_at(
+        game, target_region, target, Some((region_id, user)), Some((target_region, target)),
+        state, placement, &mut || runtime.now_milliseconds(),
+    );
 }
 
 fn release(game: &mut CGame, player_id: i32) {
@@ -393,16 +386,16 @@ pub(crate) fn complete_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut
 pub(crate) fn cancel_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, KNOCK_OUT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_knock_out(game, player_id); game.finish_player_skill(player_id, ai, dispatch, SkillTermination::Cancelled) }
 
 pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    let identity = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id: KNOCK_OUT_SKILL_ID, .. }
-        | PlayerSkillDispatch::Point { skill_id: KNOCK_OUT_SKILL_ID, .. } => {
-            failure(game, player_id, 2);
-            return result(QueuedSkillExecutionState::Rejected);
-        }
-        PlayerSkillDispatch::Object { skill_id: KNOCK_OUT_SKILL_ID, target } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
-        _ => return result(QueuedSkillExecutionState::Rejected),
-    };
     let Some((region_id, sx, sy, level)) = game.find_player(player_id).and_then(|p| Some((p.server_region_id()?, p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.learned_skill_level(KNOCK_OUT_SKILL_ID, game.skill_factory())))) else { return result(QueuedSkillExecutionState::Rejected) };
+    let identity = match dispatch {
+        PlayerSkillDispatch::Object { skill_id: KNOCK_OUT_SKILL_ID, target } => resolve_identity_sufferer(game, region_id, target),
+        PlayerSkillDispatch::Point { skill_id: KNOCK_OUT_SKILL_ID, x, y } => resolve_coordinate_sufferer(game, region_id, x, y),
+        _ => None,
+    };
+    let Some(identity) = identity else {
+        failure(game, player_id, 2);
+        return result(QueuedSkillExecutionState::Rejected);
+    };
     let Some(properties) = game.skill_base_properties(KNOCK_OUT_SKILL_ID, level) else { failure(game, player_id, 2); return result(QueuedSkillExecutionState::Rejected) };
     let delay = properties.query_property(DELAY); let persist = properties.query_property(PERSIST);
     let reuse = properties.query_property(REUSE); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
@@ -415,7 +408,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
             failure(game, player_id, 0x0d); failure(game, player_id, 2);
             return result(QueuedSkillExecutionState::Rejected);
         }
-        if maximum != 0 && maximum.wrapping_add(1) < game.base_magic_path(region_id, sx, sy, target.x, target.y, None).len() as u32 {
+        if maximum != 0 && maximum.wrapping_add(1) < player_target_path_len(game, player_id, region_id, sx, sy, identity) {
             failure(game, player_id, 0x0b); failure(game, player_id, 2);
             return result(QueuedSkillExecutionState::Rejected);
         }
@@ -436,7 +429,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     abort_player_knock_out(game, player_id);
     target = match target_snapshot(game, region_id, identity) { Some(target) => target, None => return result(QueuedSkillExecutionState::Rejected) };
     let Some((sx, sy, combat, source_level)) = game.find_player(player_id).and_then(|p| Some((p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.combat_properties(), p.level()))) else { return result(QueuedSkillExecutionState::Rejected) };
-    if maximum != 0 && maximum.wrapping_add(1) < game.base_magic_path(region_id, sx, sy, target.x, target.y, None).len() as u32 { failure(game, player_id, 0x0b); return result(QueuedSkillExecutionState::Rejected); }
+    if maximum != 0 && maximum.wrapping_add(1) < player_target_path_len(game, player_id, region_id, sx, sy, identity) { failure(game, player_id, 0x0b); return result(QueuedSkillExecutionState::Rejected); }
     cast(game, player_id, target, level, true);
     let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
     let chance = knock_out_hit_chance(
@@ -450,15 +443,20 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     );
     if chance <= game.skill_random_below(100) { return result(QueuedSkillExecutionState::Completed); }
     if let Some((master, attack)) = attack(game, player_id, target.level) {
-        match target.identity.object_type {
-            PLAYER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_player(master, target.identity.id, region_id, attack, runtime)),
-            MONSTER_TYPE => game.with_published_player_ai(player_id, ai, |game| game.apply_owned_skill_attack_to_monster(master, target.identity.id, region_id, attack, runtime)), _ => {}
+        game.with_published_player_ai(player_id, ai, |game| {
+            game.apply_owned_skill_contact(master, target.identity, region_id, attack, runtime);
+        });
+    }
+    game.with_published_player_ai(player_id, ai, |game| {
+        if resolve_state_move_shape(game, region_id, target.identity)
+            .is_some_and(|shape| !shape.has_state_by_skill_id(CURE_SKILL_ID))
+        {
+            let state = KnockOutState::new(0, persist);
+            if let Some(user) = game.find_player(player_id).map(|player| player.shape().identity()) {
+                install(game, region_id, user, target.identity, state, runtime);
+            }
         }
-    }
-    if !target.cured {
-        let state_now = runtime.now_milliseconds();
-        install(game, region_id, target, KnockOutState::new(state_now, persist), runtime.now_milliseconds());
-    }
+    });
     if let Some(execution) = game.player_skill_execution_mut(player_id, KNOCK_OUT_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

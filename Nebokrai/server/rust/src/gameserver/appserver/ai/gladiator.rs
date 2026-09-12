@@ -14,11 +14,9 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::CMoveShape;
-use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, ServerRegionOwner};
 use crate::setup::monsterlist::MonsterProperties;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,16 +44,14 @@ pub(crate) fn consider_gladiator_target(
 
 /// Выполняет общий поиск AI0/AI3 по игрокам, питомцам и совместимым повозкам.
 /// Поздняя категория заменяет прежнюю цель при равной дистанции.
-#[allow(clippy::too_many_arguments, reason = "граница сохраняет ownership повозки и свойства нападающего")]
 pub(crate) fn select_gladiator_enemy(
     game: &CGame,
-    region: &CServerRegion,
+    region_owner: &ServerRegionOwner,
     owner: ShapeView,
     area_index: usize,
     property: &MonsterProperties,
-    tamed: bool,
-    attacker_master: MasterInfo,
 ) -> Option<ShapeIdentity> {
+    let region = region_owner.base();
     let guard_range = property.guard_range as i32;
     let mut selected = None;
     for player_id in region.player_ids_around_area(area_index) {
@@ -101,7 +97,7 @@ pub(crate) fn select_gladiator_enemy(
         }
     }
     for carriage_id in region.carriage_ids_around_area(area_index) {
-        let Some((candidate, target_master)) =
+        let Some(candidate) =
             region.find_monster_by_id(carriage_id).and_then(|carriage| {
                 let carriage_property =
                     game.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
@@ -110,17 +106,15 @@ pub(crate) fn select_gladiator_enemy(
                 {
                     return None;
                 }
-                Some((carriage.shape_view(carriage_property)?, carriage.master_info()))
+                carriage.shape_view(carriage_property)
             })
         else {
             continue;
         };
-        if !game.carriage_attackable_by_monster(
-            property,
-            tamed,
-            attacker_master,
-            target_master,
-            region.id,
+        if !game.live_skill_target_attackable_in(
+            region_owner,
+            owner.identity,
+            candidate.identity,
         ) {
             continue;
         }

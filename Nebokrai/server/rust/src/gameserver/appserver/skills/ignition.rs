@@ -220,7 +220,7 @@ fn apply_ignition<Runtime: GameMainLoopRuntime>(
     match target.1.object_type {
         400 => game.apply_owned_skill_attack_to_player(master, target.1.id, target.0, attack, runtime),
         600 => game.apply_owned_skill_attack_to_monster(master, target.1.id, target.0, attack, runtime),
-        1100 | 1200 => game.apply_owned_skill_attack_to_stationary_build(player_id, target.0, target.1, attack, runtime),
+        1100 | 1200 => game.receive_stationary_build_skill_attack(target.0, target.1, attack, runtime),
         _ => return,
     }
     // Защита и callbacks попадания могут изменить арену. Ищется первая живая

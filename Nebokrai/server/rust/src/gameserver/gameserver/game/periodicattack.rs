@@ -1,6 +1,6 @@
 //! Общая координация заимствований для уже рассчитанных атак навыков.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/moveshape.cpp
-//! и appserver/skills/fightdefense.cpp.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/moveshape.cpp,
+//! player.cpp, monster.cpp, build.cpp, citygate.cpp и skills/fightdefense.cpp.
 //!
 //! Конкретные формулы, периодический шаг состояний и визуальное сетевое
 //! представление принадлежат модулям навыка и состояния. Этот дочерний модуль
@@ -25,18 +25,258 @@
 //! а не допуск рассчитанного урона:
 //! без god-фильтра, с текущими правами игрока и владельца питомца. Смерть,
 //! Cure и исключение самого источника остаются отдельными правилами caller-а.
+//! Читающий IsAttackAble получает настоящий производный регион по ссылке,
+//! включая извлечённый owner; глобальные хозяева используют свой target-region.
+//! Питомцы сохраняют рекурсивный допуск и дополнительные security-проверки,
+//! постройки/ворота — собственные action/HP и region-policy без копии защиты.
 
 use super::*;
-use crate::gameserver::appserver::skills::monsterattack::{
-    owned_monster_attackable, resolve_owned_monster_attack_target,
-};
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_player_from_monster_base_attack, defend_monster_from_monster_base_attack,
 };
 use crate::gameserver::appserver::skills::skillfactory::SkillCategory;
+use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 
 impl CGame {
+    pub(crate) fn player_attack_pk_allowed_in(
+        &self, region: &ServerRegionOwner, attacker_id: i32, victim_id: i32,
+    ) -> bool {
+        let Some(attacker) = self.find_player(attacker_id) else { return false; };
+        let Some(victim) = self.find_player(victim_id) else { return false; };
+        let (Ok(attacker_x), Ok(attacker_y), Ok(victim_x), Ok(victim_y)) = (
+            attacker.shape().get_tile_x(),
+            attacker.shape().get_tile_y(),
+            victim.shape().get_tile_x(),
+            victim.shape().get_tile_y(),
+        ) else {
+            return false;
+        };
+        if region.base().no_pk
+            || region.get_security(attacker_x, attacker_y).ok() == Some(RegionSecurity::SAFE)
+            || region.get_security(victim_x, victim_y).ok() == Some(RegionSecurity::SAFE)
+        {
+            return false;
+        }
+        let faction_enemies = attacker.is_enemy_faction_member(victim.faction_id())
+            || attacker.is_city_war_enemy_faction_member(victim.faction_id());
+        if faction_enemies {
+            return true;
+        }
+        let permissions = attacker.pk_permissions();
+        let victim_badman = victim.is_badman(self.globe_setup.pk_count_per_kill());
+        let mut attackable = true;
+        if !permissions.player && !victim_badman && attacker.country() == victim.country() {
+            attackable = false;
+        }
+        if !permissions.teammate && victim.team_id() != 0 && attacker.team_id() == victim.team_id()
+        {
+            attackable = false;
+        }
+        if !permissions.guild_member
+            && ((victim.faction_id() != 0 && attacker.faction_id() == victim.faction_id())
+                || (victim.union_id() != 0 && attacker.union_id() == victim.union_id()))
+        {
+            attackable = false;
+        }
+        if !permissions.criminal && victim_badman {
+            attackable = false;
+        }
+        if !permissions.country && !victim_badman && attacker.country() != victim.country() {
+            attackable = false;
+        }
+        if region.is_gods_battle()
+            && !permissions.player
+            && attacker.gods_battle_faction() == victim.gods_battle_faction()
+            && !victim_badman
+        {
+            attackable = false;
+        }
+        attackable
+    }
+
+    pub(crate) fn player_attack_level_block_in(
+        &self,
+        owner: &ServerRegionOwner,
+        attacker_id: i32,
+        victim_id: i32,
+    ) -> Option<(&'static [u8], u32)> {
+        let attacker = self.find_player(attacker_id)?;
+        let victim = self.find_player(victim_id)?;
+        let region = owner.base();
+        if attacker_id == victim_id || region.war_region_type != 0 {
+            return None;
+        }
+        let (national_limit, enemy_limit) = self.globe_setup.player_attack_level_limits();
+        if victim.country() == region.country {
+            if victim.country() == attacker.country() {
+                if i32::from(victim.level()) <= national_limit {
+                    return Some((b"GS0160", national_limit as u32));
+                }
+                if i32::from(attacker.level()) <= national_limit {
+                    return Some((b"GS0161", national_limit as u32));
+                }
+            } else if i32::from(victim.level()) <= enemy_limit {
+                return Some((b"GS0162", enemy_limit as u32));
+            }
+        } else if attacker.country() == region.country
+            && i32::from(attacker.level()) <= national_limit
+        {
+            return Some((b"GS0161", national_limit as u32));
+        }
+        None
+    }
+
+    pub(crate) fn monster_attackable_by_player_in(
+        &self,
+        attacker_id: i32,
+        region: &ServerRegionOwner,
+        property: &crate::setup::monsterlist::MonsterProperties,
+    ) -> bool {
+        if property.kind != 5 {
+            return true;
+        }
+        let Some(player) = self.find_player(attacker_id) else {
+            return false;
+        };
+        let permissions = player.pk_permissions();
+        match property.ai as i32 {
+            8..=9 => permissions.player,
+            10..=11 => !((player.faction_id() != 0
+                && player.faction_id() == region.base().owned_city_faction())
+                || (player.union_id() != 0
+                    && player.union_id() == region.base().owned_city_union())),
+            17 => {
+                if u32::from(player.country()) == property.race {
+                    permissions.player
+                } else {
+                    permissions.country
+                }
+            }
+            101 => u32::from(player.country()) != property.race && permissions.country,
+            12..=13 => {
+                if player.country() == region.base().country {
+                    permissions.player
+                } else {
+                    permissions.country
+                }
+            }
+            14..=15 => {
+                property.ai as i32 - 14
+                    != self
+                        .country_war_sys
+                        .get_war_camp(i32::from(player.country()))
+                    && permissions.country
+            }
+            103 => {
+                if player.gods_battle_faction() as u32 == property.race {
+                    permissions.player
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        }
+    }
+
+    pub(crate) fn stationary_build_attackable_by_player_in(
+        &self,
+        player_id: i32,
+        owner: &ServerRegionOwner,
+        identity: ShapeIdentity,
+    ) -> bool {
+        self.live_build_target_attackable_in(owner, ShapeIdentity {
+            object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID,
+        }, identity)
+    }
+
+    fn live_build_target_attackable_in(
+        &self, owner: &ServerRegionOwner, source: ShapeIdentity, identity: ShapeIdentity,
+    ) -> bool {
+        let Some(build) = owner.stationary_build(identity) else { return false; };
+        if !build.move_shape().shape().is_assigned_to_server_region() { return false; }
+        if owner.base().war_region_type == 3 {
+            if source.object_type != PLAYER_TYPE { return false; }
+            let player_id = source.id;
+            let Some(player) = self.find_player(player_id) else { return false; };
+            let ServerRegionOwner::Country(country_region) = owner else {
+                return false;
+            };
+            let mut context = KnownCountryCamp {
+                player_id,
+                country: player.country(),
+            };
+            let target = Some(CountryMoveShape {
+                object_type: identity.object_type,
+                id: identity.id,
+            });
+            let attacker = Some(CountryMoveShape {
+                object_type: PLAYER_TYPE,
+                id: player_id,
+            });
+            return match identity.object_type {
+                kind if kind == CITY_GATE_OBJECT_TYPE as i32 => country_region
+                    .defend_gates
+                    .get(&identity.id)
+                    .or_else(|| country_region.attack_gates.get(&identity.id))
+                    .is_some_and(|gate| {
+                        gate.is_attackable_in_region(true, || {
+                            country_region.gate_is_attack_able(target, attacker, &mut context)
+                        })
+                    }),
+                kind if kind == BUILD_OBJECT_TYPE as i32 => country_region
+                    .defend_flags
+                    .get(&identity.id)
+                    .or_else(|| country_region.attack_flags.get(&identity.id))
+                    .is_some_and(|build| {
+                        build.is_attackable_in_region(|| {
+                            country_region.flag_is_attack_able(target, attacker, &mut context)
+                        })
+                    }),
+                _ => false,
+            };
+        }
+
+        if identity.object_type == BUILD_OBJECT_TYPE as i32 {
+            return owner
+                .stationary_build(identity)
+                .is_some_and(|build| {
+                    build.is_attackable_in_region(|| owner.symbol_is_attackable())
+                });
+        }
+        let ServerRegionOwner::City(city_region) = owner else {
+            return false;
+        };
+        city_region
+            .city_gates
+            .values()
+            .find(|state| state.gate.id() == identity.id)
+            .is_some_and(|state| {
+                state.gate.is_attackable_in_region(true, || {
+                    if city_region.war.base.get_city_state() != 3 { return false; }
+                    match source.object_type {
+                        PLAYER_TYPE => self.find_player(source.id).is_some_and(|player| {
+                            // Воротам достаточно owning union; faction проверяется
+                            // только у источника без положительного union.
+                            if player.union_id() > 0 {
+                                player.union_id() != owner.base().owned_city_union()
+                            } else {
+                                player.faction_id() <= 0
+                                    || player.faction_id() != owner.base().owned_city_faction()
+                            }
+                        }),
+                        600 => owner.base().find_monster_by_id(source.id).is_some_and(|monster| {
+                            monster.is_tamed() && monster.has_pet_ai()
+                                && self.find_player(monster.master_info().master_id).is_some_and(|master| {
+                                    self.stationary_build_attackable_by_player_in(master.player_id(), owner, identity)
+                                })
+                        }),
+                        _ => false,
+                    }
+                })
+            })
+    }
+
     // Единственный factory-owner категории Defense — CFightDefense. Читаем
     // живые позиции, чтобы отсутствие или повторение A сохраняло native цикл.
     fn begin_received_base_defense(
@@ -57,34 +297,42 @@ impl CGame {
         }
     }
 
-    fn live_player_target_attackable(&self, source_id: i32, target_id: i32) -> bool {
-        if self.find_player(target_id).is_none_or(|player| player.city_war_died_state()) {
-            return false;
-        }
-        if let Some((text, limit)) = self.player_attack_level_block(source_id, target_id) {
-            self.send_base_attack_level_block(source_id, text, limit);
-            return false;
-        }
-        self.player_attack_pk_allowed(source_id, target_id)
+    fn skill_policy_region_in<'a>(
+        &'a self, owner: &'a ServerRegionOwner, region_id: i32,
+    ) -> Option<&'a ServerRegionOwner> {
+        if owner.region_id() == region_id { Some(owner) } else { self.find_region(region_id) }
     }
 
-    // CPlayer::IsAttackAble(monster) использует регион цели и текущий GetAI
-    // источника. DoesCreatureBeenTamed уже требует player-master, который
-    // разрешается глобально и делегирует допуск обычной player-ветке.
-    fn live_monster_attack_at_player(
-        &self, source_region: i32, source_id: i32, target_id: i32,
+    fn live_player_target_attackable_in(
+        &self, owner: &ServerRegionOwner, source_id: i32, target_id: i32,
     ) -> bool {
         let Some(target) = self.find_player(target_id) else { return false; };
         if target.city_war_died_state() { return false; }
-        let Some(target_region) = target.server_region_id().and_then(|id| self.find_region(id))
+        let Some(region) = target.server_region_id()
+            .and_then(|id| self.skill_policy_region_in(owner, id))
         else { return false; };
-        let Some(monster) = self.find_region(source_region)
-            .and_then(|region| region.base().find_monster_by_id(source_id))
+        if let Some((text, limit)) = self.player_attack_level_block_in(region, source_id, target_id) {
+            self.send_base_attack_level_block(source_id, text, limit);
+            return false;
+        }
+        self.player_attack_pk_allowed_in(region, source_id, target_id)
+    }
+
+    // CPlayer использует собственный регион и живой GetAI источника.
+    // Хозяева питомцев разрешаются глобально, даже если они в другой области.
+    fn live_monster_attack_at_player_in(
+        &self, owner: &ServerRegionOwner, source_id: i32, target_id: i32,
+    ) -> bool {
+        let Some(target) = self.find_player(target_id) else { return false; };
+        if target.city_war_died_state() { return false; }
+        let Some(target_region) = target.server_region_id()
+            .and_then(|id| self.skill_policy_region_in(owner, id))
         else { return false; };
+        let Some(monster) = owner.base().find_monster_by_id(source_id) else { return false; };
         if monster.is_tamed() && monster.has_pet_ai() {
             let id = monster.master_info().master_id;
             if self.find_player(id).is_none() { return true; }
-            return id != target_id && self.live_player_target_attackable(id, target_id);
+            return id != target_id && self.live_player_target_attackable_in(owner, id, target_id);
         }
         let Some(property) = monster.base_property_key()
             .and_then(|key| self.find_monster_property_by_origin_name(key))
@@ -103,24 +351,88 @@ impl CGame {
         }
     }
 
+    fn live_monster_target_attackable_in(
+        &self, owner: &ServerRegionOwner, source_id: i32, target_id: i32,
+    ) -> bool {
+        let Some(target) = owner.base().find_monster_by_id(target_id) else { return false; };
+        if !target.move_shape().shape().is_assigned_to_server_region() { return false; }
+        let Some(source) = owner.base().find_monster_by_id(source_id) else { return false; };
+        let source_property = source.base_property_key()
+            .and_then(|key| self.find_monster_property_by_origin_name(key));
+        let target_property = target.base_property_key()
+            .and_then(|key| self.find_monster_property_by_origin_name(key));
+        let source_guard = source_property.is_some_and(|property| property.kind == 5);
+        let source_pet = source.is_tamed() && source.has_pet_ai();
+        if target_property.is_some_and(|property| property.kind == 5) {
+            return if source_pet {
+                self.find_player(source.master_info().master_id)
+                    .is_none_or(|master| master.is_badman(self.globe_setup.pk_count_per_kill()))
+            } else {
+                !source_guard
+            };
+        }
+        let target_pet = target.is_tamed() && target.has_pet_ai();
+        let target_carriage = target.has_carriage_ai()
+            && matches!(target.active_ai(), Some(ActiveMonsterAi::Carriage
+                | ActiveMonsterAi::Primary(crate::gameserver::appserver::ai::aifactory::MonsterAiKind::Carriage)));
+        if !target_pet && !target_carriage {
+            return source_guard || source.is_tamed();
+        }
+        let target_master = target.master_info();
+        let target_master = (target_master.master_type == PLAYER_TYPE && target_master.master_id != 0)
+            .then(|| self.find_player(target_master.master_id)).flatten();
+        if source_pet {
+            let Some(source_master) = self.find_player(source.master_info().master_id) else { return true; };
+            let Some(target_master) = target_master else { return true; };
+            if !self.live_player_target_attackable_in(owner, source_master.player_id(), target_master.player_id()) {
+                return false;
+            }
+            // После рекурсивного IsAttackAble идут ещё две проверки в регионе
+            // самого питомца/повозки, а не в регионе кого-либо из хозяев.
+            let (Ok(source_y), Ok(source_x), Ok(target_y), Ok(target_x)) = (
+                source_master.shape().get_tile_y(), source_master.shape().get_tile_x(),
+                target_master.shape().get_tile_y(), target_master.shape().get_tile_x(),
+            ) else { return false; };
+            return owner.get_security(source_x, source_y).ok() != Some(RegionSecurity::SAFE)
+                && owner.get_security(target_x, target_y).ok() != Some(RegionSecurity::SAFE);
+        }
+        if !source_guard { return true; }
+        if matches!(source.active_primary_ai_type(), Some(10 | 11)) {
+            return target_master.is_none_or(|master| {
+                (master.faction_id() == 0 || master.faction_id() != owner.base().owned_city_faction())
+                    && (master.union_id() == 0 || master.union_id() != owner.base().owned_city_union())
+            });
+        }
+        // Только питомец делегирует оставшегося охранника своему хозяину.
+        // Повозка при другом либо отсутствующем GetAI возвращает false.
+        target_pet && target_master.is_none_or(|master| {
+            self.live_monster_attack_at_player_in(owner, source_id, master.player_id())
+        })
+    }
+
     pub(crate) fn live_skill_target_attackable(
-        &self,
-        region_id: i32,
-        source: ShapeIdentity,
-        target: ShapeIdentity,
+        &self, region_id: i32, source: ShapeIdentity, target: ShapeIdentity,
+    ) -> bool {
+        self.find_region(region_id)
+            .is_some_and(|owner| self.live_skill_target_attackable_in(owner, source, target))
+    }
+
+    /// Чтение из настоящего owner-а не требует публикации извлечённого региона.
+    /// HP/god движущихся целей, self и обход остаются у caller-а; собственные
+    /// action/HP-проверки построек входят в их виртуальный допуск.
+    pub(crate) fn live_skill_target_attackable_in(
+        &self, owner: &ServerRegionOwner, source: ShapeIdentity, target: ShapeIdentity,
     ) -> bool {
         if matches!(target.object_type, 1100 | 1200) {
-            return source.object_type == 400
-                && self.stationary_build_attackable_by_player(source.id, region_id, target);
+            return self.live_build_target_attackable_in(owner, source, target);
         }
         if !matches!(target.object_type, 400 | 600) { return false; }
-        let Some(region) = self.find_region(region_id).map(|owner| owner.base()) else { return false; };
         match source.object_type {
             400 => {
                 if target.object_type == 400 {
-                    return self.live_player_target_attackable(source.id, target.id);
+                    return self.live_player_target_attackable_in(owner, source.id, target.id);
                 }
-                let Some(monster) = region.find_monster_by_id(target.id) else { return false; };
+                let Some(monster) = owner.base().find_monster_by_id(target.id) else { return false; };
                 let Some(property) = monster.base_property_key()
                     .and_then(|name| self.find_monster_property_by_origin_name(name))
                 else { return false; };
@@ -128,26 +440,18 @@ impl CGame {
                 if (monster.is_tamed() || monster.is_carriage(property))
                     && target_master.master_type == 400 && target_master.master_id != 0
                 {
-                    let Some(owner) = self.find_player(target_master.master_id) else { return true; };
-                    if target_master.master_id == source.id { return owner.pk_permissions().criminal; }
-                    return self.live_player_target_attackable(source.id, target_master.master_id);
+                    let Some(master) = self.find_player(target_master.master_id) else { return true; };
+                    if target_master.master_id == source.id { return master.pk_permissions().criminal; }
+                    return self.live_player_target_attackable_in(owner, source.id, target_master.master_id);
                 }
-                self.monster_attackable_by_player(source.id, region_id, property)
+                self.monster_attackable_by_player_in(source.id, owner, property)
             }
             600 => {
                 if target.object_type == PLAYER_TYPE {
-                    return self.live_monster_attack_at_player(region_id, source.id, target.id);
+                    self.live_monster_attack_at_player_in(owner, source.id, target.id)
+                } else {
+                    self.live_monster_target_attackable_in(owner, source.id, target.id)
                 }
-                let Some(monster) = region.find_monster_by_id(source.id) else { return false; };
-                let Some(property) = monster.base_property_key()
-                    .and_then(|name| self.find_monster_property_by_origin_name(name))
-                else { return false; };
-                let Some(target_snapshot) = resolve_owned_monster_attack_target(self, region, target)
-                else { return false; };
-                owned_monster_attackable(
-                    self, region_id, property, monster.is_tamed(), monster.master_info(),
-                    target, &target_snapshot,
-                )
             }
             _ => false,
         }
@@ -168,23 +472,11 @@ impl CGame {
             self.increase_owned_player_rp(player_id, true, 0);
         }
     }
-    /// Эти навыки вызывают общий OnBeenAttacked здания без начисления RP.
-    /// Проверка допустимости остаётся перед расчётом у конкретного caller-а.
-    pub(crate) fn apply_owned_skill_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
-        &mut self, player_id: i32, region_id: i32, identity: ShapeIdentity,
-        attack: AttackInformation, runtime: &mut Runtime,
-    ) {
-        self.apply_direct_player_skill_attack_to_stationary_build(
-            player_id, region_id, identity, attack, runtime,
-        );
-    }
-
     /// Общий CMoveShape::OnBeenAttacked у здания — другой virtual slot, чем
     /// отдельный CBuild::OnBeenAttacked. Здесь нет IsAttackAble и death-script;
     /// после защиты работают обычные OnAction, death-пролог и очистка состояний.
-    pub(crate) fn apply_direct_player_skill_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn receive_stationary_build_skill_attack<Runtime: GameMainLoopRuntime>(
         &mut self,
-        _player_id: i32,
         region_id: i32,
         identity: ShapeIdentity,
         mut attack: AttackInformation,
@@ -203,6 +495,12 @@ impl CGame {
             let Some(build) = self.find_region(region_id).and_then(|region| region.stationary_build(identity))
             else { return; };
             let (defense, element_resistance) = (build.defence(), build.element_resistance());
+            let promotion_factors: Vec<_> = build.move_shape().defense_shields()
+                .filter_map(|state| match state {
+                    DefenseShieldState::Promotion(state) => Some(state.magic_attack_factor()),
+                    _ => None,
+                })
+                .collect();
             let source_id = attack.attacker_id;
             if attack.attacker_type == PLAYER_TYPE && CSkillFactory::is_war_soul_skill(attack.skill_id)
                 && self.find_player(source_id).is_none()
@@ -219,13 +517,22 @@ impl CGame {
                     (source.combat_properties(), occupation, None)
                 }
             });
-            if self.received_defense_allowed(region_id, identity, attack.attacker_type, source_id)
+            let source_allowed = self.received_defense_allowed(
+                region_id, identity, attack.attacker_type, source_id,
+            );
+            if source_allowed
                 && let Some((properties, occupation, _)) = defense_source
             {
                 let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
                 defend_build_base_attack(
                     &mut attack, properties, occupation, defense, element_resistance,
-                    &self.globe_setup, &mut random,
+                    &self.globe_setup, &promotion_factors, &mut random,
+                );
+            } else if source_allowed && attack.attacker_type != PLAYER_TYPE {
+                let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+                crate::gameserver::appserver::skills::fightdefense::defend_build_from_monster_base_attack(
+                    &mut attack, defense, element_resistance, &self.globe_setup,
+                    &promotion_factors, &mut random,
                 );
             } else {
                 attack.clear();
@@ -401,7 +708,7 @@ impl CGame {
             && (region.get_security(target_x, target_y).ok() == Some(RegionSecurity::SAFE)
                 || region.get_security(source.tile_x, source.tile_y).ok() == Some(RegionSecurity::SAFE))
         { return false; }
-        if region.base().region.region_type() == 3
+        if region.base().get_city_state() == 3
             && let (Some(target_cell), Some(source_cell)) = (target_cell, source_cell)
             && target_cell.city_war_marker() != source_cell.city_war_marker()
         { return false; }
@@ -1165,7 +1472,7 @@ impl CGame {
             {
                 crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
                     self,
-                    owner.base_mut(),
+                    &mut owner,
                     target_id,
                     &property,
                 );
