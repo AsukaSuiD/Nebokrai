@@ -20,7 +20,7 @@
 
 use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::dash::execute_registered_dash;
+use super::playercast::execute_registered_player_cast;
 use super::flash::cell_views;
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage};
@@ -380,7 +380,7 @@ pub(super) fn execute_rush<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, instance: RegisteredSkill,
     dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    execute_registered_dash(
+    execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, visual_kind(dispatch.skill_id()),
         check_cast, |dispatch, started| RushExecutionState::begin(dispatch, started).into(), rush_ai,
     )

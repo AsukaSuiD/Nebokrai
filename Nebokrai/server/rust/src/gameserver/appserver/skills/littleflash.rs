@@ -12,7 +12,8 @@
 
 use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::dash::{apply_dash_attack, check_dash_path, execute_registered_dash, publish_dash_visual};
+use super::dash::{apply_dash_attack, check_dash_path, publish_dash_visual};
+use super::playercast::execute_registered_player_cast;
 use super::flash::{cell_views, weapon_is_valid};
 use super::kernel::{PlayerSkillExecution, SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::littleflash2::{EMPTY_PATH_MESSAGE_ID as LITTLE_FLASH_2_EMPTY_PATH_MESSAGE_ID, LITTLE_FLASH_2_SKILL_ID};
@@ -261,7 +262,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_little_flash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    execute_registered_dash(
+    execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::LittleFlash,
         check_cast, |dispatch, started| PlayerSkillExecution::LittleFlash(LittleFlashExecutionState::begin(dispatch, started)), run_ai,
     )

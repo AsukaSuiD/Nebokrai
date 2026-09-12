@@ -215,7 +215,7 @@ player_skill_states! {
     ExplosiveArrow(ExplosiveArrowExecutionState) paths(clear_end_paths),
     AgilityFamily(AgilityFamilyExecutionState),
     GhostCut(GhostCutExecutionState) paths(clear_end_paths),
-    ArmyBreak(ArmyBreakExecutionState),
+    ArmyBreak(ArmyBreakExecutionState) prepare(prepare_derived_end),
     LittleFlash(LittleFlashExecutionState) paths(clear_end_paths),
     PathProjectile(PlayerPathProjectileExecutionState) paths(clear_end_paths),
     DirectProjectile(PlayerDirectProjectileExecutionState),

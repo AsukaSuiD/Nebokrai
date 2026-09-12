@@ -16,7 +16,8 @@
 //! единственный End, очистка двух списков и AfterUse принадлежат общему входу.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
-use super::dash::{apply_dash_attack, check_dash_path, execute_registered_dash, publish_dash_visual};
+use super::dash::{apply_dash_attack, check_dash_path, publish_dash_visual};
+use super::playercast::execute_registered_player_cast;
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::skillfactory::SkillOwner;
@@ -176,7 +177,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(
     dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if dispatch.skill_id() != FLASH_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
-    execute_registered_dash(
+    execute_registered_player_cast(
         game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::Flash,
         check_cast, |dispatch, started| FlashExecutionState::begin(dispatch, started).into(), run_ai,
     )

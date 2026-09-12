@@ -317,6 +317,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::knightcut::publish_knight_cut_visual(self, skill, mode),
             SkillVisualEffectKind::Flash =>
                 crate::gameserver::appserver::skills::flash::publish_flash_visual(self, skill, mode),
+            SkillVisualEffectKind::ArmyBreak =>
+                crate::gameserver::appserver::skills::armybreak::publish_army_break_visual(self, skill, mode),
             SkillVisualEffectKind::LittleFlash =>
                 crate::gameserver::appserver::skills::littleflash::publish_little_flash_visual(self, skill, mode),
             SkillVisualEffectKind::BattleFairy =>

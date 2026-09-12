@@ -1,12 +1,7 @@
-//! Общий вход рывков Flash/LittleFlash и Rush, геометрия и контакт Flash.
+//! Общая геометрия, визуальный формат и контактная атака Flash/LittleFlash.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/flash.cpp,
-//! littleflash.cpp, littleflash2.cpp, rush.cpp и rush2.cpp,
-//! базовый appserver/states/attackskill.cpp.
+//! littleflash.cpp и littleflash2.cpp.
 //!
-//! Begin, материализация, visual и End работают с одним поколенческим ключом.
-//! Проверка видит concrete payload с выключенной фазой; успешный Begin включает
-//! его без второго отсчёта времени. Общий End выполняется до возврата результата
-//! расписанию, которое только освобождает payload и соответствующую команду.
 //! Путь и список поражённых целей принадлежат concrete владельцам и не
 //! копируются через callback атаки. Общая обработка пути сохраняет блоки
 //! GetTargetPath, проверяет первую фигуру клетки и выбирает выход сначала
@@ -16,34 +11,22 @@
 //! Единый формат visual передаёт последнюю клетку подготовленного пути;
 //! безусловный базовый callback остаётся у зарегистрированного ресурса.
 //!
-//! Общий Attack Flash и двух LittleFlash сохраняет PK-флаги CPlayer
-//! и принадлежность до Calculate, доставляет сырой OnBeenAttacked без повторного
-//! допуска, затем вызывает IncreaseRp независимо от результата получателя.
-//! NULL таблица Calculate оставляет исходный UNKNOWN/1, но не отменяет удар.
-//! Формула сохраняет порядок живых getter-ов и обоих RNG, unsigned коэффициент
-//! в x87-цепочке до записи float и усечение критического множителя к нулю.
-//! Vec заменяет только техническое владение записями повреждений.
+//! Контакт использует общий оружейный расчёт с коэффициентом TARGET_DAMAGE_FACTOR.
 
-use super::fightdefense::truncate_original;
-use super::flash::master_info;
-use super::kernel::{PlayerSkillExecution, SkillStage, SkillTermination};
-use super::stateskill::state_skill_outcome;
+use super::weaponattack::apply_player_weapon_attack;
 use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
-use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
-use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, RegionShapeResolver,
+    CGame, GameMainLoopRuntime, RegionShapeResolver,
 };
 use crate::public::tools::get_line_direction;
 use crate::nets::netserver::message::CMessage;
 
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
-const USER_HIT_MODIFIER: u32 = 20_001;
 
 pub(super) fn publish_dash_visual(
     game: &CGame, skill: &MoveShapeSkill, mode: u32, kind: SkillVisualEffectKind,
@@ -82,66 +65,6 @@ pub(super) fn publish_dash_visual(
     if let Some(owner) = game.find_region(source.get_region_id()) {
         let _ = game.send_game_shape_around(owner.base(), source, None, &message);
     }
-}
-
-fn finish_outcome<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, outcome: QueuedSkillExecutionOutcome,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    let end = match outcome.state {
-        QueuedSkillExecutionState::Rejected => Some((0, SkillTermination::Rejected)),
-        QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::RejectedAfterUse => {
-            Some((1, SkillTermination::Completed))
-        }
-        QueuedSkillExecutionState::Begun | QueuedSkillExecutionState::Pending => None,
-    };
-    if let Some((argument, termination)) = end {
-        let _ = game.end_registered_instance(instance, argument, termination, runtime);
-    }
-    outcome
-}
-
-pub(super) fn execute_registered_dash<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
-    dispatch: PlayerSkillDispatch, runtime: &mut Runtime, visual_kind: SkillVisualEffectKind,
-    check: impl FnOnce(&mut CGame, RegisteredSkill, i32, &mut Runtime) -> bool,
-    materialize: impl FnOnce(PlayerSkillDispatch, u32) -> PlayerSkillExecution,
-    run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
-) -> QueuedSkillExecutionOutcome {
-    let Some(skill) = game.registered_skill(instance) else {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    };
-    if skill.id() != dispatch.skill_id() {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    }
-    if let Some(previous) = skill.player_dispatch() {
-        if previous != dispatch {
-            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-        }
-        let outcome = run_ai(game, instance, runtime);
-        return finish_outcome(game, instance, outcome, runtime);
-    }
-    if !game.begin_registered_player_skill_with_combat(
-        instance, player_id, dispatch, runtime.now_milliseconds(),
-    ) {
-        return finish_outcome(game, instance, state_skill_outcome(QueuedSkillExecutionState::Rejected), runtime);
-    }
-    let Some(skill) = game.registered_skill_mut(instance) else {
-        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
-    };
-    skill.replace_visual_effect(SkillVisualEffect::new(visual_kind, 1));
-    let mut execution = materialize(dispatch, skill.lifecycle().started_at_ms());
-    execution.kernel_mut().clear_phase_for_end();
-    if !skill.install_player_execution(execution) {
-        return finish_outcome(game, instance, state_skill_outcome(QueuedSkillExecutionState::Rejected), runtime);
-    }
-    if !check(game, instance, player_id, runtime) {
-        return finish_outcome(game, instance, state_skill_outcome(QueuedSkillExecutionState::Rejected), runtime);
-    }
-    if let Some(skill) = game.registered_skill_mut(instance) {
-        let _ = skill.advance_execution(SkillStage::Idle, SkillStage::Begin);
-    }
-    state_skill_outcome(QueuedSkillExecutionState::Begun)
 }
 
 pub(super) fn check_dash_path<Runtime: GameMainLoopRuntime>(
@@ -211,53 +134,9 @@ pub(super) fn check_dash_path<Runtime: GameMainLoopRuntime>(
     path
 }
 
-fn calculate_dash_attack(
-    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), attack: &mut AttackInformation,
-) {
-    let Some(skill) = game.registered_skill(instance) else { return; };
-    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return; };
-    attack.skill_id = skill.id();
-    attack.skill_level = skill.level() as u8;
-    attack.damage_modifier = 0;
-    let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
-    let Some(player) = game.find_player(source.1.id) else { return; };
-    let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
-    let weapon_factor = player.weapon_modifier(
-        game.goods_factory(), i32::from(target_level), divisor, minimum_factor,
-    );
-    let damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR);
-    attack.damage_factor =
-        (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
-    attack.hit_modifier = properties.query_property(USER_HIT_MODIFIER) as i32;
-    let maximum = player.combat_properties().maximum_attack;
-    let minimum = player.combat_properties().minimum_attack;
-    let width = (maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1);
-    let random = game.skill_random_below(width);
-    let Some(player) = game.find_player(source.1.id) else { return; };
-    let physical = (player.combat_properties().minimum_attack as i32).wrapping_add(random).max(0);
-    attack.damages.push(AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 });
-    let element = (player.combat_properties().add_element_attack as i32).max(0);
-    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: element, mp_damage: 0 });
-    let soul = i32::from(player.combat_properties().add_soul_attack);
-    attack.damages.push(AttackPower { kind: AttackPowerType::Soul, hp_damage: soul, mp_damage: 0 });
-    let critical_chance = player.combat_properties().cch;
-    if game.skill_random_below(100) < i32::from(critical_chance) {
-        attack.critical = true;
-        let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages {
-            power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
-        }
-    }
-}
-
 pub(super) fn apply_dash_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     target: (i32, ShapeIdentity), runtime: &mut Runtime,
 ) {
-    let Some(master) = game.find_player(source.1.id).map(master_info) else { return; };
-    let mut attack = AttackInformation::for_master(master);
-    calculate_dash_attack(game, instance, source, target, &mut attack);
-    game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
-    game.increase_owned_player_rp(source.1.id, true, 0);
+    apply_player_weapon_attack(game, instance, source, target, TARGET_DAMAGE_FACTOR, runtime);
 }

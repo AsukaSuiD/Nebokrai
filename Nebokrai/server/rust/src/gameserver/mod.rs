@@ -197,6 +197,9 @@ pub(crate) mod appserver {
         pub(crate) mod inversechopped;
         pub(crate) mod flash;
         pub(crate) mod dash;
+        pub(crate) mod playercast;
+        pub(crate) mod armybreakattack;
+        pub(crate) mod weaponattack;
         pub(crate) mod thunder;
         pub(crate) mod swallow;
         pub(crate) mod thunderblow;

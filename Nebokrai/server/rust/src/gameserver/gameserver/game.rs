@@ -142,7 +142,7 @@
 //! текущие исполнения и не терял изменения очередей. Это адаптация Rust
 //! заимствований, не новая игровая очередь. Вложенные callbacks внутри
 //! конкретных skill-owner-ов требуют отдельного проведения через эту границу.
-//! Flash, LittleFlash и Rush исполняются целиком с опубликованным AI и одним
+//! Flash, LittleFlash, Rush и ArmyBreak исполняются с опубликованным AI и одним
 //! ключом регистрации через Begin, попадания и End. Повторный поиск по ID
 //! не подменяет экземпляр, удалённый или заменённый вложенным callback.
 //! Смертельный OnBeenAttacked (0x004D38E4..0x004D3A21) синхронно выполняет
@@ -1329,7 +1329,7 @@ use crate::gameserver::appserver::skills::knightcut::{
     KNIGHT_CUT_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::armybreak::{
-    cancel_player_army_break, execute_player_army_break, is_army_break_dispatch,
+    execute_player_army_break,
     ARMY_BREAK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
@@ -39134,7 +39134,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
         let instance = self.registered_player_skill(player_id, skill_id)?;
-        if Self::registered_dash_owner::<Runtime>(skill_id).is_some() {
+        if Self::registered_player_cast_owner::<Runtime>(skill_id).is_some() {
             let dispatch = self.registered_skill(instance)?.player_dispatch();
             let mut ai = self.find_player_mut(player_id)?.take_player_ai();
             let argument = match cause {
@@ -39504,9 +39504,6 @@ impl CGame {
             }
             KNIGHT_CUT_SKILL_ID => {
                 cancel_player_knight_cut(self, player_id, &mut player_ai, runtime)
-            }
-            ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => {
-                cancel_player_army_break(self, player_id, skill_id, &mut player_ai, runtime)
             }
             RAGE_SKILL_ID => cancel_player_rage(self, player_id, &mut player_ai, runtime),
             RAGE_BREAK_SKILL_ID => {
@@ -39962,7 +39959,7 @@ impl CGame {
 
     /// Один выбор зарегистрированного владельца для исполнения, отмены и
     /// внешнего отказа Begin; перечисление не хранит отдельного состояния.
-    fn registered_dash_owner<Runtime: GameMainLoopRuntime>(skill_id: u32)
+    fn registered_player_cast_owner<Runtime: GameMainLoopRuntime>(skill_id: u32)
         -> Option<fn(&mut Self, i32, RegisteredSkill, PlayerSkillDispatch, &mut Runtime)
             -> QueuedSkillExecutionOutcome>
     {
@@ -39971,6 +39968,7 @@ impl CGame {
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => Some(execute_player_little_flash),
             RUSH_SKILL_ID => Some(execute_player_rush),
             RUSH_2_SKILL_ID => Some(execute_player_rush_2),
+            ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => Some(execute_player_army_break),
             _ => None,
         }
     }
@@ -39983,7 +39981,7 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
-        if let Some(execute) = Self::registered_dash_owner::<Runtime>(dispatch.skill_id()) {
+        if let Some(execute) = Self::registered_player_cast_owner::<Runtime>(dispatch.skill_id()) {
             let Some(instance) = instance else {
                 return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Rejected, first_contact: false };
             };
@@ -40055,7 +40053,6 @@ impl CGame {
             _ if is_mosou_dispatch(dispatch) => execute_player_mosou,
             _ if is_ghost_cut_dispatch(dispatch) => execute_player_ghost_cut,
             _ if is_knight_cut_dispatch(dispatch) => execute_player_knight_cut,
-            _ if is_army_break_dispatch(dispatch) => execute_player_army_break,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
@@ -40301,7 +40298,7 @@ impl CGame {
                 // Полный End(0) уже завершил экземпляр, но его payload
                 // освобождается ниже вместе с командой. Наличие payload
                 // не должно поглощать внешний отказ Begin.
-                && (Self::registered_dash_owner::<Runtime>(dispatch.skill_id()).is_some()
+                && (Self::registered_player_cast_owner::<Runtime>(dispatch.skill_id()).is_some()
                     || self.player_skill_begin_pending(player_id, dispatch.skill_id())
                     || instance.and_then(|address| self.registered_skill(address))
                         .is_some_and(|skill| skill.lifecycle().is_ended()));
