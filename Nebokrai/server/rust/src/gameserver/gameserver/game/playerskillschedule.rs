@@ -225,9 +225,6 @@ impl CGame {
         match skill_id {
             BASE_ATTACK_SKILL_ID
             | ARCHERY_SKILL_ID
-            | HEARTLESS_ARROW_SKILL_ID
-            | HEARTLESS_ARROW_2_SKILL_ID
-            | HEARTLESS_ARROW_3_SKILL_ID
             | BASE_MAGIC_SKILL_ID
             | FIRE_BOLT_SKILL_ID
             | FIRE_BALL_SKILL_ID

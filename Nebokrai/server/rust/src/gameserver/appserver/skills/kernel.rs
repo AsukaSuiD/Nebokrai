@@ -205,7 +205,7 @@ pub(crate) trait PlayerSkillState {
 }
 
 player_skill_states! {
-    HeartlessArrowArea(HeartlessArrowAreaExecutionState),
+    HeartlessArrowArea(HeartlessArrowAreaExecutionState) prepare(prepare_derived_end),
     ScopedArrow(ScopedArrowExecutionState) paths(clear_end_paths),
     GhostCut(GhostCutExecutionState) paths(clear_end_paths),
     ThunderBlow2(ThunderBlow2Execution) prepare(prepare_derived_end),
@@ -216,7 +216,7 @@ player_skill_states! {
     SummonCreature(PlayerSummonCreatureExecutionState),
     LordFastAttack(LordFastAttackExecutionState),
     Archery(ArcheryExecutionState),
-    HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end) paths(clear_end_paths),
+    HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end),
     LightingArrow(LightingArrowExecutionState) paths(clear_end_paths),
     LightingArrow2(LightingArrow2ExecutionState) paths(clear_end_paths),
     RainArrow(RainArrowExecutionState) paths(clear_end_paths),

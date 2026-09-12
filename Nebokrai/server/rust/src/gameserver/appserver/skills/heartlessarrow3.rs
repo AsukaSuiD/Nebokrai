@@ -1,4 +1,5 @@
 //! Вариант `CHeartLessArrow3` (`0xE6`) семейства региональных стрел.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/heartlessarrow3.cpp.
 //!
 //! Проверки, wire и phalanx совпадают с `CHeartLessArrow2`; единственное
 //! подтверждённое отличие порядка разблокировки движения выражено общим

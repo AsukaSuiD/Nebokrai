@@ -355,6 +355,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::boalock::publish_boa_lock_visual(self, skill, mode),
             SkillVisualEffectKind::Kerosene =>
                 crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
+            SkillVisualEffectKind::HeartlessArrow =>
+                crate::gameserver::appserver::skills::heartlessarrow2::publish_heartless_arrow_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {
                 if !crate::gameserver::appserver::skills::ignition::publish_ignition_visual(self, skill, mode) {
                     return;

@@ -2,7 +2,8 @@
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrow.cpp,
 //! meteorarrowmass.cpp, rainarrow.cpp, lightingarrow.cpp, lightingarrow2.cpp,
 //! poisonmoth.cpp, bloodrose.cpp, explosivearrow{,2,3}.cpp, scorpion.cpp,
-//! boalock.cpp, strike.cpp, kerosene.cpp и ignition.cpp. Проверки пути и MP доступны также
+//! boalock.cpp, strike.cpp, kerosene.cpp, ignition.cpp и heartlessarrow{,2,3}.cpp.
+//! Проверки пути и MP доступны также
 //! BoaLock/Strike без требования к оружию.
 //! Check удерживает исходного U, читает reuse и свежий путь по политике навыка.
 //! Проверка самонацеливания, если она нужна, выполняется caller-ом раньше.
@@ -18,6 +19,10 @@
 //! Kerosene/Ignition читают MAX один раз и трактуют ноль как строгий предел;
 //! в их Check нулевой MP допускает Move0 без чтения маны. Эти различия
 //! задаются отдельно от обычного ненулевого ограничения и обязательной цены.
+//! У HeartLessArrow2/3 отсутствие арбалета даёт GS0297, неверная категория —
+//! GS0293. У заряжаемого HeartLessArrow поздняя проверка лука различает
+//! отсутствие GS0297 и неверную категорию GS0292; первоначальная использует
+//! GS0297 для обоих отказов. Варианты не меняют порядок чтений экипировки/MP.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::skill_is_restored;
@@ -35,11 +40,14 @@ const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RangedWeaponKind { Bow, Crossbow, ExplosiveBow }
+pub(super) enum RangedWeaponKind { Bow, Crossbow, ExplosiveBow, HeldBow, HeartlessCrossbow }
 
 impl RangedWeaponKind {
     const fn category(self) -> i32 {
-        match self { Self::Bow | Self::ExplosiveBow => 3, Self::Crossbow => 4 }
+        match self {
+            Self::Bow | Self::ExplosiveBow | Self::HeldBow => 3,
+            Self::Crossbow | Self::HeartlessCrossbow => 4,
+        }
     }
 }
 
@@ -69,8 +77,15 @@ fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player: i32, proper
 }
 
 fn check_weapon(game: &mut CGame, instance: RegisteredSkill, player: i32, weapon: RangedWeaponKind) -> bool {
-    let missing: &[u8] = if weapon == RangedWeaponKind::Bow { b"GS0297" } else { b"GS0293" };
-    let wrong: &[u8] = if weapon == RangedWeaponKind::Crossbow { b"GS0293" } else { b"GS0297" };
+    let missing: &[u8] = match weapon {
+        RangedWeaponKind::Bow | RangedWeaponKind::HeldBow | RangedWeaponKind::HeartlessCrossbow => b"GS0297",
+        RangedWeaponKind::Crossbow | RangedWeaponKind::ExplosiveBow => b"GS0293",
+    };
+    let wrong: &[u8] = match weapon {
+        RangedWeaponKind::Crossbow | RangedWeaponKind::HeartlessCrossbow => b"GS0293",
+        RangedWeaponKind::HeldBow => b"GS0292",
+        RangedWeaponKind::Bow | RangedWeaponKind::ExplosiveBow => b"GS0297",
+    };
     let failure = match game.find_player(player).and_then(|user| user.equipment().get_goods(2)) {
         None => Some(missing),
         Some(goods) => (goods.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1)

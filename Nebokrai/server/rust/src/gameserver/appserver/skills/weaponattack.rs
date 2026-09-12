@@ -7,7 +7,8 @@
 //! исходный UNKNOWN/1, но не отменяет удар. Допуск и дедупликация принадлежат AI.
 //! RawRange читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
 //! AbsoluteRange читает MAX→MIN и использует abs(max-min)+1. Обе ветки
-//! снова читают MIN после RNG. Mosou оставляет единичный коэффициент, не читая
+//! снова читают MIN после RNG. CapturedMinimumAbsoluteRange читает MIN→MAX
+//! и abs-ширину, но прибавляет сохранённый первый MIN. Mosou оставляет единичный коэффициент, не читая
 //! уровень цели и модификатор оружия. Фронтальные удары добавляют живую
 //! ловкость CPlayer после второго MIN. InverseChopped после hit modifier
 //! расходует первое EnergyHolding и умножает три компонента с усечением
@@ -24,6 +25,8 @@
 //! Первые два удара Scorpion сохраняют живой weapon modifier без запроса
 //! skill factor; третий использует обычный WeaponUsage. RP остаётся у caller-а.
 //! Strike меняет знак hit modifier сразу после запроса, до компонентов и RNG.
+//! HeartLessArrowPhalanx сохраняет MIN до RNG и использует знаковый CCH
+//! конструктора вместо повторного чтения текущего критического шанса.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -43,6 +46,7 @@ const USER_HIT_MODIFIER: u32 = 20_001;
 pub(super) enum PlayerWeaponRoll {
     AbsoluteRange,
     RawRange,
+    CapturedMinimumAbsoluteRange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,7 +151,7 @@ fn fill_player_weapon_attack(
     let multiplier = if power_mode == WeaponPowerMode::EnergyHolding {
         consume_energy_holding_multiplier(game, source)
     } else { 1.0 };
-    fill_weapon_damage(game, source, roll, power_mode, multiplier, || 0, attack);
+    fill_weapon_damage(game, source, roll, power_mode, multiplier, None, || 0, attack);
 }
 
 pub(super) fn fill_ordinary_weapon_damage(
@@ -161,12 +165,22 @@ pub(super) fn fill_ordinary_weapon_damage_with_element_addition(
     game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
     element_addition: impl FnOnce() -> u32, attack: &mut AttackInformation,
 ) {
-    fill_weapon_damage(game, source, roll, WeaponPowerMode::Ordinary, 1.0, element_addition, attack);
+    fill_weapon_damage(game, source, roll, WeaponPowerMode::Ordinary, 1.0, None, element_addition, attack);
+}
+
+pub(super) fn fill_captured_weapon_damage(
+    game: &mut CGame, source: (i32, ShapeIdentity), critical_chance: i32,
+    attack: &mut AttackInformation,
+) {
+    fill_weapon_damage(
+        game, source, PlayerWeaponRoll::CapturedMinimumAbsoluteRange,
+        WeaponPowerMode::Ordinary, 1.0, Some(critical_chance), || 0, attack,
+    );
 }
 
 fn fill_weapon_damage(
     game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
-    power_mode: WeaponPowerMode, multiplier: f64,
+    power_mode: WeaponPowerMode, multiplier: f64, captured_critical_chance: Option<i32>,
     element_addition: impl FnOnce() -> u32, attack: &mut AttackInformation,
 ) {
     let scale = |damage: i32| {
@@ -174,20 +188,25 @@ fn fill_weapon_damage(
             truncate_original_i64_low(f64::from(damage) * multiplier)
         } else { damage }
     };
-    let width = match roll {
+    let (width, captured_minimum) = match roll {
         PlayerWeaponRoll::AbsoluteRange => {
             let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
             let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
-            (maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1)
+            ((maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1), None)
         }
         PlayerWeaponRoll::RawRange => {
             let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
             let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
-            (maximum as i32).wrapping_sub(minimum as i32).wrapping_add(1)
+            ((maximum as i32).wrapping_sub(minimum as i32).wrapping_add(1), None)
+        }
+        PlayerWeaponRoll::CapturedMinimumAbsoluteRange => {
+            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
+            let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
+            ((maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1), Some(minimum))
         }
     };
     let random = game.skill_random_below(width);
-    let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
+    let Some(minimum) = captured_minimum.or_else(|| source_property(game, source, SourceProperty::Minimum)) else { return; };
     let mut physical = (minimum as i32).wrapping_add(random);
     if power_mode != WeaponPowerMode::Ordinary && source.1.object_type == 400 {
         let Some(player) = game.find_player(source.1.id) else { return; };
@@ -199,8 +218,14 @@ fn fill_weapon_damage(
     attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: scale((element.wrapping_add(element_addition) as i32).max(0)), mp_damage: 0 });
     let Some(soul) = source_property(game, source, SourceProperty::Soul) else { return; };
     attack.damages.push(AttackPower { kind: AttackPowerType::Soul, hp_damage: scale(i32::from(soul as u16)), mp_damage: 0 });
-    let Some(critical_chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
-    if game.skill_random_below(100) < i32::from(critical_chance as u16) {
+    let critical_chance = match captured_critical_chance {
+        Some(chance) => chance,
+        None => {
+            let Some(chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
+            i32::from(chance as u16)
+        }
+    };
+    if game.skill_random_below(100) < critical_chance {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {

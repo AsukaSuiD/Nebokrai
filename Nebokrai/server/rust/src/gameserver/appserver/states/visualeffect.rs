@@ -34,6 +34,7 @@ pub(crate) enum SkillVisualEffectKind {
     BoaLock,
     Kerosene,
     Ignition,
+    HeartlessArrow,
     PoisonFog,
     Weak,
     Blind,

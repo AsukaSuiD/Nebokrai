@@ -8,11 +8,13 @@
 //! Begin включает её без второго отсчёта времени. Общий End выполняется
 //! до возврата расписанию, которое только освобождает данные и ту же команду.
 //! Удалённый callback-ом экземпляр не заменяется новым совпадением ID.
+//! Released из concrete End оставляет исполнение активным; даже терминальный
+//! результат AI не разрешает расписанию удалить выпущенный callback-ом cast.
 
 use super::kernel::{PlayerSkillExecution, SkillStage, SkillTermination};
 use super::stateskill::state_skill_outcome;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::skill::{RegisteredSkill, RegisteredSkillEnd};
 use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
@@ -25,7 +27,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -74,6 +76,9 @@ impl RegisteredPlayerCastOwner {
             super::boalock::BOA_LOCK_SKILL_ID => Self::BoaLock,
             super::strike::STRIKE_SKILL_ID | super::yakshaslash::YAKSHA_SLASH_SKILL_ID => Self::TargetedProjectile,
             super::kerosene::KEROSENE_SKILL_ID | super::ignition::IGNITION_SKILL_ID => Self::Combustion,
+            super::heartlessarrow::HEARTLESS_ARROW_SKILL_ID => Self::HeartlessArrow,
+            super::heartlessarrow2::HEARTLESS_ARROW_2_SKILL_ID
+                | super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID => Self::HeartlessArrowArea,
             _ => return None,
         })
     }
@@ -119,6 +124,8 @@ impl RegisteredPlayerCastOwner {
             Self::BoaLock => super::boalock::execute_player_boa_lock::<Runtime>,
             Self::TargetedProjectile => super::targetedprojectile::execute_player_targeted_projectile::<Runtime>,
             Self::Combustion => super::combustioncast::execute_player_combustion::<Runtime>,
+            Self::HeartlessArrow => super::heartlessarrow::execute_player_heartless_arrow::<Runtime>,
+            Self::HeartlessArrowArea => super::heartlessarrow2::execute_player_heartless_arrow_area::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }
@@ -140,7 +147,9 @@ fn finish_outcome<Runtime: GameMainLoopRuntime>(
         QueuedSkillExecutionState::Begun | QueuedSkillExecutionState::Pending => None,
     };
     if let Some((argument, termination)) = end {
-        let _ = game.end_registered_instance(instance, argument, termination, runtime);
+        if game.end_registered_instance(instance, argument, termination, runtime) == Some(RegisteredSkillEnd::Released) {
+            return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Pending, ..outcome };
+        }
     }
     outcome
 }

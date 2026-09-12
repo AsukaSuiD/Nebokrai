@@ -725,6 +725,7 @@ mod lightingarrow;
 mod summonshape;
 mod meteorarrow;
 mod rainarrow;
+mod heartlessarrow;
 mod thunderblow;
 mod thunderslash;
 mod rush;
@@ -962,7 +963,7 @@ use crate::gameserver::appserver::region::{
     RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::RideState;
-use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::skill::{RegisteredSkill, RegisteredSkillEnd};
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, resolve_state_move_shape_mut,
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -1056,20 +1057,7 @@ use crate::gameserver::appserver::skills::wangsheng::{
 use crate::gameserver::appserver::skills::archery::{
     cancel_player_archery, execute_player_archery, ARCHERY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::heartlessarrow::{
-    cancel_player_heartless_arrow, complete_or_release_player_heartless_arrow,
-    execute_player_heartless_arrow, is_heartless_arrow_dispatch, HEARTLESS_ARROW_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::heartlessarrow2::{
-    cancel_player_heartless_arrow_area, complete_player_heartless_arrow_area,
-    execute_player_heartless_arrow_area, is_heartless_arrow_area_dispatch,
-    HEARTLESS_ARROW_2_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
-use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
-    CHeartlessArrowPhalanx, HeartlessArrowPhalanxTick,
-    calculate_owned_heartless_arrow_attack,
-};
+use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::skills::daubpoison::DAUB_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::archeryphalanx::{
@@ -37122,7 +37110,7 @@ impl CGame {
             )
         });
         let interrupted = current_skill_id.is_some_and(|current_skill_id| {
-            if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
+            if matches!(materialized_end, Some(PlayerSkillEndRuntimeOutcome::Ended | PlayerSkillEndRuntimeOutcome::Released)) {
                 return true;
             }
             let released = instance.zip(previous_dispatch).is_some_and(|(instance, dispatch)| {
@@ -38911,27 +38899,41 @@ impl CGame {
         Some(result)
     }
 
-    pub(crate) fn add_heartless_arrow_phalanx<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn spawn_heartless_arrow_phalanx<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
-        phalanx: CHeartlessArrowPhalanx,
+        mut phalanx: CHeartlessArrowPhalanx,
         tile_x: i32,
         tile_y: i32,
         started_at_ms: u32,
         runtime: &mut Runtime,
-    ) -> Option<Result<i32, RegionMembershipBlock>> {
+    ) -> Option<()> {
+        let region = self.find_region(region_id)?;
+        phalanx.shape_mut().set_pos_xy_base(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        let mut existing = Vec::new();
+        let _ = region.base().get_shapes(
+            tile_x, tile_y, self.area_width, self.area_height,
+            &RegionShapeResolver { game: self, owner: region }, &mut existing,
+        );
+        // Обе версии вызывают у прежних E5 пустой CSummonShape::Begin.
+        // GetShapes сохранён, но ни End, ни замены этих объектов здесь нет.
         let mut owner = self.take_region_owner(region_id)?;
         let result = owner.base_mut().add_heartless_arrow_phalanx(
             phalanx,
-            tile_x,
-            tile_y,
             self.area_width,
             self.area_height,
             started_at_ms,
             runtime,
         );
         self.restore_region_owner(owner);
-        Some(result)
+        let failed;
+        let phalanx = match result {
+            Ok(id) => self.heartless_arrow_phalanx(region_id, id)?,
+            Err((_, phalanx)) => { failed = phalanx; &failed }
+        };
+        let payload = phalanx.encode_client_snapshot(|| runtime.now_milliseconds())?;
+        let shape = phalanx.shape().clone();
+        self.publish_summoned_shape_entry(&shape, &payload)
     }
 
     pub(crate) fn add_battle_fairy_base_magic_phalanx<Runtime: GameMainLoopRuntime>(
@@ -38972,11 +38974,12 @@ impl CGame {
         }
     }
 
-    /// Передаёт `End(true)` или `End(false)` только уже материализованному
+    /// Передаёт исходный `End(0/1/4)` зарегистрированному
     /// владельцу навыка. Извлечение `CPlayerAI` остаётся здесь как координация
     /// заимствований, а завершение, прерывание и особый выпуск удерживаемой
     /// атаки принадлежат соответствующему владельцу. Ключ и dispatch захвачены
     /// до callback; общий последний сброс не затрагивает замену того же ID.
+    /// Released сохраняет исполнение и команду: это выпуск, не завершение.
     pub(crate) fn end_materialized_player_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -38995,18 +38998,21 @@ impl CGame {
             };
             let ended = self.with_published_player_ai(player_id, &mut ai, |game| {
                 game.end_registered_instance(instance, argument, SkillTermination::Cancelled, runtime)
-            }).is_some();
-            if let Some(dispatch) = dispatch {
+            });
+            if ended != Some(RegisteredSkillEnd::Released) && let Some(dispatch) = dispatch {
                 self.finish_registered_player_command(Some(instance), &mut ai, dispatch, SkillTermination::Cancelled);
             }
             if let Some(player) = self.find_player_mut(player_id) {
                 player.restore_player_ai(ai);
             }
-            return Some(if ended { PlayerSkillEndRuntimeOutcome::Ended } else { PlayerSkillEndRuntimeOutcome::AlreadyEnded });
+            return Some(match ended {
+                Some(RegisteredSkillEnd::Released) => PlayerSkillEndRuntimeOutcome::Released,
+                Some(RegisteredSkillEnd::Ended) => PlayerSkillEndRuntimeOutcome::Ended,
+                None => PlayerSkillEndRuntimeOutcome::AlreadyEnded,
+            });
         }
         let dispatch = self.player_skill_execution(player_id, skill_id)?.dispatch();
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
-        let mut released = false;
         let explicitly_completed = if cause.uses_nonzero_end() {
             match skill_id {
                 LITTLE_STAR_SKILL_ID => Some(complete_player_little_star(
@@ -39015,22 +39021,6 @@ impl CGame {
                 MONSTER_THORN_SKILL_ID => Some(complete_player_monster_thorn(
                     self, player_id, &mut player_ai, runtime,
                 )),
-                HEARTLESS_ARROW_SKILL_ID => {
-                    let result = complete_or_release_player_heartless_arrow(
-                        self, player_id, &mut player_ai, runtime,
-                    );
-                    released = result == Some(crate::gameserver::appserver::states::skill::RegisteredSkillEnd::Released);
-                    Some(result.is_some())
-                }
-                HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
-                    Some(complete_player_heartless_arrow_area(
-                        self,
-                        player_id,
-                        skill_id,
-                        &mut player_ai,
-                        runtime,
-                    ))
-                }
                 BOSS_FIEND_PENETRATE_SKILL_ID => Some(complete_player_boss_fiend_penetrate(
                     self,
                     player_id,
@@ -39338,12 +39328,6 @@ impl CGame {
                 cancel_player_soul_mirror(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
-            HEARTLESS_ARROW_SKILL_ID => {
-                cancel_player_heartless_arrow(self, player_id, &mut player_ai, runtime)
-            }
-            HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
-                cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
@@ -39391,7 +39375,7 @@ impl CGame {
                 }
             }
         };
-        if ended && !released {
+        if ended {
             self.finish_registered_player_execution(instance, dispatch, termination);
         }
         if let Some(player) = self.find_player_mut(player_id) {
@@ -39647,8 +39631,6 @@ impl CGame {
                 }
                 _ => false,
             } => execute_player_archery,
-            _ if is_heartless_arrow_dispatch(dispatch) => execute_player_heartless_arrow,
-            _ if is_heartless_arrow_area_dispatch(dispatch) => execute_player_heartless_arrow_area,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
             _ if match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
@@ -43349,9 +43331,7 @@ impl CGame {
             SummonedSkillShape::GodPunishment(phalanx) => calculate_owned_god_punishment_attack(self, phalanx, target_level),
             SummonedSkillShape::GodThunder(phalanx) => calculate_owned_god_thunder_attack(self, phalanx, target_level),
             SummonedSkillShape::GodThunder2(phalanx) => calculate_owned_god_thunder_2_attack(self, phalanx, target_level),
-            SummonedSkillShape::HeartlessArrow(phalanx) => {
-                calculate_owned_heartless_arrow_attack(self, phalanx)
-            }
+            SummonedSkillShape::HeartlessArrow(_) => None,
         }
     }
 
@@ -43399,9 +43379,6 @@ impl CGame {
             return false;
         }
         let master = phalanx.master();
-        if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
-            heartless.prepare_target(self, region_id, target, &mut || runtime.now_milliseconds());
-        }
         let target_level = self.move_shape_level(region_id, target).unwrap_or(1);
         // Calculate оригинала возвращает void. Отсутствие источника/свойств
         // не отменяет получение пустой атаки; частичные записи сохраняет owner.
@@ -43454,7 +43431,7 @@ impl CGame {
         }
         self.apply_summoned_skill_to_target(phalanx, target, region_id, war_soul_hit, runtime);
         if !war_soul_hit && deduplicate { attacked.push(target); }
-        if matches!(phalanx, SummonedSkillShape::HeartlessArrow(_) | SummonedSkillShape::ThunderBlow(_)
+        if matches!(phalanx, SummonedSkillShape::ThunderBlow(_)
             | SummonedSkillShape::Tianhuo(_) | SummonedSkillShape::GodPunishment(_))
         {
             self.end_damage_phalanx(region_id, phalanx.shape().identity().id);
@@ -43554,6 +43531,12 @@ impl CGame {
         {
             return self.run_rain_arrow_phalanx(region_id, phalanx_id, runtime);
         }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::HeartlessArrow(_)))
+        {
+            return self.run_heartless_arrow_phalanx(region_id, phalanx_id, runtime);
+        }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -43561,7 +43544,6 @@ impl CGame {
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
         let mut thunder_fire_tick = None;
-        let mut heartless_arrow_tick = None;
         let tick = owner
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
@@ -43695,10 +43677,7 @@ impl CGame {
                 SummonedSkillShape::GodPunishment(phalanx) => match phalanx.tick(lifetime_now_ms) { GodPunishmentPhalanxTick::Scan { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodPunishmentPhalanxTick::Expired => None },
                 SummonedSkillShape::GodThunder(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunderPhalanxTick::Pending => Some(None), GodThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunderPhalanxTick::Expired => None },
                 SummonedSkillShape::GodThunder2(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunder2PhalanxTick::Pending => Some(None), GodThunder2PhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunder2PhalanxTick::Expired => None },
-                SummonedSkillShape::HeartlessArrow(phalanx) => {
-                    heartless_arrow_tick = Some(phalanx.tick(lifetime_now_ms));
-                    Some(None)
-                }
+                SummonedSkillShape::HeartlessArrow(_) => Some(None),
             });
         // Эти области продолжают обход с живым региональным владельцем:
         // callbacks могут изменить источник и состояния между наложениями.
@@ -43737,19 +43716,6 @@ impl CGame {
             return false;
         };
         let mut attacked_targets = Vec::new();
-        if let (Some(tick), SummonedSkillShape::HeartlessArrow(heartless)) =
-            (heartless_arrow_tick, &phalanx)
-        {
-            match tick {
-                HeartlessArrowPhalanxTick::Scan => {
-                    if let (Ok(x), Ok(y)) = (heartless.shape().get_tile_x(), heartless.shape().get_tile_y()) {
-                        self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
-                    }
-                }
-                HeartlessArrowPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
-            }
-            return true;
-        }
         if let (Some(tick), SummonedSkillShape::FireBall(_)) = (fire_ball_tick, &phalanx) {
             match tick {
                 FireBallPhalanxTick::Pending => {}

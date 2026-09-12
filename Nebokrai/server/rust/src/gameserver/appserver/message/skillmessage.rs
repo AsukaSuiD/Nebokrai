@@ -44,6 +44,7 @@ const USE_BATTLE_FAIRY_SKILL: u32 = 0x0009_0005;
 pub(crate) enum PlayerSkillEndRuntimeOutcome {
     AlreadyEnded,
     Ended,
+    Released,
 }
 
 /// Skill message route использует тот же script runtime; завершение любого
@@ -134,6 +135,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
                 {
                     PlayerSkillEndRuntimeOutcome::AlreadyEnded => "уже завершён",
                     PlayerSkillEndRuntimeOutcome::Ended => "завершён",
+                    PlayerSkillEndRuntimeOutcome::Released => "удерживаемая атака выпущена",
                 },
             };
             trace!(player_id, requested_skill_id, ?current_skill_id, outcome, "Обработано завершение навыка");
