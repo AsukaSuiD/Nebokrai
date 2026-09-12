@@ -1,7 +1,11 @@
 //! Общие runtime-границы контактного удара и принудительного перемещения.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/rush.cpp,
-//! rush2.cpp, strike.cpp и boalock.cpp. Создание состояний и порядок эффектов принадлежат
+//! rush2.cpp, strike.cpp, boalock.cpp и appserver/moveshape.cpp.
+//! Создание состояний и порядок эффектов принадлежат
 //! навыкам; пустая атака проходит тот же OnBeenAttacked, что обычный урон.
+//! ForceMove игрока публикует BF604 перед виртуальным SetTileXY с отменой
+//! захвата, затем обращается к свежему AI. Ошибка пространственной записи
+//! сохраняется в результате, но не отменяет следующий native Stand.
 
 use super::*;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
@@ -40,12 +44,34 @@ impl CGame {
         y: i32,
         duration_ms: u32,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
+        if target.object_type == PLAYER_TYPE {
+            let player = self.find_player(target.id)?;
+            if !player.shape().is_assigned_to_server_region() { return Some(Ok(false)); }
+            let actual_region = player.shape().get_region_id();
+            let owner = self.find_region(actual_region)?;
+            let (destination, message) = match player.move_shape().force_move_message(
+                owner.base(), x, y, duration_ms,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => return Some(Err(error)),
+            };
+            if let Err(error) = self.send_move_shape_around(actual_region, target, &message)? {
+                return Some(Err(MoveShapeCommandBlock::Coordinate(error)));
+            }
+            let position = self.set_player_tile_position(target.id, destination.x, destination.y);
+            if let Some(player) = self.find_player_mut(target.id) {
+                player.player_ai_mut().begin_forced_stand(duration_ms, game_tick_milliseconds());
+            }
+            return position.map(|result| result.map(|()| true).map_err(MoveShapeCommandBlock::Position));
+        }
         let actual_region = resolve_state_move_shape(self, region_id, target)?.shape().get_region_id();
         let mut owner = self.take_region_owner(actual_region)?;
         let result = if matches!(target.object_type, 1100 | 1200) {
             self.force_move_stationary_build(&mut owner, target, x, y, duration_ms)
+        } else if target.object_type == MONSTER_TYPE {
+            self.force_move_owned_monster(owner.base_mut(), target.id, x, y, duration_ms)
         } else {
-            self.force_move_owned_shape(owner.base_mut(), target, x, y, duration_ms)
+            None
         };
         self.restore_region_owner(owner);
         result

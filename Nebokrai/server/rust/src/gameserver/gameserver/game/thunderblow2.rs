@@ -1,9 +1,8 @@
 //! Межвладельческая граница второго громового удара.
 //!
 //! Конкретные проверки, формула, отбрасывание и пакет навыка принадлежат
-//! `appserver/skills/thunderblow2.rs`. Здесь остаётся только атомарное
-//! извлечение региона, разрешение канонического владельца player/monster и
-//! восстановление региона после `ForceMove`.
+//! `appserver/skills/thunderblow2.rs`. Общий ForceMove разрешает каноническую
+//! цель и сохраняет виртуальный SetTileXY перед свежим ожиданием AI.
 
 use super::*;
 
@@ -16,15 +15,12 @@ impl CGame {
         destination_y: i32,
         duration_ms: u32,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
-        let mut owner = self.take_region_owner(region_id)?;
-        let result = self.force_move_owned_shape(
-            owner.base_mut(),
+        self.force_move_skill_target(
+            region_id,
             target,
             destination_x,
             destination_y,
             duration_ms,
-        );
-        self.restore_region_owner(owner);
-        result
+        )
     }
 }

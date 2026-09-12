@@ -142,7 +142,7 @@
 //! текущие исполнения и не терял изменения очередей. Это адаптация Rust
 //! заимствований, не новая игровая очередь. Вложенные callbacks внутри
 //! конкретных skill-owner-ов требуют отдельного проведения через эту границу.
-//! Flash и оба LittleFlash исполняются целиком с опубликованным AI и одним
+//! Flash, LittleFlash и Rush исполняются целиком с опубликованным AI и одним
 //! ключом регистрации через Begin, попадания и End. Повторный поиск по ID
 //! не подменяет экземпляр, удалённый или заменённый вложенным callback.
 //! Смертельный OnBeenAttacked (0x004D38E4..0x004D3A21) синхронно выполняет
@@ -1186,10 +1186,10 @@ use crate::gameserver::appserver::skills::pillar::{
     cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::rush::{
-    cancel_player_rush, execute_player_rush, is_rush_dispatch, RUSH_SKILL_ID,
+    execute_player_rush, RUSH_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::rush2::{
-    cancel_player_rush_2, execute_player_rush_2, is_rush_2_dispatch, RUSH_2_SKILL_ID,
+    execute_player_rush_2, RUSH_2_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::roar::{
     cancel_player_roar, execute_player_roar, is_roar_dispatch, ROAR_SKILL_ID,
@@ -39134,7 +39134,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
         let instance = self.registered_player_skill(player_id, skill_id)?;
-        if matches!(skill_id, FLASH_SKILL_ID | LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID) {
+        if Self::registered_dash_owner::<Runtime>(skill_id).is_some() {
             let dispatch = self.registered_skill(instance)?.player_dispatch();
             let mut ai = self.find_player_mut(player_id)?.take_player_ai();
             let argument = match cause {
@@ -39485,8 +39485,6 @@ impl CGame {
             PILLAR_SKILL_ID => {
                 cancel_player_pillar(self, player_id, &mut player_ai, runtime)
             }
-            RUSH_SKILL_ID => cancel_player_rush(self, player_id, &mut player_ai, runtime),
-            RUSH_2_SKILL_ID => cancel_player_rush_2(self, player_id, &mut player_ai, runtime),
             ROAR_SKILL_ID => cancel_player_roar(self, player_id, &mut player_ai, runtime),
             ENERGY_HOLDING_SKILL_ID => {
                 cancel_player_energy_holding(self, player_id, &mut player_ai, runtime)
@@ -39962,9 +39960,21 @@ impl CGame {
         execution_count
     }
 
-    /// Вызов concrete CSkill без снятия команды и повторного допуска.
-    /// Общий обработчик сохраняет один путь формул, эффектов и End для
-    /// обычного исполнения и последующего подключения фонового AI.
+    /// Один выбор зарегистрированного владельца для исполнения, отмены и
+    /// внешнего отказа Begin; перечисление не хранит отдельного состояния.
+    fn registered_dash_owner<Runtime: GameMainLoopRuntime>(skill_id: u32)
+        -> Option<fn(&mut Self, i32, RegisteredSkill, PlayerSkillDispatch, &mut Runtime)
+            -> QueuedSkillExecutionOutcome>
+    {
+        match skill_id {
+            FLASH_SKILL_ID => Some(execute_player_flash),
+            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => Some(execute_player_little_flash),
+            RUSH_SKILL_ID => Some(execute_player_rush),
+            RUSH_2_SKILL_ID => Some(execute_player_rush_2),
+            _ => None,
+        }
+    }
+
     fn execute_player_skill_owner<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -39973,13 +39983,7 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
-        let dash: Option<fn(&mut Self, i32, RegisteredSkill, PlayerSkillDispatch, &mut Runtime)
-            -> QueuedSkillExecutionOutcome> = match dispatch.skill_id() {
-            FLASH_SKILL_ID => Some(execute_player_flash),
-            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => Some(execute_player_little_flash),
-            _ => None,
-        };
-        if let Some(execute) = dash {
+        if let Some(execute) = Self::registered_dash_owner::<Runtime>(dispatch.skill_id()) {
             let Some(instance) = instance else {
                 return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Rejected, first_contact: false };
             };
@@ -40044,8 +40048,6 @@ impl CGame {
             _ if is_thunder_blow_dispatch(dispatch) => execute_player_thunder_blow,
             _ if is_thunder_slash_dispatch(dispatch) => execute_player_thunder_slash,
             _ if is_pillar_dispatch(dispatch) => execute_player_pillar,
-            _ if is_rush_dispatch(dispatch) => execute_player_rush,
-            _ if is_rush_2_dispatch(dispatch) => execute_player_rush_2,
             _ if is_roar_dispatch(dispatch) => execute_player_roar,
             _ if is_energy_holding_dispatch(dispatch) => execute_player_energy_holding,
             _ if is_inverse_chopped_dispatch(dispatch) => execute_player_inverse_chopped,
@@ -40299,7 +40301,7 @@ impl CGame {
                 // Полный End(0) уже завершил экземпляр, но его payload
                 // освобождается ниже вместе с командой. Наличие payload
                 // не должно поглощать внешний отказ Begin.
-                && (matches!(dispatch.skill_id(), FLASH_SKILL_ID | LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID)
+                && (Self::registered_dash_owner::<Runtime>(dispatch.skill_id()).is_some()
                     || self.player_skill_begin_pending(player_id, dispatch.skill_id())
                     || instance.and_then(|address| self.registered_skill(address))
                         .is_some_and(|skill| skill.lifecycle().is_ended()));
@@ -42151,11 +42153,8 @@ impl CGame {
         Some(result)
     }
 
-    /// Удерживает целевого игрока и его конкретный регион одним изменяемым
-    /// проходом, чтобы `CMoveShape::ForceMove` одновременно опубликовал
-    /// сообщение окружающим,
-    /// переставил пространственную принадлежность и поставил событие ожидания
-    /// искусственному интеллекту на вычисленную владельцем длительность.
+    /// Сценарный вход использует тот же ForceMove и виртуальный SetTileXY,
+    /// что контактные навыки; отдельного способа переноса игрока здесь нет.
     pub(crate) fn force_move_player(
         &mut self,
         player_id: i32,
@@ -42163,88 +42162,26 @@ impl CGame {
         destination_y: i32,
         duration_ms: u32,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
-        let mut player = self.players.remove(&player_id)?;
-        let Some(region_id) = player.server_region_id() else {
-            self.players.insert(player_id, player);
-            return None;
-        };
-        let Some(mut owner) = self.take_region_owner(region_id) else {
-            self.players.insert(player_id, player);
-            return None;
-        };
-        let area_width = self.globe_setup.area_width();
-        let area_height = self.globe_setup.area_height();
-        let result = {
-            let Some(around) =
-                GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)
-            else {
-                self.restore_region_owner(owner);
-                self.players.insert(player_id, player);
-                return None;
-            };
-            player.force_move(
-                owner.base_mut(),
-                destination_x,
-                destination_y,
-                duration_ms,
-                area_width,
-                area_height,
-                &around,
-                game_tick_milliseconds,
-            )
-        };
-        self.restore_region_owner(owner);
-        self.players.insert(player_id, player);
-        Some(result)
+        let player = self.find_player(player_id)?;
+        let region_id = player.shape().get_region_id();
+        let identity = player.shape().identity();
+        self.force_move_skill_target(region_id, identity, destination_x, destination_y, duration_ms)
     }
 
-    /// Координирует подтверждённый `ForceMove` навыка между каноническим
-    /// владельцем цели, пространством региона, круговой доставкой и AI.
+    /// ForceMove монстра при уже извлечённом регионе. Игрок проходит общий
+    /// координатор, сохраняющий его виртуальный SetTileXY и отмену захвата.
     #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца цели и атомарный порядок ForceMove")]
-    pub(crate) fn force_move_owned_shape(
+    pub(crate) fn force_move_owned_monster(
         &mut self,
         region: &mut CServerRegion,
-        identity: ShapeIdentity,
+        monster_id: i32,
         destination_x: i32,
         destination_y: i32,
         duration_ms: u32,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
         let area_width = self.globe_setup.area_width();
         let area_height = self.globe_setup.area_height();
-        if identity.object_type == PLAYER_TYPE {
-            let mut player = self.players.remove(&identity.id)?;
-            if player.server_region_id() != Some(region.id) {
-                self.players.insert(identity.id, player);
-                return None;
-            }
-            let result = {
-                let Some(around) = GameServerAroundRuntime::new(
-                    self,
-                    &self.session_factory,
-                    area_width,
-                    area_height,
-                ) else {
-                    self.players.insert(identity.id, player);
-                    return None;
-                };
-                player.force_move(
-                    region,
-                    destination_x,
-                    destination_y,
-                    duration_ms,
-                    area_width,
-                    area_height,
-                    &around,
-                    game_tick_milliseconds,
-                )
-            };
-            self.players.insert(identity.id, player);
-            return Some(result);
-        }
-        if identity.object_type != MONSTER_TYPE {
-            return None;
-        }
-        let figure = region.find_monster_by_id(identity.id).and_then(|monster| {
+        let figure = region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
             Some(CMonster::figure(property))
         })?;
@@ -42255,7 +42192,7 @@ impl CGame {
             area_height,
         )?;
         region.force_move_owned_monster(
-            identity.id,
+            monster_id,
             destination_x,
             destination_y,
             duration_ms,

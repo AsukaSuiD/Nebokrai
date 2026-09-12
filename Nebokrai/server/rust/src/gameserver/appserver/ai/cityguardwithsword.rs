@@ -55,9 +55,8 @@ use super::guardtarget::{
 };
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeView};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
@@ -260,13 +259,9 @@ pub(crate) fn release_guard_sword_target<Runtime: GameMainLoopRuntime>(
         } else {
             (station.x, station.y)
         };
-        let _ = game.force_move_owned_shape(
+        let _ = game.force_move_owned_monster(
             region,
-            ShapeIdentity {
-                object_type: MONSTER_TYPE,
-                id: monster_id,
-                ex_id: CGuid::GUID_INVALID,
-            },
+            monster_id,
             destination_x,
             destination_y,
             0,
@@ -321,13 +316,9 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
             3,
             runtime,
         ) {
-            let _ = game.force_move_owned_shape(
+            let _ = game.force_move_owned_monster(
                 region,
-                ShapeIdentity {
-                    object_type: MONSTER_TYPE,
-                    id: monster_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
+                monster_id,
                 destination.x,
                 destination.y,
                 0,

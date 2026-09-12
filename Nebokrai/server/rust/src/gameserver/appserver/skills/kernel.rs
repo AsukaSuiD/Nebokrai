@@ -113,6 +113,7 @@ use super::monsterthorn::PlayerMonsterThornExecutionState;
 use super::poisonmoth::PoisonMothExecutionState;
 use super::rage::RageExecutionState;
 use super::rainarrow::RainArrowExecutionState;
+use super::rush::RushExecutionState;
 use super::scorpion::ScorpionExecutionState;
 use super::seal::SealExecutionState;
 use super::sevenshootingstar::SevenShootingStarExecutionState;
@@ -240,6 +241,7 @@ player_skill_states! {
     KnightCut(KnightCutExecutionState),
     Rage(RageExecutionState),
     Flash(FlashExecutionState) paths(clear_end_paths),
+    Rush(RushExecutionState) paths(clear_end_paths),
     Swallow(SwallowExecutionState),
     SevenShootingStar(SevenShootingStarExecutionState) paths(clear_end_paths),
     LittleStar(PlayerLittleStarExecutionState) paths(clear_end_paths),

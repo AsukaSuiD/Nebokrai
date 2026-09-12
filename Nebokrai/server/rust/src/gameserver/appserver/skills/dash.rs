@@ -1,6 +1,7 @@
-//! Общий вход и контактная атака рывков Flash, LittleFlash и LittleFlash2.
+//! Общий вход рывков Flash/LittleFlash и Rush, геометрия и контакт Flash.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/flash.cpp,
-//! littleflash.cpp и littleflash2.cpp, базовый appserver/states/attackskill.cpp.
+//! littleflash.cpp, littleflash2.cpp, rush.cpp и rush2.cpp,
+//! базовый appserver/states/attackskill.cpp.
 //!
 //! Begin, материализация, visual и End работают с одним поколенческим ключом.
 //! Проверка видит concrete payload с выключенной фазой; успешный Begin включает
@@ -15,7 +16,7 @@
 //! Единый формат visual передаёт последнюю клетку подготовленного пути;
 //! безусловный базовый callback остаётся у зарегистрированного ресурса.
 //!
-//! Все три достигнутых входа принадлежат CPlayer. Attack сохраняет его PK-флаги
+//! Общий Attack Flash и двух LittleFlash сохраняет PK-флаги CPlayer
 //! и принадлежность до Calculate, доставляет сырой OnBeenAttacked без повторного
 //! допуска, затем вызывает IncreaseRp независимо от результата получателя.
 //! NULL таблица Calculate оставляет исходный UNKNOWN/1, но не отменяет удар.

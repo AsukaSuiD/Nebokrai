@@ -24,18 +24,15 @@ impl CGame {
             if !replace_player_knock_out_state(self, target.id, state, now_ms) {
                 return false;
             }
-            let Some(mut owner) = self.take_region_owner(region_id) else { return false };
-            let moved = self.force_move_owned_shape(
-                owner.base_mut(), target, destination_x, destination_y, duration_ms,
+            return self.force_move_skill_target(
+                region_id, target, destination_x, destination_y, duration_ms,
             ).is_some();
-            self.restore_region_owner(owner);
-            return moved;
         }
         if target.object_type != MONSTER_TYPE { return false }
         let Some(mut owner) = self.take_region_owner(region_id) else { return false };
         let installed = replace_monster_knock_out_state(self, owner.base_mut(), target.id, state, now_ms);
-        let moved = installed && self.force_move_owned_shape(
-            owner.base_mut(), target, destination_x, destination_y, duration_ms,
+        let moved = installed && self.force_move_owned_monster(
+            owner.base_mut(), target.id, destination_x, destination_y, duration_ms,
         ).is_some();
         self.restore_region_owner(owner);
         moved

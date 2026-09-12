@@ -195,9 +195,9 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     ) else {
         return true;
     };
-    let _ = game.force_move_owned_shape(
+    let _ = game.force_move_owned_monster(
         region,
-        owner.identity,
+        owner.identity.id,
         destination.x,
         destination.y,
         0,

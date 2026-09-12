@@ -243,9 +243,7 @@ fn apply_target(game: &mut CGame, region_id: i32, player_id: i32, target: Target
     if !installed { return }
     game.increase_owned_player_rp(player_id, true, 0);
     game.enter_player_combat_state(player_id);
-    let Some(mut owner) = game.take_region_owner(region_id) else { return };
-    let _ = game.force_move_owned_shape(owner.base_mut(), target.identity, destination.0, destination.1, move_speed.wrapping_mul(destination.2));
-    game.restore_region_owner(owner);
+    let _ = game.force_move_skill_target(region_id, target.identity, destination.0, destination.1, move_speed.wrapping_mul(destination.2));
 }
 
 pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {

@@ -4090,10 +4090,12 @@ impl CServerRegion {
             facts,
             around,
         );
-        if matches!(result, Ok(true)) {
-            taken
-                .monster_mut()
-                .begin_active_ai_stand(duration_ms, now_ms());
+        // SetTileXY возвращает void: ошибка уже выполненной пространственной
+        // попытки не отменяет последующее ожидание AI в ForceMove.
+        if matches!(result, Ok(true) | Err(MoveShapeCommandBlock::Position(_)))
+            && let Some(ai) = taken.monster_mut().selected_base_ai_mut()
+        {
+            ai.begin_active_stand(duration_ms, now_ms());
         }
         self.owned_monsters.restore(taken);
         Some(result)

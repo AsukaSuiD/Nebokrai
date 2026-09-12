@@ -163,7 +163,7 @@ impl SkillEndPolicy {
     const USER_OR_SUFFERER: Self = Self { movement: SkillEndMovement::UserOrSufferer, ..Self::COMMON };
     const USER_AVAILABLE: Self = Self { available: Some(true), ..Self::USER };
     const USER_UNAVAILABLE: Self = Self { available: Some(false), ..Self::USER };
-    const USER_PATHS_AFTER_MOVEMENT: Self = Self { path_order: SkillEndPathOrder::AfterMovement, ..Self::USER };
+    const USER_PATHS_AFTER_MOVEMENT: Self = Self { path_order: SkillEndPathOrder::AfterMovement, ..Self::USER_RESET_PHASE };
     const RAGE: Self = Self { effect: SkillEndEffect::Rage, ..Self::USER };
     const SCORPION: Self = Self { effect: SkillEndEffect::ScorpionOnlyZero, ..Self::USER_AVAILABLE };
     const STAR: Self = Self { effect: SkillEndEffect::Star, ..Self::USER };

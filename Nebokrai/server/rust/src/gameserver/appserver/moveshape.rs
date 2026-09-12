@@ -76,6 +76,9 @@
 //! смены пространственной принадлежности, двоичные форматы `0xBF603/604/605`,
 //! счётчики запрета движения и боя, а также подтверждённая странность
 //! `ForceMove`, где верхняя граница Y записывает `width - 1`.
+//! Его BF604 строится общим способом; CGame сохраняет виртуальный SetTileXY
+//! игрока с отменой захвата до свежего AI Stand. Монстр и постройка используют
+//! пространственную базу напрямую, не создавая второго способа переноса игрока.
 //! `SetKilledMeAttackInfo` (0x004CCE50) сохраняет данные убийцы в общей
 //! базе после пакета смерти 0xBF60B. Единственный KillingAttackIdentity содержит
 //! только потребляемую OnDied-проекцию: тип, ID и guild ID атакующего.
@@ -3357,6 +3360,28 @@ impl CMoveShape {
         let Some(server_region) = server_region else {
             return Ok(false);
         };
+        let (destination, message) = self.force_move_message(
+            server_region, destination_x, destination_y, duration_ms,
+        )?;
+        let _ = message
+            .send_to_around(Some(&*server_region), &self.shape, None, around)
+            .map_err(MoveShapeCommandBlock::Coordinate)?;
+
+        server_region
+            .set_move_shape_tile_position(&mut self.shape, destination.x, destination.y, facts)
+            .map_err(MoveShapeCommandBlock::Position)?;
+        Ok(true)
+    }
+
+    /// Общий BF604 и clamp; виртуальный SetTileXY и последующий AI Stand
+    /// принадлежат конкретному владельцу движения.
+    pub(crate) fn force_move_message(
+        &self,
+        server_region: &CServerRegion,
+        destination_x: i32,
+        destination_y: i32,
+        duration_ms: u32,
+    ) -> Result<(ShapeAreaCoordinates, CMessage), MoveShapeCommandBlock> {
         let width = server_region.region.width;
         let height = server_region.region.height;
         let clamped_x = clamp_force_x(destination_x, width);
@@ -3380,14 +3405,7 @@ impl CMoveShape {
         message.add_long(clamped_y);
         message.add_ulong(duration_ms);
         message.add_long(0);
-        let _ = message
-            .send_to_around(Some(&*server_region), &self.shape, None, around)
-            .map_err(MoveShapeCommandBlock::Coordinate)?;
-
-        server_region
-            .set_move_shape_tile_position(&mut self.shape, clamped_x, clamped_y, facts)
-            .map_err(MoveShapeCommandBlock::Position)?;
-        Ok(true)
+        Ok((ShapeAreaCoordinates { x: clamped_x, y: clamped_y }, message))
     }
 
     pub(crate) fn on_move(
@@ -3854,9 +3872,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // IMPLEMENTED: `CMoveShape::SetPosXY` материализован выше; покрытый raw-блок удалён.
-
-// IMPLEMENTED: `CMoveShape::ForceMove` материализован выше; покрытый raw-блок
-// удалён.
 
 // ============================================================================
 // FUNCTION: CMoveShape::OnChangeStates
