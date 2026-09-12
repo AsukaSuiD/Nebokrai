@@ -191,7 +191,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         BLIND_STATE_ID => StateRecordLayout::typed(
             BLIND_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::blindstate::BlindState::decode(payload, offset, _now()).ok().map(StateData::Blind)
+                super::blindstate::BlindState::decode(payload, offset, _now).ok().map(StateData::Blind)
             },
         ),
         KNOCK_OUT_STATE_ID => StateRecordLayout::typed(
@@ -256,12 +256,12 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         RUSH_STATE_ID => StateRecordLayout::typed(
             RUSH_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::rushstate::RushState::decode(payload, offset, _now()).ok().map(StateData::Rush)
+                super::rushstate::RushState::decode(payload, offset, _now).ok().map(StateData::Rush)
             },
         ),
         RUSH_2_STATE_ID => StateRecordLayout::typed(
             RUSH_2_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::rushstate2::Rush2State::decode(payload, offset, _now()).ok().map(StateData::Rush2)
+                super::rushstate2::Rush2State::decode(payload, offset, _now).ok().map(StateData::Rush2)
             },
         ),
         ROAR_STATE_ID => StateRecordLayout::typed(

@@ -36859,11 +36859,6 @@ impl CGame {
         ) = {
             let attacker = self.find_player(attacker_id)?;
             let victim = self.find_player(victim_id)?;
-            if attacker.server_region_id() != Some(region_id)
-                || victim.server_region_id() != Some(region_id)
-            {
-                return None;
-            }
             let victim_x = victim.shape().get_tile_x().ok()?;
             let victim_y = victim.shape().get_tile_y().ok()?;
             let attacker_x = attacker.shape().get_tile_x().ok()?;
@@ -36897,24 +36892,10 @@ impl CGame {
             attacker_country_identity,
             attacker_kill_count,
         });
-        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
-        let mut criminal_timestamp_refreshed = false;
-        let mut criminal_state_started = false;
-        let mut criminal_delivery = None;
-        if disposition == FirstContactPkDisposition::EnterCriminalState {
-            if let Some(started) = self.find_player_mut(attacker_id)?
-                .enter_criminal_state(pk_count_per_kill, || context.now_milliseconds())
-            {
-                criminal_timestamp_refreshed = true;
-                criminal_state_started = started;
-                if started {
-                    let mut message = CMessage::new(0x000b_f60e);
-                    message.add_long(attacker_id);
-                    message.add_byte(1);
-                    criminal_delivery = self.send_player_shape_around(attacker_id, None, &message);
-                }
-            }
-        }
+        let criminal_state = (disposition == FirstContactPkDisposition::EnterCriminalState)
+            .then(|| self.enter_player_criminal_state(attacker_id, context)).flatten();
+        let criminal_timestamp_refreshed = criminal_state.is_some();
+        let criminal_state_started = criminal_state == Some(true);
         let eligible = matches!(
             disposition,
             FirstContactPkDisposition::AllowedCombat | FirstContactPkDisposition::EnterCriminalState
@@ -36936,7 +36917,6 @@ impl CGame {
             ?disposition,
             criminal_timestamp_refreshed,
             criminal_state_started,
-            ?criminal_delivery,
             ?world_log_delivery,
             "обработан первый контактный удар по игроку"
         );
@@ -37016,25 +36996,10 @@ impl CGame {
             same_country: attacker.country() == victim.country(),
         });
         let victim_level = victim.level();
-        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
-        let mut criminal_timestamp_refreshed = false;
-        let mut criminal_state_started = false;
-        let mut criminal_delivery = None;
-        if disposition == FirstContactPkDisposition::EnterCriminalState {
-            if let Some(started) = self
-                .find_player_mut(attacker_id)?
-                .enter_criminal_state(pk_count_per_kill, || context.now_milliseconds())
-            {
-                criminal_timestamp_refreshed = true;
-                criminal_state_started = started;
-                if started {
-                    let mut message = CMessage::new(0x000b_f60e);
-                    message.add_long(attacker_id);
-                    message.add_byte(1);
-                    criminal_delivery = self.send_player_shape_around(attacker_id, None, &message);
-                }
-            }
-        }
+        let criminal_state = (disposition == FirstContactPkDisposition::EnterCriminalState)
+            .then(|| self.enter_player_criminal_state(attacker_id, context)).flatten();
+        let criminal_timestamp_refreshed = criminal_state.is_some();
+        let criminal_state_started = criminal_state == Some(true);
         let eligible = matches!(
             disposition,
             FirstContactPkDisposition::AllowedCombat | FirstContactPkDisposition::EnterCriminalState
@@ -37057,7 +37022,6 @@ impl CGame {
             ?disposition,
             criminal_timestamp_refreshed,
             criminal_state_started,
-            ?criminal_delivery,
             ?world_log_delivery,
             "обработан первый удар навыком по игроку"
         );
@@ -37298,12 +37262,12 @@ impl CGame {
         )
     }
 
-    fn apply_guard_monster_first_attack(
+    fn apply_guard_monster_first_attack<Context: GameClockContext>(
         &mut self,
         attacker_id: i32,
         region_id: i32,
         property: &crate::setup::monsterlist::MonsterProperties,
-        now_ms: u32,
+        context: &mut Context,
     ) {
         if property.kind != 5 {
             return;
@@ -37325,16 +37289,7 @@ impl CGame {
         if !starts_criminal {
             return;
         }
-        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
-        let started = self
-            .find_player_mut(attacker_id)
-            .and_then(|player| player.enter_criminal_state(pk_count_per_kill, || now_ms));
-        if started == Some(true) {
-            let mut message = CMessage::new(0x000b_f60e);
-            message.add_long(attacker_id);
-            message.add_byte(1);
-            let _ = self.send_player_shape_around(attacker_id, None, &message);
-        }
+        let _ = self.enter_player_criminal_state(attacker_id, context);
     }
 
     pub(crate) fn player_base_attack_level_block(
@@ -42468,12 +42423,15 @@ impl CGame {
                 return None;
             }
             let result = {
-                let around = GameServerAroundRuntime::new(
+                let Some(around) = GameServerAroundRuntime::new(
                     self,
                     &self.session_factory,
                     area_width,
                     area_height,
-                )?;
+                ) else {
+                    self.players.insert(identity.id, player);
+                    return None;
+                };
                 player.force_move(
                     region,
                     destination_x,
@@ -44572,7 +44530,7 @@ impl CGame {
             }
             let _ = self.player_on_first_skill(master.master_id, owner_id, Some(region_id), runtime);
         }
-        self.apply_guard_monster_first_attack(master.master_id, region_id, &property, now_ms);
+        self.apply_guard_monster_first_attack(master.master_id, region_id, &property, runtime);
         if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
             heartless.prepare_target(
                 self,

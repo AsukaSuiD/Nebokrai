@@ -141,9 +141,8 @@
 //! скрытой устаревшей двоичной записи.
 //! `PillarState` хранится здесь же: проверки рывков, строгий таймер и поздний
 //! коэффициент защиты читают один экземпляр без параллельной сырой записи.
-//! Оглушения `RushState` и `Rush2State` также имеют здесь независимые
-//! канонические сроки и через общие счётчики управляют запретами движения и
-//! боя для игрока либо регионального монстра.
+//! Blind/Rush/Rush2 используют общий timed payload с отдельными ID и сроками
+//! каждого экземпляра; их запреты и DB-записи принадлежат той же арене.
 //! `CNotDisappearAfterDead` использует точный client-time override
 //! `CExStateNew::GetRemainedTime`: нулевой срок и достигнутый wrapping deadline
 //! дают `0`, иначе публикуется оставшийся DWORD.
@@ -303,12 +302,8 @@ use crate::gameserver::appserver::skills::furystate::{
 use crate::gameserver::appserver::skills::ragebreakstate::{
     RAGE_BREAK_STATE_BYTES, RageBreakState,
 };
-use crate::gameserver::appserver::skills::rushstate::{
-    RUSH_STATE_BYTES, RushState,
-};
-use crate::gameserver::appserver::skills::rushstate2::{
-    RUSH_2_STATE_BYTES, Rush2State,
-};
+use crate::gameserver::appserver::skills::rushstate::RushState;
+use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::{
     ROAR_STATE_BYTES, RoarState,
 };
@@ -333,9 +328,7 @@ use crate::gameserver::appserver::skills::knockoutstate::{
 use crate::gameserver::appserver::skills::boalockstate::{
     BOA_LOCK_STATE_BYTES, BoaLockState,
 };
-use crate::gameserver::appserver::skills::blindstate::{
-    BLIND_STATE_BYTES, BlindState,
-};
+use crate::gameserver::appserver::skills::blindstate::BlindState;
 use crate::gameserver::appserver::skills::knightcutstate::{
     KNIGHT_CUT_STATE_BYTES, KnightCutState,
 };
@@ -1545,10 +1538,7 @@ impl CMoveShape {
                 }
                 StateData::Script(state) => Some(state.encoded(&mut timed_state_now_milliseconds)),
                 StateData::ConsumableRestore(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Blind(state) => Some([
-                    state_id.to_le_bytes(),
-                    state.client_state_time(&mut timed_state_now_milliseconds).to_le_bytes(),
-                ].concat()),
+                StateData::Blind(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Seal(state) => Some([
                     state_id.to_le_bytes(),
                     (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
@@ -1591,7 +1581,7 @@ impl CMoveShape {
                     DefenseShieldState::Promotion(state) => state.encoded(&mut timed_state_now_milliseconds).to_vec(),
                 }),
                 StateData::LeafCut2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Rush2(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::Rush2(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Agility2(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::BloodLoss(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::EnergyHolding(state) => Some(state.encoded().to_vec()),
@@ -2678,14 +2668,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn take_blind_state(&mut self) -> Option<BlindState> {
-        let key = self.state_entries.first_key::<BlindState>()?;
-        let state = self.remove_applied_state_record::<BlindState>(key, BLIND_STATE_BYTES)?;
-        Some(state)
-    }
-
-
-
     pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> {
         let previous = self.state_entries.first_key::<BoaLockState>()
             .and_then(|key| self.remove_applied_state_record::<BoaLockState>(key, BOA_LOCK_STATE_BYTES));
@@ -2709,50 +2691,6 @@ impl CMoveShape {
     }
 
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.state_entries.first::<PillarState>().copied() }
-
-    pub(crate) fn replace_rush_state(&mut self, state: RushState) -> Option<RushState> {
-        let previous = self.state_entries.first_key::<RushState>()
-            .and_then(|key| self.remove_applied_state_record::<RushState>(key, RUSH_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-    pub(crate) fn take_expired_rush_state(&mut self, key: StateKey, now_ms: u32) -> Option<RushState> {
-        self.applied_state::<RushState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<RushState>(key, RUSH_STATE_BYTES)?;
-        Some(state)
-    }
-
-    pub(crate) fn take_rush_state(&mut self) -> Option<RushState> {
-        let key = self.state_entries.first_key::<RushState>()?;
-        let state = self.remove_applied_state_record::<RushState>(key, RUSH_STATE_BYTES)?;
-        Some(state)
-    }
-
-    pub(crate) fn replace_rush_2_state(&mut self, state: Rush2State) -> Option<Rush2State> {
-        let previous = self.state_entries.first_key::<Rush2State>()
-            .and_then(|key| self.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-    pub(crate) fn take_expired_rush_2_state(&mut self, key: StateKey, now_ms: u32) -> Option<Rush2State> {
-        self.applied_state::<Rush2State>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES)?;
-        Some(state)
-    }
-
-    pub(crate) fn take_rush_2_state(&mut self) -> Option<Rush2State> {
-        let key = self.state_entries.first_key::<Rush2State>()?;
-        let state = self.remove_applied_state_record::<Rush2State>(key, RUSH_2_STATE_BYTES)?;
-        Some(state)
-    }
 
     pub(crate) fn replace_pillar_state(&mut self, state: PillarState) -> Option<PillarState> {
         self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);

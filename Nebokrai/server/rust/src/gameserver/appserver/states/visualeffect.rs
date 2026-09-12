@@ -25,6 +25,9 @@ pub(crate) enum SkillVisualEffectKind {
     Ignition,
     PoisonFog,
     Weak,
+    Blind,
+    Rush,
+    Rush2,
 }
 
 #[derive(Debug, Eq, PartialEq)]

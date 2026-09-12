@@ -5831,58 +5831,12 @@ impl CPlayer {
 
 
 
-    pub(crate) fn take_blind_state(
-        &mut self,
-    ) -> Option<super::skills::blindstate::BlindState> {
-        self.move_shape.take_blind_state()
-    }
-
     pub(crate) fn replace_boa_lock_state(&mut self, state: super::skills::boalockstate::BoaLockState) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.replace_boa_lock_state(state) }
     pub(crate) fn take_expired_boa_lock_state(&mut self, key: super::moveshape::StateKey, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(key, now_ms) }
     pub(crate) fn take_boa_lock_state(&mut self) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_boa_lock_state() }
 
     pub(crate) fn pillar_state(&self) -> Option<super::skills::pillarstate::PillarState> {
         self.move_shape.pillar_state()
-    }
-
-    pub(crate) fn replace_rush_state(
-        &mut self,
-        state: super::skills::rushstate::RushState,
-    ) -> Option<super::skills::rushstate::RushState> {
-        self.move_shape.replace_rush_state(state)
-    }
-
-
-    pub(crate) fn take_expired_rush_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::rushstate::RushState> {
-        self.move_shape.take_expired_rush_state(key, now_ms)
-    }
-
-    pub(crate) fn take_rush_state(&mut self) -> Option<super::skills::rushstate::RushState> {
-        self.move_shape.take_rush_state()
-    }
-
-    pub(crate) fn replace_rush_2_state(
-        &mut self,
-        state: super::skills::rushstate2::Rush2State,
-    ) -> Option<super::skills::rushstate2::Rush2State> {
-        self.move_shape.replace_rush_2_state(state)
-    }
-
-
-    pub(crate) fn take_expired_rush_2_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::rushstate2::Rush2State> {
-        self.move_shape.take_expired_rush_2_state(key, now_ms)
-    }
-
-    pub(crate) fn take_rush_2_state(&mut self) -> Option<super::skills::rushstate2::Rush2State> {
-        self.move_shape.take_rush_2_state()
     }
 
     pub(crate) fn replace_pillar_state(
@@ -15108,19 +15062,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // IMPLEMENTED, VERIFIED_DISASSEMBLY: `UpdateCurrentState` combat/criminal
 // halves and оба caller-а принадлежат `CGame`; покрытый raw удалён.
 
-// ============================================================================
-// FUNCTION: CPlayer::EnterCriminalState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9336
-// RVA: 0x0002C9A0
-// ADDRESS: 0042c9a0
-// PROTOTYPE: void __thiscall EnterCriminalState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // IMPLEMENTED, VERIFIED_DISASSEMBLY: `EnterResidentState` scalar хранит
 // `CPlayer`, exact around wire публикует `CGame`; покрытый raw удалён.

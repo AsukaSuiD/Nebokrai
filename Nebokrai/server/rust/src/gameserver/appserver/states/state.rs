@@ -43,10 +43,8 @@ fn set_state_user_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity
     }
 }
 
-// CBlindState с четырьмя наследниками, CPoisonFogState (vtable0x006622D4)
-// и RestoreHp/RestoreMp (0x0065355C/0x006535BC)
-// используют +0x2C=0x005E3B30: меняется только sufferer-region до Begin.
-// Регион caster у первичного Fog при переходе держателя не перезаписывается.
+// У блокировок Blind/Rush, тумана и RestoreHp/RestoreMp переход держателя
+// меняет регион S перед Begin, но не переносит регион источника вместе с ним.
 fn set_state_sufferer_region(game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey) {
     if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
         shape.set_applied_state_sufferer_region(key, region_id);
@@ -703,6 +701,8 @@ state_callbacks! {
         skills::wangshengstate::update_wangsheng_state_properties
     ),
     StateData::Blind(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
+    | StateData::Rush(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
+    | StateData::Rush2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
     | StateData::KnockOut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::SpiderWeb(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::Seal(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
@@ -714,7 +714,7 @@ state_callbacks! {
         skills::blindstate::restart_blind_state,
         |_, _, _, _, _| true,
         set_state_sufferer_region
-    ),
+    ); visual = |state| Some((1, matches!(state, StateData::Blind(_) | StateData::Rush(_) | StateData::Rush2(_)))),
     StateData::Heal(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
         |game, region, target, key, runtime| {
             skills::healstate::update_stored_heal_state(game, region, target, key, || runtime.now_milliseconds());
@@ -817,22 +817,6 @@ state_callbacks! {
         },
         skills::boalockstate::end_boa_lock_state,
         skills::boalockstate::restart_boa_lock_state,
-        |_, _, _, _, _| true
-    ),
-    StateData::Rush(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
-        |game, region, target, key, runtime| {
-            skills::rushstate::update_rush_state(game, region, target, key, runtime.now_milliseconds());
-        },
-        skills::rushstate::end_rush_state,
-        skills::rushstate::restart_rush_state,
-        |_, _, _, _, _| true
-    ),
-    StateData::Rush2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
-        |game, region, target, key, runtime| {
-            skills::rushstate2::update_rush_2_state(game, region, target, key, runtime.now_milliseconds());
-        },
-        skills::rushstate2::end_rush_2_state,
-        skills::rushstate2::restart_rush_2_state,
         |_, _, _, _, _| true
     ),
     StateData::KnightCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (

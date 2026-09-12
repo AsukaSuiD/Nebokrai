@@ -45,6 +45,18 @@ impl CGame {
     /// GetTargetPath разрешает участников заново; при исчезнувшей S использует
     /// сохранённую точку. Ограничение дальности принадлежит конкретному навыку.
     pub(crate) fn skill_target_path(&self, lifecycle: &SkillLifecycle) -> Vec<(i32, i32, u8)> {
+        self.skill_target_path_impl(lifecycle, None)
+    }
+
+    pub(crate) fn skill_target_path_with_length(
+        &self, lifecycle: &SkillLifecycle, length: u32,
+    ) -> Vec<(i32, i32, u8)> {
+        self.skill_target_path_impl(lifecycle, Some(length))
+    }
+
+    fn skill_target_path_impl(
+        &self, lifecycle: &SkillLifecycle, forced_length: Option<u32>,
+    ) -> Vec<(i32, i32, u8)> {
         (|| {
             let (region, identity) = lifecycle.user();
             let source = resolve_state_move_shape(self, region, identity)?.shape();
@@ -64,7 +76,7 @@ impl CGame {
                 }
             };
             Some(self.base_magic_path(
-                source.get_region_id(), source_x, source_y, destination.0, destination.1, None,
+                source.get_region_id(), source_x, source_y, destination.0, destination.1, forced_length,
             ))
         })().unwrap_or_default()
     }
@@ -72,6 +84,34 @@ impl CGame {
     pub(crate) fn registered_player_skill(&self, player_id: i32, skill_id: u32) -> Option<RegisteredSkill> {
         let player = self.find_player(player_id)?;
         self.registered_move_shape_skill(player.shape().get_region_id(), player.shape().identity(), skill_id)
+    }
+
+    pub(crate) fn move_shape_level(&self, region_id: i32, target: ShapeIdentity) -> Option<u8> {
+        match target.object_type {
+            400 => self.find_player(target.id).map(|player| player.level()),
+            600 => {
+                let monster = self.find_region(region_id)?.base().find_monster_by_id(target.id)?;
+                self.find_monster_property_by_origin_name(monster.base_property_key()?)
+                    .map(|property| property.level as u8)
+            }
+            1100 | 1200 => resolve_state_move_shape(self, region_id, target).map(|_| 1),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn skill_target_controller(&self, region_id: i32, target: ShapeIdentity) -> Option<i32> {
+        if target.object_type == 400 {
+            return self.find_player(target.id).map(|player| player.player_id());
+        }
+        if target.object_type != 600 { return None; }
+        let monster = self.find_region(region_id)?.base().find_monster_by_id(target.id)?;
+        if !monster.is_tamed() {
+            let property = self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            if !monster.is_carriage(property) { return None; }
+        }
+        let master = monster.master_info();
+        if master.master_type != 400 { return None; }
+        self.find_player(master.master_id).map(|player| player.player_id())
     }
 
     pub(crate) fn registered_move_shape_skill(
@@ -282,6 +322,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::poisonfog::publish_poison_fog_visual(self, skill, mode),
             SkillVisualEffectKind::Weak =>
                 crate::gameserver::appserver::skills::weak::publish_weak_visual(self, skill, mode),
+            SkillVisualEffectKind::Blind =>
+                crate::gameserver::appserver::skills::blind::publish_blind_visual(self, skill, mode),
+            SkillVisualEffectKind::Rush | SkillVisualEffectKind::Rush2 =>
+                crate::gameserver::appserver::skills::rush::publish_rush_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

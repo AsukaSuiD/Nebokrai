@@ -41,6 +41,23 @@ pub(crate) struct AttackInformation {
 }
 
 impl AttackInformation {
+    /// Clear защиты сбрасывает всю атаку, кроме уровня навыка, а не только
+    /// сумму урона. Пустой результат остаётся обычным попаданием без full-miss.
+    pub(crate) fn clear(&mut self) {
+        self.skill_id = super::super::skills::skillfactory::UNKNOWN_SKILL_ID;
+        self.attacker_type = 0;
+        self.attacker_id = 0;
+        self.attacker_team_id = 0;
+        self.attacker_faction_id = 0;
+        self.attacker_union_id = 0;
+        self.hit_modifier = 0;
+        self.damage_factor = 1.0;
+        self.critical = false;
+        self.blast_attack = false;
+        self.full_miss = 0;
+        self.clear_damage();
+    }
+
     pub(crate) fn clear_damage(&mut self) {
         self.damages.clear();
         self.damage_modifier = 0;
@@ -81,33 +98,6 @@ impl AttackInformation {
 //
 //
 
-// ============================================================================
-// FUNCTION: tagAttackInformation::Clear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\attackpower.cpp:44
-// RVA: 0x001D3CA0
-// ADDRESS: 005d3ca0
-// PROTOTYPE: void __thiscall Clear(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: tagAttackInformation::~tagAttackInformation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\attackpower.cpp:39
-// RVA: 0x001D3D40
-// ADDRESS: 005d3d40
-// PROTOTYPE: void __thiscall ~tagAttackInformation(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: tagAttackInformation::tagAttackInformation

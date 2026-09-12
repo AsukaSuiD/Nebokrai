@@ -549,7 +549,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         if let Some(owner_id) = owned_target_player {
             let _ = game.player_on_first_skill(player_id, owner_id, Some(region_id), runtime);
         }
-        game.apply_guard_monster_first_attack(player_id, region_id, &monster_property, now_ms);
+        game.apply_guard_monster_first_attack(player_id, region_id, &monster_property, runtime);
 
         let (
             mut attacker_properties,
