@@ -28,9 +28,11 @@
 //! дальности перенесены в первый AI его owner-а (0x005B39B0).
 //! Общий lookup не поглощает этот отказ живого cast; до Begin свойства
 //! по-прежнему необходимы расписанию для расчёта диапазона.
-//! Зарегистрированные навыки состояний ниже сохраняют getters диапазона при отсутствии
+//! Зарегистрированные навыки ниже сохраняют getters диапазона при отсутствии
 //! свойств. Новый Begin идёт после диапазона либо Tracing и интервала ИИ;
 //! уже начатый навык получает AI без повторного допуска расписанием.
+//! Archery использует тот же зарегистрированный цикл игрока/монстра и базовый
+//! диапазон minimum1/положительный maximum, в том числе при поиске цели.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -236,9 +238,8 @@ use super::monsterrangeattack::{
     prepare_owned_monster_range_cast,
 };
 use super::chuckstone::CHUCK_STONE_SKILL_ID;
-use super::archery::{
-    ARCHERY_SKILL_ID, MonsterBaseProjectileKind, execute_owned_monster_base_projectile,
-};
+use super::archery::{ARCHERY_SKILL_ID, execute_owned_monster_archery};
+use super::monsterbasemagic::execute_owned_monster_base_magic;
 use super::basemagic::BASE_MAGIC_SKILL_ID as BASE_MAGIC_PROJECTILE_SKILL_ID;
 use super::bossbluefury::{BOSS_BLUE_FURY_SKILL_ID, execute_owned_boss_blue_fury};
 use super::bossbluequake::{BOSS_BLUE_QUAKE_SKILL_ID, execute_owned_boss_blue_quake};
@@ -493,10 +494,9 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
 const BASE_MAGIC_SKILL_ID: u16 = 3;
 
 fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) -> bool {
-    owned_target_state_executor::<Runtime>(skill_id).is_some() || matches!(
+    owned_registered_cast_executor::<Runtime>(skill_id).is_some() || matches!(
         skill_id,
         COMMON_BASE_ATTACK_SKILL_ID
-            | ARCHERY_SKILL_ID
             | BASE_MAGIC_PROJECTILE_SKILL_ID
             | MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_FAST_ATTACK_SKILL_ID
@@ -818,6 +818,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
+        if skill_id == ARCHERY_SKILL_ID { return 1; }
         game.skill_base_properties(skill_id, skill_level)
             .map_or(0, |properties| properties.query_property(5_004) as i32)
     });
@@ -1005,14 +1006,15 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     true
 }
 
-type OwnedTargetStateExecutor<Runtime> = fn(
+type OwnedRegisteredCastExecutor<Runtime> = fn(
     &mut CGame, &mut Option<ServerRegionOwner>, i32, ShapeIdentity, u16, &mut Runtime,
 ) -> bool;
 
-fn owned_target_state_executor<Runtime: GameMainLoopRuntime>(
+fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
     skill_id: u32,
-) -> Option<OwnedTargetStateExecutor<Runtime>> {
+) -> Option<OwnedRegisteredCastExecutor<Runtime>> {
     match skill_id {
+        ARCHERY_SKILL_ID => Some(execute_owned_monster_archery),
         KNOCK_OUT_SKILL_ID => Some(execute_owned_monster_knock_out),
         SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
         YAKSHA_SLASH_SKILL_ID => Some(execute_owned_monster_yaksha_slash),
@@ -1063,7 +1065,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if dispatch.skill_id == COMMON_BASE_ATTACK_SKILL_ID {
             return super::baseattack::execute_owned_monster_base_attack(game, owner, monster_id, runtime);
         }
-        if let Some(execute) = owned_target_state_executor(dispatch.skill_id) {
+        if let Some(execute) = owned_registered_cast_executor(dispatch.skill_id) {
             return execute(game, owner, monster_id, dispatch.target, dispatch.skill_level, runtime);
         }
     }
@@ -1322,7 +1324,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let Some(target) = target else {
         return false;
     };
-    if let Some(execute) = owned_target_state_executor(skill_id) {
+    if let Some(execute) = owned_registered_cast_executor(skill_id) {
         // OnFighting выше уже направлен к экземпляру. Здесь только новый
         // Begin: диапазон либо virtual Tracing, затем часы OnSchedule.
         if (pet_ai && pet_action == 2) || (!pet_ai && uses_stationary_attack_schedule(property.ai)) {
@@ -1436,18 +1438,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_monster_snow_storm(game, region_owner.base_mut(), monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
     }
-    if matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID) {
-        return execute_owned_monster_base_projectile(
+    if skill_id == BASE_MAGIC_PROJECTILE_SKILL_ID {
+        return execute_owned_monster_base_magic(
             game,
             region_owner,
             monster_id,
             target,
             skill_level,
-            if skill_id == ARCHERY_SKILL_ID {
-                MonsterBaseProjectileKind::Archery
-            } else {
-                MonsterBaseProjectileKind::Magic
-            },
             runtime,
         );
     }

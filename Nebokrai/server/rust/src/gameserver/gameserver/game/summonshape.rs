@@ -7,6 +7,8 @@
 //! он отличается от обычного ForceMove CMoveShape.
 //! End сначала отмечает удаление, затем отправляет BF504(type,id,0) вокруг
 //! фактической формы; повторный End не подавляется по флагу удаления.
+//! Исключение Archery вызывает собственный End: только отметка удаления,
+//! без немедленного BF504.
 
 use super::*;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -52,6 +54,10 @@ impl CGame {
     }
 
     pub(super) fn end_summoned_shape(&mut self, holder_region: i32, id: i32) {
+        if self.archery_phalanx(holder_region, id).is_some() {
+            self.end_archery_phalanx(holder_region, id);
+            return;
+        }
         let Some(shape) = self.mark_damage_phalanx_deleted(holder_region, id) else { return; };
         if shape.is_assigned_to_server_region()
             && let Some(region) = self.find_region(shape.get_region_id()).map(ServerRegionOwner::base)

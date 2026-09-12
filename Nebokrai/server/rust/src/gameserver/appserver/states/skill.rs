@@ -15,9 +15,14 @@
 //! Политики владельцев выбираются одним фабричным каталогом. Собственный
 //! bool-End боевой феи сохраняет отдельный пролог, не заменяя общий int-End.
 //! Производные visual подключаются явно, без имитации отсутствующих эффектов.
+//! Геометрия навыка читает живой CMoveShape без фильтра координат или текущего
+//! региона игрока. ShapeView сохраняет исходные float-биты и integer-indefinite;
+//! формулы расстояния и footprint остаются у общих CShape/CMoveShape. Для
+//! монстра без загруженной таблицы figure значение не выдумывается.
 
-use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::moveshape::{CMoveShape, MoveShapeSkill, RegisteredSkillDispatch, SkillSlot};
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::shape::{ShapeFigure, ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::skills::kernel::{SkillLifecycle, SkillTermination};
@@ -43,6 +48,31 @@ pub(crate) enum RegisteredSkillEnd {
 }
 
 impl CGame {
+    /// Геометрия уже выбранного полного CMoveShape, а не фильтр пространственной
+    /// выдачи. Игрок разрешается глобально даже после смены региона в callback.
+    pub(crate) fn skill_shape_view(&self, source: (i32, ShapeIdentity)) -> Option<ShapeView> {
+        let shape = resolve_state_move_shape(self, source.0, source.1)?.shape();
+        let figure = match shape.identity().object_type {
+            400 => self.find_player(shape.identity().id)?.figure(),
+            500 => ShapeFigure::default(),
+            600 => {
+                let monster = self.find_region(source.0)?.base().find_monster_by_id(shape.identity().id)?;
+                let property = self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                CMonster::figure(property)
+            }
+            1_100 | 1_200 => self.find_region(source.0)?.stationary_build(shape.identity())?.shape_view().figure,
+            _ => return None,
+        };
+        Some(ShapeView {
+            identity: shape.identity(),
+            tile_x: shape.get_tile_x().unwrap_or(i32::MIN),
+            tile_y: shape.get_tile_y().unwrap_or(i32::MIN),
+            pos_x_bits: shape.get_pos_x().to_bits(),
+            pos_y_bits: shape.get_pos_y().to_bits(),
+            figure,
+        })
+    }
+
     /// GetTargetPath разрешает участников заново; при исчезнувшей S использует
     /// сохранённую точку. Ограничение дальности принадлежит конкретному навыку.
     /// Блоки читаются по региону базы Begin, не по текущему региону живого U.
@@ -63,13 +93,24 @@ impl CGame {
             let (region, identity) = lifecycle.user();
             let source = resolve_state_move_shape(self, region, identity)?.shape();
             let target = resolve_skill_sufferer(self, lifecycle);
-            let source_x = source.get_tile_x().ok()?;
-            let source_y = source.get_tile_y().ok()?;
+            let source_x = source.get_tile_x().unwrap_or(i32::MIN);
+            let source_y = source.get_tile_y().unwrap_or(i32::MIN);
             let destination = match target {
-                Some((region, identity)) => {
-                    let target = resolve_state_move_shape(self, region, identity)?.shape();
-                    if target.identity() == source.identity() { return None; }
-                    self.base_magic_target_point(target.get_region_id(), source_x, source_y, target.identity())?
+                Some((target_region, identity)) => {
+                    let target = resolve_state_move_shape(self, target_region, identity)?.shape();
+                    if std::ptr::eq(target, source) { return None; }
+                    if matches!(target.identity().object_type, 600 | 1_100 | 1_200) {
+                        let view = self.skill_shape_view((target_region, target.identity()))?;
+                        if target.identity().object_type == 600 && view.figure.get(0) == 0 {
+                            (view.tile_x, view.tile_y)
+                        } else {
+                            CMoveShape::nearest_figure_attack_point(
+                                view.tile_x, view.tile_y, view.figure, source_x, source_y,
+                            )
+                        }
+                    } else {
+                        (target.get_tile_x().unwrap_or(i32::MIN), target.get_tile_y().unwrap_or(i32::MIN))
+                    }
                 }
                 None => {
                     let destination = lifecycle.destination();
@@ -357,6 +398,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
             SkillVisualEffectKind::HeartlessArrow =>
                 crate::gameserver::appserver::skills::heartlessarrow2::publish_heartless_arrow_visual(self, skill, mode),
+            SkillVisualEffectKind::Archery =>
+                crate::gameserver::appserver::skills::archerycast::publish_archery_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {
                 if !crate::gameserver::appserver::skills::ignition::publish_ignition_visual(self, skill, mode) {
                     return;

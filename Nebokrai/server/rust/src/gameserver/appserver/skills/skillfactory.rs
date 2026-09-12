@@ -256,7 +256,7 @@ macro_rules! skill_owners {
 // категория принадлежит конструктору экземпляра, а не записи runtime-свойств.
 skill_owners! {
     CBaseAttack: Attack, COMMON, Weapon, EndZero => 0x001,
-    CArchery: Summon, USER, Weapon => 0x002,
+    CArchery: Summon, USER_RESET_PHASE, Weapon => 0x002,
     CBaseMagic: Summon, USER, Weapon => 0x003,
     CFightDefense: Defense, COMMON, None => 0x00a,
     CMosou: Attack, USER_RESET_PHASE, Weapon => 0x065,

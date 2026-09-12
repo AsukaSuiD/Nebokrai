@@ -726,6 +726,7 @@ mod summonshape;
 mod meteorarrow;
 mod rainarrow;
 mod heartlessarrow;
+mod archery;
 mod thunderblow;
 mod thunderslash;
 mod rush;
@@ -1054,15 +1055,9 @@ use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
 use crate::gameserver::appserver::skills::wangsheng::{
     execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::archery::{
-    cancel_player_archery, execute_player_archery, ARCHERY_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::skills::daubpoison::DAUB_POISON_SKILL_ID;
-use crate::gameserver::appserver::skills::archeryphalanx::{
-    calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
-};
 use crate::gameserver::appserver::skills::basemagic::{
     cancel_player_base_magic, execute_player_base_magic, is_base_magic_object_target_type,
     BASE_MAGIC_SKILL_ID,
@@ -38876,29 +38871,6 @@ impl CGame {
         Some(result)
     }
 
-    pub(crate) fn add_archery_phalanx<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        region_id: i32,
-        phalanx: CArcheryPhalanx,
-        tile_x: i32,
-        tile_y: i32,
-        started_at_ms: u32,
-        runtime: &mut Runtime,
-    ) -> Option<Result<i32, RegionMembershipBlock>> {
-        let mut owner = self.take_region_owner(region_id)?;
-        let result = owner.base_mut().add_archery_phalanx(
-            phalanx,
-            tile_x,
-            tile_y,
-            self.area_width,
-            self.area_height,
-            started_at_ms,
-            runtime,
-        );
-        self.restore_region_owner(owner);
-        Some(result)
-    }
-
     pub(crate) fn spawn_heartless_arrow_phalanx<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -39327,7 +39299,6 @@ impl CGame {
             SOUL_MIRROR_SKILL_ID => {
                 cancel_player_soul_mirror(self, player_id, &mut player_ai, runtime)
             }
-            ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
@@ -39624,13 +39595,6 @@ impl CGame {
                             || target.object_type == CITY_GATE_OBJECT_TYPE as i32)
                 }
             } => baseattackruntime::execute_player_base_attack,
-            _ if match dispatch {
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == ARCHERY_SKILL_ID
-                        && is_base_magic_object_target_type(target.object_type)
-                }
-                _ => false,
-            } => execute_player_archery,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
             _ if match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
@@ -43280,9 +43244,7 @@ impl CGame {
         target_level: u8,
     ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
         match phalanx {
-            SummonedSkillShape::Archery(phalanx) => {
-                calculate_owned_archery_attack(self, phalanx, target_level)
-            }
+            SummonedSkillShape::Archery(_) => None,
             SummonedSkillShape::LightingArrow(_) => None,
             SummonedSkillShape::MeteorArrow(_) => None,
             SummonedSkillShape::RainArrow(_) => None,
@@ -43509,6 +43471,12 @@ impl CGame {
     ) -> bool {
         if matches!(self.find_region(region_id)
             .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::Archery(_)))
+        {
+            return self.run_archery_phalanx(region_id, phalanx_id, runtime);
+        }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
             Some(SummonedSkillShape::ThunderSlash(_)))
         {
             return self.run_thunder_slash_phalanx(region_id, phalanx_id, runtime);
@@ -43548,16 +43516,7 @@ impl CGame {
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
             .map(|phalanx| match phalanx {
-                SummonedSkillShape::Archery(phalanx) => {
-                    match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
-                        ArcheryPhalanxTick::Pending => Some(None),
-                        ArcheryPhalanxTick::Attack {
-                            target,
-                            sampled_at_ms,
-                        } => Some(Some((target, sampled_at_ms))),
-                        ArcheryPhalanxTick::Expired => None,
-                    }
-                }
+                SummonedSkillShape::Archery(_) => Some(None),
                 SummonedSkillShape::LightingArrow(_) => Some(None),
                 SummonedSkillShape::MeteorArrow(_) => Some(None),
                 SummonedSkillShape::RainArrow(_) => Some(None),
@@ -43904,8 +43863,7 @@ impl CGame {
                 }
             }
         }
-        if !matches!(&phalanx, SummonedSkillShape::Archery(_))
-            && let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
+        if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
         {
             let _ = self.send_shape_exit_around(region, phalanx.shape());
         }

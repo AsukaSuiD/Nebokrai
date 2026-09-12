@@ -1,4 +1,7 @@
 //! Реализованная часть `CMoveShape` исторического GameServer.
+//! Постоянные данные CArchery из gameserver.exe/PDB принадлежат экземпляру
+//! навыка: att_time обнуляется конструктором, но не Begin/End или удалением
+//! исполнения команды. Игрок и монстр используют одно и то же хранение.
 //! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
 //! dispatcher-ом states/state.rs. Здесь хранится одна PDB-структура
 //! tagProperties (+0x84, 25 signed LONG); её читают native monster getters.
@@ -436,6 +439,21 @@ impl RegisteredSkillExecution {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum SkillRetainedData {
+    None,
+    Archery(super::skills::archery::ArcheryProgress),
+}
+
+impl SkillRetainedData {
+    fn for_owner(owner: SkillOwner) -> Self {
+        match owner {
+            SkillOwner::CArchery => Self::Archery(Default::default()),
+            _ => Self::None,
+        }
+    }
+}
+
 /// Достигнутая common-проекция `CSkill`: identity, level и concrete owner.
 /// Алгоритмы concrete attack/defense/state/summon остаются у skill owners;
 /// исполнение, его ресурсы и reuse принадлежат каждому экземпляру.
@@ -447,6 +465,7 @@ pub(crate) struct MoveShapeSkill {
     item_position: i32,
     immediate_lifecycle: ImmediateSkillLifecycle,
     execution: RegisteredSkillExecution,
+    retained_data: SkillRetainedData,
     current_visual_effect: Option<SkillVisualEffect>,
     last_used_ms: u32,
 }
@@ -807,6 +826,20 @@ impl MoveShapeSkill {
             RegisteredSkillExecution::Monster(execution) => Some(execution.kernel.stage()),
             RegisteredSkillExecution::BattleFairy(execution) => Some(execution.kernel().stage()),
             RegisteredSkillExecution::Inactive(_) => None,
+        }
+    }
+
+    pub(crate) fn archery_progress(&self) -> Option<&super::skills::archery::ArcheryProgress> {
+        match &self.retained_data {
+            SkillRetainedData::Archery(progress) => Some(progress),
+            SkillRetainedData::None => None,
+        }
+    }
+
+    pub(crate) fn archery_progress_mut(&mut self) -> Option<&mut super::skills::archery::ArcheryProgress> {
+        match &mut self.retained_data {
+            SkillRetainedData::Archery(progress) => Some(progress),
+            SkillRetainedData::None => None,
         }
     }
 
@@ -2935,14 +2968,16 @@ impl CMoveShape {
     /// Reloadable properties не могут отменить intrinsic defense или
     /// изменить его категорию; имя читается только при обращении к экземпляру.
     pub(crate) fn add_base_defense_skill(&mut self, _factory: &CSkillFactory) {
+        let owner = CSkillFactory::factory_owner(SKILL_BASE_DEFENSE)
+            .expect("CFightDefense входит в native factory");
         self.skills[SkillCategory::Defense as usize].push(MoveShapeSkill {
             id: SKILL_BASE_DEFENSE,
             level: 1,
-            owner: CSkillFactory::factory_owner(SKILL_BASE_DEFENSE)
-                .expect("CFightDefense входит в native factory"),
+            owner,
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
+            retained_data: SkillRetainedData::for_owner(owner),
             current_visual_effect: None,
             last_used_ms: 0,
         });
@@ -3037,6 +3072,7 @@ impl CMoveShape {
             item_position: -1,
             immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
+            retained_data: SkillRetainedData::for_owner(owner),
             current_visual_effect: None,
             last_used_ms: 0,
         });

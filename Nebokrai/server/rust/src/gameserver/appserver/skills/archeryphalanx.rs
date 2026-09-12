@@ -1,273 +1,137 @@
-//! Региональный снаряд базовой стрельбы GameServer.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/archeryphalanx.cpp`. Два раздельных чтения часов,
-//! строгие границы срока жизни и задержки атаки сохранены. В отличие от
-//! базовой магии `End` лишь ставит `CS_DELETE`: отдельный немедленный пакет
-//! выхода здесь не отправляется. Расчёт трёх типов урона, wrapping и два
-//! исходных вызова RNG принадлежат этому owner-у; `CGame` передаёт снимок
-//! живого игрока и применяет рассчитанную атаку к независимому владельцу цели.
-//! Exact `CalculateAttackPower` безусловно ищет attacker ID в player-map;
-//! созданный монстром снаряд поэтому остаётся визуальным и не получает
-//! выдуманную monster-формулу. Критический float-множитель усекается к нулю
-//! перед записью `int`: `0x00601EAB..0x00601ED5` сохраняет произведение в
-//! x87 до `FISTP`, без промежуточной записи в `float`.
+//! Прицельный региональный снаряд базовой стрельбы Archery.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/archeryphalanx.cpp.
+//! Два независимых чтения часов сравнивают unsigned start+life и start+delay.
+//! После задержки цель заново ищется в фактическом регионе формы по type/id
+//! с GUID_INVALID. Attack проверяет смерть, фиксирует PK и доставляет сырой
+//! OnBeenAttacked без допуска, DaubPoison и RP. End только отмечает удаление,
+//! после контакта, без немедленного сообщения выхода.
+//! Calculate ищет игрока по attacker ID независимо от сохранённого типа.
+//! Отсутствие игрока или таблицы оставляет исходную пустую атаку. Живые
+//! weapon modifier, hit, MIN/MAX, ELEMENT/SOUL и CCH читаются в исходном
+//! порядке; физический RNG получает max(MAX-MIN,0), без +1.
+//! Неиспользуемые MIN/MAX/ELEMENT конструктора и выделение CScope не
+//! дублируются: область не участвует ни в выборе цели, ни в расчёте.
+//! Клиентский снимок содержит skill/level, master type/id и остаток времени.
+//! Серверный decoder ниже не имеет достигнутого caller-а.
 
+use super::archery::ARCHERY_SKILL_ID;
+use super::weaponattack::{PlayerWeaponRoll, fill_ordinary_weapon_damage};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
-use crate::gameserver::appserver::states::attackpower::{
-    AttackInformation, AttackPower, AttackPowerType,
-};
-use crate::gameserver::appserver::skills::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
-use crate::gameserver::appserver::skills::fightdefense::truncate_original;
+use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::summonshape::{
     SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
 };
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ArcheryPhalanxTick {
-    Pending,
-    Attack {
-        target: ShapeIdentity,
-        sampled_at_ms: u32,
-    },
-    Expired,
+pub(crate) struct ArcheryAttack {
+    master: MasterInfo,
+    skill_level: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CArcheryPhalanx {
     shape: CShape,
-    master: MasterInfo,
     started_at_ms: u32,
     lifetime_ms: u32,
-    skill_level: i32,
     attack_delay_ms: u32,
     target: ShapeIdentity,
+    attack: ArcheryAttack,
 }
 
 impl CArcheryPhalanx {
     pub(crate) fn new(
-        id: i32,
-        master: MasterInfo,
-        started_at_ms: u32,
-        lifetime_ms: u32,
-        skill_level: i32,
-        attack_delay_ms: u32,
-        target: ShapeIdentity,
+        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
+        skill_level: i32, attack_delay_ms: u32, target: ShapeIdentity,
     ) -> Self {
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity {
-            object_type: SUMMON_SHAPE_TYPE,
-            id,
-            ex_id: CGuid::GUID_INVALID,
+            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
         });
         Self {
-            shape,
-            master,
-            started_at_ms,
-            lifetime_ms,
-            skill_level,
-            attack_delay_ms,
-            target,
+            shape, started_at_ms, lifetime_ms, attack_delay_ms,
+            target: ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..target },
+            attack: ArcheryAttack { master, skill_level },
         }
     }
 
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
-    pub(crate) const fn master(&self) -> MasterInfo { self.master }
-    pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+    pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
+    pub(crate) const fn target(&self) -> ShapeIdentity { self.target }
+    pub(crate) const fn attack_snapshot(&self) -> ArcheryAttack { self.attack }
 
-    /// Точный клиентский `AddToByteArray`: параметры снаряда предшествуют
-    /// общему префиксу `CShape`, а вычисление оставшегося времени сохраняет
-    /// два независимых чтения часов в незавершённой ветви.
+    pub(crate) fn expired_at(&self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms
+    }
+
+    pub(crate) fn attack_due_at(&self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.attack_delay_ms) < now_ms
+    }
+
+    pub(crate) fn end(&mut self) {
+        self.shape.set_change_state(SHAPE_CHANGE_DELETE);
+    }
+
     pub(crate) fn encode_client_snapshot(
-        &self,
-        now_milliseconds: impl FnMut() -> u32,
+        &self, now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         encode_related_phalanx_snapshot(
-            &self.shape,
-            super::archery::ARCHERY_SKILL_ID as i32,
-            self.skill_level,
-            self.target.object_type,
-            self.target.id,
-            self.started_at_ms,
-            self.lifetime_ms,
-            now_milliseconds,
+            &self.shape, ARCHERY_SKILL_ID as i32, self.attack.skill_level,
+            self.attack.master.master_type, self.attack.master.master_id,
+            self.started_at_ms, self.lifetime_ms, now_milliseconds,
         )
     }
+}
 
-    pub(crate) fn tick(
-        &mut self,
-        lifetime_now_ms: u32,
-        get_attack_now_ms: impl FnOnce() -> u32,
-    ) -> ArcheryPhalanxTick {
-        if lifetime_now_ms.wrapping_sub(self.started_at_ms) > self.lifetime_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
-            return ArcheryPhalanxTick::Expired;
+impl ArcheryAttack {
+    fn attack_master(self) -> MasterInfo {
+        if self.master.master_type == 400 { return self.master; }
+        MasterInfo {
+            master_type: self.master.master_type, master_id: self.master.master_id,
+            ..MasterInfo::default()
         }
-        let attack_now_ms = get_attack_now_ms();
-        if attack_now_ms.wrapping_sub(self.started_at_ms) > self.attack_delay_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
-            return ArcheryPhalanxTick::Attack {
-                target: self.target,
-                sampled_at_ms: attack_now_ms,
-            };
-        }
-        ArcheryPhalanxTick::Pending
     }
 }
 
-pub(crate) fn calculate_owned_archery_attack(
-    game: &mut CGame,
-    phalanx: &CArcheryPhalanx,
-    target_level: u8,
-) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let player = game.find_player(phalanx.master().master_id)?;
-    let properties = game.skill_base_properties(
-        super::archery::ARCHERY_SKILL_ID,
-        phalanx.skill_level(),
-    )?;
-    let combat = player.combat_properties();
-    let occupation = player.occupation();
-    let attacker_level = player.level();
-    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
-    let damage_factor = player.weapon_modifier(
-        game.goods_factory(),
-        i32::from(target_level),
-        weapon_divisor,
-        weapon_minimum,
+fn calculate_archery_attack(
+    game: &mut CGame, snapshot: ArcheryAttack, target: (i32, ShapeIdentity),
+    attack: &mut AttackInformation,
+) {
+    let Some(player) = game.find_player(attack.attacker_id) else { return; };
+    let Some(properties) = game.skill_base_properties(ARCHERY_SKILL_ID, snapshot.skill_level)
+    else { return; };
+    let source = (player.shape().get_region_id(), player.shape().identity());
+    attack.skill_id = ARCHERY_SKILL_ID;
+    attack.skill_level = snapshot.skill_level as u8;
+    attack.damage_modifier = 0;
+    let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
+    let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
+    attack.damage_factor = player.weapon_modifier(
+        game.goods_factory(), i32::from(target_level), divisor, minimum_factor,
     );
-    let critical_rate = game.globe_setup().critical_rate();
-    let combat_scales = game.globe_setup().base_combat_scales();
-    calculate_archery_attack(
-        phalanx,
-        combat,
-        occupation,
-        attacker_level,
-        damage_factor,
-        hit_modifier,
-        critical_rate,
-        combat_scales,
-        |maximum| game.skill_random_below(maximum),
-    )
+    attack.hit_modifier = properties.query_property(20_001) as i32;
+    fill_ordinary_weapon_damage(game, source, PlayerWeaponRoll::Archery, attack);
 }
 
-#[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]
-pub(crate) fn calculate_archery_attack(
-    phalanx: &CArcheryPhalanx,
-    mut combat: PlayerCombatProperties,
-    occupation: u8,
-    attacker_level: u8,
-    damage_factor: f32,
-    hit_modifier: i32,
-    critical_rate: f32,
-    combat_scales: [f32; 5],
-    mut random_below: impl FnMut(i32) -> i32,
-) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let master = phalanx.master();
-    if master.master_type != 400 || master.master_id == 0 {
-        return None;
-    }
-    let minimum = combat.minimum_attack as i32;
-    let maximum = combat.maximum_attack as i32;
-    let width_delta = maximum.wrapping_sub(minimum);
-    let width = if width_delta < 0 {
-        width_delta.wrapping_neg()
-    } else {
-        width_delta
-    }
-    .wrapping_add(1);
-    let physical = minimum.wrapping_add(random_below(width));
-    let mut attack = AttackInformation {
-        skill_id: super::archery::ARCHERY_SKILL_ID,
-        skill_level: phalanx.skill_level() as u8,
-        attacker_type: master.master_type,
-        attacker_id: master.master_id,
-        attacker_team_id: master.master_team_id,
-        attacker_faction_id: master.master_guild_id,
-        attacker_union_id: master.master_union_id,
-        hit_modifier,
-        damage_factor,
-        damage_modifier: 0,
-        critical: false,
-        blast_attack: false,
-        full_miss: 0,
-        damages: vec![
-            AttackPower {
-                kind: AttackPowerType::Physical,
-                hp_damage: physical.max(0),
-                mp_damage: 0,
-            },
-            AttackPower {
-                kind: AttackPowerType::Element,
-                hp_damage: combat.add_element_attack as i32,
-                mp_damage: 0,
-            },
-            AttackPower {
-                kind: AttackPowerType::Soul,
-                hp_damage: i32::from(combat.add_soul_attack),
-                mp_damage: 0,
-            },
-        ],
-    };
-    if random_below(100) < i32::from(combat.cch) {
-        attack.critical = true;
-        for power in &mut attack.damages {
-            power.hp_damage = truncate_original(
-                f64::from(power.hp_damage) * f64::from(critical_rate),
-            );
-        }
-    }
-    let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
-        combat_scales;
-    if combat.blast_attack_scale() < 1.0 {
-        combat.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
-    }
-    if combat.blast_defense_scale() < 0.01 {
-        combat.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
-    }
-    if combat.element_blast_attack_scale() < 1.0 {
-        combat.element_blast_attack_scale_bits = element_blast_attack.max(1.0).to_bits();
-    }
-    if combat.element_blast_defense_scale() < 0.01 {
-        combat.element_blast_defense_scale_bits = element_blast_defense.max(0.01).to_bits();
-    }
-    if combat.full_miss_scale() < 0.01 {
-        combat.full_miss_scale_bits = full_miss.max(0.01).to_bits();
-    }
-    if combat.critical_rate() < 1.0 {
-        combat.critical_rate_bits = critical_rate.max(1.0).to_bits();
-    }
-    Some((attack, combat, occupation, attacker_level))
+pub(crate) fn apply_archery_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, snapshot: ArcheryAttack, target: (i32, ShapeIdentity),
+    runtime: &mut Runtime,
+) {
+    if game.move_shape_health(target.0, target.1).is_none_or(|hp| hp == 0) { return; }
+    let master = snapshot.attack_master();
+    let mut attack = AttackInformation::for_master(master);
+    calculate_archery_attack(game, snapshot, target, &mut attack);
+    game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
 }
 
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранён только не подключённый декодер снаряда.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\archeryphalanx.cpp
-
-// ============================================================================
+// Неподключённый серверный декодер снимка. Клиентский encoder не заменяет
+// его runtime: после чтения префикса native начинает отсчёт заново.
 // FUNCTION: CArcheryPhalanx::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\archeryphalanx.cpp:281
+// SOURCE: appserver/skills/archeryphalanx.cpp:281
 // RVA: 0x001EB070
-// ADDRESS: 005eb070
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
+// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar *source, long *offset, bool include_ex_data)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer

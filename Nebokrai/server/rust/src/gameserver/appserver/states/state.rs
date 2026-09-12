@@ -7,6 +7,8 @@
 //! контейнер. Часы и игровые правила принадлежат конкретному состоянию.
 //! User/Sufferer разрешаются независимо от держателя: игрок — глобально,
 //! остальные формы — через регион. Ключ нельзя применять к другой арене.
+//! Identity-поиск проверяет реестр и живой объект, а не пространственный view:
+//! координаты и таблица figure не определяют существование CMoveShape.
 //! В ещё не перенесённых первичных установках сохраняется прежняя привязка
 //! к держателю; общий restart не заменяет эти конкретные Begin.
 //!
@@ -1106,9 +1108,20 @@ pub(crate) fn resolve_identity_sufferer(
 ) -> Option<ShapeIdentity> {
     match identity.object_type {
         400 => game.find_player(identity.id).map(|_| identity),
-        500 | 600 | 1_100 | 1_200 => game
-            .find_shape_in_region(region_id, identity)
-            .map(|_| identity),
+        500 | 600 | 1_100 | 1_200 => {
+            let owner = game.find_region(region_id)?;
+            let lookup = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..identity };
+            if !owner.base().has_registered_shape(lookup) { return None; }
+            // GetObject возвращает живой объект, не пространственный ShapeView:
+            // некорректная координата и отсутствие figure-таблицы не дают NULL.
+            let shape = match identity.object_type {
+                500 => owner.base().find_npc_by_id(identity.id)?.move_shape().shape(),
+                600 => owner.base().find_monster_by_id(identity.id)?.move_shape().shape(),
+                _ => owner.stationary_build(lookup)?.move_shape().shape(),
+            };
+            (shape.identity().object_type == identity.object_type && shape.identity().id == identity.id)
+                .then_some(identity)
+        }
         _ => None,
     }
 }

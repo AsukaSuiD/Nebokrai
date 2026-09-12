@@ -8,8 +8,11 @@
 //! RawRange читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
 //! AbsoluteRange читает MAX→MIN и использует abs(max-min)+1. Обе ветки
 //! снова читают MIN после RNG. CapturedMinimumAbsoluteRange читает MIN→MAX
-//! и abs-ширину, но прибавляет сохранённый первый MIN. Mosou оставляет единичный коэффициент, не читая
-//! уровень цели и модификатор оружия. Фронтальные удары добавляют живую
+//! и abs-ширину, но прибавляет сохранённый первый MIN.
+//! Archery читает MAX→MIN→второй MIN до RNG, использует max(MAX-MIN,0)
+//! без прибавления единицы и сохраняет второй MIN до результата RNG.
+//! Mosou оставляет единичный коэффициент, не читая уровень цели и модификатор
+//! оружия. Фронтальные удары добавляют живую
 //! ловкость CPlayer после второго MIN. InverseChopped после hit modifier
 //! расходует первое EnergyHolding и умножает три компонента с усечением
 //! к младшему DWORD от i64; его контакт не начисляет RP.
@@ -47,6 +50,7 @@ pub(super) enum PlayerWeaponRoll {
     AbsoluteRange,
     RawRange,
     CapturedMinimumAbsoluteRange,
+    Archery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -203,6 +207,13 @@ fn fill_weapon_damage(
             let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
             let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
             ((maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1), Some(minimum))
+        }
+        PlayerWeaponRoll::Archery => {
+            let Some(maximum) = source_property(game, source, SourceProperty::Maximum) else { return; };
+            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
+            let width = (maximum as i32).wrapping_sub(minimum as i32).max(0);
+            let Some(minimum) = source_property(game, source, SourceProperty::Minimum) else { return; };
+            (width, Some(minimum))
         }
     };
     let random = game.skill_random_below(width);
