@@ -5773,14 +5773,6 @@ impl CPlayer {
     }
 
 
-    pub(crate) fn replace_weak_state(
-        &mut self,
-        state: super::skills::weakstate::WeakState,
-    ) -> Option<super::skills::weakstate::WeakState> {
-        self.move_shape.replace_weak_state(state)
-    }
-
-
     pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
 
     pub(crate) fn energy_holding_state(&self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state() }
@@ -5819,19 +5811,6 @@ impl CPlayer {
     pub(crate) fn take_soul_collect_state(&mut self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.take_soul_collect_state()
     }
-
-    pub(crate) fn take_weak_state(&mut self) -> Option<super::skills::weakstate::WeakState> {
-        self.move_shape.take_weak_state()
-    }
-
-    pub(crate) fn take_weak_state_outside(
-        &mut self,
-        tile_x: i32,
-        tile_y: i32,
-    ) -> Option<super::skills::weakstate::WeakState> {
-        self.move_shape.take_weak_state_outside(tile_x, tile_y)
-    }
-
 
     pub(crate) fn take_spider_web_state(
         &mut self,

@@ -280,6 +280,8 @@ impl CGame {
             }
             SkillVisualEffectKind::PoisonFog =>
                 crate::gameserver::appserver::skills::poisonfog::publish_poison_fog_visual(self, skill, mode),
+            SkillVisualEffectKind::Weak =>
+                crate::gameserver::appserver::skills::weak::publish_weak_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

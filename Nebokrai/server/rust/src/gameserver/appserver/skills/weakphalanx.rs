@@ -1,15 +1,17 @@
-//! Область ослабления `CWeakPhalanx` (`0x12E`).
+//! Область ослабления: геометрия, срок жизни и параметры состояния.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/weakphalanx.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/weakphalanx.cpp`. Владелец хранит прямоугольник 1×1,
-//! снижение атаки и строгий wrapping-срок жизни. Обход клеток сохраняет
-//! исходный порядок X→Y. Разрешение форм и применение состояния остаются у
-//! `CGame`, поскольку игроки и монстры принадлежат разным runtime-owner-ам.
+//! RU-caller создаёт область 1×1. Исходный обход использует length для обеих
+//! осей, хотя смещение Y и состояние используют height. Истечение лишь
+//! выбирает ветвь AI: удаление области следует после обоих обходов состояний.
+//! Входной снимок содержит ID/уровень навыка, Master и оставшееся время перед
+//! CShape; сам владелец и его часы при сериализации не изменяются.
 
 use super::weak::WEAK_SKILL_ID;
+use super::weakstate::WeakState;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
@@ -28,22 +30,12 @@ pub(crate) struct CWeakPhalanx {
     attack_loss: u32,
 }
 
-pub(crate) fn weak_targets(game: &CGame, region_id: i32, phalanx: &CWeakPhalanx) -> Vec<ShapeIdentity> {
+pub(crate) fn weak_cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> {
     let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
     let (width, height) = game.area_dimensions();
-    let mut targets = Vec::new();
-    for (tile_x, tile_y) in phalanx.active_cells() {
-        let mut shapes = Vec::new();
-        if region.get_shapes(tile_x, tile_y, width, height, game, &mut shapes).is_err() { break }
-        for shape in shapes {
-            if shape.identity == phalanx.shape().identity()
-                || (shape.identity.object_type == phalanx.master().master_type && shape.identity.id == phalanx.master().master_id)
-                || !matches!(shape.identity.object_type, 400 | 600)
-            { continue }
-            targets.push(shape.identity);
-        }
-    }
-    targets
+    let mut shapes = Vec::new();
+    if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new(); }
+    shapes.into_iter().map(|shape| shape.identity).collect()
 }
 
 impl CWeakPhalanx {
@@ -63,9 +55,24 @@ impl CWeakPhalanx {
     pub(crate) const fn height(&self) -> i32 { self.height }
     pub(crate) const fn skill_id(&self) -> u32 { WEAK_SKILL_ID }
 
+    pub(crate) fn set_center(&mut self, x: i32, y: i32) {
+        let y = (f64::from(y) + 0.5) as f32;
+        let x = (f64::from(x) + 0.5) as f32;
+        self.shape.set_pos_xy_base(x, y);
+    }
+
+    pub(crate) fn state(&self) -> Option<WeakState> {
+        let y = self.shape.get_tile_y().ok()?;
+        let x = self.shape.get_tile_x().ok()?;
+        Some(WeakState::new(self.attack_loss, x, y, self.length, self.height))
+    }
+
+    pub(crate) fn mark_ended(&mut self) {
+        self.shape.set_change_state(SHAPE_CHANGE_DELETE);
+    }
+
     pub(crate) fn tick(&mut self, now_ms: u32) -> WeakPhalanxTick {
         if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
             WeakPhalanxTick::Expired
         } else {
             WeakPhalanxTick::Scan
@@ -78,16 +85,19 @@ impl CWeakPhalanx {
         let start_x = center_x.wrapping_sub(self.length / 2);
         let start_y = center_y.wrapping_sub(self.height / 2);
         let mut cells = Vec::new();
-        for x in 0..self.length.max(0) {
-            for y in 0..self.height.max(0) {
-                cells.push((start_x.wrapping_add(x), start_y.wrapping_add(y)));
+        for x in start_x..start_x.wrapping_add(self.length) {
+            for y in start_y..start_y.wrapping_add(self.length) {
+                cells.push((x, y));
             }
         }
         cells
     }
 
-    pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
-        let mut payload = Vec::new();
-        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
+    pub(crate) fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        encode_related_phalanx_snapshot(
+            &self.shape, WEAK_SKILL_ID as i32, self.skill_level,
+            self.master.master_type, self.master.master_id,
+            self.started_at_ms, self.lifetime_ms, now,
+        )
     }
 }

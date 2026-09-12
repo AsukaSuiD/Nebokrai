@@ -202,7 +202,7 @@ impl SummonedSkillShape {
             Self::Tianhuo(shape) => shape.encode_client_snapshot(),
             Self::SpiderMist(shape) => shape.encode_client_snapshot(),
             Self::SnowStorm(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::Weak(shape) => shape.encode_client_snapshot(),
+            Self::Weak(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::YinYang(shape) => shape.encode_client_snapshot(),
             Self::GodPunishment(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)

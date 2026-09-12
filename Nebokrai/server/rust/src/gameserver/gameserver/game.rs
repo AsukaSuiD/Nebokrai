@@ -45064,23 +45064,30 @@ impl CGame {
                     Some(None)
                 }
             });
-        // Туман продолжает обход с живым региональным владельцем: callbacks
-        // могут изменить область и источника между двумя наложениями.
-        let poison_fog = matches!(
-            owner.base().find_skill_phalanx(phalanx_id),
-            Some(SummonedSkillShape::PoisonFog(_)),
-        );
-        let phalanx = if poison_fog { None } else {
+        // Эти области продолжают обход с живым региональным владельцем:
+        // callbacks могут изменить источник и состояния между наложениями.
+        let live_phalanx_skill = match owner.base().find_skill_phalanx(phalanx_id) {
+            Some(SummonedSkillShape::PoisonFog(_)) => Some(POISON_FOG_SKILL_ID),
+            Some(SummonedSkillShape::Weak(_)) => Some(WEAK_SKILL_ID),
+            _ => None,
+        };
+        let phalanx = if live_phalanx_skill.is_some() { None } else {
             owner.base().find_skill_phalanx(phalanx_id).cloned()
         };
         self.restore_region_owner(owner);
-        if poison_fog {
+        if let Some(skill_id) = live_phalanx_skill {
             match tick {
                 Some(Some(Some(_))) => {
-                    self.apply_poison_fog_phalanx(region_id, phalanx_id, runtime);
+                    if skill_id == WEAK_SKILL_ID {
+                        self.apply_weak_phalanx(region_id, phalanx_id, runtime);
+                    } else {
+                        self.apply_poison_fog_phalanx(region_id, phalanx_id, runtime);
+                    }
                 }
                 Some(None) => {
-                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
+                    if skill_id == WEAK_SKILL_ID {
+                        self.expire_weak_phalanx(region_id, phalanx_id, runtime);
+                    } else if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
                         && let Some(phalanx) = region.find_skill_phalanx(phalanx_id)
                     {
                         let _ = self.send_shape_exit_around(region, phalanx.shape());
@@ -45306,19 +45313,6 @@ impl CGame {
                 self, region_id, spider_mist, candidates, || runtime.now_milliseconds(),
             );
             tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
-            return true;
-        }
-        if let SummonedSkillShape::Weak(weak) = &phalanx {
-            if tick.is_some() {
-                let applied = self.apply_weak_phalanx(region_id, weak);
-                tracing::trace!(region_id, phalanx_id, applied, "обновлена область ослабления");
-            } else {
-                let ended = self.finish_weak_phalanx_targets(region_id, weak);
-                tracing::trace!(region_id, phalanx_id, ended, "завершена область ослабления");
-                if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-                    let _ = self.send_shape_exit_around(region, phalanx.shape());
-                }
-            }
             return true;
         }
         if let (

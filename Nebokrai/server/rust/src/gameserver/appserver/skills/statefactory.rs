@@ -216,7 +216,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         WEAK_STATE_ID => StateRecordLayout::typed(
             WEAK_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::weakstate::WeakState::decode(payload, offset, _now()).ok().map(StateData::Weak)
+                super::weakstate::WeakState::decode(payload, offset, _now).ok().map(StateData::Weak)
             },
         ),
         SOUL_COLLECT_STATE_ID => StateRecordLayout::typed(

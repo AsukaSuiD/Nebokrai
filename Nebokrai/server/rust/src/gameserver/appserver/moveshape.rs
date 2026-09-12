@@ -377,12 +377,10 @@ use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiS
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
     TianShenXiaFanState,
 };
-use crate::gameserver::appserver::skills::weakstate::{
-    WEAK_STATE_BYTES, WeakState,
-};
 use crate::gameserver::appserver::skills::wangshengstate::{
     WangshengState,
 };
+use crate::gameserver::appserver::skills::weakstate::WeakState;
 use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
 use crate::gameserver::appserver::skills::godblessstate::{
     GodBlessState,
@@ -2604,34 +2602,6 @@ impl CMoveShape {
     }
 
 
-
-    pub(crate) fn weak_state(&self) -> Option<WeakState> {
-        self.state_entries.first::<WeakState>().copied()
-    }
-
-    pub(crate) fn replace_weak_state(&mut self, state: WeakState) -> Option<WeakState> {
-        self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        {
-            let previous = self.state_entries.take_first::<WeakState>();
-            self.state_entries.append(state);
-            previous
-        }
-    }
-
-
-
-    pub(crate) fn take_weak_state(&mut self) -> Option<WeakState> {
-        let state = self.state_entries.take_first::<WeakState>()?;
-        self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
-        Some(state)
-    }
-
-    pub(crate) fn take_weak_state_outside(&mut self, tile_x: i32, tile_y: i32) -> Option<WeakState> {
-        let key = self.state_entries.keys::<WeakState>().into_iter()
-            .find(|key| self.applied_state::<WeakState>(*key).is_some_and(|state| !state.contains(tile_x, tile_y)))?;
-        self.remove_applied_state_record::<WeakState>(key, WEAK_STATE_BYTES)
-    }
 
     pub(crate) fn god_bless_state(&self) -> Option<GodBlessState> { self.state_entries.first::<GodBlessState>().copied() }
 
