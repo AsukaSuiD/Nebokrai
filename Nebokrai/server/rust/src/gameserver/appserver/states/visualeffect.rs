@@ -33,6 +33,8 @@ pub(crate) enum SkillVisualEffectKind {
     Rush2,
     ArmyBreak,
     GhostCut,
+    Mosou,
+    ThunderBlow2,
     Strike,
     KnockOut,
     SpiderWeb,

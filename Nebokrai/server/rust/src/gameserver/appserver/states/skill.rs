@@ -322,6 +322,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::armybreak::publish_army_break_visual(self, skill, mode),
             SkillVisualEffectKind::GhostCut =>
                 crate::gameserver::appserver::skills::ghostcutvisual::publish_ghost_cut_visual(self, skill, mode),
+            SkillVisualEffectKind::Mosou =>
+                crate::gameserver::appserver::skills::mosouvisual::publish_mosou_visual(self, skill, mode),
+            SkillVisualEffectKind::ThunderBlow2 =>
+                crate::gameserver::appserver::skills::thunderblow2visual::publish_thunder_blow_2_visual(self, skill, mode),
             SkillVisualEffectKind::LittleFlash =>
                 crate::gameserver::appserver::skills::littleflash::publish_little_flash_visual(self, skill, mode),
             SkillVisualEffectKind::BattleFairy =>

@@ -203,10 +203,13 @@ pub(crate) mod appserver {
         pub(crate) mod skillpath;
         pub(crate) mod armybreakattack;
         pub(crate) mod weaponattack;
+        pub(crate) mod impactattack;
+        pub(crate) mod mosouvisual;
         pub(crate) mod thunder;
         pub(crate) mod swallow;
         pub(crate) mod thunderblow;
         pub(crate) mod thunderblow2;
+        pub(crate) mod thunderblow2visual;
         pub(crate) mod thunderblowphalanx;
         pub(crate) mod thunderslash;
         pub(crate) mod thunderslashphalanx;

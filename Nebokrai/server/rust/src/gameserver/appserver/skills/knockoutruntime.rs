@@ -11,10 +11,9 @@
 //! захваченный поколенческий ключ, не замену навыка с тем же ID.
 
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
-use super::blindstate::begin_primary_blind_state_at;
 use super::fightdefense::truncate_original;
 use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
-use super::knockoutstate::KnockOutState;
+use super::knockoutstate::{KnockOutState, replace_knock_out_state};
 use super::stateskill::{
     RegisteredStateSkill, end_state_skill, execute_owned_state_skill, execute_player_state_skill,
     finish_player_state_skill, publish_state_skill_visual, state_skill_outcome,
@@ -27,7 +26,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_skill_sufferer,
+    resolve_skill_sufferer,
     resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
@@ -191,22 +190,6 @@ fn attack<Runtime: GameMainLoopRuntime>(
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
 }
 
-fn install<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
-    state: KnockOutState, runtime: &mut Runtime,
-) {
-    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return; };
-    let previous = shape.find_state_position(|state| state.state_id() == KNOCK_OUT_SKILL_ID);
-    let placement = previous.and_then(|(_, key)| shape.applied_state_replacement_location(key));
-    if let Some((position, _)) = previous {
-        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
-    }
-    let _ = begin_primary_blind_state_at(
-        game, target.0, target.1, Some(source), Some(target), state, placement,
-        &mut || runtime.now_milliseconds(),
-    );
-}
-
 fn hit(game: &CGame, source: (i32, ShapeIdentity)) -> Option<u16> {
     if source.1.object_type == PLAYER_TYPE {
         Some(game.find_player(source.1.id)?.combat_properties().hit)
@@ -287,7 +270,7 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
         .is_some_and(|shape| !shape.has_state_by_skill_id(CURE_SKILL_ID))
     {
         let state = KnockOutState::new(0, properties.query_property(PERSIST));
-        install(game, source, target, state, runtime);
+        let _ = replace_knock_out_state(game, source, target, state, &mut || runtime.now_milliseconds());
     }
     let _ = game.registered_skill_mut(instance).map(|skill| skill.advance_execution(SkillStage::Attack, SkillStage::Apply));
     Some(1)

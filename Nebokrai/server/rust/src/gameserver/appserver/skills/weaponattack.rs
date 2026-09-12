@@ -1,4 +1,4 @@
-//! Общий оружейный расчёт Flash/LittleFlash, ArmyBreak и GhostCut.
+//! Общий оружейный расчёт Flash/LittleFlash, ArmyBreak, GhostCut и Mosou.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые владельцы skills.
 //!
 //! Расчёт сохраняет PK-флаги и принадлежность CPlayer до Calculate. Обычный
@@ -7,9 +7,10 @@
 //! исходный UNKNOWN/1, но не отменяет удар. Допуск и дедупликация принадлежат AI.
 //! GhostCut читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
 //! остальные семейства читают MAX→MIN и используют abs(max-min)+1. Обе ветки
-//! снова читают MIN после RNG. Остальная формула различается только usage
-//! коэффициента: сохранены живые getter-ы, оба RNG, unsigned коэффициент в x87
-//! до записи float и усечение критического множителя к нулю. Vec владеет уроном.
+//! снова читают MIN после RNG. Mosou оставляет единичный коэффициент, не читая
+//! уровень цели и модификатор оружия. Сохранены живые getter-ы, оба RNG,
+//! unsigned коэффициент в x87 до записи float и усечение критического
+//! множителя к нулю. Vec владеет уроном.
 
 use super::fightdefense::truncate_original;
 use super::flash::master_info;
@@ -27,9 +28,15 @@ pub(super) enum PlayerWeaponRoll {
     RawRange,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlayerWeaponDamageFactor {
+    Unit,
+    WeaponUsage(u32),
+}
+
 fn fill_player_weapon_attack(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), damage_factor_usage: u32, roll: PlayerWeaponRoll,
+    target: (i32, ShapeIdentity), factor: PlayerWeaponDamageFactor, roll: PlayerWeaponRoll,
     attack: &mut AttackInformation,
 ) {
     let Some(skill) = game.registered_skill(instance) else { return; };
@@ -37,16 +44,21 @@ fn fill_player_weapon_attack(
     attack.skill_id = skill.id();
     attack.skill_level = skill.level() as u8;
     attack.damage_modifier = 0;
-    let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
-    let Some(player) = game.find_player(source.1.id) else { return; };
-    let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
-    let weapon_factor = player.weapon_modifier(
-        game.goods_factory(), i32::from(target_level), divisor, minimum_factor,
-    );
-    let damage_factor = properties.query_property(damage_factor_usage);
-    attack.damage_factor =
-        (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
+    attack.damage_factor = match factor {
+        PlayerWeaponDamageFactor::Unit => 1.0,
+        PlayerWeaponDamageFactor::WeaponUsage(usage) => {
+            let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
+            let Some(player) = game.find_player(source.1.id) else { return; };
+            let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
+            let weapon_factor = player.weapon_modifier(
+                game.goods_factory(), i32::from(target_level), divisor, minimum_factor,
+            );
+            let damage_factor = properties.query_property(usage);
+            (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32
+        }
+    };
     attack.hit_modifier = properties.query_property(USER_HIT_MODIFIER) as i32;
+    let Some(player) = game.find_player(source.1.id) else { return; };
     let width = match roll {
         PlayerWeaponRoll::AbsoluteRange => {
             let maximum = player.combat_properties().maximum_attack;
@@ -81,9 +93,18 @@ pub(super) fn calculate_player_weapon_attack(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     target: (i32, ShapeIdentity), damage_factor_usage: u32, roll: PlayerWeaponRoll,
 ) -> Option<(MasterInfo, AttackInformation)> {
+    calculate_player_weapon_attack_with_factor(
+        game, instance, source, target, PlayerWeaponDamageFactor::WeaponUsage(damage_factor_usage), roll,
+    )
+}
+
+fn calculate_player_weapon_attack_with_factor(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), factor: PlayerWeaponDamageFactor, roll: PlayerWeaponRoll,
+) -> Option<(MasterInfo, AttackInformation)> {
     let master = game.find_player(source.1.id).map(master_info)?;
     let mut attack = AttackInformation::for_master(master);
-    fill_player_weapon_attack(game, instance, source, target, damage_factor_usage, roll, &mut attack);
+    fill_player_weapon_attack(game, instance, source, target, factor, roll, &mut attack);
     Some((master, attack))
 }
 
@@ -91,8 +112,26 @@ pub(super) fn apply_player_weapon_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     target: (i32, ShapeIdentity), damage_factor_usage: u32, runtime: &mut Runtime,
 ) {
-    let Some((master, attack)) = calculate_player_weapon_attack(
-        game, instance, source, target, damage_factor_usage, PlayerWeaponRoll::AbsoluteRange,
+    apply_player_weapon_attack_with_factor(
+        game, instance, source, target, PlayerWeaponDamageFactor::WeaponUsage(damage_factor_usage), runtime,
+    );
+}
+
+pub(super) fn apply_player_unmodified_weapon_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), runtime: &mut Runtime,
+) {
+    apply_player_weapon_attack_with_factor(
+        game, instance, source, target, PlayerWeaponDamageFactor::Unit, runtime,
+    );
+}
+
+fn apply_player_weapon_attack_with_factor<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), factor: PlayerWeaponDamageFactor, runtime: &mut Runtime,
+) {
+    let Some((master, attack)) = calculate_player_weapon_attack_with_factor(
+        game, instance, source, target, factor, PlayerWeaponRoll::AbsoluteRange,
     ) else { return; };
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
     game.increase_owned_player_rp(source.1.id, true, 0);

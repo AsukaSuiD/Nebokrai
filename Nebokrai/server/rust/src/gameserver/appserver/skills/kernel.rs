@@ -123,6 +123,7 @@ use super::spriteburn::SpriteBurnExecutionState;
 use super::strike::StrikeExecutionState;
 use super::summoncreatureskill::PlayerSummonCreatureExecutionState;
 use super::swallow::SwallowExecutionState;
+use super::thunderblow2::ThunderBlow2Execution;
 use super::yakshaslash::YakshaSlashExecutionState;
 use super::yunshenglightning::PlayerYunShengLightningExecutionState;
 
@@ -215,6 +216,7 @@ player_skill_states! {
     ExplosiveArrow(ExplosiveArrowExecutionState) paths(clear_end_paths),
     AgilityFamily(AgilityFamilyExecutionState),
     GhostCut(GhostCutExecutionState) paths(clear_end_paths),
+    ThunderBlow2(ThunderBlow2Execution) prepare(prepare_derived_end),
     ArmyBreak(ArmyBreakExecutionState) prepare(prepare_derived_end),
     LittleFlash(LittleFlashExecutionState) paths(clear_end_paths),
     PathProjectile(PlayerPathProjectileExecutionState) paths(clear_end_paths),

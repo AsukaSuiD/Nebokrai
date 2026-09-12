@@ -726,8 +726,6 @@ mod meteorarrow;
 mod rainarrow;
 mod thunderblow;
 mod thunderslash;
-mod thunderblow2;
-mod mosou;
 mod rush;
 mod boalock;
 mod bossbluequake;
@@ -1185,12 +1183,6 @@ use crate::gameserver::appserver::skills::thunderslashphalanx::{
 use crate::gameserver::appserver::skills::pillar::{
     cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::rush::{
-    execute_player_rush, RUSH_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::rush2::{
-    execute_player_rush_2, RUSH_2_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::roar::{
     cancel_player_roar, execute_player_roar, is_roar_dispatch, ROAR_SKILL_ID,
 };
@@ -1312,26 +1304,16 @@ use crate::gameserver::appserver::skills::chainlightning::{
     cancel_player_chain_lightning, execute_player_chain_lightning, is_chain_lightning_dispatch,
     CHAIN_LIGHTNING_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::thunderblow2::{
-    cancel_player_thunder_blow_2, execute_player_thunder_blow_2, is_thunder_blow_2_dispatch,
-    THUNDER_BLOW_2_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::mosou::{
-    cancel_player_mosou, execute_player_mosou, is_mosou_dispatch, MOSOU_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::ghostcut::{
-    execute_player_ghost_cut, GHOST_CUT_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::playercast::RegisteredPlayerCastOwner;
+use crate::gameserver::appserver::skills::mosou::MOSOU_SKILL_ID;
+use crate::gameserver::appserver::skills::ghostcut::GHOST_CUT_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
 use crate::gameserver::appserver::skills::knightcut::{
     cancel_player_knight_cut, execute_player_knight_cut, is_knight_cut_dispatch,
     KNIGHT_CUT_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::armybreak::{
-    execute_player_army_break,
-    ARMY_BREAK_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::armybreak::ARMY_BREAK_SKILL_ID;
 use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use crate::gameserver::appserver::skills::rage::{
     cancel_player_rage, execute_player_rage, is_rage_dispatch, RAGE_SKILL_ID,
@@ -1340,9 +1322,7 @@ use crate::gameserver::appserver::skills::ragebreak::{
     cancel_player_rage_break, execute_player_rage_break, is_rage_break_dispatch,
     RAGE_BREAK_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::flash::{
-    execute_player_flash, FLASH_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::flash::FLASH_SKILL_ID;
 use crate::gameserver::appserver::skills::swallow::{
     cancel_player_swallow, execute_player_swallow, is_swallow_dispatch, SWALLOW_SKILL_ID,
 };
@@ -1367,10 +1347,7 @@ use crate::gameserver::appserver::skills::lightningsword::{
 use crate::gameserver::appserver::skills::lightningsword2::LIGHTNING_SWORD_2_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
-use crate::gameserver::appserver::skills::littleflash::{
-    execute_player_little_flash,
-    LITTLE_FLASH_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::littleflash::LITTLE_FLASH_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
@@ -39128,7 +39105,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
         let instance = self.registered_player_skill(player_id, skill_id)?;
-        if Self::registered_player_cast_owner::<Runtime>(skill_id).is_some() {
+        if RegisteredPlayerCastOwner::from_skill_id(skill_id).is_some() {
             let dispatch = self.registered_skill(instance)?.player_dispatch();
             let mut ai = self.find_player_mut(player_id)?.take_player_ai();
             let argument = match cause {
@@ -39489,10 +39466,6 @@ impl CGame {
             INFERNOL_SKILL_ID => {
                 cancel_player_infernol(self, player_id, &mut player_ai, runtime)
             }
-            THUNDER_BLOW_2_SKILL_ID => {
-                cancel_player_thunder_blow_2(self, player_id, &mut player_ai, runtime)
-            }
-            MOSOU_SKILL_ID => cancel_player_mosou(self, player_id, &mut player_ai, runtime),
             KNIGHT_CUT_SKILL_ID => {
                 cancel_player_knight_cut(self, player_id, &mut player_ai, runtime)
             }
@@ -39948,23 +39921,6 @@ impl CGame {
         execution_count
     }
 
-    /// Один выбор зарегистрированного владельца для исполнения, отмены и
-    /// внешнего отказа Begin; перечисление не хранит отдельного состояния.
-    fn registered_player_cast_owner<Runtime: GameMainLoopRuntime>(skill_id: u32)
-        -> Option<fn(&mut Self, i32, RegisteredSkill, PlayerSkillDispatch, &mut Runtime)
-            -> QueuedSkillExecutionOutcome>
-    {
-        match skill_id {
-            FLASH_SKILL_ID => Some(execute_player_flash),
-            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => Some(execute_player_little_flash),
-            RUSH_SKILL_ID => Some(execute_player_rush),
-            RUSH_2_SKILL_ID => Some(execute_player_rush_2),
-            ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => Some(execute_player_army_break),
-            GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => Some(execute_player_ghost_cut),
-            _ => None,
-        }
-    }
-
     fn execute_player_skill_owner<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -39973,12 +39929,12 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
-        if let Some(execute) = Self::registered_player_cast_owner::<Runtime>(dispatch.skill_id()) {
+        if let Some(owner) = RegisteredPlayerCastOwner::from_skill_id(dispatch.skill_id()) {
             let Some(instance) = instance else {
                 return QueuedSkillExecutionOutcome { state: QueuedSkillExecutionState::Rejected, first_contact: false };
             };
             return self.with_published_player_ai(player_id, player_ai, |game| {
-                execute(game, player_id, instance, dispatch, runtime)
+                owner.execute(game, player_id, instance, dispatch, runtime)
             });
         }
         let execute: fn(
@@ -40041,8 +39997,6 @@ impl CGame {
             _ if is_roar_dispatch(dispatch) => execute_player_roar,
             _ if is_energy_holding_dispatch(dispatch) => execute_player_energy_holding,
             _ if is_inverse_chopped_dispatch(dispatch) => execute_player_inverse_chopped,
-            _ if is_thunder_blow_2_dispatch(dispatch) => execute_player_thunder_blow_2,
-            _ if is_mosou_dispatch(dispatch) => execute_player_mosou,
             _ if is_knight_cut_dispatch(dispatch) => execute_player_knight_cut,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
@@ -40289,7 +40243,7 @@ impl CGame {
                 // Полный End(0) уже завершил экземпляр, но его payload
                 // освобождается ниже вместе с командой. Наличие payload
                 // не должно поглощать внешний отказ Begin.
-                && (Self::registered_player_cast_owner::<Runtime>(dispatch.skill_id()).is_some()
+                && (RegisteredPlayerCastOwner::from_skill_id(dispatch.skill_id()).is_some()
                     || self.player_skill_begin_pending(player_id, dispatch.skill_id())
                     || instance.and_then(|address| self.registered_skill(address))
                         .is_some_and(|skill| skill.lifecycle().is_ended()));

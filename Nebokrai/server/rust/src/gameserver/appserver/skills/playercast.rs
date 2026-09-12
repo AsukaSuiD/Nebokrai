@@ -1,7 +1,7 @@
 //! Общий зарегистрированный вход активных навыков игрока.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/states/skill.cpp,
-//! attackskill.cpp и совместимые Begin владельцев Flash, LittleFlash, Rush
-//! ArmyBreak и GhostCut. Игровые проверки и AI остаются у конкретных навыков.
+//! attackskill.cpp и совместимые Begin активных атак. Игровые проверки
+//! и AI остаются у конкретных навыков.
 //!
 //! База Begin, материализация, visual и End используют один поколенческий
 //! ключ. Проверка видит данные исполнения с выключенной фазой; успешный
@@ -17,6 +17,47 @@ use crate::gameserver::appserver::states::visualeffect::{SkillVisualEffect, Skil
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
+
+/// Один каталог задаёт собственный Begin, исполнение и общий End.
+/// Расписание не поддерживает отдельный список этих же владельцев.
+#[derive(Clone, Copy)]
+pub(crate) enum RegisteredPlayerCastOwner {
+    Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
+}
+
+impl RegisteredPlayerCastOwner {
+    pub(crate) fn from_skill_id(id: u32) -> Option<Self> {
+        Some(match id {
+            super::flash::FLASH_SKILL_ID => Self::Flash,
+            super::littleflash::LITTLE_FLASH_SKILL_ID | super::littleflash2::LITTLE_FLASH_2_SKILL_ID => Self::LittleFlash,
+            super::rush::RUSH_SKILL_ID => Self::Rush,
+            super::rush2::RUSH_2_SKILL_ID => Self::Rush2,
+            super::armybreak::ARMY_BREAK_SKILL_ID | super::armybreak2::ARMY_BREAK_2_SKILL_ID => Self::ArmyBreak,
+            super::ghostcut::GHOST_CUT_SKILL_ID | super::ghostcut2::GHOST_CUT_2_SKILL_ID
+                | super::ghostcut3::GHOST_CUT_3_SKILL_ID => Self::GhostCut,
+            super::mosou::MOSOU_SKILL_ID => Self::Mosou,
+            super::thunderblow2::THUNDER_BLOW_2_SKILL_ID => Self::ThunderBlow2,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn execute<Runtime: GameMainLoopRuntime>(
+        self, game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+        dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let execute = match self {
+            Self::Flash => super::flash::execute_player_flash::<Runtime>,
+            Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
+            Self::Rush => super::rush::execute_player_rush::<Runtime>,
+            Self::Rush2 => super::rush2::execute_player_rush_2::<Runtime>,
+            Self::ArmyBreak => super::armybreak::execute_player_army_break::<Runtime>,
+            Self::GhostCut => super::ghostcut::execute_player_ghost_cut::<Runtime>,
+            Self::Mosou => super::mosou::execute_player_mosou::<Runtime>,
+            Self::ThunderBlow2 => super::thunderblow2::execute_player_thunder_blow_2::<Runtime>,
+        };
+        execute(game, player_id, instance, dispatch, runtime)
+    }
+}
 
 fn finish_outcome<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, outcome: QueuedSkillExecutionOutcome,

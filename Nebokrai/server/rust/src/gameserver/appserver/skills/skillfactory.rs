@@ -159,6 +159,7 @@ impl SkillEndPolicy {
         path_order: SkillEndPathOrder::BeforeMovement,
     };
     const USER: Self = Self { movement: SkillEndMovement::User, ..Self::COMMON };
+    const COMMON_RESET_PHASE: Self = Self { reset_phase: true, ..Self::COMMON };
     const USER_RESET_PHASE: Self = Self { reset_phase: true, ..Self::USER };
     const USER_OR_SUFFERER: Self = Self { movement: SkillEndMovement::UserOrSufferer, ..Self::COMMON };
     const USER_AVAILABLE: Self = Self { available: Some(true), ..Self::USER };
@@ -249,7 +250,7 @@ skill_owners! {
     CArchery: Summon, USER, Weapon => 0x002,
     CBaseMagic: Summon, USER, Weapon => 0x003,
     CFightDefense: Defense, COMMON, None => 0x00a,
-    CMosou: Attack, USER, Weapon => 0x065,
+    CMosou: Attack, USER_RESET_PHASE, Weapon => 0x065,
     CGhostCut: Attack, USER_RESET_PHASE, Weapon, EndZero => 0x066,
     CKnightCut: State, USER, Weapon => 0x067,
     CArmyBreak: Attack, USER_RESET_PHASE, Weapon => 0x068,
@@ -343,7 +344,7 @@ skill_owners! {
     CHearten: State, USER_RESET_PHASE, Weapon => 0x144,
     CGodBless2: State, USER_OR_SUFFERER, Weapon => 0x145,
     CYinYang2: Summon, USER, Weapon => 0x146,
-    CThunderBlow2: Attack, COMMON, Weapon => 0x14d,
+    CThunderBlow2: Attack, COMMON_RESET_PHASE, Weapon => 0x14d,
     CSpiderPoison: State, USER_RESET_PHASE, Weapon => 0x191,
     CKnockOut: State, USER_RESET_PHASE, Weapon => 0x192,
     CSnowStorm: Summon, USER, Weapon => 0x193,

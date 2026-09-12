@@ -219,6 +219,9 @@ impl CGame {
     }
 
     fn player_skill_begin_policy(skill_id: u32) -> Option<PlayerSkillBeginPolicy> {
+        if RegisteredPlayerCastOwner::from_skill_id(skill_id).is_some() {
+            return Some(PlayerSkillBeginPolicy::Owner);
+        }
         match skill_id {
             BASE_ATTACK_SKILL_ID
             | ARCHERY_SKILL_ID
@@ -240,8 +243,6 @@ impl CGame {
             | ENERGY_HOLDING_SKILL_ID
             | INVERSE_CHOPPED_SKILL_ID
             | INFERNOL_SKILL_ID
-            | THUNDER_BLOW_2_SKILL_ID
-            | MOSOU_SKILL_ID
             | SWALLOW_SKILL_ID
             | LEAF_CUT_SKILL_ID
             | LEAF_CUT_2_SKILL_ID
@@ -308,17 +309,7 @@ impl CGame {
             | GOD_BLESS_SKILL_ID
             | GOD_BLESS_2_SKILL_ID
             | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
-            FLASH_SKILL_ID
-            | LITTLE_FLASH_SKILL_ID
-            | LITTLE_FLASH_2_SKILL_ID
-            | RUSH_SKILL_ID
-            | RUSH_2_SKILL_ID
-            | ARMY_BREAK_SKILL_ID
-            | ARMY_BREAK_2_SKILL_ID
-            | GHOST_CUT_SKILL_ID
-            | GHOST_CUT_2_SKILL_ID
-            | GHOST_CUT_3_SKILL_ID
-            | SPIDER_WEB_SKILL_ID
+            SPIDER_WEB_SKILL_ID
             | KNOCK_OUT_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | PROMOTION_SKILL_ID

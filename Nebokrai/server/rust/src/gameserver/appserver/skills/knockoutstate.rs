@@ -11,11 +11,15 @@
 //! DB-запись ID/remaining занимает 8 байт; StartAllStates восстанавливает
 //! блокировки после загрузки. RAW координатной и типизированной перегрузок
 //! Begin (0x005F5020/0x005F5100) сохранён отдельно от объектного пути.
+//! Mosou и KnockOut заменяют первый одноимённый объект через полный End,
+//! destructor и объектный Begin, публикуя новый экземпляр в прежней позиции.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, timed_client_state_time};
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_state_move_shape, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 use super::sealstate::SEAL_STATE_ID;
@@ -54,6 +58,24 @@ impl super::blindstate::BlindStatePayload for KnockOutState {
     fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
     fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_time(now) as u32 }
     fn install_record(&self) -> [u8; KNOCK_OUT_STATE_BYTES] { self.encoded_for_install() }
+}
+
+pub(crate) fn replace_knock_out_state(
+    game: &mut CGame,
+    source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity),
+    state: KnockOutState,
+    now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return false; };
+    let previous = shape.find_state_position(|state| state.state_id() == KNOCK_OUT_STATE_ID);
+    let placement = previous.and_then(|(_, key)| shape.applied_state_replacement_location(key));
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
+    }
+    super::blindstate::begin_primary_blind_state_at(
+        game, target.0, target.1, Some(source), Some(target), state, placement, now,
+    ).is_some()
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
