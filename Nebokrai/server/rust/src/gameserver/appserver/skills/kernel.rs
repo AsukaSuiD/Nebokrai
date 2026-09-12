@@ -222,7 +222,7 @@ player_skill_states! {
     LordFastAttack(LordFastAttackExecutionState),
     Archery(ArcheryExecutionState),
     HeartlessArrow(HeartlessArrowExecutionState) prepare(prepare_derived_end) paths(clear_end_paths),
-    LightingArrow(LightingArrowExecutionState),
+    LightingArrow(LightingArrowExecutionState) paths(clear_end_paths),
     LightingArrow2(LightingArrow2ExecutionState) paths(clear_end_paths),
     MeteorArrowMass(MeteorArrowMassExecutionState),
     MeteorArrow(MeteorArrowExecutionState),

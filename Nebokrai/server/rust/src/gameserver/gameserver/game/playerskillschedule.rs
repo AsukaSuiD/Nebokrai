@@ -228,7 +228,6 @@ impl CGame {
             | HEARTLESS_ARROW_SKILL_ID
             | HEARTLESS_ARROW_2_SKILL_ID
             | HEARTLESS_ARROW_3_SKILL_ID
-            | LIGHTING_ARROW_SKILL_ID
             | RAIN_ARROW_SKILL_ID
             | BASE_MAGIC_SKILL_ID
             | FIRE_BOLT_SKILL_ID
@@ -272,7 +271,6 @@ impl CGame {
             | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
             | SOUL_MIRROR_SKILL_ID
-            | LIGHTING_ARROW_2_SKILL_ID
             | METEOR_ARROW_MASS_SKILL_ID
             | METEOR_ARROW_SKILL_ID
             | POISON_MOTH_SKILL_ID

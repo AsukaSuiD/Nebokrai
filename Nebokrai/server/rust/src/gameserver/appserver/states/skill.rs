@@ -342,6 +342,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::selfcastvisual::publish_self_cast_visual(self, skill, mode),
             SkillVisualEffectKind::ThunderSlash =>
                 crate::gameserver::appserver::skills::thunderslashvisual::publish_thunder_slash_visual(self, skill, mode),
+            SkillVisualEffectKind::ArrowCast =>
+                crate::gameserver::appserver::skills::arrowcastvisual::publish_arrow_cast_visual(self, skill, mode),
             SkillVisualEffectKind::Kerosene =>
                 crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {

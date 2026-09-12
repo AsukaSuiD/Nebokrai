@@ -1,184 +1,274 @@
-//! Световая стрела `CLightingArrow` (`0xCB`).
-//! Успешный Begin возвращает Begun до первого AI; координатор ставит Attack
-//! и продолжает AI в том же Run. Проверки и побочные эффекты фаз сохранены.
+//! Световая стрела CLightingArrow (0xCB).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightingarrow.cpp.
+//! Attack Begin сохраняет исходного U и ранний отсчёт; Check проверяет reuse,
+//! свежий путь и дальность. Чужой CMoveShape затем допускается без Move0;
+//! игроку нужны лук категории 3 и ненулевая цена MP. MP0 — тихий отказ.
+//! Неотрицательная signed DWORD-разность разрешает запрет движения исходному U.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/lightingarrow.cpp`. Модуль хранит execution pipeline,
-//! проверки лука, MP, задержку и построение движущейся phalanx-формы. MP
-//! списывается до повторной проверки оружия и не откатывается при позднем
-//! отказе. `CGame` только разрешает владельцев, регистрирует форму и доставляет
-//! точные сообщения `0xBFE01/0xBF502`. Cooldown использует абсолютный срок
-//! `CSkill::IsRestored`; задержка и движение phalanx остаются elapsed.
+//! Каждый AI удерживает свежие свойства, U и координаты S через callbacks.
+//! Отсутствующая S использует базовую точку, мёртвая S даёт End(0), смерть U
+//! не проверяется. Первый AI игрока списывает MP и вызывает OnChangeStates
+//! до повторной проверки лука; поздний отказ не возвращает MP. Затем CAN,
+//! направление, visual0 и condition. Срок выпуска — absolute unsigned start+delay.
+//!
+//! Выпуск возвращает движение, заново строит путь заданной длины и очищает S
+//! перед visual1/prepared. Пустой путь вызывает End(0), но исходный AI продолжает
+//! Summon и End(1); этот необычный порядок сохранён. Путь остаётся опубликованным
+//! до End и копируется в региональный снаряд. End сбрасывает фазу, очищает путь,
+//! возвращает движение свежему U и завершает Attack с настоящим аргументом.
+//!
+//! Summon получает отдельную свежую таблицу, снимок MasterInfo и параметры
+//! снаряда; его размещение, замена форм в клетке и wire принадлежат региональному
+//! owner. Vec и поколенческий ключ заменяют указатели без второго хранилища.
 
-use super::baseattack::time_reached;
-use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
-    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
-    SKILL_USAGE_TARGET_MAX_DISTANCE};
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
+use super::basemagic::{
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
+    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
+    SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
+};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::lightingarrowphalanx::CLightingArrowPhalanx;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use super::playercast::execute_registered_player_cast;
+use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase,
-    QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::public::tools::get_line_direction;
 
 pub(crate) const LIGHTING_ARROW_SKILL_ID: u32 = 0xcb;
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LightingArrowExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32),
-    target: Option<ShapeIdentity>, condition_checked: bool,
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    path: Vec<(i32, i32, u8)>,
 }
+
 impl LightingArrowExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), target: Option<ShapeIdentity>, now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, target, condition_checked: false }
+    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, started), path: Vec::new() }
     }
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+    pub(crate) fn clear_end_paths(&mut self) { self.path.clear(); }
 }
 
-fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
 }
-fn restore_player_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+
+fn failure(game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, mode: u32) {
+    game.update_registered_skill_visual(instance, mode);
+    let Some(player) = player else { return; };
+    let text: &[u8] = match mode {
+        10 => b"GS0285", 11 => b"GS0290", 13 => b"GS0278", 14 => b"GS0297", _ => return,
+    };
+    game.send_skill_system_info(player, text);
 }
-fn finish_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
-    restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, LIGHTING_ARROW_SKILL_ID, runtime);
+
+fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player: i32, properties: &CSkillBaseProperties) {
+    game.update_registered_skill_visual(instance, 7);
+    let amount = properties.query_property(USER_MP_LOSE);
+    game.send_skill_system_info_with_unsigned(player, b"GS0288", amount);
 }
-fn abort_player_lighting_arrow(game: &mut CGame, player_id: i32) {
-    restore_player_movement(game, player_id);
-}
-pub(crate) fn complete_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
-    finish_player_lighting_arrow(game, player_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
-}
-pub(crate) fn cancel_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().map(|state| state.kernel().dispatch()) else { return false };
-    abort_player_lighting_arrow(game, player_id);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
+
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
     player.equipment().get_goods(2).is_some_and(|weapon|
         weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3)
 }
-fn master_info(player: &CPlayer) -> MasterInfo {
-    let p = player.pk_permissions();
-    MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(),
-        master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: 0,
-        permitted_to_kill_player: i32::from(p.player), permitted_to_kill_teammate: i32::from(p.teammate),
-        permitted_to_kill_guild_member: i32::from(p.guild_member), permitted_to_kill_criminal: i32::from(p.criminal) }
-}
-fn target_snapshot(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<(i32, i32, bool)> {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).and_then(|p| Some((p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.is_dead()))),
-        MONSTER_TYPE => game.find_region(region_id).and_then(|r| { let m = r.base().find_monster_by_id(target.id)?;
-            Some((m.move_shape().shape().get_tile_x().ok()?, m.move_shape().shape().get_tile_y().ok()?, m.hit_points() == 0)) }),
-        _ => None,
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: (i32, ShapeIdentity), runtime: &mut Runtime,
+) -> bool {
+    let Some(source) = resolve_state_move_shape(game, original_user.0, original_user.1) else { return false; };
+    let source = (source.shape().get_region_id(), source.shape().identity());
+    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        failure(game, instance, player, 13);
+        return false;
     }
-}
-fn send_start(game: &mut CGame, player_id: i32, level: i32) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE); message.add_byte(1);
-    message.add_long(LIGHTING_ARROW_SKILL_ID as i32); message.base_mut().add_short(level as i16);
-    message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction());
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-fn send_fire(game: &mut CGame, player_id: i32, level: i32, target: Option<ShapeIdentity>, x: i32, y: i32) {
-    let target = target.unwrap_or(ShapeIdentity { object_type: 0, id: 0, ex_id: crate::public::guid::CGuid::GUID_INVALID });
-    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE); message.add_byte(2);
-    message.add_long(LIGHTING_ARROW_SKILL_ID as i32); message.base_mut().add_short(level as i16);
-    message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(target.object_type);
-    message.add_long(target.id); message.add_long(x); message.add_long(y);
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-pub(crate) const fn is_lighting_arrow_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch, PlayerSkillDispatch::Point { skill_id: LIGHTING_ARROW_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object { skill_id: LIGHTING_ARROW_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } })
-}
-
-pub(crate) fn execute_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32,
-    dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    if !is_lighting_arrow_dispatch(dispatch) { return outcome(QueuedSkillExecutionState::Rejected); }
-    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|p|
-        Some((p.server_region_id()?, p.learned_skill_level(LIGHTING_ARROW_SKILL_ID, game.skill_factory()), p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?)))
-        else { return outcome(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(LIGHTING_ARROW_SKILL_ID, level) else { if game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().is_some() { abort_player_lighting_arrow(game, player_id); } return outcome(QueuedSkillExecutionState::Rejected) };
-    let mp_loss = properties.query_property(USER_MP_LOSE); let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME); let speed = properties.query_property(SKILL_USAGE_SUMMONED_SPEED);
-    let hit = properties.query_property(crate::gameserver::appserver::skills::baseattack::SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-
-    if game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().is_none() {
-        let (destination, target) = match dispatch {
-            PlayerSkillDispatch::Point { x, y, .. } => ((x, y), None),
-            PlayerSkillDispatch::Object { target, .. } => match target_snapshot(game, region_id, target) {
-                Some((x, y, _)) => ((x, y), Some(target)),
-                _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected); }
-            }, _ => unreachable!(),
-        };
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, LIGHTING_ARROW_SKILL_ID), reuse_ms, runtime.now_milliseconds()) {
-            game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected);
-        }
-        let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
-        if maximum != 0 && path.len() > maximum as usize { game.send_base_magic_failure(player_id, 0x0b); game.send_skill_system_info(player_id, b"GS0290"); return outcome(QueuedSkillExecutionState::Rejected); }
-        let Some(player) = game.find_player(player_id) else { return outcome(QueuedSkillExecutionState::Rejected) };
-        if !weapon_is_valid(game, player) { game.send_base_magic_failure(player_id, 0x0e); game.send_skill_system_info(player_id, b"GS0297"); return outcome(QueuedSkillExecutionState::Rejected); }
-        if mp_loss != 0 && (player.mana().wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); return outcome(QueuedSkillExecutionState::Rejected); }
-        let now_ms = runtime.now_milliseconds();
-        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(LIGHTING_ARROW_SKILL_ID)); }
-        game.begin_player_skill_execution(player_id, LightingArrowExecutionState::begin(dispatch, destination, target, now_ms));
-        return outcome(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().is_none_or(|s| s.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected); }
-
-    let state = game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().expect("выполнение световой стрелы создано");
-    let (mut destination, target) = (state.destination, state.target);
-    if let Some(target) = target {
-        match target_snapshot(game, region_id, target) {
-            Some((x, y, false)) => destination = (x, y),
-            _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); abort_player_lighting_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected); }
+    let path = game.skill_target_path(skill.lifecycle());
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
+        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        if path.len() as u32 > maximum {
+            failure(game, instance, player, 11);
+            return false;
         }
     }
-    if !state.condition_checked {
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (mana.wrapping_sub(mp_loss) as i32) < 0 { game.send_base_magic_failure(player_id, 7); game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss); abort_player_lighting_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected); }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        if game.find_player(player_id).is_none_or(|p| !weapon_is_valid(game, p)) { game.send_base_magic_failure(player_id, 0x0e); game.send_skill_system_info(player_id, b"GS0297"); abort_player_lighting_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected); }
-        if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); }
-        send_start(game, player_id, level);
-        if let Some(state) = game.player_skill_state_mut::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID) { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+    let Some(player) = player else { return true; };
+    if game.find_player(player).is_none_or(|source| !weapon_is_valid(game, source)) {
+        failure(game, instance, Some(player), 14);
+        return false;
     }
-    let started = game.player_skill_state::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID).copied().expect("состояние сохранено").kernel().started_at_ms();
-    if !time_reached(runtime.now_milliseconds(), started, delay_ms) { return outcome(QueuedSkillExecutionState::Pending); }
-    restore_player_movement(game, player_id);
-    let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
-    if path.is_empty() { game.send_base_magic_failure(player_id, 2); abort_player_lighting_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected); }
-    if maximum != 0 && path.len() > maximum as usize + 1 { game.send_base_magic_failure(player_id, 0x0b); game.send_skill_system_info(player_id, b"GS0290"); abort_player_lighting_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected); }
-    send_fire(game, player_id, level, target, destination.0, destination.1);
-    let Some(player) = game.find_player(player_id) else { abort_player_lighting_arrow(game, player_id); return outcome(QueuedSkillExecutionState::Rejected) };
-    let master = master_info(player); let face = player.shape().get_face_position();
-    let summon_id = game.allocate_summon_shape_id(); let now_ms = runtime.now_milliseconds();
-    let mut phalanx = CLightingArrowPhalanx::new(summon_id, master, now_ms, lifetime, level, hit, factor, path, speed);
-    phalanx.shape_mut().set_region_id(region_id);
-    if let Ok(face) = face {
-        let result = game.add_lighting_arrow_phalanx(region_id, phalanx, face.x, face.y, now_ms, runtime);
-        if result.is_some_and(|result| result.is_ok()) { let _ = game.send_lighting_arrow_phalanx_entry(region_id, summon_id, runtime); }
+    if properties.query_property(USER_MP_LOSE) == 0 { return false; }
+    let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
+    if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
+        mana_failure(game, instance, player, &properties);
+        return false;
     }
-    if let Some(state) = game.player_skill_state_mut::<LightingArrowExecutionState>(player_id, LIGHTING_ARROW_SKILL_ID) { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_lighting_arrow(game, player_id, player_ai, runtime);
-    outcome(QueuedSkillExecutionState::Completed)
+    let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
+    source.set_moveable(false);
+    true
+}
+
+fn summon<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    x: i32, y: i32, runtime: &mut Runtime,
+) {
+    let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
+    if !user.shape().is_assigned_to_server_region() { return; }
+    let region = user.shape().get_region_id();
+    if game.find_region(region).is_none() { return; }
+    let identity = user.shape().identity();
+    let Some(skill) = game.registered_skill(instance) else { return; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
+    let destination = skill.lifecycle().destination();
+    let Some(skill) = game.registered_skill_mut(instance) else { return; };
+    skill.lifecycle_mut().set_point_target(destination);
+    let mut master = MasterInfo { master_type: identity.object_type, master_id: identity.id, ..Default::default() };
+    if identity.object_type == PLAYER_TYPE {
+        let Some(player) = game.find_player(identity.id) else { return; };
+        master.master_team_id = player.team_id();
+        master.master_guild_id = player.faction_id();
+        master.master_union_id = player.union_id();
+        let permissions = player.pk_permissions();
+        master.permitted_to_kill_player = i32::from(permissions.player);
+        master.permitted_to_kill_teammate = i32::from(permissions.teammate);
+        master.permitted_to_kill_guild_member = i32::from(permissions.guild_member);
+        master.permitted_to_kill_criminal = i32::from(permissions.criminal);
+    }
+    let _ = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
+    let speed = properties.query_property(SKILL_USAGE_SUMMONED_SPEED);
+    let factor = properties.query_property(TARGET_DAMAGE_FACTOR);
+    let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let Some(skill) = game.registered_skill(instance) else { return; };
+    let level = skill.level();
+    let lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
+    let Some(state) = skill.player_state::<LightingArrowExecutionState>() else { return; };
+    let path = state.path.clone();
+    let started = runtime.now_milliseconds();
+    let id = game.allocate_summon_shape_id();
+    let phalanx = CLightingArrowPhalanx::new(id, master, started, lifetime, level, hit, factor, path, speed);
+    let _ = game.spawn_lighting_arrow_phalanx(region, phalanx, x, y, started, runtime);
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let (region, identity) = skill.lifecycle().user();
+    let source = resolve_state_move_shape(game, region, identity)
+        .map(|source| (source.shape().get_region_id(), source.shape().identity()));
+    let player = source.filter(|source| source.1.object_type == PLAYER_TYPE).map(|source| source.1.id);
+    let destination = match resolve_skill_sufferer(game, skill.lifecycle()) {
+        Some((region, identity)) => {
+            if game.move_shape_health(region, identity) == Some(0) {
+                failure(game, instance, player, 10);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            let Some(target) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let x = target.shape().get_tile_x().unwrap_or(i32::MIN);
+            let y = target.shape().get_tile_y().unwrap_or(i32::MIN);
+            (x, y)
+        }
+        None => skill.lifecycle().destination(),
+    };
+    let Some(source) = source else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if stage == SkillStage::Begin {
+        if let Some(player) = player {
+            let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+            if (remaining as i32) < 0 {
+                mana_failure(game, instance, player, &properties);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            let Some(user) = game.find_player_mut(player) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            user.set_mana(remaining);
+            game.publish_player_states(player);
+            if game.find_player(player).is_none_or(|user| !weapon_is_valid(game, user)) {
+                failure(game, instance, Some(player), 14);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+        }
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let y = user.shape().get_tile_y().unwrap_or(i32::MIN);
+        let x = user.shape().get_tile_x().unwrap_or(i32::MIN);
+        let direction = get_line_direction(x, y, destination.0, destination.1);
+        if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.shape_mut().set_direction(direction); }
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+    }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
+    if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.set_moveable(true); }
+    let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let path = game.skill_target_path_with_length(skill.lifecycle(), maximum);
+    let empty = path.is_empty();
+    let Some(state) = game.registered_skill_mut(instance).and_then(|skill| skill.player_state_mut::<LightingArrowExecutionState>()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    state.path = path;
+    if empty {
+        game.update_registered_skill_visual(instance, 2);
+        let _ = game.end_registered_instance(instance, 0, SkillTermination::Rejected, runtime);
+    }
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0 {
+        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        let Some(state) = game.registered_skill(instance).and_then(|skill| skill.player_state::<LightingArrowExecutionState>()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        if maximum.wrapping_add(1) < state.path.len() as u32 {
+            failure(game, instance, player, 11);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+    }
+    let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let destination = skill.lifecycle().destination();
+    skill.lifecycle_mut().set_point_target(destination);
+    game.update_registered_skill_visual(instance, 1);
+    if let Some(skill) = game.registered_skill_mut(instance) { skill.lifecycle_mut().mark_prepared(); }
+    if let Some(user) = resolve_state_move_shape(game, source.0, source.1) {
+        let shape = user.shape();
+        let x = shape.get_tile_x().unwrap_or(i32::MIN);
+        let y = shape.get_tile_y().unwrap_or(i32::MIN);
+        if let Ok(face) = CShape::get_direction_position(shape.get_direction(), ShapeAreaCoordinates { x, y }) {
+            summon(game, instance, source, face.x, face.y, runtime);
+        }
+    }
+    terminal(QueuedSkillExecutionState::Completed)
+}
+
+pub(crate) fn execute_player_lighting_arrow<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::ArrowCast,
+        |game, instance, _player_id, runtime| original_user
+            .is_some_and(|source| check_cast(game, instance, source, runtime)),
+        |dispatch, started| LightingArrowExecutionState::begin(dispatch, started).into(),
+        run_ai,
+    )
 }

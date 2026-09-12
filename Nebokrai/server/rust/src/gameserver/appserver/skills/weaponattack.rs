@@ -17,6 +17,8 @@
 //! множителя к нулю. У CMonster используются его MIN/MAX/SOUL; ELEMENT после
 //! native нижней границы и CCH равны нулю. NPC, Build и CityGate наследуют
 //! нулевые компоненты/CCH, единичный weapon modifier и пустой IncreaseRp.
+//! LightingArrowPhalanx использует тот же порядок компонентов и RNG без
+//! ловкости; её сохранённый знаковый коэффициент и яд остаются у формы.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -128,6 +130,20 @@ fn fill_player_weapon_attack(
     let multiplier = if power_mode == WeaponPowerMode::EnergyHolding {
         consume_energy_holding_multiplier(game, source)
     } else { 1.0 };
+    fill_weapon_damage(game, source, roll, power_mode, multiplier, attack);
+}
+
+pub(super) fn fill_ordinary_weapon_damage(
+    game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
+    attack: &mut AttackInformation,
+) {
+    fill_weapon_damage(game, source, roll, WeaponPowerMode::Ordinary, 1.0, attack);
+}
+
+fn fill_weapon_damage(
+    game: &mut CGame, source: (i32, ShapeIdentity), roll: PlayerWeaponRoll,
+    power_mode: WeaponPowerMode, multiplier: f64, attack: &mut AttackInformation,
+) {
     let scale = |damage: i32| {
         if power_mode == WeaponPowerMode::EnergyHolding {
             truncate_original_i64_low(f64::from(damage) * multiplier)

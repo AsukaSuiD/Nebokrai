@@ -61,12 +61,7 @@ impl CGame {
         let now = runtime.now_milliseconds();
         let Some(phalanx) = self.thunder_slash_phalanx(region_id, id) else { return false; };
         if phalanx.expired_at(now) {
-            let Some(shape) = self.mark_damage_phalanx_deleted(region_id, id) else { return false; };
-            if shape.is_assigned_to_server_region()
-                && let Some(region) = self.find_region(shape.get_region_id()).map(ServerRegionOwner::base)
-            {
-                let _ = self.send_shape_exit_around(region, &shape);
-            }
+            self.end_summoned_shape(region_id, id);
             return true;
         }
         let now = runtime.now_milliseconds();

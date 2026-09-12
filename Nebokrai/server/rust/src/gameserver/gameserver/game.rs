@@ -722,6 +722,7 @@ mod chaossphere;
 mod fireball;
 mod thunderfire;
 mod lightingarrow;
+mod summonshape;
 mod meteorarrow;
 mod rainarrow;
 mod thunderblow;
@@ -1069,17 +1070,6 @@ use crate::gameserver::appserver::skills::heartlessarrow3::HEARTLESS_ARROW_3_SKI
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     CHeartlessArrowPhalanx, HeartlessArrowPhalanxTick,
     calculate_owned_heartless_arrow_attack,
-};
-use crate::gameserver::appserver::skills::lightingarrow::{
-    cancel_player_lighting_arrow, complete_player_lighting_arrow,
-    execute_player_lighting_arrow, is_lighting_arrow_dispatch, LIGHTING_ARROW_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::lightingarrow2::{
-    cancel_player_lighting_arrow_2, complete_player_lighting_arrow_2,
-    execute_player_lighting_arrow_2, is_lighting_arrow_2_dispatch, LIGHTING_ARROW_2_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::lightingarrowphalanx::{
-    calculate_owned_lighting_arrow_attack, LightingArrowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::meteorarrow::{
     cancel_player_meteor_arrow, complete_player_meteor_arrow,
@@ -39108,18 +39098,6 @@ impl CGame {
                         runtime,
                     ))
                 }
-                LIGHTING_ARROW_SKILL_ID => Some(complete_player_lighting_arrow(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                LIGHTING_ARROW_2_SKILL_ID => Some(complete_player_lighting_arrow_2(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 BOSS_FIEND_PENETRATE_SKILL_ID => Some(complete_player_boss_fiend_penetrate(
                     self,
                     player_id,
@@ -39520,12 +39498,6 @@ impl CGame {
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
                 cancel_player_heartless_arrow_area(self, player_id, skill_id, &mut player_ai, runtime)
             }
-            LIGHTING_ARROW_SKILL_ID => {
-                cancel_player_lighting_arrow(self, player_id, &mut player_ai, runtime)
-            }
-            LIGHTING_ARROW_2_SKILL_ID => {
-                cancel_player_lighting_arrow_2(self, player_id, &mut player_ai, runtime)
-            }
             METEOR_ARROW_MASS_SKILL_ID => {
                 cancel_player_meteor_arrow_mass(self, player_id, &mut player_ai, runtime)
             }
@@ -39883,8 +39855,6 @@ impl CGame {
             } => execute_player_archery,
             _ if is_heartless_arrow_dispatch(dispatch) => execute_player_heartless_arrow,
             _ if is_heartless_arrow_area_dispatch(dispatch) => execute_player_heartless_arrow_area,
-            _ if is_lighting_arrow_dispatch(dispatch) => execute_player_lighting_arrow,
-            _ if is_lighting_arrow_2_dispatch(dispatch) => execute_player_lighting_arrow_2,
             _ if is_meteor_arrow_mass_dispatch(dispatch) => execute_player_meteor_arrow_mass,
             _ if is_meteor_arrow_dispatch(dispatch) => execute_player_meteor_arrow,
             _ if is_rain_arrow_dispatch(dispatch) => execute_player_rain_arrow,
@@ -43558,9 +43528,7 @@ impl CGame {
             SummonedSkillShape::Archery(phalanx) => {
                 calculate_owned_archery_attack(self, phalanx, target_level)
             }
-            SummonedSkillShape::LightingArrow(phalanx) => {
-                calculate_owned_lighting_arrow_attack(self, phalanx, target_level)
-            }
+            SummonedSkillShape::LightingArrow(_) => None,
             SummonedSkillShape::MeteorArrow(phalanx) => Some(calculate_meteor_arrow_attack(self, phalanx)),
             SummonedSkillShape::RainArrow(phalanx) => calculate_rain_arrow_attack(self, phalanx, target_level),
             SummonedSkillShape::BaseMagic(phalanx) => {
@@ -43661,10 +43629,6 @@ impl CGame {
         if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
             heartless.prepare_target(self, region_id, target, &mut || runtime.now_milliseconds());
         }
-        if let SummonedSkillShape::LightingArrow(arrow) = phalanx {
-            crate::gameserver::appserver::skills::heartlessarrow::apply_daub_poison(self, arrow.master().master_id, region_id, target,
-                &mut || runtime.now_milliseconds());
-        }
         let target_level = self.move_shape_level(region_id, target).unwrap_or(1);
         // Calculate оригинала возвращает void. Отсутствие источника/свойств
         // не отменяет получение пустой атаки; частичные записи сохраняет owner.
@@ -43750,10 +43714,7 @@ impl CGame {
     }
 
     fn end_damage_phalanx(&mut self, region_id: i32, phalanx_id: i32) {
-        let Some(shape) = self.mark_damage_phalanx_deleted(region_id, phalanx_id) else { return; };
-        if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
-            let _ = self.send_shape_exit_around(region, &shape);
-        }
+        self.end_summoned_shape(region_id, phalanx_id);
     }
 
     /// GetShape каждой клетки выполняется после попаданий по её боевым феям
@@ -43802,6 +43763,12 @@ impl CGame {
         {
             return self.run_thunder_slash_phalanx(region_id, phalanx_id, runtime);
         }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::LightingArrow(_)))
+        {
+            return self.run_lighting_arrow_phalanx(region_id, phalanx_id, runtime);
+        }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -43809,7 +43776,6 @@ impl CGame {
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
         let mut thunder_fire_tick = None;
-        let mut lighting_arrow_tick = None;
         let mut meteor_arrow_tick = None;
         let mut rain_arrow_tick = None;
         let mut heartless_arrow_tick = None;
@@ -43827,10 +43793,7 @@ impl CGame {
                         ArcheryPhalanxTick::Expired => None,
                     }
                 }
-                SummonedSkillShape::LightingArrow(phalanx) => {
-                    lighting_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
-                    Some(None)
-                }
+                SummonedSkillShape::LightingArrow(_) => Some(None),
                 SummonedSkillShape::MeteorArrow(phalanx) => {
                     meteor_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
                     Some(None)
@@ -44007,21 +43970,6 @@ impl CGame {
             }
             return true;
         }
-        if let (Some(lighting_arrow_tick), SummonedSkillShape::LightingArrow(_)) = (lighting_arrow_tick, &phalanx) {
-            match lighting_arrow_tick {
-                LightingArrowPhalanxTick::Pending => {}
-                LightingArrowPhalanxTick::Active { force_move, cell } => {
-                    if let Some((x, y, duration)) = force_move {
-                        let _ = self.force_move_lighting_arrow(region_id, phalanx_id, x, y, duration);
-                    }
-                    if let Some((x, y, sampled_at_ms)) = cell {
-                        self.apply_lighting_arrow_cell(region_id, phalanx_id, x, y, sampled_at_ms, runtime);
-                    }
-                }
-                LightingArrowPhalanxTick::Expired => {}
-            }
-            return true;
-        }
         if let (Some(meteor_arrow_tick), SummonedSkillShape::MeteorArrow(_)) = (meteor_arrow_tick, &phalanx) {
             if let MeteorArrowPhalanxTick::Attack { cell: (x, y), sampled_at_ms } = meteor_arrow_tick {
                 self.apply_meteor_arrow_cell(region_id, phalanx_id, x, y, sampled_at_ms, runtime);
@@ -44048,7 +43996,7 @@ impl CGame {
                         if attempted { self.end_damage_phalanx(region_id, phalanx_id); }
                     }
                     if let Some((x, y, duration)) = force_move {
-                        self.force_move_fire_ball(region_id, phalanx_id, x, y, duration);
+                        self.force_move_summoned_shape(region_id, phalanx_id, x, y, duration);
                     }
                 }
                 FireBallPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
@@ -44066,7 +44014,7 @@ impl CGame {
                         self.end_damage_phalanx(region_id, phalanx_id);
                     }
                     if let Some((x, y, duration)) = force_move {
-                        self.force_move_thunder_fire(region_id, phalanx_id, x, y, duration);
+                        self.force_move_summoned_shape(region_id, phalanx_id, x, y, duration);
                     }
                 }
                 ThunderFirePhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
@@ -44078,7 +44026,7 @@ impl CGame {
                 ChaosSpherePhalanxTick::Pending => {}
                 ChaosSpherePhalanxTick::Active { force_move, scan } => {
                     if let Some((x, y, duration)) = force_move {
-                        self.force_move_chaos_sphere(region_id, phalanx_id, x, y, duration);
+                        self.force_move_summoned_shape(region_id, phalanx_id, x, y, duration);
                     }
                     if let Some((x, y, _)) = scan {
                         for (x, y) in crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalanx::scope_cells(x, y) {

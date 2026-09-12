@@ -29,6 +29,8 @@
 //! Первый старый яд получает End и уничтожение остатка до чтения modifier/оружия,
 //! CONST/frequency/keep. Новый Begin с живыми часами предшествует append;
 //! наличие покрытия не расходует и не завершает DaubPoison.
+//! Таблица свойств покрытия захватывается до снятия прежнего яда и не
+//! подменяется новым lookup после его callbacks.
 //! После эффекта выпуска (0x005931BE) устанавливается общий prepared-флаг.
 //! Следующий OnFighting переносит исполнение в фон без End; полёт продолжает
 //! тот же owner с исходной целью и временем. Это не attacking_started,
@@ -238,7 +240,7 @@ pub(crate) fn apply_daub_poison(
     if target_shape.has_state_by_skill_id(0x131) { return; }
     if !player.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return; }
     let Some(level) = player.learned_skill_level_if_present(DAUB_POISON_SKILL_ID, game.skill_factory()) else { return };
-    if game.skill_base_properties(DAUB_POISON_SKILL_ID, level).is_none() { return; }
+    let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level).cloned() else { return; };
     let master = master_info(player);
     let user = (player.shape().get_region_id(), player.shape().identity());
     let sufferer = (target_shape.shape().get_region_id(), target_shape.shape().identity());
@@ -246,7 +248,6 @@ pub(crate) fn apply_daub_poison(
     if let Some((position, _)) = previous {
         let _ = end_and_destroy_state_at(game, sufferer.0, sufferer.1, position);
     }
-    let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else { return };
     let modifier = properties.query_property(WEAPON_DAMAGE_LEVEL_MODIFIER);
     let Some(weapon_level) = game.find_player(player_id).map(|player| player.weapon_damage_level(game.goods_factory())) else { return };
     let scaled = (weapon_level as u32).wrapping_mul(modifier);

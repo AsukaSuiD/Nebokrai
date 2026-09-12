@@ -1,89 +1,129 @@
-//! Межвладельческая координация световой стрелы.
-//!
-//! Execution, путь, часы, порядок клеток, яд и формула принадлежат
-//! `lightingarrow.rs` и `lightingarrowphalanx.rs`. Здесь остаются региональная
-//! регистрация, `ForceMove`, разрешение независимых владельцев и применение
-//! результата к цели.
+//! Региональное исполнение световой стрелы.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightingarrow.cpp,
+//! lightingarrowphalanx.cpp и ThunderBlowPhalanx::Begin. Форма остаётся
+//! в единственном хранилище во время Attack и callbacks. Следующая клетка,
+//! End и флаг ForceMove изменяются после соответствующих вызовов.
+//! Перед Add прежние формы 13F из снимка лицевой клетки получают Begin:
+//! совпадение их живых координат вызывает полный End с сообщением удаления.
+//! Результат Add не отменяет сериализацию и отправку новой формы.
 
 use super::*;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::skills::lightingarrowphalanx::{lighting_arrow_targets, CLightingArrowPhalanx};
-use crate::gameserver::appserver::states::state::resolve_state_move_shape;
+use crate::gameserver::appserver::skills::lightingarrowphalanx::{
+    CLightingArrowPhalanx, apply_lighting_arrow_attack, lighting_arrow_targets,
+};
 
 impl CGame {
-    pub(crate) fn add_lighting_arrow_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32,
-        phalanx: CLightingArrowPhalanx, tile_x: i32, tile_y: i32, started_at_ms: u32,
-        runtime: &mut Runtime) -> Option<Result<i32, RegionMembershipBlock>> {
-        let mut owner = self.take_region_owner(region_id)?;
-        let result = owner.base_mut().add_lighting_arrow_phalanx(phalanx, tile_x, tile_y,
-            self.area_width, self.area_height, started_at_ms, runtime);
-        self.restore_region_owner(owner); Some(result)
-    }
-
-    pub(crate) fn send_lighting_arrow_phalanx_entry<Runtime: GameMainLoopRuntime>(&mut self,
-        region_id: i32, phalanx_id: i32, runtime: &mut Runtime) -> Option<()> {
-        let phalanx = self.find_region(region_id)?.base().find_skill_phalanx(phalanx_id)?;
-        let SummonedSkillShape::LightingArrow(phalanx) = phalanx else { return None };
-        let identity = phalanx.shape().identity(); let x = phalanx.shape().get_tile_x().ok()?;
-        let y = phalanx.shape().get_tile_y().ok()?; let payload = phalanx.encode_client_snapshot(|| runtime.now_milliseconds())?;
-        let mut message = CMessage::new(0x000b_f502); message.add_long(identity.object_type); message.add_long(identity.id);
-        message.base_mut().add_guid(identity.ex_id); message.add_long(i32::try_from(payload.len()).ok()?);
-        message.base_mut().add(&payload); message.base_mut().add_char(0);
-        let _ = self.send_shape_position_around(region_id, x, y, &message); Some(())
-    }
-
-    pub(super) fn force_move_lighting_arrow(&mut self, region_id: i32, phalanx_id: i32,
-        destination_x: i32, destination_y: i32, duration_ms: u32) -> bool {
-        let Some(mut owner) = self.take_region_owner(region_id) else { return false };
-        let region = owner.base_mut(); let destination_x = destination_x.clamp(0, region.region.width.saturating_sub(1));
-        let destination_y = destination_y.clamp(0, region.region.height.saturating_sub(1));
-        let Some(SummonedSkillShape::LightingArrow(phalanx)) = region.find_skill_phalanx(phalanx_id) else { self.restore_region_owner(owner); return false };
-        let (Ok(old_x), Ok(old_y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { self.restore_region_owner(owner); return false };
-        let identity = phalanx.shape().identity(); let mut message = CMessage::new(0x000b_f604);
-        message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(old_x); message.add_long(old_y);
-        message.add_long(destination_x); message.add_long(destination_y); message.add_ulong(duration_ms); message.add_long(0);
-        let _ = self.send_shape_position_around(region_id, old_x, old_y, &message);
-        if let Some(SummonedSkillShape::LightingArrow(phalanx)) = region.find_skill_phalanx_mut(phalanx_id) {
-            phalanx.shape_mut().set_pos_xy_move_order(destination_x as f32 + 0.5, destination_y as f32 + 0.5);
+    pub(crate) fn spawn_lighting_arrow_phalanx<Runtime: GameMainLoopRuntime>(
+        &mut self, region_id: i32, mut phalanx: CLightingArrowPhalanx,
+        tile_x: i32, tile_y: i32, started_at_ms: u32, runtime: &mut Runtime,
+    ) -> Option<()> {
+        self.find_region(region_id)?;
+        phalanx.shape_mut().set_pos_xy_base(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        let mut shapes = Vec::new();
+        if let Some(owner) = self.find_region(region_id) {
+            let _ = owner.base().get_shapes(
+                tile_x, tile_y, self.area_width, self.area_height,
+                &RegionShapeResolver { game: self, owner }, &mut shapes,
+            );
         }
-        self.restore_region_owner(owner); true
+        for shape in shapes {
+            if shape.identity.object_type != SUMMON_SHAPE_TYPE { continue; }
+            let matched = self.find_region(region_id)
+                .and_then(|owner| owner.base().find_skill_phalanx(shape.identity.id))
+                .is_some_and(|existing| matches!(existing, SummonedSkillShape::ThunderBlow(existing)
+                    if existing.shape().get_tile_x() == Ok(tile_x)
+                        && existing.shape().get_tile_y() == Ok(tile_y)));
+            if matched { self.end_summoned_shape(region_id, shape.identity.id); }
+        }
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = owner.base_mut().add_lighting_arrow_phalanx(
+            phalanx, self.area_width, self.area_height, started_at_ms, runtime,
+        );
+        self.restore_region_owner(owner);
+        let failed;
+        let phalanx = match result {
+            Ok(id) => self.lighting_arrow_phalanx(region_id, id)?,
+            Err((_, phalanx)) => { failed = phalanx; &failed }
+        };
+        let shape = phalanx.shape();
+        let identity = shape.identity();
+        let payload = phalanx.encode_client_snapshot(|| runtime.now_milliseconds())?;
+        let mut message = CMessage::new(0x000b_f502);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add_guid(identity.ex_id);
+        message.add_long(i32::try_from(payload.len()).ok()?);
+        message.base_mut().add(&payload);
+        message.base_mut().add_char(0);
+        if shape.is_assigned_to_server_region() {
+            let (x, y) = (shape.get_tile_x().ok()?, shape.get_tile_y().ok()?);
+            let _ = self.send_shape_position_around(shape.get_region_id(), x, y, &message);
+        }
+        Some(())
     }
 
-    // Сканирование проверяет каждый RTTI CMoveShape после предыдущего
-    // попадания. У non-player master нет IsAttackAble; HP проверяет сам Attack.
-    pub(crate) fn summoned_skill_scan_target_allowed(&self, region_id: i32,
-        master: MasterInfo, target: ShapeIdentity) -> bool {
-        if (target.object_type == master.master_type && target.id == master.master_id)
-            || resolve_state_move_shape(self, region_id, target).is_none()
-        { return false }
-        if master.master_type != PLAYER_TYPE { return true }
-        let Some(source) = self.find_player(master.master_id).map(|player| player.shape().identity())
-        else { return false };
-        self.live_skill_target_attackable(region_id, source, target)
+    fn lighting_arrow_phalanx(&self, region_id: i32, id: i32) -> Option<&CLightingArrowPhalanx> {
+        let SummonedSkillShape::LightingArrow(phalanx) =
+            self.find_region(region_id)?.base().find_skill_phalanx(id)?
+        else { return None; };
+        Some(phalanx)
     }
 
-    pub(super) fn apply_lighting_arrow_cell<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32,
-        phalanx_id: i32, tile_x: i32, tile_y: i32, _sampled_at_ms: u32, runtime: &mut Runtime) {
-        let Some(phalanx) = self.find_region(region_id).and_then(|r| r.base().find_skill_phalanx(phalanx_id)).cloned() else { return };
-        let SummonedSkillShape::LightingArrow(snapshot) = &phalanx else { return };
-        let targets = lighting_arrow_targets(self, region_id, snapshot, tile_x, tile_y);
+    fn lighting_arrow_phalanx_mut(&mut self, region_id: i32, id: i32) -> Option<&mut CLightingArrowPhalanx> {
+        let SummonedSkillShape::LightingArrow(phalanx) =
+            self.find_region_mut(region_id)?.base_mut().find_skill_phalanx_mut(id)?
+        else { return None; };
+        Some(phalanx)
+    }
+
+    pub(super) fn run_lighting_arrow_phalanx<Runtime: GameMainLoopRuntime>(
+        &mut self, region_id: i32, id: i32, runtime: &mut Runtime,
+    ) -> bool {
+        let now = runtime.now_milliseconds();
+        let Some(phalanx) = self.lighting_arrow_phalanx(region_id, id) else { return false; };
+        if phalanx.expired_at(now) {
+            self.end_summoned_shape(region_id, id);
+            return true;
+        }
+        let Some(phalanx) = self.lighting_arrow_phalanx_mut(region_id, id) else { return false; };
+        let current = phalanx.prepare_attack_cells();
+        let now = runtime.now_milliseconds();
+        let Some(phalanx) = self.lighting_arrow_phalanx(region_id, id) else { return false; };
+        if let Some((x, y)) = phalanx.due_attack_cell(current, now) {
+            self.apply_lighting_arrow_cell(region_id, id, x, y, runtime);
+            let Some(phalanx) = self.lighting_arrow_phalanx_mut(region_id, id) else { return false; };
+            phalanx.advance_attack_cell();
+        }
+        let Some(phalanx) = self.lighting_arrow_phalanx(region_id, id) else { return false; };
+        if phalanx.attack_cells_finished() {
+            self.end_summoned_shape(region_id, id);
+        } else if let Some((x, y, duration)) = phalanx.force_move_destination() {
+            let _ = self.force_move_summoned_shape(region_id, id, x, y, duration);
+            if let Some(phalanx) = self.lighting_arrow_phalanx_mut(region_id, id) {
+                phalanx.mark_force_moved();
+            }
+        }
+        true
+    }
+
+    fn apply_lighting_arrow_cell<Runtime: GameMainLoopRuntime>(
+        &mut self, holder_region: i32, id: i32, x: i32, y: i32, runtime: &mut Runtime,
+    ) {
+        let Some(snapshot) = self.lighting_arrow_phalanx(holder_region, id).cloned() else { return; };
+        if !snapshot.shape().is_assigned_to_server_region() { return; }
+        let region = snapshot.shape().get_region_id();
+        let targets = lighting_arrow_targets(self, region, x, y);
         for target in targets {
-            let Some(SummonedSkillShape::LightingArrow(current)) = self.find_region(region_id)
-                .and_then(|region| region.base().find_skill_phalanx(phalanx_id))
-            else { return };
-            if current.was_attacked(target)
-                || !self.summoned_skill_scan_target_allowed(region_id, snapshot.master(), target)
-                || self.base_magic_target_dead(region_id, target)
-            { continue }
-            let marked = if let Some(mut owner) = self.take_region_owner(region_id) {
-                let marked = match owner.base_mut().find_skill_phalanx_mut(phalanx_id) {
-                    Some(SummonedSkillShape::LightingArrow(current)) => current.mark_attacked(target),
-                    _ => false,
-                };
-                self.restore_region_owner(owner); marked
-            } else { false };
-            if !marked { continue }
-            self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+            let Some(current) = self.lighting_arrow_phalanx(holder_region, id) else { return; };
+            if current.was_attacked(region, target)
+                || !self.summoned_skill_scan_target_allowed(region, current.master(), target)
+            { continue; }
+            // Attack заново проверяет смерть и тот же список после IsAttackAble.
+            if self.move_shape_health(region, target).is_none_or(|hp| hp == 0) { continue; }
+            let Some(current) = self.lighting_arrow_phalanx_mut(holder_region, id) else { return; };
+            if !current.mark_attacked(region, target) { continue; }
+            let snapshot = current.clone();
+            apply_lighting_arrow_attack(self, &snapshot, region, target, runtime);
         }
     }
 }

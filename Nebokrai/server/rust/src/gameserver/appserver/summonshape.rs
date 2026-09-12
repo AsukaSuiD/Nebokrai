@@ -6,6 +6,8 @@
 //! и срок жизни. Конкретная область, атака и игровые эффекты остаются у
 //! производного владельца. Счётчик принадлежит `CGame`, а не региону, поэтому смена региона
 //! не создаёт повторные устаревшие ID.
+//! Общие ForceMove и End подключены через game/summonshape: живой регион,
+//! порядок сообщений и базовый SetTileXY не дублируются в каждом снаряде.
 
 pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
 
@@ -408,19 +410,6 @@ impl NextSummonShapeId {
 //
 //
 
-// ============================================================================
-// FUNCTION: CSummonShape::ForceMove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\summonshape.cpp:35
-// RVA: 0x001E9AF0
-// ADDRESS: 005e9af0
-// PROTOTYPE: void __thiscall ForceMove(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CSummonShape::MoveStep
@@ -436,19 +425,6 @@ impl NextSummonShapeId {
 //
 //
 
-// ============================================================================
-// FUNCTION: CSummonShape::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\summonshape.cpp:124
-// RVA: 0x001E9DC0
-// ADDRESS: 005e9dc0
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 
 

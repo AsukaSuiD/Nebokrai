@@ -1609,21 +1609,14 @@ impl CServerRegion {
     pub(crate) fn add_lighting_arrow_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::lightingarrowphalanx::CLightingArrowPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        for existing in self.owned_skill_phalanxes.values_mut() {
-            let SummonedSkillShape::ThunderBlow(existing) = existing else { continue };
-            if existing.shape().get_tile_x() == Ok(tile_x) && existing.shape().get_tile_y() == Ok(tile_y) {
-                existing.finish();
-            }
-        }
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::lightingarrowphalanx::CLightingArrowPhalanx)> {
+        if let Err(error) = self.add_object(
+            phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context,
+        ) { return Err((error, phalanx)); }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes.insert(id, SummonedSkillShape::LightingArrow(phalanx));
         Ok(id)
