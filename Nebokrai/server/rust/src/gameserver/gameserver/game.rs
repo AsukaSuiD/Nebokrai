@@ -1186,14 +1186,7 @@ use crate::gameserver::appserver::skills::pillar::{
 use crate::gameserver::appserver::skills::roar::{
     cancel_player_roar, execute_player_roar, is_roar_dispatch, ROAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::energyholding::{
-    cancel_player_energy_holding, execute_player_energy_holding, is_energy_holding_dispatch,
-    ENERGY_HOLDING_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::inversechopped::{
-    cancel_player_inverse_chopped, execute_player_inverse_chopped, is_inverse_chopped_dispatch,
-    INVERSE_CHOPPED_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::energyholding::ENERGY_HOLDING_SKILL_ID;
 use crate::gameserver::appserver::skills::firewall::{
     cancel_player_fire_wall, execute_player_fire_wall, is_fire_wall_target, FIRE_WALL_SKILL_ID,
 };
@@ -1320,13 +1313,8 @@ use crate::gameserver::appserver::skills::ragebreak::{
 };
 use crate::gameserver::appserver::skills::flash::FLASH_SKILL_ID;
 use crate::gameserver::appserver::skills::swallow::SWALLOW_SKILL_ID;
-use crate::gameserver::appserver::skills::jucut::{
-    cancel_player_ju_cut, execute_player_ju_cut, is_ju_cut_dispatch, JU_CUT_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::lightningsword::{
-    cancel_player_lightning_sword, execute_player_lightning_sword, is_lightning_sword_dispatch,
-    LIGHTNING_SWORD_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::jucut::JU_CUT_SKILL_ID;
+use crate::gameserver::appserver::skills::lightningsword::LIGHTNING_SWORD_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword2::LIGHTNING_SWORD_2_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
@@ -39440,12 +39428,6 @@ impl CGame {
                 cancel_player_pillar(self, player_id, &mut player_ai, runtime)
             }
             ROAR_SKILL_ID => cancel_player_roar(self, player_id, &mut player_ai, runtime),
-            ENERGY_HOLDING_SKILL_ID => {
-                cancel_player_energy_holding(self, player_id, &mut player_ai, runtime)
-            }
-            INVERSE_CHOPPED_SKILL_ID => {
-                cancel_player_inverse_chopped(self, player_id, &mut player_ai, runtime)
-            }
             INFERNOL_SKILL_ID => {
                 cancel_player_infernol(self, player_id, &mut player_ai, runtime)
             }
@@ -39454,13 +39436,6 @@ impl CGame {
                 cancel_player_rage_break(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
-            JU_CUT_SKILL_ID => cancel_player_ju_cut(self, player_id, &mut player_ai, runtime),
-            LIGHTNING_SWORD_SKILL_ID
-            | LIGHTNING_SWORD_2_SKILL_ID
-            | LIGHTNING_SWORD_3_SKILL_ID
-            | LIGHTNING_SWORD_4_SKILL_ID => {
-                cancel_player_lightning_sword(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             LITTLE_STAR_SKILL_ID => {
                 cancel_player_little_star(self, player_id, &mut player_ai, runtime)
             }
@@ -39967,13 +39942,9 @@ impl CGame {
             _ if is_thunder_slash_dispatch(dispatch) => execute_player_thunder_slash,
             _ if is_pillar_dispatch(dispatch) => execute_player_pillar,
             _ if is_roar_dispatch(dispatch) => execute_player_roar,
-            _ if is_energy_holding_dispatch(dispatch) => execute_player_energy_holding,
-            _ if is_inverse_chopped_dispatch(dispatch) => execute_player_inverse_chopped,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
-            _ if is_ju_cut_dispatch(dispatch) => execute_player_ju_cut,
-            _ if is_lightning_sword_dispatch(dispatch) => execute_player_lightning_sword,
             _ if is_fire_wall_target(dispatch) => execute_player_fire_wall,
             _ if is_poison_fog_target(dispatch) => execute_player_poison_fog,
             _ if is_infernol_dispatch(dispatch) => execute_player_infernol,

@@ -181,6 +181,8 @@ pub(crate) mod appserver {
         pub(crate) mod ghostcut2;
         pub(crate) mod ghostcut3;
         pub(crate) mod frontcellsword;
+        pub(crate) mod frontcellswordcast;
+        pub(crate) mod frontcellswordvisual;
         pub(crate) mod knightcut;
         pub(crate) mod knightcutattack;
         pub(crate) mod knightcutvisual;
@@ -197,6 +199,7 @@ pub(crate) mod appserver {
         pub(crate) mod roar;
         pub(crate) mod roarstate;
         pub(crate) mod energyholding;
+        pub(crate) mod energyholdingvisual;
         pub(crate) mod energyholdingstate;
         pub(crate) mod inversechopped;
         pub(crate) mod flash;

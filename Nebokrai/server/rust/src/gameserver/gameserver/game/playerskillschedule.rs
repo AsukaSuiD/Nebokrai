@@ -240,14 +240,7 @@ impl CGame {
             | THUNDER_BLOW_SKILL_ID
             | PILLAR_SKILL_ID
             | ROAR_SKILL_ID
-            | ENERGY_HOLDING_SKILL_ID
-            | INVERSE_CHOPPED_SKILL_ID
             | INFERNOL_SKILL_ID
-            | JU_CUT_SKILL_ID
-            | LIGHTNING_SWORD_SKILL_ID
-            | LIGHTNING_SWORD_2_SKILL_ID
-            | LIGHTNING_SWORD_3_SKILL_ID
-            | LIGHTNING_SWORD_4_SKILL_ID
             | LITTLE_STAR_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID

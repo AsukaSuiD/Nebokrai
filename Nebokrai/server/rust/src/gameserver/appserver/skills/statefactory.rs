@@ -434,13 +434,8 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         ENERGY_HOLDING_STATE_ID => StateRecordLayout::typed(
             ENERGY_HOLDING_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                {
-                let level = read_u32(payload, offset + 4)?;
-                let percent = _factory.query_skill_base_properties(ENERGY_HOLDING_STATE_ID, level as i32)?
-                    .query_property(super::energyholding::PARAMETER_PERCENT);
-                super::energyholdingstate::EnergyHoldingState::decode(payload, offset, percent).ok()
+                super::energyholdingstate::EnergyHoldingState::decode(payload, offset).ok()
                     .map(StateData::EnergyHolding)
-            }
             },
         ),
         _ => return None,

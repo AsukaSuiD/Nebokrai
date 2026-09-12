@@ -336,6 +336,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::spriteburn::publish_sprite_burn_visual(self, skill, mode),
             SkillVisualEffectKind::LeafCut =>
                 crate::gameserver::appserver::skills::leafcutvisual::publish_leaf_cut_visual(self, skill, mode),
+            SkillVisualEffectKind::FrontCellSword =>
+                crate::gameserver::appserver::skills::frontcellswordvisual::publish_front_cell_sword_visual(self, skill, mode),
+            SkillVisualEffectKind::EnergyHolding =>
+                crate::gameserver::appserver::skills::energyholdingvisual::publish_energy_holding_visual(self, skill, mode),
             SkillVisualEffectKind::Kerosene =>
                 crate::gameserver::appserver::skills::kerosene::publish_kerosene_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {

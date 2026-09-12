@@ -23,7 +23,7 @@ use crate::gameserver::gameserver::game::{
 #[derive(Clone, Copy)]
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
-    Swallow, KnightCut, LeafCut,
+    Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -42,6 +42,12 @@ impl RegisteredPlayerCastOwner {
             super::knightcut::KNIGHT_CUT_SKILL_ID => Self::KnightCut,
             super::leafcut::LEAF_CUT_SKILL_ID | super::leafcut2::LEAF_CUT_2_SKILL_ID
                 | super::leafcut3::LEAF_CUT_3_SKILL_ID => Self::LeafCut,
+            super::jucut::JU_CUT_SKILL_ID | super::lightningsword::LIGHTNING_SWORD_SKILL_ID
+                | super::lightningsword2::LIGHTNING_SWORD_2_SKILL_ID
+                | super::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID
+                | super::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID
+                | super::inversechopped::INVERSE_CHOPPED_SKILL_ID => Self::FrontCellSword,
+            super::energyholding::ENERGY_HOLDING_SKILL_ID => Self::EnergyHolding,
             _ => return None,
         })
     }
@@ -62,6 +68,8 @@ impl RegisteredPlayerCastOwner {
             Self::Swallow => super::swallow::execute_player_swallow::<Runtime>,
             Self::KnightCut => super::knightcut::execute_player_knight_cut::<Runtime>,
             Self::LeafCut => super::leafcut::execute_player_leaf_cut::<Runtime>,
+            Self::FrontCellSword => super::frontcellswordcast::execute_player_front_cell_sword::<Runtime>,
+            Self::EnergyHolding => super::energyholding::execute_player_energy_holding::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

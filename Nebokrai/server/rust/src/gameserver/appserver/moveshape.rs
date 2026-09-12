@@ -303,7 +303,7 @@ use crate::gameserver::appserver::skills::roarstate::{
     ROAR_STATE_BYTES, RoarState,
 };
 use crate::gameserver::appserver::skills::energyholdingstate::{
-    EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES,
+    EnergyHoldingState,
 };
 use crate::gameserver::appserver::skills::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
@@ -2542,22 +2542,8 @@ impl CMoveShape {
     }
 
 
-    pub(crate) fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_entries.first::<EnergyHoldingState>().copied() }
-
     pub(crate) fn energy_holding_states(&self) -> impl Iterator<Item = &EnergyHoldingState> {
         self.state_entries.iter::<EnergyHoldingState>()
-    }
-    pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut EnergyHoldingState> { self.state_entries.first_mut::<EnergyHoldingState>() }
-    pub(crate) fn begin_energy_holding_state(&mut self, state: EnergyHoldingState) {
-        self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        let _ = self.state_entries.take_first::<EnergyHoldingState>();
-        self.state_entries.append(state);
-    }
-    pub(crate) fn take_energy_holding_state(&mut self) -> Option<EnergyHoldingState> {
-        let state = self.state_entries.take_first::<EnergyHoldingState>()?;
-        self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
-        Some(state)
     }
 
     pub(crate) fn soul_collect_state(&self) -> Option<SoulCollectState> {

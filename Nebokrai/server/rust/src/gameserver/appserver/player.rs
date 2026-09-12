@@ -5690,10 +5690,6 @@ impl CPlayer {
 
     pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
 
-    pub(crate) fn energy_holding_state(&self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state() }
-    pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state_mut() }
-    pub(crate) fn begin_energy_holding_state(&mut self, state: super::skills::energyholdingstate::EnergyHoldingState) { self.move_shape.begin_energy_holding_state(state); }
-    pub(crate) fn take_energy_holding_state(&mut self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.take_energy_holding_state() }
 
     pub(crate) fn take_boss_blue_fury_state(
         &mut self,
