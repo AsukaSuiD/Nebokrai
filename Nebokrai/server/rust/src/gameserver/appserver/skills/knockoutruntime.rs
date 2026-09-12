@@ -33,8 +33,8 @@ use super::knockoutstate::{
     KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
 };
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
-    owned_monster_attackable, resolve_owned_monster_attack_target,
+    apply_owned_monster_attack_hit,
+    resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::finish_state_skill;
@@ -201,9 +201,8 @@ fn monster_attack(
     region: &CServerRegion,
     monster_id: i32,
     property: &MonsterProperties,
-) -> Option<(MasterInfo, AttackInformation)> {
+) -> Option<AttackInformation> {
     let monster = region.find_monster_by_id(monster_id)?;
-    let master = monster.master_info();
     let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
     let minimum = minimum as i32;
     let difference = (maximum as i32).wrapping_sub(minimum);
@@ -234,7 +233,7 @@ fn monster_attack(
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); }
     }
-    Some((master, attack))
+    Some(attack)
 }
 
 fn owned_target_has_cure(game: &CGame, region: &CServerRegion, target: ShapeIdentity) -> bool {
@@ -261,14 +260,14 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
+    let Some((source, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
         return true;
     };
-    if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, property, tamed, master, target_identity, &target) {
+    if target.dead {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
@@ -337,13 +336,12 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(KNOCK_OUT_SKILL_ID, game.skill_factory()); }
         return true;
     }
-    let Some((attacker_master, attack)) = monster_attack(game, region, monster_id, property) else { return true };
-    let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
+    let Some(attack) = monster_attack(game, region, monster_id, property) else { return true };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
         let _ = monster.advance_base_attack_cast(KNOCK_OUT_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
     }
-    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, attacker_master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack);
+    apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if !owned_target_has_cure(game, region, target_identity) {
         let state_now = runtime.now_milliseconds();

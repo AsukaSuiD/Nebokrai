@@ -48,7 +48,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER}
 use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -783,7 +783,6 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
-    now_ms: u32,
     monster_id: i32,
     spec: PathProjectileSpec,
     skill_level: u16,
@@ -827,9 +826,7 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
                 if cell_x == center_x && cell_y != 0 && progress.visual_target.is_none() {
                     progress.visual_target = Some(identity);
                 }
-                if target.god
-                    || target.city_dead
-                    || !owned_monster_attackable(
+                if !owned_monster_attackable(
                         game,
                         region.id,
                         attacker_property,
@@ -870,32 +867,7 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
                         mp_damage: 0,
                     }],
                 };
-                let attack = defend_owned_monster_attack(
-                    game,
-                    identity,
-                    target.mana,
-                    target.war_soul_mana,
-                    target.player_properties,
-                    target.monster_properties,
-                    attack,
-                );
-                apply_owned_monster_attack_hit(
-                    game,
-                    owner,
-                    runtime,
-                    now_ms,
-                    monster_id,
-                    attacker_master,
-                    identity,
-                    &target.shape,
-                    target.health,
-                    target.mana,
-                    target.master,
-                    target.monster_property,
-                    target.tamed,
-                    target.carriage,
-                    attack,
-                );
+                apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
                 attacked.push(identity);
                 did_attack = true;
                 if owner.is_none() { return did_attack; }
@@ -1101,7 +1073,6 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 game,
                 owner,
                 runtime,
-                now_ms,
                 monster_id,
                 spec,
                 skill_level,

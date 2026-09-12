@@ -20,8 +20,8 @@
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
 //! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
 //! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
-//! добавления состояний. Коэффициент `PillarState` применяется в прежней
-//! поздней точке `PostDefense`, после обычного расчёта и PvP-множителя;
+//! добавления состояний. Коэффициент `PillarState` применяется в
+//! точке `PostDefense`, после обычного расчёта, но до множителей урона и PvP;
 //! произведение целого урона и сохранённого `f32`-коэффициента усекается к нулю
 //! при записи обратно в целое поле. Прочие ещё не восстановленные состояния не
 //! подменяются этой реализацией.
@@ -50,6 +50,23 @@ fn avoid_damage(damage: i32, avoid: u16) -> i32 {
         truncate_original(f64::from(passed) * f64::from(0.01_f32) * f64::from(damage))
     } else {
         damage
+    }
+}
+
+fn subtract_non_player_defense(
+    damage: i32,
+    defense: u32,
+    critical: bool,
+    critical_rate: f32,
+) -> i32 {
+    if critical {
+        // Для источника-монстра используется общий критический множитель;
+        // беззнаковая защита умножается без промежуточного округления к f32.
+        damage.wrapping_add(truncate_original(
+            f64::from(defense) * f64::from(critical_rate) * -0.5,
+        ))
+    } else {
+        damage.wrapping_sub((defense / 2) as i32)
     }
 }
 
@@ -425,6 +442,11 @@ pub(crate) fn defend_player_base_attack(
             }
             AttackPowerType::Poison => {}
         }
+        power.hp_damage = apply_pillar_post_defense(
+            attack.skill_id,
+            pillar_damage_factor,
+            power.hp_damage,
+        );
         if power.hp_damage > 0 {
             power.hp_damage =
                 truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
@@ -433,11 +455,6 @@ pub(crate) fn defend_player_base_attack(
                 f64::from(power.hp_damage) * f64::from(setup.pvp_damage_factor()),
             );
         }
-        power.hp_damage = apply_pillar_post_defense(
-            attack.skill_id,
-            pillar_damage_factor,
-            power.hp_damage,
-        );
     }
 }
 
@@ -473,13 +490,21 @@ pub(crate) fn defend_player_from_monster_base_attack(
         }
         match power.kind {
             AttackPowerType::Physical => {
-                power.hp_damage = power.hp_damage.wrapping_sub((target.defense / 2) as i32);
+                power.hp_damage = subtract_non_player_defense(
+                    power.hp_damage,
+                    target.defense,
+                    attack.critical,
+                    setup.critical_rate(),
+                );
                 power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(0);
             }
             AttackPowerType::Element => {
-                power.hp_damage = power
-                    .hp_damage
-                    .wrapping_sub((target.element_resistance / 2) as i32);
+                power.hp_damage = subtract_non_player_defense(
+                    power.hp_damage,
+                    target.element_resistance,
+                    attack.critical,
+                    setup.critical_rate(),
+                );
                 power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(0);
             }
             AttackPowerType::Soul => {
@@ -490,16 +515,16 @@ pub(crate) fn defend_player_from_monster_base_attack(
             }
             AttackPowerType::Poison => {}
         }
-        if power.hp_damage > 0 {
-            power.hp_damage =
-                truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
-                    .max(1);
-        }
         power.hp_damage = apply_pillar_post_defense(
             attack.skill_id,
             pillar_damage_factor,
             power.hp_damage,
         );
+        if power.hp_damage > 0 {
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
+                    .max(1);
+        }
     }
 }
 
@@ -528,13 +553,21 @@ pub(crate) fn defend_monster_from_monster_base_attack(
         );
         match power.kind {
             AttackPowerType::Physical => {
-                power.hp_damage = power.hp_damage.wrapping_sub((target.defense / 2) as i32);
+                power.hp_damage = subtract_non_player_defense(
+                    power.hp_damage,
+                    target.defense,
+                    attack.critical,
+                    setup.critical_rate(),
+                );
                 power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(0);
             }
             AttackPowerType::Element => {
-                power.hp_damage = power
-                    .hp_damage
-                    .wrapping_sub((target.element_resistance / 2) as i32);
+                power.hp_damage = subtract_non_player_defense(
+                    power.hp_damage,
+                    target.element_resistance,
+                    attack.critical,
+                    setup.critical_rate(),
+                );
                 power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(0);
             }
             AttackPowerType::Soul => {

@@ -64,7 +64,7 @@ use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
 use super::fightdefense::truncate_original;
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -603,7 +603,6 @@ pub(crate) struct WideArcAttackDispatch {
     property: MonsterProperties,
     attacker_master: MasterInfo,
     attacker_tamed: bool,
-    now_ms: u32,
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт")]
@@ -769,7 +768,6 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         property,
         attacker_master: master,
         attacker_tamed: tamed,
-        now_ms,
     });
     MonsterSkillCallOutcome::Handled
 }
@@ -841,10 +839,7 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return false;
     };
-    if target.dead
-        || target.god
-        || target.city_dead
-        || !owned_monster_attackable(
+    if !owned_monster_attackable(
             game,
             region.id,
             &dispatch.property,
@@ -857,32 +852,7 @@ pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>
         return false;
     }
     let Some(attack) = wide_arc_attack(game, region, dispatch) else { return false };
-    let attack = defend_owned_monster_attack(
-        game,
-        identity,
-        target.mana,
-        target.war_soul_mana,
-        target.player_properties,
-        target.monster_properties,
-        attack,
-    );
-    apply_owned_monster_attack_hit(
-        game,
-        owner,
-        runtime,
-        dispatch.now_ms,
-        dispatch.monster_id,
-        dispatch.attacker_master,
-        identity,
-        &target.shape,
-        target.health,
-        target.mana,
-        target.master,
-        target.monster_property,
-        target.tamed,
-        target.carriage,
-        attack,
-    );
+    apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
     true
 }
 

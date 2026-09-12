@@ -1,4 +1,6 @@
 //! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`) для игрока и монстра.
+//! Monster cell (0x0052BC80) допускает RTTI CMoveShape; текущий пространственный
+//! resolver ограничен владельцами 400/600, остальные derived-цели не подключены.
 //! На время применения удара настоящий AI источника опубликован в CPlayer;
 //! изменения синхронных callback возвращаются в тот же проход навыка.
 //! Monster-End освобождает локальный снимок пути и поражённых целей перед
@@ -48,7 +50,7 @@ use super::baseattack::{
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
@@ -776,35 +778,13 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
-    now_ms: u32,
     monster_id: i32,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     attacker_property: &crate::setup::monsterlist::MonsterProperties,
-    attacker_master: MasterInfo,
-    attacker_tamed: bool,
     identity: ShapeIdentity,
 ) {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
-        return;
-    };
-    if target.dead
-        || target.god
-        || target.city_dead
-        || !owned_monster_attackable(
-            game,
-            region.id,
-            attacker_property,
-            attacker_tamed,
-            attacker_master,
-            identity,
-            &target,
-        )
-    {
-        return;
-    }
-
     let Some(monster) = region.find_monster_by_id(monster_id) else { return };
     let (minimum, maximum) = monster.state_attack_bounds(
         attacker_property.minimum_attack,
@@ -853,32 +833,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             },
         ],
     };
-    let attack = defend_owned_monster_attack(
-        game,
-        identity,
-        target.mana,
-        target.war_soul_mana,
-        target.player_properties,
-        target.monster_properties,
-        attack,
-    );
-    apply_owned_monster_attack_hit(
-        game,
-        owner,
-        runtime,
-        now_ms,
-        monster_id,
-        attacker_master,
-        identity,
-        &target.shape,
-        target.health,
-        target.mana,
-        target.master,
-        target.monster_property,
-        target.tamed,
-        target.carriage,
-        attack,
-    );
+    apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, путь и текущий такт навыка")]
@@ -1070,16 +1025,10 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     };
     for identity in monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y) {
         let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-        if progress.attacked.contains(&identity) {
-            continue;
-        }
         let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
             continue;
         };
-        if target.dead
-            || target.god
-            || target.city_dead
-            || !owned_monster_attackable(
+        if !owned_monster_attackable(
                 game,
                 region.id,
                 &property,
@@ -1091,18 +1040,18 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         {
             continue;
         }
+        if progress.attacked.contains(&identity) {
+            continue;
+        }
         progress.attacked.push(identity);
         attack_target(
             game,
             owner,
             runtime,
-            now_ms,
             monster_id,
             skill_level,
             properties,
             &property,
-            master,
-            tamed,
             identity,
         );
         if owner.is_none() { return true; }

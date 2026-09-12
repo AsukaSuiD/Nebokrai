@@ -6,6 +6,8 @@
 //! сохраняет порядок X→Y и отдельный бросок урона для каждой цели. Формула,
 //! визуальные пакеты и самоубийственный жизненный цикл находятся здесь; `CGame`
 //! остаётся владельцем защиты, применения смерти и сценарной очереди.
+//! Scan допускает RTTI CMoveShape, а Attack отдельно отвергает 600 → 600.
+//! Общий пространственный resolver пока не передаёт NPC и постройки.
 //! End (0x00582810, общий со SporeBlasting) сбрасывает флаги, снимает один
 //! запрет движения и вызывает CAttackSkill::End. Общая очистка CMonster
 //! выполняет его после сообщения смерти либо при отмене/Stiffen без взрыва;
@@ -20,7 +22,7 @@ use crate::gameserver::gameserver::game::ServerRegionOwner;
 use crate::gameserver::appserver::states::state::resolve_owned_skill_begin_object;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -28,7 +30,6 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
-use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -226,11 +227,6 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
         return true;
     };
     send_fire(game, region, &source, skill_level);
-    let attacker = MasterInfo {
-        master_type: MONSTER_TYPE,
-        master_id: monster_id,
-        ..MasterInfo::default()
-    };
     for x in 0_i32..3 {
         for y in 0_i32..3 {
             if SCOPE[(x + 3 * y) as usize] == 0 {
@@ -242,17 +238,11 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
             let candidates = monster_attack_cell_candidates(game, region, monster_id, cell_x, cell_y);
             for identity in candidates {
                 let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
-                if identity.object_type != PLAYER_TYPE {
-                    continue;
-                }
                 let Some(target) = resolve_owned_monster_attack_target(game, region, identity)
                 else {
                     continue;
                 };
-                if target.dead
-                    || target.god
-                    || target.city_dead
-                    || !owned_monster_attackable(
+                if !owned_monster_attackable(
                         game,
                         region.id,
                         &property,
@@ -264,33 +254,10 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
                 {
                     continue;
                 }
+                // В scan вызывается IsAttackAble; отдельный Attack отвергает 600 → 600.
+                if identity.object_type == MONSTER_TYPE { continue; }
                 let attack = calculate_attack(game, monster_id, skill_level, properties);
-                let attack = defend_owned_monster_attack(
-                    game,
-                    identity,
-                    target.mana,
-                    target.war_soul_mana,
-                    target.player_properties,
-                    target.monster_properties,
-                    attack,
-                );
-                apply_owned_monster_attack_hit(
-                    game,
-                    owner,
-                    runtime,
-                    now_ms,
-                    monster_id,
-                    attacker,
-                    identity,
-                    &target.shape,
-                    target.health,
-                    target.mana,
-                    target.master,
-                    target.monster_property,
-                    target.tamed,
-                    target.carriage,
-                    attack,
-                );
+                apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
             }
         }
     }

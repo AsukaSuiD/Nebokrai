@@ -35,6 +35,8 @@
 //! использует резервные координаты +0x24/+0x28. Объектный Begin обнуляет
 //! их (0x005DBDBA), поэтому до построения пути fallback равен (0, 0),
 //! а не позиции источника. После выпуска сохранённый путь независим от цели.
+//! Исходная S не проходит dead/god/IsAttackAble gate; допуск выполняется для
+//! каждой цели пути типа 400/600 непосредственно перед Calculate и попаданием.
 //! Monster-hit получает полное временное владение ServerRegionOwner для общего
 //! death/End callback. После такого вызова регион разрешается заново;
 //! исчезнувший owner прекращает проход без подмены базовым регионом.
@@ -48,7 +50,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER}
 use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -479,7 +481,6 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     owner: &mut Option<ServerRegionOwner>,
     runtime: &mut Runtime,
-    now_ms: u32,
     monster_id: i32,
     skill_level: u16,
     properties: &CSkillBaseProperties,
@@ -498,10 +499,7 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
             let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
                 continue;
             };
-            if target.dead
-                || target.god
-                || target.city_dead
-                || !owned_monster_attackable(
+            if !owned_monster_attackable(
                     game,
                     region.id,
                     attacker_property,
@@ -541,32 +539,7 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
                     mp_damage: 0,
                 }],
             };
-            let attack = defend_owned_monster_attack(
-                game,
-                identity,
-                target.mana,
-                target.war_soul_mana,
-                target.player_properties,
-                target.monster_properties,
-                attack,
-            );
-            apply_owned_monster_attack_hit(
-                game,
-                owner,
-                runtime,
-                now_ms,
-                monster_id,
-                attacker_master,
-                identity,
-                &target.shape,
-                target.health,
-                target.mana,
-                target.master,
-                target.monster_property,
-                target.tamed,
-                target.carriage,
-                attack,
-            );
+            apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
             if owner.is_none() { return; }
         }
     }
@@ -618,21 +591,6 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let target = resolve_owned_monster_attack_target(game, region, target_identity);
-    if cast.is_none()
-        && !target.as_ref().is_some_and(|target| {
-            !target.dead
-                && !target.god
-                && !target.city_dead
-                && owned_monster_attackable(
-                    game, region.id, &property, tamed, master, target_identity, target,
-                )
-        })
-    {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target(game.skill_factory());
-        }
-        return true;
-    }
     let Ok(source_x) = source.get_tile_x() else {
         return true;
     };
@@ -642,7 +600,11 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     let target_position = target.as_ref().and_then(|target| {
         Some((target.shape.get_tile_x().ok()?, target.shape.get_tile_y().ok()?))
     });
-    let (target_x, target_y) = target_position.unwrap_or((0, 0));
+    let (target_x, target_y) = target_position.or_else(|| {
+        region.find_monster_by_id(monster_id)?
+            .move_shape().skill_lifecycle(LITTLE_STAR_SKILL_ID, game.skill_factory())
+            .map(|lifecycle| lifecycle.destination())
+    }).unwrap_or_default();
 
     if cast.is_none() {
         let trace_target = target.as_ref().map_or_else(
@@ -721,7 +683,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
 
     if progress.attack_due(now_ms, properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY)) {
         attack_path(
-            game, owner, runtime, now_ms, monster_id, skill_level, properties, &property,
+            game, owner, runtime, monster_id, skill_level, properties, &property,
             master, tamed, &progress.path,
         );
         let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };

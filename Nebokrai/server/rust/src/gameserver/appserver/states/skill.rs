@@ -9,8 +9,9 @@
 //! финализация payload остаются отдельными от общего завершения базы.
 //!
 //! End не проверяет IsEnded. При нулевом аргументе нет AfterUse и reuse-часов;
-//! успешный attack/state/summon сначала вызывает AfterUse, затем читает часы
-//! независимо от наличия User. Defense пропускает обе операции.
+//! успешный attack/state/summon сначала вызывает AfterUse, очищает контекст,
+//! затем читает часы независимо от наличия User и удаляет visual перед IsEnded.
+//! Defense пропускает AfterUse и reuse-час.
 //! Политики владельцев выбираются одним фабричным каталогом. Собственный
 //! bool-End боевой феи сохраняет отдельный пролог, не заменяя общий int-End.
 //! Производные visual подключаются явно, без имитации отсутствующих эффектов.
@@ -343,7 +344,7 @@ impl CGame {
         }
     }
 
-    fn after_use_registered_skill(
+    fn run_registered_after_use(
         &mut self,
         address: RegisteredSkill,
         now: &mut dyn FnMut() -> u32,
@@ -374,8 +375,21 @@ impl CGame {
             }
             SkillAfterUse::None => {}
         }
-        // Callback мог удалить исходный экземпляр. Его замена не наследует reuse.
         self.registered_skill(address)?;
+        Some(())
+    }
+
+    fn after_use_registered_skill(
+        &mut self,
+        address: RegisteredSkill,
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<()> {
+        if self.registered_skill(address)?.owner().category() == SkillCategory::Defense {
+            return Some(());
+        }
+        self.run_registered_after_use(address, now)?;
+        // Совместимый частичный хвост старых callers; полный End размещает
+        // эти часы после очистки контекста, а не внутри AfterUse.
         let used_at = now();
         self.registered_skill_mut(address)?.mark_used(used_at);
         Some(())
@@ -425,7 +439,14 @@ impl CGame {
         if self.prepare_registered_end(address, argument)? == RegisteredSkillEnd::Released {
             return Some(RegisteredSkillEnd::Released);
         }
-        if argument != 0 { self.after_use_registered_skill(address, now)?; }
+        let use_clock = argument != 0
+            && self.registered_skill(address)?.owner().category() != SkillCategory::Defense;
+        if use_clock { self.run_registered_after_use(address, now)?; }
+        self.registered_skill_mut(address)?.clear_base_end_context();
+        if use_clock {
+            let used_at = now();
+            self.registered_skill_mut(address)?.mark_used(used_at);
+        }
         self.finish_registered_base_end(address, termination)
     }
 
@@ -439,6 +460,7 @@ impl CGame {
         if self.prepare_registered_end(address, 0)? == RegisteredSkillEnd::Released {
             return Some(RegisteredSkillEnd::Released);
         }
+        self.registered_skill_mut(address)?.clear_base_end_context();
         self.finish_registered_base_end(address, termination)
     }
 
@@ -448,7 +470,7 @@ impl CGame {
         termination: SkillTermination,
     ) -> Option<RegisteredSkillEnd> {
         // CPlayer/CMonster::OnEndSkill — пустой virtual 0x00485540.
-        self.registered_skill_mut(address)?.finish_base(termination);
+        self.registered_skill_mut(address)?.finish_cleared_base_end(termination);
         Some(RegisteredSkillEnd::Ended)
     }
 

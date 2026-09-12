@@ -24,6 +24,8 @@
 //! расширенной точности x87 из `u32` и `0.01_f32` до единственной записи `f32`.
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
+//! Исходный monster cell допускает RTTI CMoveShape; пространственный resolver
+//! пока ограничен 400/600, подключение остальных derived-целей не завершено.
 //! Для monster-цели `time_percent` отдельно сохраняется в `f32`, после чего
 //! unsigned duration масштабируется в x87 и усекается к нулю. Обе ветви
 //! проверяют восстановление абсолютным сроком `CSkill::IsRestored`, сохраняя
@@ -44,7 +46,7 @@ use super::bossbluequakestate::BossBlueQuakeState;
 use super::fightdefense::truncate_original;
 use super::flash::cell_views;
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -707,7 +709,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
 ) {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else { return };
-    if target.dead || target.god || target.city_dead || !owned_monster_attackable(
+    if target.dead || !owned_monster_attackable(
         game, region.id, attacker_property, tamed, master, identity, &target,
     ) { return; }
     let Some(monster) = region.find_monster_by_id(monster_id) else { return };
@@ -750,20 +752,14 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul_attack), mp_damage: 0 },
         ],
     };
-    let attack = defend_owned_monster_attack(game, identity, target.mana, target.war_soul_mana,
-        target.player_properties, target.monster_properties, attack);
-    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, master, identity,
-        &target.shape, target.health, target.mana, target.master, target.monster_property,
-        target.tamed, target.carriage, attack);
+    apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
 
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return; };
     let Some(live_target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return;
     };
-    if live_target.dead
-        || live_target.god
-        || live_target.city_dead
-        || !owned_monster_attackable(
+    if target_level(game, region, identity).is_some_and(|target_level| target_level < attacker_property.level as u8) {
+        if !owned_monster_attackable(
             game,
             region.id,
             attacker_property,
@@ -771,11 +767,9 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             master,
             identity,
             &live_target,
-        )
-    {
-        return;
-    }
-    if target_level(game, region, identity).is_some_and(|target_level| target_level < attacker_property.level as u8) {
+        ) {
+            return;
+        }
         let persist = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
         let duration = if identity.object_type == PLAYER_TYPE { persist } else {
             scaled_monster_duration(

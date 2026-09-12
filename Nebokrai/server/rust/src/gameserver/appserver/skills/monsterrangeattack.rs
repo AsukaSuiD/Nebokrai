@@ -23,6 +23,8 @@
 //! Каждая клетка читается после предыдущих повреждений; IsAttackAble вызывается
 //! перед дедупликацией, цель добавляется в список после Attack. Общий регион,
 //! Vec и kernel заменяют только указатели, STL и хранение исполнения.
+//! Monster-обход пока разрешает только владельцев 400/600; исходный RTTI
+//! допускает остальные CMoveShape, для которых ещё нужна полная spatial-граница.
 //!
 //! Расчёт (VA `0x00512170`) сохраняет RNG `abs(max-min)+1`, элементальный
 //! урон и x87-усечение EM-бонуса с исходной константой `0.01_f32`.
@@ -63,7 +65,7 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::skills::monsterattack::{
     apply_owned_monster_attack_hit,
-    defend_owned_monster_attack, monster_attack_cell_candidates, owned_monster_attackable,
+    monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
@@ -333,7 +335,6 @@ pub(crate) struct MonsterRangeAttackDispatch {
     attacker_tamed: bool,
     pub(crate) center_x: i32,
     pub(crate) center_y: i32,
-    now_ms: u32,
 }
 
 pub(crate) fn begin_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
@@ -371,7 +372,6 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,
     monster_id: i32,
     properties: &CSkillBaseProperties,
-    now_ms: u32,
     runtime: &mut Runtime,
     dispatch: &mut Option<MonsterRangeAttackDispatch>,
 ) -> bool {
@@ -431,7 +431,6 @@ pub(crate) fn prepare_owned_monster_range_cast<Runtime: GameMainLoopRuntime>(
         attacker_tamed,
         center_x: tile_x,
         center_y: tile_y,
-        now_ms,
     });
     true
 }
@@ -441,15 +440,13 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     owner: &mut Option<ServerRegionOwner>,
     dispatch: &MonsterRangeAttackDispatch,
     identity: ShapeIdentity,
+    attacked: &[ShapeIdentity],
     runtime: &mut Runtime,
 ) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
         return false;
     };
-    if target.dead || target.god || target.city_dead {
-        return false;
-    }
     if !owned_monster_attackable(
         game,
         region.id,
@@ -461,6 +458,7 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     ) {
         return false;
     }
+    if attacked.contains(&identity) { return false; }
     let mut random = |maximum| game.skill_random_below(maximum);
     let attack = calculate_monster_range_attack(
         &dispatch.properties,
@@ -468,31 +466,6 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
         dispatch.monster_id,
         &mut random,
     );
-    let attack = defend_owned_monster_attack(
-        game,
-        identity,
-        target.mana,
-        target.war_soul_mana,
-        target.player_properties,
-        target.monster_properties,
-        attack,
-    );
-    apply_owned_monster_attack_hit(
-        game,
-        owner,
-        runtime,
-        dispatch.now_ms,
-        dispatch.monster_id,
-        dispatch.attacker_master,
-        identity,
-        &target.shape,
-        target.health,
-        target.mana,
-        target.master,
-        target.monster_property,
-        target.tamed,
-        target.carriage,
-        attack,
-    );
+    apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
     true
 }

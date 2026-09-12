@@ -24,8 +24,9 @@
 //! движение и передаёт исходный аргумент в CAttackSkill::End (0x005DFBD0).
 //! Отмена End(0) сохраняет этот cleanup, но не вызывает AfterUseSkill
 //! и не читает/записывает reuse; ненулевой End сохраняет оба success-эффекта.
-//! Attack (0x00542060) пропускает только null/self до расчёта и Defend;
-//! начатый cast не повторяет schedule-проверку IsAttackAble/god. Исчезнувшая
+//! Attack (0x00542060) пропускает только null/self до расчёта и OnBeenAttacked;
+//! IsAttackAble/god не являются допуском этого owner-а. Monster-resolver пока
+//! ограничен 400/600 вместо всех исходных RTTI CMoveShape. Исчезнувшая
 //! объектная цель оставляет пустой GetTargetPath (0x004D85E0): объектный
 //! CState::Begin обнуляет fallback. Message-owner (0x0054189B..0x00541973)
 //! пишет нулевые type/id и fallback x/y, затем Attack пропускает null,
@@ -64,8 +65,8 @@ use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::master_info;
 use super::fightdefense::truncate_original;
 use super::monsterattack::{
-    OwnedMonsterAttackTarget, apply_owned_monster_attack_hit, defend_owned_monster_attack,
-    owned_monster_attackable, resolve_owned_monster_attack_target,
+    OwnedMonsterAttackTarget, apply_owned_monster_attack_hit,
+    resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
@@ -191,8 +192,6 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     let Some((
         source_shape,
         property,
-        attacker_master,
-        attacker_tamed,
         pet_attack,
         cast,
         last_used_ms,
@@ -203,8 +202,6 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         Some((
             monster.move_shape().shape().clone(),
             property.clone(),
-            monster.master_info(),
-            monster.is_tamed(),
             monster
                 .is_tamed()
                 .then(|| monster.pet_attack_properties(&property)),
@@ -246,20 +243,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         let _ = super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, MONSTER_THORN_SKILL_ID, game.skill_factory());
         return MonsterSkillCallOutcome::Handled;
     }
-    if cast.is_none()
-        && (target.dead
-            || target.god
-            || target.city_dead
-            || !owned_monster_attackable(
-                game,
-                region.id,
-                &property,
-                attacker_tamed,
-                attacker_master,
-                target_identity,
-                &target,
-            ))
-    {
+    if cast.is_none() && target.dead {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
@@ -416,36 +400,11 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
             },
         ],
     };
-    let attack = defend_owned_monster_attack(
-        game,
-        target_identity,
-        target.mana,
-        target.war_soul_mana,
-        target.player_properties,
-        target.monster_properties,
-        attack,
-    );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(MONSTER_THORN_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
     }
-    apply_owned_monster_attack_hit(
-        game,
-        owner,
-        runtime,
-        now_ms,
-        monster_id,
-        attacker_master,
-        target_identity,
-        &target.shape,
-        target.health,
-        target.mana,
-        target.master,
-        target.monster_property,
-        target.tamed,
-        target.carriage,
-        attack,
-    );
+    apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return MonsterSkillCallOutcome::Handled; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().shape_mut().set_action(1);

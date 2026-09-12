@@ -141,9 +141,11 @@
 //! задаёт эффект, а `OnFighting` завершает активный ход даже после `End(0)`:
 //! Swordship устанавливает состояние без reuse, WuXing отвергает type `600`
 //! без эффекта и reuse. Это завершение не добавляется фоновой очереди.
-//! Объектный `CBaseAttack` (`1`) использует тот же monster runtime, но сохраняет
-//! свой ID в состоянии и wire. `AI` по VA `0x005B39B0/0x00514820` имеют
-//! одинаковую последовательность; различия расчёта не стираются:
+//! Объектный `CBaseAttack` (`1`) получает здесь только Begin расписания;
+//! его собственные AI/Calculate/Attack находятся в baseattack и публикуют
+//! исходный регион для общих visual/OnBeenAttacked/End. ID навыка остаётся
+//! в состоянии и visual, но сам удар сохраняет конструкторские UNKNOWN/1.
+//! Различия расчёта родственных владельцев не стираются:
 //! `CBaseAttack` (`0x005B3600`) берёт `max(max-min,0)`, MonsterBase/Fast
 //! (`0x00514460/0x00513490`) прибавляют единицу, LordFast (`0x00530D60`)
 //! использует `abs(max-min)+1` с DWORD-переполнением. MonsterBase/Fast перед
@@ -223,7 +225,7 @@ use super::monsterfastattack::{
     fast_attack_fire_message,
 };
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
@@ -1038,6 +1040,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if let Some((immediate, skill_id, skill_level)) = immediate {
         return immediate.execute(game, owner, monster_id, skill_id, skill_level, runtime);
     }
+    if region.find_monster_by_id(monster_id)
+        .and_then(|monster| monster.current_active_attack_cast(game.skill_factory()))
+        .is_some_and(|cast| cast.dispatch().skill_id == COMMON_BASE_ATTACK_SKILL_ID)
+    {
+        return super::baseattack::execute_owned_monster_base_attack(game, owner, monster_id, runtime);
+    }
     let Some((
         property,
         monster_shape,
@@ -1305,7 +1313,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
     else {
-        if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID | COMMON_BASE_ATTACK_SKILL_ID)
+        if matches!(skill_id, MONSTER_THORN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID)
             && cast.is_some()
         {
             return super::monsterattack::end_owned_monster_skill_without_reuse(region, monster_id, skill_id, game.skill_factory());
@@ -1693,7 +1701,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             &skill_properties,
-            now_ms,
             runtime,
             range_dispatch,
         );
@@ -1702,18 +1709,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    if skill_id == COMMON_BASE_ATTACK_SKILL_ID && cast.is_some()
-        && super::baseattack::handle_owned_monster_base_target_loss(
-            game, region, monster_id, monster_view, &skill_properties, runtime,
-        )
-    {
-        return true;
-    }
-    let live_base_attack = skill_id == COMMON_BASE_ATTACK_SKILL_ID && cast.is_some();
     let target_snapshot = super::monsterattack::resolve_owned_monster_attack_target(
         game, region, target,
     ).filter(|snapshot| {
-        live_base_attack || target.object_type != MONSTER_TYPE
+        target.object_type != MONSTER_TYPE
             || super::monsterattack::owned_monster_attackable(
                 game, region.id, &property, tamed, attacker_master, target, snapshot,
             )
@@ -1721,18 +1720,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let Some(super::monsterattack::OwnedMonsterAttackTarget {
         shape: target_shape,
         view: target_view,
-        health: mut target_health,
-        mana: mut target_mana,
-        war_soul_mana: target_war_soul_mana,
-        player_properties: target_player_properties,
-        monster_properties: target_monster_properties,
         dead: target_dead,
         god: target_god,
         city_dead: target_city_dead,
-        master: target_master,
-        monster_property: target_monster_property,
-        tamed: target_tamed,
-        carriage: target_carriage,
+        ..
     }) = target_snapshot
     else {
         if pet_ai {
@@ -1742,7 +1733,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
         return true;
     };
-    if !live_base_attack && (target_dead
+    if target_dead
         || ((pet_ai || !uses_stationary_attack_schedule(property.ai) || cast.is_some())
             && (target_god
                 || target_city_dead
@@ -1755,7 +1746,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         &property,
                         tamed,
                         attacker_master,
-                    )))))
+                    ))))
     {
         if pet_ai {
             lose_pet_target_and_search(region, monster_id, runtime);
@@ -1773,7 +1764,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
 
-    if !live_base_attack && tamed
+    if tamed
         && target.object_type == PLAYER_TYPE
         && attacker_master.master_type == PLAYER_TYPE
         && attacker_master.master_id != 0
@@ -1819,18 +1810,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
 
     if let Some(cast) = cast {
-        if cast.dispatch().skill_id == COMMON_BASE_ATTACK_SKILL_ID
-            && cast.stage() == SkillStage::Begin
-            && !super::baseattack::start_owned_monster_base_attack_ai(
-                game, region, monster_id, monster_view, Some(target_view), maximum_distance,
-            )
-        {
-            return true;
-        }
-        let delay_reached = if matches!(
-            cast.dispatch().skill_id,
-            COMMON_BASE_ATTACK_SKILL_ID | MONSTER_BASE_ATTACK_SKILL_ID,
-        ) {
+        let delay_reached = if cast.dispatch().skill_id == MONSTER_BASE_ATTACK_SKILL_ID {
             cast.started_at_ms().wrapping_add(delay_ms) <= runtime.now_milliseconds()
         } else {
             time_reached(now_ms, cast.started_at_ms(), delay_ms)
@@ -1915,29 +1895,16 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             (1, true)
         };
 
-        if live_base_attack
-            && !super::baseattack::owned_monster_base_attack_allowed(
-                game, region, monster_id, &property, tamed, attacker_master, target,
-            )
-        {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.finish_base_attack_cast_with_clock(dispatch.skill_id, game.skill_factory(), || runtime.now_milliseconds());
-            }
-            return true;
-        }
-
         for hit_index in 0..hit_count {
             let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
             if hit_index != 0 {
-                if target.object_type == PLAYER_TYPE {
+                let target_health = if target.object_type == PLAYER_TYPE {
                     let Some(player) = game.find_player(target.id) else { break; };
-                    target_health = player.health();
-                    target_mana = player.mana();
+                    player.health()
                 } else {
                     let Some(monster) = region.find_monster_by_id(target.id) else { break; };
-                    target_health = monster.hit_points();
-                    target_mana = 0;
-                }
+                    monster.hit_points()
+                };
                 if target_health == 0 {
                     break;
                 }
@@ -1952,30 +1919,17 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             let physical_maximum = maximum as i32;
             let difference = physical_maximum.wrapping_sub(physical_minimum);
             let physical_span = match dispatch.skill_id {
-                COMMON_BASE_ATTACK_SKILL_ID => difference.max(0),
                 LORD_FAST_ATTACK_SKILL_ID => difference.wrapping_abs().wrapping_add(1),
                 _ => difference.max(0).wrapping_add(1),
             };
             let physical = physical_minimum.wrapping_add(game.skill_random_below(physical_span));
             // `CMonster::GetAddElementAtk` остаётся нулевым даже для pet-owner.
             let element = 0;
-            if matches!(dispatch.skill_id, COMMON_BASE_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID) {
+            if dispatch.skill_id == LORD_FAST_ATTACK_SKILL_ID {
                 let _critical_roll = game.skill_random_below(100);
             }
-            let attack = AttackInformation {
-                skill_id: dispatch.skill_id,
-                skill_level: dispatch.skill_level as u8,
-                attacker_type: MONSTER_TYPE,
-                attacker_id: monster_id,
-                attacker_team_id: 0,
-                attacker_faction_id: 0,
-                attacker_union_id: 0,
+            let mut attack = AttackInformation {
                 hit_modifier,
-                damage_factor: 1.0,
-                damage_modifier: 0,
-                critical: false,
-                blast_attack: false,
-                full_miss: 0,
                 damages: vec![
                     AttackPower {
                         kind: AttackPowerType::Physical,
@@ -1993,16 +1947,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         mp_damage: 0,
                     },
                 ],
+                ..AttackInformation::for_master(MasterInfo {
+                    master_type: MONSTER_TYPE,
+                    master_id: monster_id,
+                    ..MasterInfo::default()
+                })
             };
-            let attack = defend_owned_monster_attack(
-                game,
-                target,
-                target_mana,
-                target_war_soul_mana,
-                target_player_properties,
-                target_monster_properties,
-                attack,
-            );
+            // MonsterBase::Calculate не заменяет конструкторские UNKNOWN/1.
+            // Метаданные самостоятельных Fast-владельцев остаются их контрактом.
+            if dispatch.skill_id != MONSTER_BASE_ATTACK_SKILL_ID {
+                attack.skill_id = dispatch.skill_id;
+                attack.skill_level = dispatch.skill_level as u8;
+            }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if matches!(
                     dispatch.skill_id,
@@ -2021,29 +1977,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         .advance_base_attack_cast(dispatch.skill_id, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
                 }
             }
-            apply_owned_monster_attack_hit(
-                game,
-                owner,
-                runtime,
-                now_ms,
-                monster_id,
-                attacker_master,
-                target,
-                &target_shape,
-                target_health,
-                target_mana,
-                target_master,
-                target_monster_property.clone(),
-                target_tamed,
-                target_carriage,
-                attack,
-            );
+            apply_owned_monster_attack_hit(game, owner, runtime, target, attack);
         }
         let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
         if finish_cast
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
-            monster.move_shape_mut().shape_mut().set_action(1);
+            if dispatch.skill_id != MONSTER_BASE_ATTACK_SKILL_ID {
+                monster.move_shape_mut().shape_mut().set_action(1);
+            }
             let _ = monster.finish_base_attack_cast_with_clock(dispatch.skill_id, game.skill_factory(), || runtime.now_milliseconds());
         }
         return true;
@@ -2083,7 +2025,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
     }
     if skill_id == COMMON_BASE_ATTACK_SKILL_ID {
-        super::baseattack::begin_owned_monster_base_attack(game, region, monster_id, target, skill_level, now_ms, game.skill_factory());
+        super::baseattack::begin_owned_monster_base_attack(game, region, monster_id, target, skill_level, runtime);
         return true;
     }
     let last_used_ms = region

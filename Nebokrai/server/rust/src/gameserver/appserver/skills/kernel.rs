@@ -496,11 +496,24 @@ impl SkillLifecycle {
         termination: SkillTermination,
         clear_visual: impl FnOnce(),
     ) {
+        self.clear_end_context();
+        self.finish_end(termination, clear_visual);
+    }
+
+    /// CSkill::End очищает участников и prepared до чтения часов reuse.
+    pub(crate) fn clear_end_context(&mut self) {
         self.user = (0, Self::EMPTY_IDENTITY);
         self.sufferer = (0, Self::EMPTY_IDENTITY);
         self.destination = (0, 0);
         self.started_at_ms = 0;
         self.prepared = false;
+    }
+
+    pub(crate) fn finish_end(
+        &mut self,
+        termination: SkillTermination,
+        clear_visual: impl FnOnce(),
+    ) {
         clear_visual();
         self.ended = true;
         self.termination = Some(termination);

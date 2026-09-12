@@ -6,22 +6,17 @@
 //! Владелец заранее расходует по два вызова legacy RNG на каждую цель каждого
 //! окна, хранит FIFO окон и формирует точный клиентский снимок. Поиск сущностей
 //! и применение атаки к независимым владельцам остаются у `CGame`.
-
-//! Цепочка попадания передаёт Option владельца региона до синхронной смерти.
-//! Заимствование базы не переживает эту границу; продолжение заново получает
-//! оставшегося владельца, не создавая замену исчезнувшему региону.
-
-use crate::gameserver::gameserver::game::ServerRegionOwner;
+//! AI (0x005F94B0) требует региональный source для любого master type и
+//! вызывает IsAttackAble перед Attack; тот отдельно отвергает IsDied.
 
 use super::snowstorm::SNOW_STORM_SKILL_ID;
-use super::monsterattack::{apply_owned_monster_attack_hit, defend_owned_monster_attack, owned_monster_attackable, resolve_owned_monster_attack_target};
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 const SCOPE_SIDE: i32 = 5;
@@ -65,18 +60,6 @@ pub(crate) fn calculate_owned_snow_storm_attack(
     Some(phalanx.calculate_attack(combat, occupation, level, &mut |maximum| {
         game.skill_random_below(maximum)
     }))
-}
-
-pub(crate) fn execute_owned_monster_snow_storm_target<Runtime: GameMainLoopRuntime>(game: &mut CGame, owner: &mut Option<ServerRegionOwner>, phalanx: &CSnowStormPhalanx, target_identity: ShapeIdentity, now_ms: u32, runtime: &mut Runtime) -> bool {
-    let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let master = phalanx.master();
-    let Some((property, tamed, policy_master)) = region.find_monster_by_id(master.master_id).and_then(|monster| Some((game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(), monster.is_tamed(), monster.master_info()))) else { return false };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else { return false };
-    if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, &property, tamed, policy_master, target_identity, &target) { return false; }
-    let attack = phalanx.calculate_element_attack(&mut |maximum| game.skill_random_below(maximum));
-    let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
-    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, master.master_id, master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack);
-    true
 }
 
 impl CSnowStormPhalanx {

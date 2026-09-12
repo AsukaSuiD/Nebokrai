@@ -1451,7 +1451,7 @@ use crate::gameserver::appserver::skills::snowstorm::{
     is_snow_storm_target, SNOW_STORM_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::snowstormphalanx::{
-    calculate_owned_snow_storm_attack, execute_owned_monster_snow_storm_target,
+    calculate_owned_snow_storm_attack,
     CSnowStormPhalanx, SnowStormPhalanxTick,
 };
 use crate::gameserver::appserver::skills::weak::{
@@ -37539,17 +37539,6 @@ impl CGame {
         message.add_byte(attack.skill_level);
     }
 
-    pub(crate) fn applied_attack_damage(
-        attack: &AttackInformation,
-        target_health: u32,
-        target_mana: u32,
-    ) -> (u32, u32) {
-        (
-            attack.hp_damage().min(target_health),
-            attack.mp_damage().min(target_mana),
-        )
-    }
-
     pub(crate) fn append_hurt_damage_records(
         message: &mut CMessage,
         health_damage: u32,
@@ -38943,9 +38932,6 @@ impl CGame {
                 );
                 self.restore_region_owner(owner);
                 for identity in candidates {
-                    if attacked.contains(&identity) {
-                        continue;
-                    }
                     let Some(owner) = self.take_region_owner(region_id) else {
                         break 'cells;
                     };
@@ -38955,6 +38941,7 @@ impl CGame {
                         &mut owner,
                         &dispatch,
                         identity,
+                        &attacked,
                         runtime,
                     );
                     let Some(owner) = owner else { break 'cells };
@@ -44638,7 +44625,16 @@ impl CGame {
             }
             return true;
         }
-        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::SnowStorm(snow)) = (tick, &phalanx) {
+        if let (Some(Some(_)), SummonedSkillShape::SnowStorm(snow)) = (tick, &phalanx) {
+            // Региональный GetShape источника предшествует всем клеткам;
+            // глобальный поиск игрока не заменяет эту границу SnowStorm.
+            let source = ShapeIdentity {
+                object_type: snow.master().master_type,
+                id: snow.master().master_id,
+                ex_id: CGuid::GUID_INVALID,
+            };
+            let source_present = self.find_shape_in_region(region_id, source)
+                .is_some_and(|_| resolve_state_move_shape(self, region_id, source).is_some());
             for (x, y) in snow.current_cells() {
                 let mut shapes = Vec::new();
                 if let Some(region) = self.find_region(region_id) {
@@ -44646,21 +44642,11 @@ impl CGame {
                 }
                 for shape in shapes {
                     let target = shape.identity;
-                    if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                    if !source_present || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
                         || (target.object_type == snow.master().master_type && target.id == snow.master().master_id)
                     { continue; }
-                    if snow.master().master_type == MONSTER_TYPE {
-                        let Some(owner) = self.take_region_owner(region_id) else { break; };
-                        let mut owner = Some(owner);
-                        let _ = execute_owned_monster_snow_storm_target(
-                            self, &mut owner, snow, target, sampled_at_ms, runtime,
-                        );
-                        let Some(owner) = owner else { break; };
-                        self.restore_region_owner(owner);
-                    } else {
-                        self.apply_scanned_summoned_skill_to_target(
-                            &phalanx, target, region_id, false, &mut attacked_targets, runtime,
-                        );
+                    if self.live_skill_target_attackable(region_id, source, target) {
+                        self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
                     }
                 }
             }

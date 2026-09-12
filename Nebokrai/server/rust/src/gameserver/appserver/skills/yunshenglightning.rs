@@ -41,7 +41,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER}
 use super::fightdefense::truncate_original;
 use super::flash::master_info;
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -327,9 +327,6 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
     }
 
     if let Some(target) = target
-        && !target.dead
-        && !target.god
-        && !target.city_dead
         && owned_monster_attackable(
             game, region.id, &property, tamed, master, target_identity, &target,
         )
@@ -364,15 +361,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
                 mp_damage: 0,
             }],
         };
-        let attack = defend_owned_monster_attack(
-            game, target_identity, target.mana, target.war_soul_mana,
-            target.player_properties, target.monster_properties, attack,
-        );
-        apply_owned_monster_attack_hit(
-            game, owner, runtime, now_ms, monster_id, master, target_identity,
-            &target.shape, target.health, target.mana, target.master,
-            target.monster_property, target.tamed, target.carriage, attack,
-        );
+        apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
     }
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {

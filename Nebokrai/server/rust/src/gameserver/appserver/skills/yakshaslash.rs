@@ -9,6 +9,8 @@
 //! конкретного `CMoveShape`. Объектная ветвь достигнута и для игрока, и для
 //! монстра; `CGame` только разрешает владельцев, применяет готовый удар и
 //! выполняет доставку.
+//! Monster GetS пока разрешает только 400/600; остальные исходные RTTI
+//! CMoveShape не подключены. Attack (0x00543030) не добавляет IsAttackAble.
 //! Беззнаковый skill factor сохраняется в x87 до единственной записи в
 //! `float`. Критический множитель переводится в `int` с x87 rounding-control
 //! `11`, то есть усечением к нулю после умножения каждого боевого компонента.
@@ -34,7 +36,7 @@ use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_H
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::monsterattack::{finish_owned_monster_attack_impact, owned_monster_attackable, resolve_owned_monster_attack_target};
+use super::monsterattack::{finish_owned_monster_attack_impact, resolve_owned_monster_attack_target};
 use super::monsterprojectile::{MonsterProjectileDispatch, MonsterProjectileProgress, execute_owned_monster_projectile_target};
 use super::poisonmoth::{master_info, MONSTER_TYPE, PLAYER_TYPE};
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
@@ -151,7 +153,7 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_progress::<MonsterProjectileProgress>(YAKSHA_SLASH_SKILL_ID, game.skill_factory()).copied()))) else { return false };
+    let Some((source, source_view, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.is_tamed(), monster.current_active_attack_cast(game.skill_factory()), monster.skill_progress::<MonsterProjectileProgress>(YAKSHA_SLASH_SKILL_ID, game.skill_factory()).copied()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
@@ -161,7 +163,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         }
         return true;
     };
-    if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, property, tamed, master, target_identity, &target) {
+    if target.dead || (target_identity.object_type == MONSTER_TYPE && target_identity.id == monster_id) {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
@@ -216,7 +218,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         send_monster_cast(game, region, monster_id, skill_level, target_identity, (target_x, target_y), Some(flying_time));
     }
     if !time_reached(now_ms, cast.started_at_ms(), delay.wrapping_add(progress.missile_flying_time_ms())) { return true; }
-    let dispatch = MonsterProjectileDispatch::object_target(monster_id, YAKSHA_SLASH_SKILL_ID, target_x, target_y, skill_level, properties.clone(), property.clone(), master, tamed, now_ms);
+    let dispatch = MonsterProjectileDispatch::object_target(monster_id, YAKSHA_SLASH_SKILL_ID, target_x, target_y, skill_level, properties.clone(), property.clone());
     let _ = execute_owned_monster_projectile_target(game, owner, &dispatch, target_identity, runtime);
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return true; };
     finish_owned_monster_attack_impact(region, dispatch.monster_id, dispatch.skill_id, game.skill_factory(), runtime);

@@ -45,8 +45,8 @@ use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillTermination, skill_is_restored};
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
-    owned_monster_attackable, resolve_owned_monster_attack_target,
+    apply_owned_monster_attack_hit,
+    resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoisonstate::{
@@ -396,11 +396,11 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some((source_shape, property, attacker_master, attacker_tamed, pet_attack, cast, last_used_ms)) =
+    let Some((source_shape, property, pet_attack, cast, last_used_ms)) =
         region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
             let pet_attack = monster.is_tamed().then(|| monster.pet_attack_properties(&property));
-            Some((monster.move_shape().shape().clone(), property, monster.master_info(), monster.is_tamed(), pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID, game.skill_factory())))
+            Some((monster.move_shape().shape().clone(), property, pet_attack, monster.current_active_attack_cast(game.skill_factory()), monster.skill_last_used_ms(SPIDER_POISON_SKILL_ID, game.skill_factory())))
         })
     else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
@@ -412,9 +412,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         }
         return true;
     };
-    if target.dead || target.god || target.city_dead || !owned_monster_attackable(
-        game, region.id, &property, attacker_tamed, attacker_master, target_identity, &target,
-    ) {
+    if target.dead {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_none_or(|execution| execution.termination().is_some()) {
                 monster.move_shape_mut().set_moveable(true);
@@ -502,14 +500,11 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(soul_attack), mp_damage: 0 },
         ],
     };
-    let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
         let _ = monster.advance_base_attack_cast(SPIDER_POISON_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
     }
-    apply_owned_monster_attack_hit(game, owner, runtime, now_ms, monster_id, attacker_master,
-        target_identity, &target.shape, target.health, target.mana, target.master,
-        target.monster_property, target.tamed, target.carriage, attack);
+    apply_owned_monster_attack_hit(game, owner, runtime, target_identity, attack);
     let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return true; };
     let region_id = region.id;
     let Some(user) = region.find_monster_by_id(monster_id)

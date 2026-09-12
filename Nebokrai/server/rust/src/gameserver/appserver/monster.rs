@@ -2092,10 +2092,13 @@ impl CMonster {
         }
         self.clear_skill_progress(skill_id, factory);
         self.finish_attack_skill_resources(skill_id);
-        self.move_shape.finish_skill_base(skill_id, factory, SkillTermination::Completed);
+        let slot = self.move_shape.skill_slot(skill_id, factory)?;
+        let skill = self.move_shape.skill_at_mut(slot)?;
+        skill.clear_base_end_context();
         if let Some(now) = reuse_clock {
-            self.move_shape.mark_skill_used(skill_id, now(), factory);
+            skill.mark_used(now());
         }
+        skill.finish_cleared_base_end(SkillTermination::Completed);
         self.base_attack_cast(skill_id, factory)
     }
 

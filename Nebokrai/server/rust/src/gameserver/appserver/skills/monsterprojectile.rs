@@ -11,9 +11,12 @@
 //! `f32`. Оба остальных исходных `CalculateAttackPower` берут elemental damage из virtual
 //! `CMonster::GetAddElementAtk == 0`, поэтому ресурсный element range здесь не
 //! участвует и между physical и critical roll нет дополнительного RNG.
-//! Общий хвост `End` сохраняет отдельные часы: `dispatch.now_ms` относится к
-//! попаданию, а reuse читает runtime после очистки ресурсов и освобождения
-//! движения, как `CSkill::End` (0x4d84c0). Часы попадания не подменяют часы End.
+//! Защита и попадание читают часы внутри общего OnBeenAttacked. Reuse отдельно
+//! читает runtime после очистки ресурсов и освобождения движения,
+//! как `CSkill::End` (0x4d84c0).
+//! Cell Skeleton/Chuck (0x005392B0/0x0053DA40) не вызывает IsAttackAble перед
+//! Calculate; проверка первой BLOCK_SHAPE остаётся отдельной границей полёта.
+//! Исходный RTTI допускает все CMoveShape, но текущий resolver ещё только 400/600.
 //! End `0x0056A330` и `0x0057B810` обнуляет четыре derived DWORD
 //! `+0x4C/+0x50/+0x54/+0x58` до возврата движения. Общий зарегистрированный
 //! End снимает фазу kernel, а этот owner сбрасывает fired и время полёта.
@@ -30,13 +33,12 @@ use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
 use super::monsterattack::{
-    apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    apply_owned_monster_attack_hit,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -65,10 +67,7 @@ pub(crate) struct MonsterProjectileDispatch {
     skill_level: u16,
     properties: CSkillBaseProperties,
     property: MonsterProperties,
-    attacker_master: MasterInfo,
-    attacker_tamed: bool,
     damage_factor: f32,
-    now_ms: u32,
 }
 
 impl MonsterProjectileDispatch {
@@ -83,17 +82,13 @@ impl MonsterProjectileDispatch {
         skill_level: u16,
         properties: CSkillBaseProperties,
         property: MonsterProperties,
-        attacker_master: MasterInfo,
-        attacker_tamed: bool,
-        now_ms: u32,
     ) -> Self {
         let damage_factor = (f64::from(
             properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
         ) * f64::from(0.01_f32)) as f32;
         Self {
             monster_id, skill_id, impact_x: target_x, impact_y: target_y,
-            skill_level, properties, property, attacker_master, attacker_tamed,
-            damage_factor, now_ms,
+            skill_level, properties, property, damage_factor,
         }
     }
 }
@@ -171,22 +166,12 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
     if detached_impact.is_none()
         && target
             .as_ref()
-            .is_some_and(|target| target.dead || target.god || target.city_dead)
+            .is_some_and(|target| target.dead)
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             if cast.is_some() {
                 let _ = monster.finish_base_attack_cast_with_clock(skill_id, game.skill_factory(), || runtime.now_milliseconds());
             }
-            monster.clear_ai_target(game.skill_factory());
-        }
-        return true;
-    }
-    if detached_impact.is_none() && target.as_ref().is_some_and(|target| {
-        !owned_monster_attackable(
-            game, region.id, &property, tamed, master, target_identity, target,
-        )
-    }) {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target(game.skill_factory());
         }
         return true;
@@ -355,10 +340,7 @@ pub(crate) fn prepare_owned_monster_projectile<Runtime: GameMainLoopRuntime>(
         skill_level,
         properties: properties.clone(),
         property,
-        attacker_master: master,
-        attacker_tamed: tamed,
         damage_factor: 1.0,
-        now_ms,
     });
     true
 }
@@ -408,22 +390,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
     runtime: &mut Runtime,
 ) -> bool {
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
-    let Some(target) = resolve_owned_monster_attack_target(game, region, identity) else {
-        return false;
-    };
-    if target.dead
-        || target.god
-        || target.city_dead
-        || !owned_monster_attackable(
-            game,
-            region.id,
-            &dispatch.property,
-            dispatch.attacker_tamed,
-            dispatch.attacker_master,
-            identity,
-            &target,
-        )
-    {
+    if resolve_owned_monster_attack_target(game, region, identity).is_none() {
         return false;
     }
     let Some(monster) = region.find_monster_by_id(dispatch.monster_id) else { return false };
@@ -476,31 +443,6 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
             },
         ],
     };
-    let attack = defend_owned_monster_attack(
-        game,
-        identity,
-        target.mana,
-        target.war_soul_mana,
-        target.player_properties,
-        target.monster_properties,
-        attack,
-    );
-    apply_owned_monster_attack_hit(
-        game,
-        owner,
-        runtime,
-        dispatch.now_ms,
-        dispatch.monster_id,
-        dispatch.attacker_master,
-        identity,
-        &target.shape,
-        target.health,
-        target.mana,
-        target.master,
-        target.monster_property,
-        target.tamed,
-        target.carriage,
-        attack,
-    );
+    apply_owned_monster_attack_hit(game, owner, runtime, identity, attack);
     true
 }

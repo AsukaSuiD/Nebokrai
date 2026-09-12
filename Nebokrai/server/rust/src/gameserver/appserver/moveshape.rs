@@ -791,6 +791,20 @@ impl MoveShapeSkill {
         }
     }
 
+    pub(crate) fn monster_kernel(&self) -> Option<&super::monster::MonsterBaseAttackCast> {
+        match &self.execution {
+            RegisteredSkillExecution::Monster(execution) => Some(&execution.kernel),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn monster_kernel_mut(&mut self) -> Option<&mut super::monster::MonsterBaseAttackCast> {
+        match &mut self.execution {
+            RegisteredSkillExecution::Monster(execution) => Some(&mut execution.kernel),
+            _ => None,
+        }
+    }
+
     pub(crate) fn execution_dispatch(&self) -> Option<RegisteredSkillDispatch> {
         match &self.execution {
             RegisteredSkillExecution::Player(execution) =>
@@ -883,10 +897,20 @@ impl MoveShapeSkill {
     /// Общий хвост CSkill::End после concrete cleanup и OnEndSkill.
     /// Владеющий visual не входит в копируемый снимок скалярного lifecycle.
     pub(crate) fn finish_base(&mut self, termination: SkillTermination) {
+        self.clear_base_end_context();
+        self.finish_cleared_base_end(termination);
+    }
+
+    pub(crate) fn clear_base_end_context(&mut self) {
+        self.execution.lifecycle_mut().clear_end_context();
+    }
+
+    /// Visual и IsEnded следуют после отдельного native reuse-clock.
+    pub(crate) fn finish_cleared_base_end(&mut self, termination: SkillTermination) {
         let visual = &mut self.current_visual_effect;
         self.execution
             .lifecycle_mut()
-            .reset_after_end(termination, || drop(visual.take()));
+            .finish_end(termination, || drop(visual.take()));
     }
 
     pub(crate) const fn id(&self) -> u32 {
