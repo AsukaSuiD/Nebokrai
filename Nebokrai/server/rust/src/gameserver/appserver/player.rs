@@ -5774,28 +5774,6 @@ impl CPlayer {
         self.move_shape.take_knock_out_state()
     }
 
-    pub(crate) fn replace_knight_cut_state(
-        &mut self,
-        state: super::skills::knightcutstate::KnightCutState,
-    ) -> Option<super::skills::knightcutstate::KnightCutState> {
-        self.move_shape.replace_knight_cut_state(state)
-    }
-
-
-    pub(crate) fn take_expired_knight_cut_state(
-        &mut self,
-        key: super::moveshape::StateKey,
-        now_ms: u32,
-    ) -> Option<super::skills::knightcutstate::KnightCutState> {
-        self.move_shape.take_expired_knight_cut_state(key, now_ms)
-    }
-
-    pub(crate) fn take_knight_cut_state(
-        &mut self,
-    ) -> Option<super::skills::knightcutstate::KnightCutState> {
-        self.move_shape.take_knight_cut_state()
-    }
-
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {
         self.move_shape.blind_state_order()
     }

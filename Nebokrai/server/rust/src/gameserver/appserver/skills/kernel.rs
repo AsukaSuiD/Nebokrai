@@ -244,7 +244,7 @@ player_skill_states! {
     Rage(RageExecutionState),
     Flash(FlashExecutionState) paths(clear_end_paths),
     Rush(RushExecutionState) paths(clear_end_paths),
-    Swallow(SwallowExecutionState),
+    Swallow(SwallowExecutionState) prepare(prepare_derived_end),
     SevenShootingStar(SevenShootingStarExecutionState) paths(clear_end_paths),
     LittleStar(PlayerLittleStarExecutionState) paths(clear_end_paths),
     YunshengLightning(PlayerYunShengLightningExecutionState),

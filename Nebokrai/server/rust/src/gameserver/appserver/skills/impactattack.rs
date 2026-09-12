@@ -1,9 +1,10 @@
-//! Попадание и отбрасывание Mosou и ThunderBlow2.
-//! Источник: gameserver.exe/GameServer.pdb, skills/mosou.cpp и thunderblow2.cpp.
+//! Попадание Mosou/ThunderBlow2 и общий шаг отбрасывания с KnightCut.
+//! Источник: gameserver.exe/GameServer.pdb, skills/mosou.cpp, thunderblow2.cpp
+//! и knightcut.cpp.
 //!
 //! Mosou обходит один снимок лицевой клетки без дедупликации; допуск проверяется
 //! перед каждым контактом. Оружейный расчёт и RP общие с weaponattack. После
-//! попадания только игрок уменьшает вероятность оглушения своим avoidance.
+//! попадания только игрок уменьшает вероятность оглушения своим ReAnk.
 //! Cure запрещает установку KnockOut, но не последующее отбрасывание; отказ
 //! Begin нового состояния также не отменяет ForceMove.
 //!
@@ -12,6 +13,8 @@
 //! NULL таблица Calculate оставляет UNKNOWN/1 и пустой урон. Общая геометрия
 //! отбрасывания читает позиции после callback-ов и использует захваченный
 //! caller-ом регион для GetBlock, а ForceMove — фактический регион цели.
+//! Mosou/Thunder требуют нулевой блок целиком, KnightCut — только младшие
+//! три бита; обе проверки допускают координату 0 и исключают выход за регион.
 
 use super::basemagic::{SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use super::cure::CURE_SKILL_ID;
@@ -83,6 +86,13 @@ pub(super) fn knock_back_impact_target(
     game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
     region_id: i32, properties: &CSkillBaseProperties,
 ) {
+    knock_back_impact_target_with_block_mask(game, source, target, region_id, properties, u8::MAX);
+}
+
+pub(super) fn knock_back_impact_target_with_block_mask(
+    game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
+    region_id: i32, properties: &CSkillBaseProperties, block_mask: u8,
+) {
     let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return; };
     let target_y = sufferer.shape().get_tile_y().unwrap_or(i32::MIN);
     let target_x = sufferer.shape().get_tile_x().unwrap_or(i32::MIN);
@@ -105,7 +115,7 @@ pub(super) fn knock_back_impact_target(
         let Ok(next) = CShape::get_direction_position(direction, candidate) else { return; };
         candidate = next;
         let Some(owner) = game.find_region(region_id) else { return; };
-        if owner.base().block_at(candidate.x, candidate.y) != Some(0) { break; }
+        if owner.base().block_at(candidate.x, candidate.y).is_none_or(|block| block & block_mask != 0) { break; }
         destination = candidate;
         moved = moved.wrapping_add(1);
         steps = properties.query_property(TARGET_BACK_STEP);
@@ -135,10 +145,10 @@ pub(super) fn run_mosou_attack<Runtime: GameMainLoopRuntime>(
         let target = (sufferer.shape().get_region_id(), sufferer.shape().identity());
         if source.1 == target.1 || !game.live_skill_target_attackable(target.0, source.1, target.1) { continue; }
         apply_player_unmodified_weapon_attack(game, instance, source, target, runtime);
-        let avoidance = if target.1.object_type == 400 {
-            game.find_player(target.1.id).map_or(0, |player| i32::from(player.combat_properties().attack_avoid))
+        let reank = if target.1.object_type == 400 {
+            game.find_player(target.1.id).map_or(0, |player| i32::from(player.combat_properties().reank))
         } else { 0 };
-        let probability = (properties.query_property(BASE_PROBABILITY) as i32).wrapping_sub(avoidance);
+        let probability = (properties.query_property(BASE_PROBABILITY) as i32).wrapping_sub(reank);
         if game.skill_random_below(100) >= probability { continue; }
         let Some(target_level) = game.move_shape_level(target.0, target.1) else { continue; };
         let Some(source_level) = game.move_shape_level(source.0, source.1) else { continue; };

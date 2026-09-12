@@ -9,17 +9,17 @@
 //!
 //! Строгий wrapping deadline действует и при нулевом сроке. Восьмибайтный
 //! ID/remaining codec читает часы перед remaining при Load и после ID при Save.
-//! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike. Для primary
-//! KnockOut/SpiderWeb/BossBlueQuake payload-адаптер сохраняет тот же Begin;
+//! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike/KnightCut. Для primary
+//! KnockOut/SpiderWeb/BossBlueQuake/KnightCut payload-адаптер сохраняет тот же Begin;
 //! caller выбирает append либо освобождённый прежний слот без второго хранилища.
-//! OnAction не объединён: Blind/KnockOut/Seal заканчиваются при Defense,
+//! OnAction не объединён: Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
 //! Rush/Rush2/SpiderWeb/Strike ничего не делают.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::{AppliedState, StateData, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    begin_applied_state_visual, begin_base_applied_state, remove_applied_state_from,
+    begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at, remove_applied_state_from,
     resolve_applied_state_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
     state_client_record, timed_client_state_time, update_applied_state_end_visual,
     update_applied_state_visual_base, StatePropertyTarget,
@@ -128,6 +128,23 @@ pub(crate) fn begin_primary_blind_state<T: BlindStatePayload>(
     begin_primary_blind_state_at(game, holder_region, holder, user, sufferer, state, None, now)
 }
 
+/// KnockOut, Mosou и KnightCut создают новый payload до поиска прежнего.
+/// Полный End и destructor освобождают ту же позицию до нового Begin.
+pub(crate) fn replace_primary_blind_state<T: BlindStatePayload>(
+    game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),
+    state: T, now: &mut dyn FnMut() -> u32,
+) -> bool {
+    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return false; };
+    let previous = shape.find_state_position(|old| old.state_id() == state.blind_state_id());
+    let placement = previous.and_then(|(_, key)| shape.applied_state_replacement_location(key));
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
+    }
+    begin_primary_blind_state_at(
+        game, target.0, target.1, Some(source), Some(target), state, placement, now,
+    ).is_some()
+}
+
 #[allow(clippy::too_many_arguments, reason = "место публикации задаёт конкретный caller после End старого состояния")]
 pub(crate) fn begin_primary_blind_state_at<T: BlindStatePayload>(
     game: &mut CGame,
@@ -215,6 +232,7 @@ pub(crate) fn update_blind_state(
             StateData::Rush(state) => state.expired(now_ms),
             StateData::Rush2(state) => state.expired(now_ms),
             StateData::KnockOut(state) => state.expired(now_ms),
+            StateData::KnightCut(state) => state.expired(now_ms),
             StateData::SpiderWeb(state) => state.expired(now_ms),
             StateData::Seal(state) => state.expired(now_ms),
             StateData::Strike(state) => state.expired(now_ms),

@@ -182,6 +182,8 @@ pub(crate) mod appserver {
         pub(crate) mod ghostcut3;
         pub(crate) mod frontcellsword;
         pub(crate) mod knightcut;
+        pub(crate) mod knightcutattack;
+        pub(crate) mod knightcutvisual;
         pub(crate) mod knightcutstate;
         pub(crate) mod armybreak;
         pub(crate) mod armybreak2;
@@ -207,6 +209,8 @@ pub(crate) mod appserver {
         pub(crate) mod mosouvisual;
         pub(crate) mod thunder;
         pub(crate) mod swallow;
+        pub(crate) mod swallowattack;
+        pub(crate) mod swallowvisual;
         pub(crate) mod thunderblow;
         pub(crate) mod thunderblow2;
         pub(crate) mod thunderblow2visual;

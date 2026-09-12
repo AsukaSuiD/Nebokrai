@@ -714,6 +714,7 @@ state_callbacks! {
     | StateData::Rush(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
     | StateData::Rush2(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) }
     | StateData::KnockOut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
+    | StateData::KnightCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::SpiderWeb(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::Seal(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::Strike(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
@@ -828,14 +829,6 @@ state_callbacks! {
         },
         skills::boalockstate::end_boa_lock_state,
         skills::boalockstate::restart_boa_lock_state,
-        |_, _, _, _, _| true
-    ),
-    StateData::KnightCut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
-        |game, region, target, key, runtime| {
-            skills::knightcutstate::update_knight_cut_state(game, region, target, key, runtime.now_milliseconds());
-        },
-        skills::knightcutstate::end_knight_cut_state,
-        skills::knightcutstate::restart_knight_cut_state,
         |_, _, _, _, _| true
     ),
     StateData::GodBless(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (

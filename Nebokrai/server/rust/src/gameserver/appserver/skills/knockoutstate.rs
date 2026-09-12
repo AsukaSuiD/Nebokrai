@@ -18,12 +18,13 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_state_move_shape, timed_client_state_time,
+    resolve_state_move_shape, timed_client_state_time,
 };
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 use super::sealstate::SEAL_STATE_ID;
 use super::blindstate::BLIND_STATE_ID;
+use super::knightcutstate::KNIGHT_CUT_STATE_ID;
 
 pub(crate) const KNOCK_OUT_STATE_ID: u32 = 0x192;
 pub(crate) const KNOCK_OUT_STATE_BYTES: usize = 8;
@@ -67,15 +68,7 @@ pub(crate) fn replace_knock_out_state(
     state: KnockOutState,
     now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return false; };
-    let previous = shape.find_state_position(|state| state.state_id() == KNOCK_OUT_STATE_ID);
-    let placement = previous.and_then(|(_, key)| shape.applied_state_replacement_location(key));
-    if let Some((position, _)) = previous {
-        let _ = end_and_destroy_state_at(game, target.0, target.1, position);
-    }
-    super::blindstate::begin_primary_blind_state_at(
-        game, target.0, target.1, Some(source), Some(target), state, placement, now,
-    ).is_some()
+    super::blindstate::replace_primary_blind_state(game, source, target, state, now)
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
@@ -185,7 +178,7 @@ pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id:
     let Some((region_id, identity, order)) = context else { return false };
     let mut changed = false;
     for (key, state_id) in order {
-        if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID) {
+        if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID | KNIGHT_CUT_STATE_ID) {
             changed |= super::blindstate::end_blind_state(game, region_id, identity, key);
         }
     }
@@ -200,7 +193,7 @@ pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region_id: i32, t
         .map(|shape| shape.blind_state_instances()).unwrap_or_default();
     let mut changed = false;
     for (key, state_id) in order {
-        if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID) {
+        if matches!(state_id, BLIND_STATE_ID | KNOCK_OUT_STATE_ID | SEAL_STATE_ID | KNIGHT_CUT_STATE_ID) {
             changed |= super::blindstate::end_blind_state(game, region_id, target, key);
         }
     }

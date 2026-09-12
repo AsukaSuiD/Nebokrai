@@ -316,9 +316,7 @@ use crate::gameserver::appserver::skills::boalockstate::{
     BOA_LOCK_STATE_BYTES, BoaLockState,
 };
 use crate::gameserver::appserver::skills::blindstate::BlindState;
-use crate::gameserver::appserver::skills::knightcutstate::{
-    KNIGHT_CUT_STATE_BYTES, KnightCutState,
-};
+use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
 use crate::gameserver::appserver::skills::pillarstate::{
     PILLAR_STATE_BYTES, PillarState,
@@ -2651,28 +2649,6 @@ impl CMoveShape {
     pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
         let key = self.state_entries.first_key::<KnockOutState>()?;
         let state = self.remove_applied_state_record::<KnockOutState>(key, KNOCK_OUT_STATE_BYTES)?;
-        Some(state)
-    }
-
-    pub(crate) fn replace_knight_cut_state(&mut self, state: KnightCutState) -> Option<KnightCutState> {
-        let previous = self.state_entries.first_key::<KnightCutState>()
-            .and_then(|key| self.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-    pub(crate) fn take_expired_knight_cut_state(&mut self, key: StateKey, now_ms: u32) -> Option<KnightCutState> {
-        self.applied_state::<KnightCutState>(key).filter(|state| state.expired(now_ms))?;
-        let state = self.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES)?;
-        Some(state)
-    }
-
-    pub(crate) fn take_knight_cut_state(&mut self) -> Option<KnightCutState> {
-        let key = self.state_entries.first_key::<KnightCutState>()?;
-        let state = self.remove_applied_state_record::<KnightCutState>(key, KNIGHT_CUT_STATE_BYTES)?;
         Some(state)
     }
 

@@ -19,6 +19,7 @@ pub(crate) enum SkillVisualEffectKind {
     BaseAttack,
     Rage,
     KnightCut,
+    Swallow,
     Flash,
     LittleFlash,
     BattleFairy,

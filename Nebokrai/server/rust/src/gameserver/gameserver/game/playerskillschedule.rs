@@ -243,7 +243,6 @@ impl CGame {
             | ENERGY_HOLDING_SKILL_ID
             | INVERSE_CHOPPED_SKILL_ID
             | INFERNOL_SKILL_ID
-            | SWALLOW_SKILL_ID
             | LEAF_CUT_SKILL_ID
             | LEAF_CUT_2_SKILL_ID
             | LEAF_CUT_3_SKILL_ID
@@ -322,7 +321,6 @@ impl CGame {
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID
-            | KNIGHT_CUT_SKILL_ID
             | RAGE_SKILL_ID
             | CALLOSITY_SKILL_ID
             | CALLOSITY_2_SKILL_ID

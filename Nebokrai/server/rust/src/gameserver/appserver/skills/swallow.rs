@@ -1,109 +1,214 @@
-//! Двойной направленный удар `CSwallow` (`0x6A`).
-//! На время участка нанесения урона настоящий CPlayerAI опубликован в CPlayer:
-//! вложенные обработчики смерти видят и изменяют ту же очередь источника.
-//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
-//! перемещение и атака остаются у AI после постановки Attack в том же Run;
-//! раннее время Begin сохраняется общим kernel.
-//! Reuse проверяется exact `CSkill::IsRestored`; оба attack interval — elapsed.
+//! Двойной направленный удар Swallow (0x6A).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/swallow.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/swallow.cpp`. Владелец сохраняет повторную проверку меча,
-//! необратимое списание MP до этой проверки, две атаки через `delay` и
-//! `delay + action interval`, региональный порядок целей и отдельную
-//! дедупликацию каждого прохода. Восемь матриц `3×3` восстановлены из `.data`;
-//! уровни `1`, `2` и остальные используют одинаковые байты. `CGame` только
-//! разрешает цели, применяет рассчитанный урон и выполняет доставку. `Attack`
-//! и `AI` не изнашивают оружие на каждой цели двух проходов: унаследованный
-//! `AfterUseSkill` делает это один раз в подтверждённом `End(1)`, после сброса
-//! сохранённого направления и возврата движения.
-//! Беззнаковый коэффициент урона проходит исходную x87-цепочку до единственной
-//! записи в `float`, а критический множитель переводится в `int` с усечением
-//! к нулю отдельно для каждого боевого компонента.
+//! Зарегистрированный Begin сохраняет исходного U, раннее время и loop1 visual.
+//! Check требует reuse, меч категории 2 и ненулевую цену MP; нулевая цена
+//! отклоняется молча. Первый AI списывает MP до OnChangeStates и повторной
+//! проверки меча. Живой S либо базовая точка определяет направление: оно
+//! сохраняется до SetDir, затем CAN, visual0 и condition. Таблица свойств
+//! остаётся прежней через callbacks этого AI; каждый Calculate читает свою.
+//!
+//! Два прохода ждут абсолютные unsigned сроки start+delay и start+delay+interval.
+//! Первый публикует visual1, выключает available и лишь после прохода включает
+//! firstAttack. Второй заново читает start и не повторяет visual1. Оба могут
+//! пройти за один AI; отсутствие региона не отменяет успешный End(1).
+//! Swallowattack владеет живым направлением каждой клетки, отдельной локальной
+//! дедупликацией проходов и общим оружейным расчётом. Сохранённое направление
+//! нужно только visual1. End сбрасывает фазу и firstAttack, включает available
+//! и сбрасывает направление до движения, AfterUse, reuse и удаления visual. Каноническое
+//! исполнение остаётся опубликованным через весь AI и его вложенные callbacks.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
+use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::playercast::execute_registered_player_cast;
+use super::skillbaseproperties::CSkillBaseProperties;
+use super::swallowattack::run_swallow_attack;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::public::tools::get_line_direction;
 
 pub(crate) const SWALLOW_SKILL_ID: u32 = 0x6a;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 const ACTION_INTERVAL: u32 = 10_009;
-const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
-// Оригинал обходит X снаружи, Y внутри, но индексирует `x + 3 * y`.
-const DIRECTIONAL_SCOPE: [[u8; 9]; 8] = [
-    [1, 1, 1, 0, 0, 0, 0, 0, 0], [0, 1, 1, 0, 0, 1, 0, 0, 0],
-    [0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 0, 0, 0, 0, 1, 0, 1, 1],
-    [0, 0, 0, 0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 0, 0, 1, 1, 0],
-    [1, 0, 0, 1, 0, 0, 1, 0, 0], [1, 1, 0, 1, 0, 0, 0, 0, 0],
-];
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SwallowExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    condition_checked: bool,
     first_attack_done: bool,
     direction: i32,
 }
+
 impl SwallowExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, now: u32) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, now), condition_checked: false, first_attack_done: false, direction: -1 } }
+    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started),
+            first_attack_done: false,
+            direction: -1,
+        }
+    }
+
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+    pub(super) const fn direction(&self) -> i32 { self.direction }
+
+    pub(crate) fn prepare_derived_end(&mut self, _argument: i32) -> bool {
+        self.first_attack_done = false;
+        self.kernel.lifecycle_mut().set_available(true);
+        self.direction = -1;
+        true
+    }
 }
 
-fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
-pub(crate) fn is_swallow_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == SWALLOW_SKILL_ID }
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
-fn finish_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, SWALLOW_SKILL_ID, runtime); }
-pub(crate) fn cancel_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).map(|state| state.kernel().dispatch()) else { return false }; finish_player_swallow(game, player_id, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
-fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
-fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-    match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), 0x0e => game.send_skill_system_info(player_id, b"GS0292"), _ => {} }
-}
-fn send_visual(game: &mut CGame, player_id: i32, level: i32, action: u8, direction: i32) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(action); message.add_long(SWALLOW_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id);
-    if action == 1 { message.add_long(direction); } else { let origin = ShapeAreaCoordinates { x: player.shape().get_tile_x().unwrap_or_default(), y: player.shape().get_tile_y().unwrap_or_default() }; let destination = CShape::get_direction_position(direction, origin).unwrap_or(origin); message.add_long(0); message.add_long(0); message.add_long(destination.x); message.add_long(destination.y); }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-fn target_position(game: &CGame, region_id: i32, player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
-    match dispatch { PlayerSkillDispatch::SelfTarget { .. } => game.find_player(player_id).and_then(CPlayer::shape_view).map(|view| (view.tile_x, view.tile_y)), PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)), PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)) }
-}
-fn master_info(player: &CPlayer) -> MasterInfo { let p = player.pk_permissions(); MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(p.player), permitted_to_kill_teammate: i32::from(p.teammate), permitted_to_kill_guild_member: i32::from(p.guild_member), permitted_to_kill_criminal: i32::from(p.criminal) } }
-fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> { match target.object_type { PLAYER_TYPE => game.find_player(target.id).map(CPlayer::level), MONSTER_TYPE => game.find_region(region_id).and_then(|owner| { let monster = owner.base().find_monster_by_id(target.id)?; game.find_monster_property_by_origin_name(monster.base_property_key()?).map(|property| property.level as u8) }), _ => None } }
-fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i32, hit: i32, factor: u32) -> Option<(MasterInfo, AttackInformation)> {
-    let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let (divisor, floor) = game.globe_setup().weapon_damage_factors(); let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, floor); let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
-    let damage_factor =
-        (f64::from(factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
-    let mut attack = AttackInformation { skill_id: SWALLOW_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
-    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } } Some((master, attack))
-}
-fn cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> { let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() }; let (width, height) = game.area_dimensions(); let mut shapes = Vec::new(); if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new() } shapes.into_iter().map(|shape| shape.identity).collect() }
-fn attack_scope<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, direction: i32, level: i32, hit: i32, factor: u32, runtime: &mut Runtime) {
-    let Some((source_x, source_y, master)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, master_info(player)))) else { return }; let Some(scope) = usize::try_from(direction).ok().and_then(|index| DIRECTIONAL_SCOPE.get(index)) else { return }; let mut attacked = Vec::new();
-    for x_offset in 0..3usize { for y_offset in 0..3usize { if scope[x_offset + 3 * y_offset] == 0 { continue } let x = source_x.wrapping_sub(1).wrapping_add(x_offset as i32); let y = source_y.wrapping_sub(1).wrapping_add(y_offset as i32); for target in cell_targets(game, region_id, x, y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || attacked.contains(&target) { continue } attacked.push(target); if !game.owned_player_skill_target_attackable(master, target, region_id) { continue } let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, hit, factor) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } } } }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false }
 }
 
-pub(crate) fn execute_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    if !is_swallow_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(SWALLOW_SKILL_ID, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(SWALLOW_SKILL_ID, level) else { if game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).is_some() { finish_player_swallow(game, player_id, runtime); } return terminal(QueuedSkillExecutionState::Rejected) }; let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let interval = properties.query_property(ACTION_INTERVAL); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    if game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).is_none() { let now = runtime.now_milliseconds(); if !skill_is_restored(game.player_skill_last_used_ms(player_id, SWALLOW_SKILL_ID), reuse, now) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) } let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_sword(game, player) { send_failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss == 0 { return terminal(QueuedSkillExecutionState::Rejected) } if (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(SWALLOW_SKILL_ID)); } game.begin_player_skill_execution(player_id, SwallowExecutionState::begin(dispatch, now)); return terminal(QueuedSkillExecutionState::Begun); } else if game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    if game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).is_some_and(|state| !state.condition_checked) { let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); finish_player_swallow(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_sword(game, player)) { send_failure(game, player_id, 0x0e, mp_loss); finish_player_swallow(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) } let Some((target_x, target_y)) = target_position(game, region_id, player_id, dispatch) else { finish_player_swallow(game, player_id, runtime); return terminal(QueuedSkillExecutionState::Rejected) }; let direction = get_line_direction(source_x, source_y, target_x, target_y); if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(direction); } send_visual(game, player_id, level, 1, direction); if let Some(state) = game.player_skill_state_mut::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID) { state.condition_checked = true; state.direction = direction; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); } }
-    let started = game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).map(|state| state.kernel.started_at_ms()).unwrap_or_default(); if !game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).is_some_and(|state| state.first_attack_done) { if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending) } let direction = game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).map_or(-1, |state| state.direction); send_visual(game, player_id, level, 2, direction); game.with_published_player_ai(player_id, player_ai, |game| attack_scope(game, player_id, region_id, direction, level, hit, factor, runtime)); if let Some(state) = game.player_skill_state_mut::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID) { state.first_attack_done = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); } }
-    if runtime.now_milliseconds() < started.wrapping_add(delay).wrapping_add(interval) { return terminal(QueuedSkillExecutionState::Pending) } let direction = game.player_skill_state::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID).map_or(-1, |state| state.direction); game.with_published_player_ai(player_id, player_ai, |game| attack_scope(game, player_id, region_id, direction, level, hit, factor, runtime)); if let Some(state) = game.player_skill_state_mut::<SwallowExecutionState>(player_id, SWALLOW_SKILL_ID) { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_swallow(game, player_id, runtime); terminal(QueuedSkillExecutionState::Completed)
+fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool {
+    player.equipment().get_goods(2).is_some_and(|weapon| {
+        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2
+    })
+}
+
+fn failure(game: &mut CGame, instance: RegisteredSkill, player_id: i32, code: u32) {
+    game.update_registered_skill_visual(instance, code);
+    let text: &[u8] = match code { 13 => b"GS0278", 14 => b"GS0292", _ => return };
+    game.send_skill_system_info(player_id, text);
+}
+
+fn mana_failure(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties,
+) {
+    game.update_registered_skill_visual(instance, 7);
+    let amount = properties.query_property(USER_MP_LOSE);
+    game.send_skill_system_info_with_unsigned(player_id, b"GS0288", amount);
+}
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32, runtime: &mut Runtime,
+) -> bool {
+    let Some(player) = game.find_player(player_id) else { return false; };
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        failure(game, instance, player_id, 13);
+        return false;
+    }
+    if !weapon_is_sword(game, player) {
+        failure(game, instance, player_id, 14);
+        return false;
+    }
+    if properties.query_property(USER_MP_LOSE) == 0 { return false; }
+    let mana = player.mana();
+    let loss = properties.query_property(USER_MP_LOSE);
+    if (mana.wrapping_sub(loss) as i32) < 0 {
+        mana_failure(game, instance, player_id, &properties);
+        return false;
+    }
+    let Some(player) = game.find_player_mut(player_id) else { return false; };
+    player.set_skill_moveable(false);
+    true
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let user = (source.shape().get_region_id(), source.shape().identity());
+    if stage == SkillStage::Begin {
+        if user.1.object_type == PLAYER_TYPE {
+            let Some(player) = game.find_player(user.1.id) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let mana = player.mana();
+            let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
+            if (remaining as i32) < 0 {
+                mana_failure(game, instance, user.1.id, &properties);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if let Some(player) = game.find_player_mut(user.1.id) { player.set_mana(remaining); }
+            game.publish_player_states(user.1.id);
+            if game.find_player(user.1.id).is_none_or(|player| !weapon_is_sword(game, player)) {
+                failure(game, instance, user.1.id, 14);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+        }
+        let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let destination = match resolve_skill_sufferer(game, skill.lifecycle()) {
+            Some((region, identity)) => {
+                let Some(target) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
+                (target.shape().get_tile_x().unwrap_or(i32::MIN), target.shape().get_tile_y().unwrap_or(i32::MIN))
+            }
+            None => skill.lifecycle().destination(),
+        };
+        let Some(source) = resolve_state_move_shape(game, user.0, user.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let y = source.shape().get_tile_y().unwrap_or(i32::MIN);
+        let x = source.shape().get_tile_x().unwrap_or(i32::MIN);
+        let direction = get_line_direction(x, y, destination.0, destination.1);
+        let Some(state) = game.registered_skill_mut(instance).and_then(|skill| skill.player_state_mut::<SwallowExecutionState>()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        state.direction = direction;
+        if let Some(source) = resolve_state_move_shape_mut(game, user.0, user.1) { source.shape_mut().set_direction(direction); }
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+    }
+    let Some(first_attack_done) = game.registered_skill(instance)
+        .and_then(|skill| skill.player_state::<SwallowExecutionState>())
+        .map(|state| state.first_attack_done)
+    else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if !first_attack_done {
+        let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+        let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
+        game.update_registered_skill_visual(instance, 1);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(false);
+        run_swallow_attack(game, instance, user, runtime);
+        let Some(state) = game.registered_skill_mut(instance).and_then(|skill| skill.player_state_mut::<SwallowExecutionState>()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        state.first_attack_done = true;
+        let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack);
+    }
+    let interval = properties.query_property(ACTION_INTERVAL);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    if runtime.now_milliseconds() < interval.wrapping_add(delay).wrapping_add(started) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    run_swallow_attack(game, instance, user, runtime);
+    terminal(QueuedSkillExecutionState::Completed)
+}
+
+pub(crate) fn execute_player_swallow<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if dispatch.skill_id() != SWALLOW_SKILL_ID { return terminal(QueuedSkillExecutionState::Rejected); }
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::Swallow,
+        |game, instance, player_id, runtime| {
+            if !check_cast(game, instance, player_id, runtime) { return false; }
+            let Some(skill) = game.registered_skill_mut(instance) else { return false; };
+            skill.lifecycle_mut().set_available(true);
+            true
+        },
+        |dispatch, started| SwallowExecutionState::begin(dispatch, started).into(), run_ai,
+    )
 }

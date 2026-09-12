@@ -1309,10 +1309,6 @@ use crate::gameserver::appserver::skills::mosou::MOSOU_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut::GHOST_CUT_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
-use crate::gameserver::appserver::skills::knightcut::{
-    cancel_player_knight_cut, execute_player_knight_cut, is_knight_cut_dispatch,
-    KNIGHT_CUT_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::armybreak::ARMY_BREAK_SKILL_ID;
 use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use crate::gameserver::appserver::skills::rage::{
@@ -1323,9 +1319,7 @@ use crate::gameserver::appserver::skills::ragebreak::{
     RAGE_BREAK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::flash::FLASH_SKILL_ID;
-use crate::gameserver::appserver::skills::swallow::{
-    cancel_player_swallow, execute_player_swallow, is_swallow_dispatch, SWALLOW_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::swallow::SWALLOW_SKILL_ID;
 use crate::gameserver::appserver::skills::leafcut::{
     cancel_player_leaf_cut, execute_player_leaf_cut, is_leaf_cut_dispatch, LEAF_CUT_SKILL_ID,
 };
@@ -39466,15 +39460,11 @@ impl CGame {
             INFERNOL_SKILL_ID => {
                 cancel_player_infernol(self, player_id, &mut player_ai, runtime)
             }
-            KNIGHT_CUT_SKILL_ID => {
-                cancel_player_knight_cut(self, player_id, &mut player_ai, runtime)
-            }
             RAGE_SKILL_ID => cancel_player_rage(self, player_id, &mut player_ai, runtime),
             RAGE_BREAK_SKILL_ID => {
                 cancel_player_rage_break(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
             FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
-            SWALLOW_SKILL_ID => cancel_player_swallow(self, player_id, &mut player_ai, runtime),
             LEAF_CUT_SKILL_ID => cancel_player_leaf_cut(self, player_id, &mut player_ai, runtime),
             LEAF_CUT_2_SKILL_ID => {
                 cancel_player_leaf_cut_2(self, player_id, &mut player_ai, runtime)
@@ -39997,11 +39987,9 @@ impl CGame {
             _ if is_roar_dispatch(dispatch) => execute_player_roar,
             _ if is_energy_holding_dispatch(dispatch) => execute_player_energy_holding,
             _ if is_inverse_chopped_dispatch(dispatch) => execute_player_inverse_chopped,
-            _ if is_knight_cut_dispatch(dispatch) => execute_player_knight_cut,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
-            _ if is_swallow_dispatch(dispatch) => execute_player_swallow,
             _ if is_leaf_cut_dispatch(dispatch) => execute_player_leaf_cut,
             _ if is_leaf_cut_2_dispatch(dispatch) => execute_player_leaf_cut_2,
             _ if is_leaf_cut_3_dispatch(dispatch) => execute_player_leaf_cut_3,

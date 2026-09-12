@@ -1,6 +1,6 @@
 //! Общий зарегистрированный вход активных навыков игрока.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/states/skill.cpp,
-//! attackskill.cpp и совместимые Begin активных атак. Игровые проверки
+//! attackskill.cpp, stateskill.cpp и совместимые Begin. Игровые проверки
 //! и AI остаются у конкретных навыков.
 //!
 //! База Begin, материализация, visual и End используют один поколенческий
@@ -23,6 +23,7 @@ use crate::gameserver::gameserver::game::{
 #[derive(Clone, Copy)]
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
+    Swallow, KnightCut,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -37,6 +38,8 @@ impl RegisteredPlayerCastOwner {
                 | super::ghostcut3::GHOST_CUT_3_SKILL_ID => Self::GhostCut,
             super::mosou::MOSOU_SKILL_ID => Self::Mosou,
             super::thunderblow2::THUNDER_BLOW_2_SKILL_ID => Self::ThunderBlow2,
+            super::swallow::SWALLOW_SKILL_ID => Self::Swallow,
+            super::knightcut::KNIGHT_CUT_SKILL_ID => Self::KnightCut,
             _ => return None,
         })
     }
@@ -54,6 +57,8 @@ impl RegisteredPlayerCastOwner {
             Self::GhostCut => super::ghostcut::execute_player_ghost_cut::<Runtime>,
             Self::Mosou => super::mosou::execute_player_mosou::<Runtime>,
             Self::ThunderBlow2 => super::thunderblow2::execute_player_thunder_blow_2::<Runtime>,
+            Self::Swallow => super::swallow::execute_player_swallow::<Runtime>,
+            Self::KnightCut => super::knightcut::execute_player_knight_cut::<Runtime>,
         };
         execute(game, player_id, instance, dispatch, runtime)
     }

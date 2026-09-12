@@ -227,7 +227,7 @@ impl StateData {
 
     pub(crate) fn is_blind(&self) -> bool {
         matches!(self, Self::Blind(_) | Self::KnockOut(_) | Self::SpiderWeb(_)
-            | Self::Seal(_) | Self::Strike(_))
+            | Self::Seal(_) | Self::Strike(_) | Self::KnightCut(_))
     }
 
 }
