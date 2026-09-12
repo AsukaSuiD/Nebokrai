@@ -45,6 +45,7 @@ pub(crate) enum RegisteredSkillEnd {
 impl CGame {
     /// GetTargetPath разрешает участников заново; при исчезнувшей S использует
     /// сохранённую точку. Ограничение дальности принадлежит конкретному навыку.
+    /// Блоки читаются по региону базы Begin, не по текущему региону живого U.
     pub(crate) fn skill_target_path(&self, lifecycle: &SkillLifecycle) -> Vec<(i32, i32, u8)> {
         self.skill_target_path_impl(lifecycle, None)
     }
@@ -77,7 +78,7 @@ impl CGame {
                 }
             };
             Some(self.base_magic_path(
-                source.get_region_id(), source_x, source_y, destination.0, destination.1, forced_length,
+                region, source_x, source_y, destination.0, destination.1, forced_length,
             ))
         })().unwrap_or_default()
     }
@@ -319,6 +320,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::flash::publish_flash_visual(self, skill, mode),
             SkillVisualEffectKind::ArmyBreak =>
                 crate::gameserver::appserver::skills::armybreak::publish_army_break_visual(self, skill, mode),
+            SkillVisualEffectKind::GhostCut =>
+                crate::gameserver::appserver::skills::ghostcutvisual::publish_ghost_cut_visual(self, skill, mode),
             SkillVisualEffectKind::LittleFlash =>
                 crate::gameserver::appserver::skills::littleflash::publish_little_flash_visual(self, skill, mode),
             SkillVisualEffectKind::BattleFairy =>

@@ -1,16 +1,19 @@
-//! Общий оружейный контакт Flash/LittleFlash и ArmyBreak.
+//! Общий оружейный расчёт Flash/LittleFlash, ArmyBreak и GhostCut.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые владельцы skills.
 //!
-//! Attack сохраняет PK-флаги и принадлежность CPlayer до Calculate, доставляет
-//! сырой OnBeenAttacked без повторного допуска, затем вызывает IncreaseRp
-//! независимо от результата получателя. NULL таблица Calculate оставляет
+//! Расчёт сохраняет PK-флаги и принадлежность CPlayer до Calculate. Обычный
+//! контакт доставляет сырой OnBeenAttacked без повторного допуска, затем
+//! вызывает IncreaseRp независимо от результата. NULL таблица Calculate оставляет
 //! исходный UNKNOWN/1, но не отменяет удар. Допуск и дедупликация принадлежат AI.
-//! Формула различается только usage коэффициента основной/побочной цели;
-//! сохранены живые getter-ы, оба RNG, unsigned коэффициент в x87 до записи
-//! float и усечение критического множителя к нулю. Vec владеет записями урона.
+//! GhostCut читает MIN→MAX и передаёт RNG сырую DWORD-ширину max-min+1;
+//! остальные семейства читают MAX→MIN и используют abs(max-min)+1. Обе ветки
+//! снова читают MIN после RNG. Остальная формула различается только usage
+//! коэффициента: сохранены живые getter-ы, оба RNG, unsigned коэффициент в x87
+//! до записи float и усечение критического множителя к нулю. Vec владеет уроном.
 
 use super::fightdefense::truncate_original;
 use super::flash::master_info;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
@@ -18,9 +21,16 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 const USER_HIT_MODIFIER: u32 = 20_001;
 
-fn calculate_player_weapon_attack(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PlayerWeaponRoll {
+    AbsoluteRange,
+    RawRange,
+}
+
+fn fill_player_weapon_attack(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), damage_factor_usage: u32, attack: &mut AttackInformation,
+    target: (i32, ShapeIdentity), damage_factor_usage: u32, roll: PlayerWeaponRoll,
+    attack: &mut AttackInformation,
 ) {
     let Some(skill) = game.registered_skill(instance) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()) else { return; };
@@ -37,9 +47,18 @@ fn calculate_player_weapon_attack(
     attack.damage_factor =
         (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
     attack.hit_modifier = properties.query_property(USER_HIT_MODIFIER) as i32;
-    let maximum = player.combat_properties().maximum_attack;
-    let minimum = player.combat_properties().minimum_attack;
-    let width = (maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1);
+    let width = match roll {
+        PlayerWeaponRoll::AbsoluteRange => {
+            let maximum = player.combat_properties().maximum_attack;
+            let minimum = player.combat_properties().minimum_attack;
+            (maximum as i32).wrapping_sub(minimum as i32).wrapping_abs().wrapping_add(1)
+        }
+        PlayerWeaponRoll::RawRange => {
+            let minimum = player.combat_properties().minimum_attack;
+            let maximum = player.combat_properties().maximum_attack;
+            (maximum as i32).wrapping_sub(minimum as i32).wrapping_add(1)
+        }
+    };
     let random = game.skill_random_below(width);
     let Some(player) = game.find_player(source.1.id) else { return; };
     let physical = (player.combat_properties().minimum_attack as i32).wrapping_add(random).max(0);
@@ -58,13 +77,23 @@ fn calculate_player_weapon_attack(
     }
 }
 
+pub(super) fn calculate_player_weapon_attack(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), damage_factor_usage: u32, roll: PlayerWeaponRoll,
+) -> Option<(MasterInfo, AttackInformation)> {
+    let master = game.find_player(source.1.id).map(master_info)?;
+    let mut attack = AttackInformation::for_master(master);
+    fill_player_weapon_attack(game, instance, source, target, damage_factor_usage, roll, &mut attack);
+    Some((master, attack))
+}
+
 pub(super) fn apply_player_weapon_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     target: (i32, ShapeIdentity), damage_factor_usage: u32, runtime: &mut Runtime,
 ) {
-    let Some(master) = game.find_player(source.1.id).map(master_info) else { return; };
-    let mut attack = AttackInformation::for_master(master);
-    calculate_player_weapon_attack(game, instance, source, target, damage_factor_usage, &mut attack);
+    let Some((master, attack)) = calculate_player_weapon_attack(
+        game, instance, source, target, damage_factor_usage, PlayerWeaponRoll::AbsoluteRange,
+    ) else { return; };
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
     game.increase_owned_player_rp(source.1.id, true, 0);
 }

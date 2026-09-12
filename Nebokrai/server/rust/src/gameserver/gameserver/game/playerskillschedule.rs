@@ -41,8 +41,8 @@
 //! затем перемещается в их kernel. CState::Begin пишет source/target, время
 //! и ended=false до OnBeginSkill; неудача не откатывает эту запись.
 //! Установка kernel сохраняет ту же базу, без timestamp-маркеров CPlayerAI.
-//! Flash, LittleFlash, Rush и ArmyBreak выполняют Begin и создают visual у своего
-//! общего владельца. Расписание, active и background передают ему захваченный
+//! Владельцы общего playercast выполняют Begin и создают visual внутри него.
+//! Расписание, active и background передают ему захваченный
 //! ключ; после его End здесь освобождаются только payload и та же команда.
 //! Поэтому отсутствие concrete-данных не означает IsEnded: перевод всех
 //! materialized-проверок расписания и End на эту границу ещё не завершён.
@@ -242,9 +242,6 @@ impl CGame {
             | INFERNOL_SKILL_ID
             | THUNDER_BLOW_2_SKILL_ID
             | MOSOU_SKILL_ID
-            | GHOST_CUT_SKILL_ID
-            | GHOST_CUT_2_SKILL_ID
-            | GHOST_CUT_3_SKILL_ID
             | SWALLOW_SKILL_ID
             | LEAF_CUT_SKILL_ID
             | LEAF_CUT_2_SKILL_ID
@@ -318,6 +315,9 @@ impl CGame {
             | RUSH_2_SKILL_ID
             | ARMY_BREAK_SKILL_ID
             | ARMY_BREAK_2_SKILL_ID
+            | GHOST_CUT_SKILL_ID
+            | GHOST_CUT_2_SKILL_ID
+            | GHOST_CUT_3_SKILL_ID
             | SPIDER_WEB_SKILL_ID
             | KNOCK_OUT_SKILL_ID
             | SPIDER_POISON_SKILL_ID

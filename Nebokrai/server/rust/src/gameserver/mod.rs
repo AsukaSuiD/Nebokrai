@@ -176,6 +176,8 @@ pub(crate) mod appserver {
         pub(crate) mod furystate;
         pub(crate) mod gibe;
         pub(crate) mod ghostcut;
+        pub(crate) mod ghostcutattack;
+        pub(crate) mod ghostcutvisual;
         pub(crate) mod ghostcut2;
         pub(crate) mod ghostcut3;
         pub(crate) mod frontcellsword;
@@ -198,6 +200,7 @@ pub(crate) mod appserver {
         pub(crate) mod flash;
         pub(crate) mod dash;
         pub(crate) mod playercast;
+        pub(crate) mod skillpath;
         pub(crate) mod armybreakattack;
         pub(crate) mod weaponattack;
         pub(crate) mod thunder;

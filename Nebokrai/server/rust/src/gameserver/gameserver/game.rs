@@ -142,7 +142,7 @@
 //! текущие исполнения и не терял изменения очередей. Это адаптация Rust
 //! заимствований, не новая игровая очередь. Вложенные callbacks внутри
 //! конкретных skill-owner-ов требуют отдельного проведения через эту границу.
-//! Flash, LittleFlash, Rush и ArmyBreak исполняются с опубликованным AI и одним
+//! Владельцы общего playercast исполняются с опубликованным AI и одним
 //! ключом регистрации через Begin, попадания и End. Повторный поиск по ID
 //! не подменяет экземпляр, удалённый или заменённый вложенным callback.
 //! Смертельный OnBeenAttacked (0x004D38E4..0x004D3A21) синхронно выполняет
@@ -1320,7 +1320,7 @@ use crate::gameserver::appserver::skills::mosou::{
     cancel_player_mosou, execute_player_mosou, is_mosou_dispatch, MOSOU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::ghostcut::{
-    cancel_player_ghost_cut, execute_player_ghost_cut, is_ghost_cut_dispatch, GHOST_CUT_SKILL_ID,
+    execute_player_ghost_cut, GHOST_CUT_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -38998,15 +38998,9 @@ impl CGame {
         target_y: i32,
         forced_length: Option<u32>,
     ) -> Vec<(i32, i32, u8)> {
-        let Some(region) = self.find_region(region_id) else {
-            return Vec::new();
-        };
-        region.base().straight_skill_path(
-            source_x,
-            source_y,
-            target_x,
-            target_y,
-            forced_length,
+        crate::gameserver::appserver::skills::skillpath::straight_skill_path(
+            self.find_region(region_id).map(|owner| owner.base()),
+            source_x, source_y, target_x, target_y, forced_length,
         )
     }
 
@@ -39499,9 +39493,6 @@ impl CGame {
                 cancel_player_thunder_blow_2(self, player_id, &mut player_ai, runtime)
             }
             MOSOU_SKILL_ID => cancel_player_mosou(self, player_id, &mut player_ai, runtime),
-            GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
-                cancel_player_ghost_cut(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             KNIGHT_CUT_SKILL_ID => {
                 cancel_player_knight_cut(self, player_id, &mut player_ai, runtime)
             }
@@ -39969,6 +39960,7 @@ impl CGame {
             RUSH_SKILL_ID => Some(execute_player_rush),
             RUSH_2_SKILL_ID => Some(execute_player_rush_2),
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => Some(execute_player_army_break),
+            GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => Some(execute_player_ghost_cut),
             _ => None,
         }
     }
@@ -40051,7 +40043,6 @@ impl CGame {
             _ if is_inverse_chopped_dispatch(dispatch) => execute_player_inverse_chopped,
             _ if is_thunder_blow_2_dispatch(dispatch) => execute_player_thunder_blow_2,
             _ if is_mosou_dispatch(dispatch) => execute_player_mosou,
-            _ if is_ghost_cut_dispatch(dispatch) => execute_player_ghost_cut,
             _ if is_knight_cut_dispatch(dispatch) => execute_player_knight_cut,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
