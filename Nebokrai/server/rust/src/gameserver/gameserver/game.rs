@@ -950,6 +950,7 @@ use crate::gameserver::appserver::region::{
     RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::RideState;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, resolve_state_move_shape_mut,
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -32749,13 +32750,13 @@ impl CGame {
         true
     }
 
-    fn begin_battle_fairy_skill_lifecycle(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> bool {
+    fn begin_battle_fairy_skill_lifecycle(&mut self, player_id: i32, instance: RegisteredSkill, dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> bool {
         let Some(player) = self.find_player(player_id) else { return false };
         let source = (player.shape().get_region_id(), player.shape().identity());
         let target = dispatch.object_target().and_then(|target| self.player_skill_begin_object(source.0, target));
-        let Some(lifecycle) = self.player_skill_lifecycle_mut(player_id, dispatch.skill_id()) else { return false };
+        let Some(skill) = self.registered_skill_mut(instance) else { return false };
         // WarSoul даже для координатного запроса вызывает объектный Begin(null).
-        lifecycle.begin_objects(Some(source), target, || started_at_ms);
+        skill.lifecycle_mut().begin_objects(Some(source), target, || started_at_ms);
         true
     }
 
@@ -39874,7 +39875,7 @@ impl CGame {
             } else {
                 let dispatch = fairy_execution.expect("проверен фоновый экземпляр WarSoul").dispatch();
                 let outcome = self.execute_battle_fairy_skill_owner(
-                    player_id, dispatch, &mut player_ai, runtime,
+                    player_id, instance, dispatch, &mut player_ai, runtime,
                 );
                 self.apply_battle_fairy_skill_contacts(player_id, dispatch, &mut player_ai, &outcome, runtime);
                 outcome
@@ -40393,19 +40394,30 @@ impl CGame {
     fn execute_battle_fairy_skill_owner<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
+        instance: Option<RegisteredSkill>,
         dispatch: BattleFairySkillDispatch,
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> QueuedSkillExecutionOutcome {
+        let Some(instance) = instance.filter(|instance| self.registered_skill(*instance).is_some()) else {
+            return QueuedSkillExecutionOutcome {
+                state: QueuedSkillExecutionState::Rejected,
+                first_contact: false,
+            };
+        };
         // Собственный End уже выключает concrete AI до visual/AfterUse,
         // пока база, источник и payload ещё живы. Это не повторный Begin.
-        if self.battle_fairy_execution(player_id, dispatch.skill_id())
-            .is_some_and(|execution| execution.stage() == SkillStage::Idle)
-        {
+        let stage = self.registered_skill(instance).and_then(|skill| skill.execution_stage());
+        if stage == Some(SkillStage::Idle) {
             return QueuedSkillExecutionOutcome {
                 state: QueuedSkillExecutionState::Pending,
                 first_contact: false,
             };
+        }
+        if dispatch.skill_id() == LIFE_SHIELD_SKILL_ID {
+            return self.with_published_player_ai(player_id, player_ai, |game| {
+                execute_battle_fairy_life_shield(game, player_id, instance, dispatch, runtime)
+            });
         }
         let execute: fn(
             &mut Self,
@@ -40415,7 +40427,6 @@ impl CGame {
             &mut Runtime,
         ) -> QueuedSkillExecutionOutcome = match dispatch.skill_id() {
             id if battle_fairy_attribute_definition(id).is_some() => execute_battle_fairy_attribute,
-            LIFE_SHIELD_SKILL_ID => execute_battle_fairy_life_shield,
             FATAL_BLOW_SKILL_ID => execute_battle_fairy_fatal_blow,
             TIANHUO_SKILL_ID => execute_battle_fairy_tianhuo,
             LEIMING2_SKILL_ID => execute_battle_fairy_leiming2,
@@ -40478,7 +40489,7 @@ impl CGame {
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
                 && !self.battle_fairy_skill_execution_is_materialized(player_id, player_ai);
             if !schedule_rejected {
-                self.begin_battle_fairy_skill_schedule(player_id, dispatch, player_ai, runtime);
+                self.begin_battle_fairy_skill_schedule(player_id, instance, dispatch, player_ai, runtime);
             }
             let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
@@ -40486,12 +40497,12 @@ impl CGame {
                     first_contact: false,
                 }
             } else {
-                self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
+                self.execute_battle_fairy_skill_owner(player_id, instance, dispatch, player_ai, runtime)
             };
             let begin_completed = outcome.state == QueuedSkillExecutionState::Begun;
             let outcome = if begin_completed {
                 player_ai.begin_battle_fairy_fighting(runtime.now_milliseconds());
-                self.execute_battle_fairy_skill_owner(player_id, dispatch, player_ai, runtime)
+                self.execute_battle_fairy_skill_owner(player_id, instance, dispatch, player_ai, runtime)
             } else {
                 outcome
             };

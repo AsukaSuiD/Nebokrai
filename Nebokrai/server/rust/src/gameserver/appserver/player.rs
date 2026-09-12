@@ -5610,13 +5610,6 @@ impl CPlayer {
     }
 
 
-    pub(crate) fn replace_life_shield_state(
-        &mut self,
-        state: super::skills::lifeshieldstate::LifeShieldState,
-    ) -> Option<super::skills::lifeshieldstate::LifeShieldState> {
-        self.move_shape.replace_life_shield_state(state)
-    }
-
     pub(crate) fn defense_shields(
         &self,
     ) -> impl Iterator<Item = &super::skills::shieldstate::DefenseShieldState> {

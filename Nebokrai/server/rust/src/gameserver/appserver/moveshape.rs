@@ -302,9 +302,7 @@ use crate::gameserver::appserver::skills::roarstate::{
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::lifeshieldstate::{
-    LifeShieldState, LIFE_SHIELD_STATE_BYTES,
-};
+use crate::gameserver::appserver::skills::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::manashieldstate::MANA_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::promotionstate::PROMOTION_STATE_BYTES;
@@ -871,6 +869,19 @@ impl MoveShapeSkill {
             RegisteredSkillExecution::BattleFairy(execution) => Some(execution),
             _ => None,
         }
+    }
+
+    /// Материализация сохраняет уже начатую базу именно этого экземпляра.
+    pub(crate) fn install_battle_fairy_execution(&mut self, mut execution: BattleFairyExecution) -> bool {
+        if execution.kernel().dispatch().skill_id() != self.id
+            || !matches!(self.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_))
+        {
+            return false;
+        }
+        let lifecycle = std::mem::take(self.execution.lifecycle_mut());
+        execution.kernel_mut().replace_lifecycle(lifecycle);
+        self.execution = RegisteredSkillExecution::BattleFairy(execution);
+        true
     }
 
     /// Убирает только payload этого экземпляра, без повторного поиска по ID.
@@ -2079,25 +2090,6 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn replace_life_shield_state(
-        &mut self,
-        state: LifeShieldState,
-    ) -> Option<LifeShieldState> {
-        let previous = self
-            .defense_shield_key(state.skill_id())
-            .and_then(|key| self.state_entries.take::<DefenseShieldState>(key))
-            .and_then(|candidate| match candidate {
-                DefenseShieldState::Life(previous) => Some(previous),
-                DefenseShieldState::Machine(_)
-                | DefenseShieldState::Mana(_)
-                | DefenseShieldState::Promotion(_) => None,
-            });
-        self.remove_serialized_state_record(state.skill_id(), LIFE_SHIELD_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(DefenseShieldState::Life(state));
-        previous
-    }
-
     pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {
         self.state_entries.iter::<DefenseShieldState>().find_map(|state| match state {
             DefenseShieldState::Promotion(state) => Some(state.magic_attack_factor()),
@@ -3113,18 +3105,12 @@ impl CMoveShape {
 
     pub(crate) fn install_battle_fairy_execution(
         &mut self,
-        mut execution: BattleFairyExecution,
+        execution: BattleFairyExecution,
         factory: &CSkillFactory,
     ) -> bool {
         let skill_id = execution.kernel().dispatch().skill_id();
-        let Some(skill) = self.skill_mut(skill_id, factory) else { return false };
-        if !matches!(skill.execution, RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_)) {
-            return false;
-        }
-        let lifecycle = std::mem::take(skill.execution.lifecycle_mut());
-        execution.kernel_mut().replace_lifecycle(lifecycle);
-        skill.execution = RegisteredSkillExecution::BattleFairy(execution);
-        true
+        self.skill_mut(skill_id, factory)
+            .is_some_and(|skill| skill.install_battle_fairy_execution(execution))
     }
 
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {

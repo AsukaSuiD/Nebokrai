@@ -1,32 +1,22 @@
-//! Каноническое состояние `CLifeShieldState`.
-//!
-//! Состояние хранит уровень навыка для обязательного последующего
-//! `CCureState`, проверяет наличие и MP боевого духа, но рассчитанный
-//! `lMPDamage` применяет к MP игрока обычный владелец атаки. DB-запись
-//! сохраняет уровень, остаток срока, прочность и два WORD-фактора. Vtable
-//! exact EXE направляет `GetRemainedTime` на общее тело `CBlindState` по
-//! `0x005F2CD0` с условным вторым чтением clock.
-//! Все преобразования absorbed damage используют x87-усечение к нулю;
-//! `mp_factor` сохраняется в `f32` перед умножением, а `hp_factor` — нет.
-//! Первичное масштабирование через `damage_factor` выполняется `FISTP dword`
-//! до поиска war-soul goods; ноль единицей не подменяется.
-//! AddCure (`0x005E2FD0`) завершает прежний Cure, начинает новый, добавляет
-//! его в общую арену и вызывает virtual UpdateProperty живого holder до эффекта
-//! завершения самого LifeShield (`0x005E3110`). Последующее удаление щита
-//! вызывает свой UpdateProperty отдельно: это второй исходный вызов.
-//! AddCure использует generic CState::GetSufferer, а не CPlayer cast:
-//! опубликованный holder переиспользует тот же Cure Begin/storage/visual.
-//! Сам щит остаётся в арене до завершения AddCure и своего visual End.
-//! Граница unchecked player MP/war-soul части AI зафиксирована в shieldstate.rs;
-//! чистый lifetime-префикс не подставляет вымышленные ресурсы другой форме.
+//! CLifeShieldState: gameserver.exe/GameServer.pdb, appserver/skills/lifeshieldstate.cpp.
+//! Общий shieldstate выполняет object Begin: S guard, часы при U, loop1
+//! и немедленный пакет перед append. Payload и visual принадлежат общей арене.
+//! DB-запись хранит уровень, остаток срока, прочность и два WORD-фактора.
+//! Load читает часы после уровня; Save пишет ID/уровень до чтения остатка.
+//! Положительный клиентский остаток требует двух живых чтений часов.
+//! Щит проверяет MP боевого духа, но lMPDamage применяет к MP игрока владелец
+//! атаки. Absorbed damage усекается к нулю; mp_factor округляется до f32
+//! перед умножением, hp_factor — нет. Начальное damage_factor масштабирование
+//! использует FISTP dword до поиска war-soul goods, ноль не заменяется единицей.
+//! End сначала создаёт Cure для actual S с собственным UpdateProperty,
+//! затем обновляет visual и удаляет щит со вторым отдельным UpdateProperty.
+//! Для неплеерных holders unchecked MP/war-soul layout AI (0x005E2D90)
+//! остаётся неподтверждённым; общий lifetime-префикс не выдумывает их ресурсы.
 
 use super::curestate::{CURE_STATE_SKILL_ID, CureState, begin_primary_cure_state};
 use super::fightdefense::truncate_original;
 use super::lifeshield::{
     LIFE_SHIELD_SKILL_ID, SKILL_USAGE_STATE_PERSIST_TIME,
-};
-use super::manashieldstate::{
-    MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
@@ -37,7 +27,6 @@ use crate::gameserver::appserver::states::state::{
     timed_client_state_time,
 };
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const LIFE_SHIELD_STATE_BYTES: usize = 20;
 
@@ -51,9 +40,12 @@ pub(crate) struct LifeShieldState {
     skill_level: i32,
 }
 
+impl Default for LifeShieldState {
+    fn default() -> Self { Self::new(0, 0, 1, 1, 0) }
+}
+
 impl LifeShieldState {
     pub(crate) const fn new(
-        started_at_ms: u32,
         keep_time_ms: u32,
         life: i32,
         hp_factor: u16,
@@ -61,13 +53,17 @@ impl LifeShieldState {
         skill_level: i32,
     ) -> Self {
         Self {
-            started_at_ms,
+            started_at_ms: 0,
             keep_time_ms,
             life,
             hp_factor,
             mp_factor,
             skill_level,
         }
+    }
+
+    pub(crate) fn begin_at(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
@@ -109,7 +105,7 @@ impl LifeShieldState {
     pub(crate) fn decode(
         payload: &[u8],
         offset: usize,
-        now_ms: u32,
+        now_milliseconds: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != LIFE_SHIELD_SKILL_ID {
@@ -120,29 +116,33 @@ impl LifeShieldState {
             });
         }
         let skill_level = reader.read_i32()?;
-        Ok(Self::new(
-            now_ms,
+        let now_ms = now_milliseconds();
+        let mut state = Self::new(
             reader.read_u32()?,
             reader.read_i32()?,
             reader.read_u16()?,
             reader.read_u16()?,
             skill_level,
-        ))
+        );
+        state.begin_at(now_ms);
+        Ok(state)
     }
 
     pub(crate) fn encoded(
-        self,
+        &self,
         now_milliseconds: impl FnMut() -> u32,
     ) -> [u8; LIFE_SHIELD_STATE_BYTES] {
-        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
+        self.encoded_with_remaining(|| self.client_time(now_milliseconds) as u32)
     }
 
-    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+    fn encoded_with_remaining(
+        &self, remaining_time: impl FnOnce() -> u32,
+    ) -> [u8; LIFE_SHIELD_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(LIFE_SHIELD_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(LIFE_SHIELD_SKILL_ID);
         writer.write_i32(self.skill_level);
-        writer.write_u32(remaining_time_ms);
+        writer.write_u32(remaining_time());
         writer.write_i32(self.life);
         writer.write_u16(self.hp_factor);
         writer.write_u16(self.mp_factor);
@@ -151,8 +151,8 @@ impl LifeShieldState {
             .expect("размер состояния щита жизни фиксирован")
     }
 
-    pub(crate) fn encoded_for_install(self) -> [u8; LIFE_SHIELD_STATE_BYTES] {
-        self.encoded_with_remaining(self.keep_time_ms)
+    pub(crate) fn encoded_for_install(&self) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+        self.encoded_with_remaining(|| self.keep_time_ms)
     }
 
 
@@ -199,32 +199,6 @@ impl LifeShieldState {
     }
 }
 
-pub(crate) fn send_life_shield_state_visual(
-    game: &mut CGame,
-    player_id: i32,
-    state: LifeShieldState,
-    begin: bool,
-    now_milliseconds: impl FnMut() -> u32,
-) {
-    let Some(player) = game.find_player(player_id) else {
-        return;
-    };
-    let identity = player.shape().identity();
-    let mut message = CMessage::new(if begin {
-        MANA_SHIELD_STATE_BEGIN_MESSAGE
-    } else {
-        MANA_SHIELD_STATE_END_MESSAGE
-    });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.client_time(now_milliseconds));
-        message.add_long(state.life());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
 /// Пролог LifeShield End; visual и Remove самого щита остаются общему End.
 pub(crate) fn add_life_shield_cure(
     game: &mut CGame, region_id: i32, holder: ShapeIdentity, state: LifeShieldState, key: StateKey,
@@ -246,30 +220,3 @@ pub(crate) fn add_life_shield_cure(
     );
     let _ = game.update_move_shape_properties(target.0, target.1);
 }
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранён только не подключённый конструктор по умолчанию.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshieldstate.cpp
-
-// ============================================================================
-// FUNCTION: CLifeShieldState::CLifeShieldState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshieldstate.cpp:32
-// RVA: 0x001E2A50
-// ADDRESS: 005e2a50
-// PROTOTYPE: undefined __thiscall CLifeShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer

@@ -7,7 +7,7 @@
 //! AI Life/Mana/Machine проверяет deadline, signed life и смерть перед ресурсами.
 //! Их достигнутые creators/DB load требуют CPlayer; последующий unchecked MP/layout
 //! для иных holders не выдумывается. Promotion проверяет только собственный срок.
-//! Первичный Mana/Machine Begin читает базовые часы при U, отправляет visual и
+//! Первичный Life/Mana/Machine Begin читает базовые часы при U, отправляет visual и
 //! добавляет состояние в арену; UpdateProperty остаётся caller-у. Restart после
 //! Unserialize использует Begin(NULL, holder) и сохраняет уже прочитанный старт.
 //! Object Begin требует S; visual loop1 общий, у Promotion loop0 завершается сразу.
@@ -101,7 +101,7 @@ impl DefenseShieldState {
     }
 }
 
-/// Первичный object Begin щитов Mana/Machine: S guard → base clock при U →
+/// Первичный object Begin щитов Life/Mana/Machine: S guard → base clock при U →
 /// visual loop1 → пакет → append. DB-record технический и часов не читает.
 pub(crate) fn begin_primary_self_shield_state(
     game: &mut CGame,
@@ -113,12 +113,13 @@ pub(crate) fn begin_primary_self_shield_state(
     now: &mut dyn FnMut() -> u32,
 ) -> Option<StateKey> {
     let sufferer = sufferer?;
-    if !matches!(state, DefenseShieldState::Mana(_) | DefenseShieldState::Machine(_)) { return None; }
+    if matches!(state, DefenseShieldState::Promotion(_)) { return None; }
     resolve_state_move_shape(game, holder_region, holder)?;
     resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
     if user.is_some() {
         let started = now();
         match &mut state {
+            DefenseShieldState::Life(state) => state.begin_at(started),
             DefenseShieldState::Mana(state) => state.begin_at(started),
             DefenseShieldState::Machine(state) => state.begin_at(started),
             _ => unreachable!("первичный owner проверен до Begin"),
@@ -133,6 +134,7 @@ pub(crate) fn begin_primary_self_shield_state(
     let message = shield_begin_message(sufferer.1, state, now);
     let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
     let record = match state {
+        DefenseShieldState::Life(state) => state.encoded_for_install().to_vec(),
         DefenseShieldState::Mana(state) => state.encoded_for_install().to_vec(),
         DefenseShieldState::Machine(state) => state.encoded_for_install().to_vec(),
         _ => unreachable!("первичный owner проверен до Begin"),
@@ -259,20 +261,6 @@ pub(crate) fn expire_player_defense_shield(
         ))
     });
     expired && end_player_defense_shield_key(game, player_id, key, now_ms)
-}
-
-pub(crate) fn end_player_defense_shield(
-    game: &mut CGame,
-    player_id: i32,
-    skill_id: u32,
-    now_ms: u32,
-) -> bool {
-    let Some(key) = game.find_player(player_id)
-        .and_then(|player| player.defense_shield_key(skill_id))
-    else {
-        return false;
-    };
-    end_player_defense_shield_key(game, player_id, key, now_ms)
 }
 
 pub(crate) fn end_player_defense_shield_key(

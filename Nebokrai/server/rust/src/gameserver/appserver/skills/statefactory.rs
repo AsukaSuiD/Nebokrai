@@ -424,7 +424,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         LIFE_SHIELD_SKILL_ID => StateRecordLayout::typed(
             LIFE_SHIELD_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                LifeShieldState::decode(payload, offset, _now()).ok().map(|state| StateData::DefenseShield(DefenseShieldState::Life(state)))
+                LifeShieldState::decode(payload, offset, _now).ok().map(|state| StateData::DefenseShield(DefenseShieldState::Life(state)))
             },
         ),
         PROMOTION_SKILL_ID => StateRecordLayout::typed(

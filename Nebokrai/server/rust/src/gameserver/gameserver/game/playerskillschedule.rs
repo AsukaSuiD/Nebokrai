@@ -149,23 +149,31 @@ impl CGame {
     pub(super) fn begin_battle_fairy_skill_schedule<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
+        instance: Option<RegisteredSkill>,
         dispatch: BattleFairySkillDispatch,
         ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) {
-        if (0x212..=0x224).contains(&dispatch.skill_id())
-            && !self.battle_fairy_skill_execution_is_materialized(player_id, ai)
-        {
-            self.begin_battle_fairy_skill_lifecycle(player_id, dispatch, runtime.now_milliseconds());
-            self.enter_player_combat_state(player_id);
-            self.finish_player_skill_base_begin(player_id, dispatch.skill_id(), true);
-            self.replace_player_skill_visual_effect(
-                player_id, dispatch.skill_id(),
-                crate::gameserver::appserver::states::visualeffect::SkillVisualEffect::new(
-                    crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind::BattleFairy, 1,
-                ),
-            );
-        }
+        let needs_begin = (0x212..=0x224).contains(&dispatch.skill_id())
+            && !self.battle_fairy_skill_execution_is_materialized(player_id, ai);
+        if !needs_begin { return; }
+        let Some(instance) = instance else { return; };
+        self.with_published_player_ai(player_id, ai, |game| {
+            if !game.begin_battle_fairy_skill_lifecycle(player_id, instance, dispatch, runtime.now_milliseconds()) {
+                return;
+            }
+            game.enter_player_combat_state(player_id);
+            // OnBeginSkill может удалить регистрацию. Его продолжение не
+            // подхватывает новый экземпляр с тем же ID.
+            if let Some(skill) = game.registered_skill_mut(instance) {
+                skill.lifecycle_mut().finish_begin(true);
+                skill.replace_visual_effect(
+                    crate::gameserver::appserver::states::visualeffect::SkillVisualEffect::new(
+                        crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind::BattleFairy, 1,
+                    ),
+                );
+            }
+        });
     }
 
     pub(super) fn reject_battle_fairy_skill_schedule(
