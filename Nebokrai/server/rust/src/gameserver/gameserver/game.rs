@@ -39513,9 +39513,9 @@ impl CGame {
             }
             RAGE_SKILL_ID => cancel_player_rage(self, player_id, &mut player_ai, runtime),
             RAGE_BREAK_SKILL_ID => {
-                cancel_player_rage_break(self, player_id, &mut player_ai, runtime)
+                cancel_player_rage_break(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
-            FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, runtime),
+            FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
             FLASH_SKILL_ID => cancel_player_flash(self, player_id, &mut player_ai, runtime),
             SWALLOW_SKILL_ID => cancel_player_swallow(self, player_id, &mut player_ai, runtime),
             LEAF_CUT_SKILL_ID => cancel_player_leaf_cut(self, player_id, &mut player_ai, runtime),

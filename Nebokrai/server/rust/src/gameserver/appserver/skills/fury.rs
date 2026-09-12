@@ -1,117 +1,64 @@
-//! Ярость `CFury` (`0x1a3`) для игрока и монстра.
-//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
-//! первого AI исполняются после постановки Attack в том же Run.
+//! Ярость CFury (0x1A3), gameserver.exe/GameServer.pdb,
+//! appserver/skills/fury.cpp. Общая RP-подготовка обслуживает также
+//! CRageBreak из appserver/skills/ragebreak.cpp.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает задержку и
-//! повторное использование, пакеты `0xBFE01`, накопление `CFuryState`, порядок
-//! снятия конфликтующих состояний и последующее `CCureState` со сроком навыка.
-//! Модуль владеет проверками, расходом RP, стадиями, состояниями и визуальными
-//! пакетами. `CGame` предоставляет владельцев, доставку и общий пересчёт
-//! свойств. `AI` (0x00536970) при наличии `CRageBreakState` вызывает Restart
-//! (0x00536B97, slot +0x20) и завершается без создания Fury/Cure, пакета
-//! состояния и пересчёта свойств. Это общая ветвь игрока и монстра;
-//! обычная ветвь сохраняет накопление состояний.
-//! Снятие конфликтов внутри AI0x00536970 обходит живую длину общей арены:
-//! каждый подходящий ID получает virtual End, затем destructor свежего остатка
-//! той же позиции. Игрок и монстр используют один проход; монстровый callback
-//! публикует настоящий регион. Дополнительного BFE04 поверх owner End нет.
-//! Игровая ветвь игрока завершается общим `CSummonSkill::End(1)`; монстровый
-//! lifecycle остаётся отдельным и не использует этот хвост. Обе ветви
-//! используют абсолютные сроки `CSkill::IsRestored` и задержки каста
-//! (unsigned cmp/jb по 0x00536A9C).
-//! Cure добавляется без поиска и замены предыдущей записи: поздний persist
-//! → Begin(U,U) с собственными часами и visual → append. Накопление
-//! сохраняется в DB и AI. UpdateProperty следует после Fury, снятия
-//! конфликтов и Cure append, но до skill End(1). Вложенные вызовы видят
-//! опубликованный настоящий AI игрока либо полный регион монстра.
-//! CFuryState::Begin(0x005EA500) только создаёт loop=1 visual; начальный
-//! BFE03 отправляет OnUpdateProperties, а не отдельный вызов после Begin.
-use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_owned_skill_begin_object, resolve_state_move_shape,
-};
+//! Игрок и монстр используют одно зарегистрированное исполнение. Begin
+//! создаёт visual до проверки U; RP расходуется только первым AI игрока,
+//! затем задаются прерываемость и абсолютная задержка. Нулевая стоимость
+//! RP допустима. Отказ Begin не публикует дополнительный visual2.
+//!
+//! Наличие первого RageBreak продлевает только его таймер и завершает
+//! навык: Fury, Cure и пересчёт свойств в этой ветви не выполняются.
+//! Иначе Fury накапливается через Begin(U,U) и append, конфликтующие
+//! состояния снимаются по живым позициям, затем добавляется Cure и
+//! пересчитываются свойства. Все callbacks видят опубликованный AI/регион.
+//! Полный End принадлежит захваченному экземпляру навыка.
+
+use std::ops::ControlFlow;
+
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::curestate::{CureState, begin_primary_cure_state};
-use super::furystate::FuryState;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::monsterattack::resolve_owned_monster_attack_target;
+use super::furystate::{FuryState, begin_primary_fury_state};
+use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
+use super::ragebreakstate::{RAGE_BREAK_STATE_ID, RageBreakState};
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::{
-    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
+    execute_owned_state_skill, execute_player_state_skill, finish_player_state_skill,
+    publish_state_skill_visual, state_skill_outcome,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, ServerRegionOwner, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, resolve_state_move_shape, resolve_state_move_shape_mut,
 };
-use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+    ServerRegionOwner,
+};
 
-const MONSTER_TYPE: i32 = 600;
+pub(crate) const FURY_SKILL_ID: u32 = 0x1a3;
 const PLAYER_TYPE: i32 = 400;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
-const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
-const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
-const SKILL_USAGE_TARGET_ATK_GAIN: u32 = 105;
+const RP_LOSS: u32 = 3;
+const CAN_BREAK: u32 = 10_006;
+const PERSIST: u32 = 10_002;
+const ATTACK_GAIN: u32 = 105;
 const CONFLICTING_STATES: [u32; 9] = [
     0x138, 0xd2, 0xc9, 0x67, 0x192, 0x191, 0x198, 0x199, 0x1a6,
 ];
-pub(crate) const FURY_SKILL_ID: u32 = 0x1a3;
 
-fn self_identity(monster_id: i32) -> ShapeIdentity {
-    ShapeIdentity {
-        object_type: MONSTER_TYPE,
-        id: monster_id,
-        ex_id: CGuid::GUID_INVALID,
-    }
+fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
+    let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
+    Some((shape.get_region_id(), shape.identity()))
 }
 
-fn send_cast_start(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &CShape,
-    skill_level: u16,
+pub(crate) fn remove_reached_conflict_states(
+    game: &mut CGame, region_id: i32, holder: ShapeIdentity,
 ) {
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(1);
-    message.add_long(FURY_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(source.get_direction());
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
-
-fn send_cast_fire(
-    game: &CGame,
-    region: &CServerRegion,
-    source: &CShape,
-    skill_level: u16,
-) {
-    let Ok(tile_x) = source.get_tile_x() else {
-        return;
-    };
-    let Ok(tile_y) = source.get_tile_y() else {
-        return;
-    };
-    let mut message = CMessage::new(0x000b_fe01);
-    message.add_byte(2);
-    message.add_long(FURY_SKILL_ID as i32);
-    message.add_short(skill_level as i16);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(MONSTER_TYPE);
-    message.add_long(source.identity().id);
-    message.add_long(tile_x);
-    message.add_long(tile_y);
-    let _ = game.send_game_shape_around(region, source, None, &message);
-}
-
-fn remove_reached_conflict_states(game: &mut CGame, region_id: i32, holder: ShapeIdentity) {
     let mut position = 0;
     loop {
         let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return; };
@@ -123,139 +70,180 @@ fn remove_reached_conflict_states(game: &mut CGame, region_id: i32, holder: Shap
     }
 }
 
-pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    owner: &mut Option<ServerRegionOwner>,
-    monster_id: i32,
-    target_identity: ShapeIdentity,
-    skill_level: u16,
+fn fail_rp(
+    game: &mut CGame, address: RegisteredSkill, source: (i32, ShapeIdentity),
     properties: &CSkillBaseProperties,
-    now_ms: u32,
-    runtime: &mut Runtime,
+) {
+    game.update_registered_skill_visual(address, 8);
+    if source.1.object_type == PLAYER_TYPE {
+        game.send_skill_system_info_with_unsigned(
+            source.1.id, b"GS0289", properties.query_property(RP_LOSS),
+        );
+    }
+}
+
+/// Различие двух RP-навыков касается только первого Check, не расхода в AI.
+pub(super) enum RageRpPolicy {
+    AllowZero,
+    RequirePositive,
+}
+
+pub(super) struct RageSkillEffect {
+    pub(super) source: (i32, ShapeIdentity),
+    pub(super) properties: CSkillBaseProperties,
+}
+
+pub(super) fn check_rage_skill_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, address: RegisteredSkill, policy: RageRpPolicy, runtime: &mut Runtime,
 ) -> bool {
-    let Some(region_owner) = owner.as_mut() else { return false };
-    let region_id = region_owner.base().id;
-    let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region_owner.base_mut()
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| {
-            let property = game
-                .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                .clone();
-            let attack_interval_ms = monster
-                .is_tamed()
-                .then(|| monster.pet_attack_properties(&property))
-                .map_or(property.attack_speed, |pet| pet.attack_interval);
-            Some((
-                monster.move_shape().shape().clone(),
-                property,
-                attack_interval_ms,
-                monster.current_active_attack_cast(game.skill_factory()),
-                monster.skill_last_used_ms(FURY_SKILL_ID, game.skill_factory()),
-            ))
-        })
-    else {
+    let Some(skill) = game.registered_skill(address) else { return false; };
+    let Some(source) = participant(game, skill.lifecycle().user()) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
         return false;
     };
-
-    if cast.is_none() {
-        let Some(target) = resolve_owned_monster_attack_target(game, region_owner, target_identity)
-        else {
-            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target(game.skill_factory());
-            }
-            return true;
-        };
-        if !approach_attack_range(
-            game,
-            region_owner.base_mut(),
-            monster_id,
-            MonsterTraceTarget::Shape(target.view),
-            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
-            runtime,
-        ) {
-            return true;
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(address, 13);
+        if source.1.object_type == PLAYER_TYPE {
+            game.send_skill_system_info(source.1.id, b"GS0278");
         }
-        if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
-        {
-            let attack_started = region_owner.base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .is_some_and(|monster| {
-                    monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
-                });
-            if !attack_started {
-                return true;
-            }
-        }
-        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
-                last_used_ms,
-                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
-                now_ms,
-            )
-        {
-            return true;
-        }
-        let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), self_identity(monster_id));
-        if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-            monster.begin_base_attack_cast(
-                self_identity(monster_id),
-                FURY_SKILL_ID,
-                skill_level,
-                now_ms,
-                target_object,
-                game.skill_factory(),
-            );
-        }
-        send_cast_start(game, region_owner.base_mut(), &source, skill_level);
-        return true;
-    }
-
-    let cast = cast.expect("выполнение ярости проверено выше");
-    if cast.dispatch().skill_id != FURY_SKILL_ID {
         return false;
     }
-    if now_ms < cast.started_at_ms().wrapping_add(properties.query_property(SKILL_USAGE_DELAY_TIME)) {
-        return true;
+    if source.1.object_type != PLAYER_TYPE { return true; }
+    // RageBreak проверяет стоимость до чтения RP, затем запрашивает её вновь.
+    // Fury сразу читает RP и только после этого делает единственный запрос.
+    if matches!(policy, RageRpPolicy::RequirePositive) && properties.query_property(RP_LOSS) == 0 {
+        return false;
     }
-
-    send_cast_fire(game, region_owner.base_mut(), &source, skill_level);
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Check, SkillStage::Calculate, game.skill_factory());
-        let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Calculate, SkillStage::Attack, game.skill_factory());
+    let Some(rp) = game.find_player(source.1.id).map(|player| player.rp()) else { return false; };
+    if (u32::from(rp).wrapping_sub(properties.query_property(RP_LOSS)) as i32) < 0 {
+        fail_rp(game, address, source, &properties);
+        return false;
     }
-
-    let identity = source.identity();
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        if monster.move_shape_mut().restart_rage_break_state(now_ms) {
-            let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
-            let _ = monster.finish_base_attack_cast_with_clock(FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
-            return true;
-        }
-    }
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let fury = FuryState::new(
-        now_ms,
-        keep_time_ms,
-        properties.query_property(SKILL_USAGE_TARGET_ATK_GAIN) as i32,
-    );
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        monster.move_shape_mut().push_fury_state(fury);
-    }
-
-    let _ = game.with_published_region(owner, |game| {
-        remove_reached_conflict_states(game, region_id, identity);
-        let cure = CureState::new(properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME));
-        let _ = begin_primary_cure_state(
-            game, region_id, identity, Some((region_id, identity)), Some((region_id, identity)),
-            cure, &mut || runtime.now_milliseconds(),
-        );
-        game.update_move_shape_properties(region_id, identity)
-    });
-    let Some(region_owner) = owner.as_mut() else { return true };
-    if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-        let _ = monster.advance_base_attack_cast(FURY_SKILL_ID, SkillStage::Attack, SkillStage::Apply, game.skill_factory());
-        let _ = monster.finish_base_attack_cast_with_clock(FURY_SKILL_ID, game.skill_factory(), || runtime.now_milliseconds());
+    if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) {
+        user.set_moveable(false);
     }
     true
+}
+
+/// Общая подготовка Fury/RageBreak заканчивается visual1. Таблица этого AI
+/// и его U передаются обработчику состояний, не разрешаясь заново по ID навыка.
+pub(super) fn prepare_rage_skill_effect<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+) -> ControlFlow<QueuedSkillExecutionOutcome, RageSkillEffect> {
+    let Some(skill) = game.registered_skill(address) else {
+        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Rejected));
+    };
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
+        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Pending));
+    }
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
+    };
+    let Some(source) = participant(game, skill.lifecycle().user()) else {
+        return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
+    };
+    if game.move_shape_health(source.0, source.1) == Some(0) {
+        // Смерть U завершает оба навыка с AfterUse, хотя усиления не создаются.
+        game.update_registered_skill_visual(address, 2);
+        return ControlFlow::Break(end_state_skill(game, address, 1, runtime));
+    }
+    if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) == Some(SkillStage::Begin) {
+        if source.1.object_type == PLAYER_TYPE {
+            let Some(rp) = game.find_player(source.1.id).map(|player| player.rp()) else {
+                return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
+            };
+            let remaining = u32::from(rp).wrapping_sub(properties.query_property(RP_LOSS));
+            if (remaining as i32) < 0 {
+                fail_rp(game, address, source, &properties);
+                return ControlFlow::Break(end_state_skill(game, address, 0, runtime));
+            }
+            if let Some(player) = game.find_player_mut(source.1.id) {
+                player.set_rp(remaining as u16);
+            }
+            let _ = game.publish_player_states(source.1.id);
+        }
+        if let Some(skill) = game.registered_skill_mut(address) {
+            skill.lifecycle_mut().set_available(properties.query_property(CAN_BREAK) != 0);
+        }
+        game.update_registered_skill_visual(address, 0);
+        if let Some(skill) = game.registered_skill_mut(address) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    if game.registered_skill(address).and_then(MoveShapeSkill::execution_stage) != Some(SkillStage::Check) {
+        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Pending));
+    }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(address).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Rejected));
+    };
+    if started.wrapping_add(delay) > runtime.now_milliseconds() {
+        return ControlFlow::Break(state_skill_outcome(QueuedSkillExecutionState::Pending));
+    }
+    game.update_registered_skill_visual(address, 1);
+    ControlFlow::Continue(RageSkillEffect { source, properties })
+}
+
+struct Fury;
+
+impl RegisteredStateSkill for Fury {
+    const ID: u32 = FURY_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::Fury;
+    const VISUAL_FAILURES: &'static [u32] = &[2, 7, 8, 13];
+    const VISUAL_DWORD_FAILURES: &'static [u32] = &[8];
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::User;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = None;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, _begin_target: StateSkillBeginTarget,
+        runtime: &mut Runtime,
+    ) -> bool {
+        check_rage_skill_cast(game, address, RageRpPolicy::AllowZero, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, address: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let RageSkillEffect { source, properties } = match prepare_rage_skill_effect(game, address, runtime) {
+            ControlFlow::Continue(effect) => effect,
+            ControlFlow::Break(outcome) => return outcome,
+        };
+
+        // Это именно Restart таймера, а не повторный Begin состояния:
+        // ни нового visual, ни пересчёта свойств здесь нет.
+        if let Some((_, key)) = resolve_state_move_shape(game, source.0, source.1)
+            .and_then(|shape| shape.find_state_position(|state| state.state_id() == RAGE_BREAK_STATE_ID))
+        {
+            let now = runtime.now_milliseconds();
+            if let Some(state) = resolve_state_move_shape_mut(game, source.0, source.1)
+                .and_then(|shape| shape.applied_state_mut::<RageBreakState>(key))
+            {
+                state.restart_timer(now);
+            }
+            return end_state_skill(game, address, 1, runtime);
+        }
+
+        let keep = properties.query_property(PERSIST);
+        let gain = properties.query_property(ATTACK_GAIN) as i32;
+        let fury = FuryState::new(keep, gain);
+        let _ = begin_primary_fury_state(
+            game, source.0, source.1, Some(source), Some(source), fury,
+            &mut || runtime.now_milliseconds(),
+        );
+        remove_reached_conflict_states(game, source.0, source.1);
+        let cure = CureState::new(properties.query_property(PERSIST));
+        let _ = begin_primary_cure_state(
+            game, source.0, source.1, Some(source), Some(source), cure,
+            &mut || runtime.now_milliseconds(),
+        );
+        let _ = game.update_move_shape_properties(source.0, source.1);
+        end_state_skill(game, address, 1, runtime)
+    }
+}
+
+pub(crate) fn publish_fury_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    publish_state_skill_visual::<Fury>(game, skill, mode);
 }
 
 pub(crate) const fn is_fury_dispatch(dispatch: PlayerSkillDispatch) -> bool {
@@ -266,183 +254,25 @@ pub(crate) const fn is_fury_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     }
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome {
-        state,
-        first_contact: false,
-    }
-}
-
-fn finish_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    finish_summon_skill(game, player_id, FURY_SKILL_ID, runtime);
-}
-
-pub(crate) fn cancel_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, FURY_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_fury(game, player_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
-
-fn send_player_failure(game: &CGame, player_id: i32, action: u8, rp_loss: u32) {
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    if action == 8 {
-        message.add_long(0);
-    } else {
-        message.add_byte(0);
-    }
-    message.add_byte(action);
-    let _ = message.send_to_player(game.net_server(), player_id);
-    match action {
-        8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        _ => {}
-    }
-}
-
-fn send_player_cast(game: &mut CGame, player_id: i32, level: i32, fired: bool) {
-    game.send_self_state_skill_cast(
-        EFFECT_MESSAGE,
-        player_id,
-        FURY_SKILL_ID,
-        level,
-        if fired { 2 } else { 1 },
-    );
+pub(crate) fn cancel_player_fury<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI,
+    nonzero_end: bool, runtime: &mut Runtime,
+) -> bool {
+    finish_player_state_skill::<Fury, Runtime>(
+        game, player_id, player_ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
+    )
 }
 
 pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if !is_fury_dispatch(dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let Some((level, initial_rp)) = game
-        .find_player(player_id)
-        .map(|player| (player.learned_skill_level(FURY_SKILL_ID, game.skill_factory()), player.rp()))
-    else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let Some(properties) = game.skill_base_properties(FURY_SKILL_ID, level).cloned() else {
-        if game.player_skill_execution(player_id, FURY_SKILL_ID).is_some() {
-            finish_player_fury(game, player_id, player_ai, runtime);
-        }
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let rp_loss = properties.query_property(SKILL_USAGE_USER_RP_LOSE);
-    let reuse_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let attack_gain = properties.query_property(SKILL_USAGE_TARGET_ATK_GAIN) as i32;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    execute_player_state_skill::<Fury, Runtime>(game, player_id, dispatch, player_ai, runtime)
+}
 
-    if game.player_skill_execution(player_id, FURY_SKILL_ID).is_none() {
-        let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, FURY_SKILL_ID), reuse_ms, now_ms) {
-            send_player_failure(game, player_id, 0x0d, rp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
-            send_player_failure(game, player_id, 8, rp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(FURY_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, FURY_SKILL_ID)
-        .is_none_or(|execution| execution.dispatch() != dispatch)
-    {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.find_player(player_id).is_none_or(CPlayer::is_dead) {
-        send_player_cast(game, player_id, level, false);
-        finish_player_fury(game, player_id, player_ai, runtime);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.player_skill_execution(player_id, FURY_SKILL_ID)
-        .is_some_and(|execution| execution.stage() == SkillStage::Begin)
-    {
-        let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
-            send_player_failure(game, player_id, 8, rp_loss);
-            finish_player_fury(game, player_id, player_ai, runtime);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16);
-        }
-        let _ = game.publish_player_states(player_id);
-        send_player_cast(game, player_id, level, false);
-        if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
-            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-
-    let started_at_ms = game.player_skill_execution(player_id, FURY_SKILL_ID)
-        .map(SkillExecutionKernel::started_at_ms)
-        .unwrap_or_default();
-    if started_at_ms.wrapping_add(delay_ms) > runtime.now_milliseconds() {
-        return terminal(QueuedSkillExecutionState::Pending);
-    }
-
-    send_player_cast(game, player_id, level, true);
-    if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-    }
-    let now_ms = runtime.now_milliseconds();
-    let Some((region_id, identity, _tile_x, _tile_y)) =
-        game.find_player(player_id).and_then(|player| {
-            Some((
-                player.server_region_id()?,
-                player.shape().identity(),
-                player.shape().get_tile_x().ok()?,
-                player.shape().get_tile_y().ok()?,
-            ))
-        })
-    else {
-        finish_player_fury(game, player_id, player_ai, runtime);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-
-    if game
-        .find_player_mut(player_id)
-        .is_some_and(|player| player.restart_rage_break_state(now_ms))
-    {
-        if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
-            let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
-        }
-        finish_player_fury(game, player_id, player_ai, runtime);
-        return terminal(QueuedSkillExecutionState::Completed);
-    }
-
-    let fury = FuryState::new(now_ms, keep_time_ms, attack_gain);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.push_fury_state(fury);
-    }
-
-    game.with_published_player_ai(player_id, player_ai, |game| {
-        remove_reached_conflict_states(game, region_id, identity);
-        let cure = CureState::new(properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME));
-        let _ = begin_primary_cure_state(
-            game, region_id, identity, Some((region_id, identity)), Some((region_id, identity)),
-            cure, &mut || runtime.now_milliseconds(),
-        );
-        let _ = game.update_player_properties(player_id);
-        let _ = game.publish_player_states(player_id);
-    });
-
-    if let Some(execution) = game.player_skill_execution_mut(player_id, FURY_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_fury(game, player_id, player_ai, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
+pub(crate) fn execute_owned_fury<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<Fury, Runtime>(game, owner, monster_id, target, skill_level, runtime)
 }

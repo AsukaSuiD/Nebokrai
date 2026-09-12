@@ -292,12 +292,8 @@ use crate::gameserver::appserver::skills::heartenstate::HeartenState;
 use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
 };
-use crate::gameserver::appserver::skills::furystate::{
-    FURY_STATE_BYTES, FURY_STATE_SKILL_ID, FuryState,
-};
-use crate::gameserver::appserver::skills::ragebreakstate::{
-    RAGE_BREAK_STATE_BYTES, RageBreakState,
-};
+use crate::gameserver::appserver::skills::furystate::FuryState;
+use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::{
@@ -2038,64 +2034,6 @@ impl CMoveShape {
         Some(state)
     }
 
-
-    pub(crate) fn push_fury_state(&mut self, state: FuryState) {
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-    }
-
-
-
-    pub(crate) fn fury_states(&self) -> impl Iterator<Item = &FuryState> {
-        self.state_entries.iter::<FuryState>()
-    }
-
-    pub(crate) fn remove_fury_state(&mut self, position: usize) -> Option<FuryState> {
-        let key = self.state_entries.key_at::<FuryState>(position)?;
-        self.remove_fury_state_key(key)
-    }
-
-    pub(crate) fn remove_fury_state_key(&mut self, key: StateKey) -> Option<FuryState> {
-        let position = self.state_entries.keys::<FuryState>().iter().position(|current| *current == key)?;
-        let serialized_offset = known_state_record_offsets(&self.ex_states).into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(FURY_STATE_SKILL_ID))
-            .nth(position);
-        let state = self.state_entries.take::<FuryState>(key)?;
-        if let Some(offset) = serialized_offset {
-            self.remove_serialized_state_record_at(offset, FURY_STATE_BYTES);
-        }
-        Some(state)
-    }
-
-    pub(crate) fn rage_break_state(&self) -> Option<RageBreakState> {
-        self.state_entries.first::<RageBreakState>().copied()
-    }
-
-    pub(crate) fn replace_rage_break_state(&mut self, state: RageBreakState) -> Option<RageBreakState> {
-        self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        {
-            let previous = self.state_entries.take_first::<RageBreakState>();
-            self.state_entries.append(state);
-            previous
-        }
-    }
-
-
-
-    pub(crate) fn take_rage_break_state(&mut self) -> Option<RageBreakState> {
-        let state = self.state_entries.take_first::<RageBreakState>()?;
-        self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
-        Some(state)
-    }
-
-    pub(crate) fn restart_rage_break_state(&mut self, now_ms: u32) -> bool {
-        let Some(state) = self.state_entries.first_mut::<RageBreakState>() else {
-            return false;
-        };
-        state.restart_timer(now_ms);
-        true
-    }
 
 
 

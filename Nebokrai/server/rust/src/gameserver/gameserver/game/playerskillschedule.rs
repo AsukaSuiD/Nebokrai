@@ -231,8 +231,6 @@ impl CGame {
             | GHOST_CUT_3_SKILL_ID
             | ARMY_BREAK_SKILL_ID
             | ARMY_BREAK_2_SKILL_ID
-            | RAGE_BREAK_SKILL_ID
-            | FURY_SKILL_ID
             | FLASH_SKILL_ID
             | SWALLOW_SKILL_ID
             | LEAF_CUT_SKILL_ID
@@ -310,6 +308,8 @@ impl CGame {
             | HEARTEN_SKILL_ID
             | MACHINE_SHIELD_SKILL_ID
             | MANA_SHIELD_SKILL_ID
+            | FURY_SKILL_ID
+            | RAGE_BREAK_SKILL_ID
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID

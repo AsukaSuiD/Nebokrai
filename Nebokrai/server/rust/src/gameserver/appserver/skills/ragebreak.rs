@@ -1,176 +1,131 @@
-//! Подготовка яростного удара `CRageBreak` (`0x6E`).
-//! Успешный Begin возвращает Begun до первого AI. Расход ресурсов,
-//! перемещение и атака остаются у AI после постановки Attack в том же Run;
-//! раннее время Begin сохраняется общим kernel.
-//! Reuse проверяется exact `CSkill::IsRestored`; каст и состояние используют
-//! абсолютный wrapping-срок.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/ragebreak.cpp`. Владелец сохраняет проверку и повторное
-//! списание RP, задержку, replacement `CRageBreakState`, порядок снятия
-//! конфликтующих состояний и последующее наложение `CCureState`. `CGame`
-//! используется только для канонического player-owner-а, доставки и общего
-//! пересчёта свойств. Подтверждённый `End` возвращает движение и выполняет
-//! общий хвост `CSummonSkill::End(1)` после установки состояний.
-//! AI завершает прежний RageBreak и первый Cure до Begin новых, включая
-//! отдельный UpdateProperty каждого удаления. Для Cure нет внешнего
-//! destructor: затем читается persist, проходит Begin(U,U) и append,
-//! после чего свойства пересчитываются вновь. Вложенные callbacks видят
-//! опубликованный настоящий AI игрока.
-//! Begin RageBreakState(0x005FD5C0) создаёт loop=1 visual без Update;
-//! BFE03 состояния публикуется только последующим OnUpdateProperties.
+//! CRageBreak (0x6E): gameserver.exe + GameServer.pdb, appserver/skills/ragebreak.cpp.
+//! Общий stateskill обслуживает три Begin, registered visual и полный End;
+//! RP-подготовка в fury.rs проверяет U и срок эффекта; предметный хвост
+//! накладывает усиление и затем Cure.
+//! Источник не обязан быть игроком: RTTI ограничивает только RP и сообщения.
+//! Состояния принадлежат арене источника и не завершаются вместе с навыком.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::cure::finish_curable_state;
-use super::curestate::{CureState, begin_primary_cure_state, end_player_cure_state};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::ragebreakstate::{RageBreakState, end_player_rage_break_state};
+use std::ops::ControlFlow;
+
+use super::curestate::{CURE_STATE_SKILL_ID, CureState, begin_primary_cure_state};
+use super::fury::{
+    RageRpPolicy, RageSkillEffect, check_rage_skill_cast, prepare_rage_skill_effect,
+    remove_reached_conflict_states,
+};
+use super::kernel::SkillTermination;
+use super::ragebreakstate::{RageBreakState, begin_primary_rage_break_state};
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
+    execute_owned_state_skill, execute_player_state_skill, finish_player_state_skill,
+    publish_state_skill_visual, state_skill_outcome,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
-use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    end_and_destroy_state_at, end_move_shape_state, resolve_state_move_shape,
+};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
+};
 
 pub(crate) const RAGE_BREAK_SKILL_ID: u32 = 0x6e;
-const PLAYER_TYPE: i32 = 400;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const USER_RP_LOSE: u32 = 3;
 const STATE_PERSIST_TIME: u32 = 10_002;
 const TARGET_ATTACK_GAIN: u32 = 105;
-const CONFLICTING_STATES: [u32; 9] = [0x138, 0xd2, 0xc9, 0x67, 0x192, 0x191, 0x198, 0x199, 0x1a6];
 
-fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
-pub(crate) fn is_rage_break_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == RAGE_BREAK_SKILL_ID }
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
-
-fn finish_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    finish_summon_skill(game, player_id, RAGE_BREAK_SKILL_ID, runtime);
+pub(crate) fn is_rage_break_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    dispatch.skill_id() == RAGE_BREAK_SKILL_ID
 }
 
-pub(crate) fn cancel_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_rage_break(game, player_id, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
+struct RageBreak;
 
-fn fail(game: &CGame, player_id: i32, code: u8, rp_loss: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-    match code {
-        8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        _ => {}
+impl RegisteredStateSkill for RageBreak {
+    const ID: u32 = RAGE_BREAK_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::RageBreak;
+    const VISUAL_FAILURES: &'static [u32] = &[2, 7, 8, 13];
+    const VISUAL_DWORD_FAILURES: &'static [u32] = &[8];
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::User;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = None;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, _target: StateSkillBeginTarget,
+        runtime: &mut Runtime,
+    ) -> bool {
+        check_rage_skill_cast(game, instance, RageRpPolicy::RequirePositive, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let effect = match prepare_rage_skill_effect(game, instance, runtime) {
+            ControlFlow::Continue(effect) => effect,
+            ControlFlow::Break(outcome) => return outcome,
+        };
+        match apply_rage_break_effect(game, effect, runtime) {
+            Some(argument) => end_state_skill(game, instance, argument, runtime),
+            None => state_skill_outcome(QueuedSkillExecutionState::Pending),
+        }
     }
 }
 
-fn send_cast_visual(game: &mut CGame, player_id: i32, level: i32, fired: bool) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(if fired { 2 } else { 1 });
-    message.add_long(RAGE_BREAK_SKILL_ID as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if fired {
-        message.add_long(PLAYER_TYPE);
-        message.add_long(player_id);
-        message.add_long(player.shape().get_tile_x().unwrap_or_default());
-        message.add_long(player.shape().get_tile_y().unwrap_or_default());
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+pub(crate) fn publish_rage_break_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    publish_state_skill_visual::<RageBreak>(game, skill, mode);
+}
+
+pub(crate) fn cancel_player_rage_break<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI,
+    nonzero_end: bool, runtime: &mut Runtime,
+) -> bool {
+    finish_player_state_skill::<RageBreak, Runtime>(
+        game, player_id, player_ai, i32::from(nonzero_end), SkillTermination::Cancelled, runtime,
+    )
 }
 
 pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if !is_rage_break_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let Some((level, rp)) = game.find_player(player_id).map(|player| (player.learned_skill_level(RAGE_BREAK_SKILL_ID, game.skill_factory()), player.rp())) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(RAGE_BREAK_SKILL_ID, level).cloned() else { if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_some() { finish_player_rage_break(game, player_id, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
-    let rp_loss = properties.query_property(USER_RP_LOSE);
-    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    execute_player_state_skill::<RageBreak, Runtime>(game, player_id, dispatch, player_ai, runtime)
+}
+
+pub(crate) fn execute_owned_monster_rage_break<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<RageBreak, Runtime>(game, owner, monster_id, target, skill_level, runtime)
+}
+
+fn apply_rage_break_effect<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, effect: RageSkillEffect, runtime: &mut Runtime,
+) -> Option<i32> {
+    let RageSkillEffect { source, properties } = effect;
+    let previous = resolve_state_move_shape(game, source.0, source.1)?
+        .find_state_position(|state| state.state_id() == RAGE_BREAK_SKILL_ID);
+    if let Some((position, _)) = previous {
+        let _ = end_and_destroy_state_at(game, source.0, source.1, position);
+    }
     let keep = properties.query_property(STATE_PERSIST_TIME);
-    let attack_gain = properties.query_property(TARGET_ATTACK_GAIN) as i32;
-    let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let gain = properties.query_property(TARGET_ATTACK_GAIN) as i32;
+    let state = RageBreakState::new(keep, gain);
+    let _ = begin_primary_rage_break_state(
+        game, source.0, source.1, Some(source), Some(source), state,
+        &mut || runtime.now_milliseconds(),
+    );
+    remove_reached_conflict_states(game, source.0, source.1);
 
-    if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_none() {
-        let now = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, RAGE_BREAK_SKILL_ID), reuse, now) {
-            fail(game, player_id, 0x0d, rp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if rp_loss == 0 { return terminal(QueuedSkillExecutionState::Rejected) }
-        if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 {
-            fail(game, player_id, 8, rp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(RAGE_BREAK_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, now));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
-        let current = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if (u32::from(current).wrapping_sub(rp_loss) as i32) < 0 {
-            fail(game, player_id, 8, rp_loss);
-            finish_player_rage_break(game, player_id, runtime);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_rp(u32::from(current).wrapping_sub(rp_loss) as u16); }
-        send_cast_visual(game, player_id, level, false);
-        if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
-    }
-
-    let started = game.player_skill_execution(player_id, RAGE_BREAK_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
-    if started.wrapping_add(delay) > runtime.now_milliseconds() { return terminal(QueuedSkillExecutionState::Pending) }
-    send_cast_visual(game, player_id, level, true);
-    if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) {
-        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-    }
-
-    let now = runtime.now_milliseconds();
-    let Some((region_id, _tile_x, _tile_y)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
-        finish_player_rage_break(game, player_id, runtime);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let identity = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
-    let _ = end_player_rage_break_state(game, player_id, now);
-    let state_now = runtime.now_milliseconds();
-    let state = RageBreakState::new(state_now, keep, attack_gain);
-    if let Some(player) = game.find_player_mut(player_id) { player.replace_rage_break_state(state); }
-
-    game.with_published_player_ai(player_id, player_ai, |game| {
-        let order = game.find_player(player_id).map(CPlayer::curable_state_ids).unwrap_or_default();
-        for state_id in order {
-            if CONFLICTING_STATES.contains(&state_id) { let _ = finish_curable_state(game, region_id, identity, state_id, now); }
-        }
-        // Этот caller вызывает только первый End, без внешнего destructor.
-        // Новый Cure всегда добавляется в хвост, даже если End оставил старый.
-        let _ = end_player_cure_state(game, player_id);
-        let cure = CureState::new(properties.query_property(STATE_PERSIST_TIME));
-        let _ = begin_primary_cure_state(
-            game, region_id, identity, Some((region_id, identity)), Some((region_id, identity)),
-            cure, &mut || runtime.now_milliseconds(),
-        );
-        let _ = game.update_player_properties(player_id);
-    });
-
-    if let Some(state) = game.player_skill_execution_mut(player_id, RAGE_BREAK_SKILL_ID) { let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_rage_break(game, player_id, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
+    // Для прежнего Cure вызывается только первый End, без внешнего destructor;
+    // новый экземпляр всегда добавляется в хвост после позднего запроса срока.
+    let previous = resolve_state_move_shape(game, source.0, source.1)?
+        .find_state_position(|state| state.state_id() == CURE_STATE_SKILL_ID);
+    if let Some((_, key)) = previous { let _ = end_move_shape_state(game, source.0, source.1, key); }
+    let cure = CureState::new(properties.query_property(STATE_PERSIST_TIME));
+    let _ = begin_primary_cure_state(
+        game, source.0, source.1, Some(source), Some(source), cure,
+        &mut || runtime.now_milliseconds(),
+    );
+    let _ = game.update_move_shape_properties(source.0, source.1);
+    Some(1)
 }

@@ -252,6 +252,7 @@ use super::corpsecandleblasting::{
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
+use super::ragebreak::{RAGE_BREAK_SKILL_ID, execute_owned_monster_rage_break};
 use super::immediatestate::MonsterImmediateSkill;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
@@ -491,8 +492,8 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
 
 const BASE_MAGIC_SKILL_ID: u16 = 3;
 
-fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
-    matches!(
+fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) -> bool {
+    owned_target_state_executor::<Runtime>(skill_id).is_some() || matches!(
         skill_id,
         COMMON_BASE_ATTACK_SKILL_ID
             | ARCHERY_SKILL_ID
@@ -510,12 +511,9 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SPORE_BLASTING_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID
-            | FURY_SKILL_ID
             | LITTLE_STAR_SKILL_ID
             | SNAKE_BOLT_SKILL_ID
-            | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
-            | SPIDER_WEB_SKILL_ID
             | SPRITE_BURN_SKILL_ID
             | MACHINERY_STOMP_SKILL_ID
             | LORD_WIDERANGING_ATTACK_SKILL_ID
@@ -526,8 +524,6 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
-            | PROMOTION_SKILL_ID
-            | KNOCK_OUT_SKILL_ID
             | YAKSHA_SLASH_SKILL_ID
             | SNOW_STORM_SKILL_ID
     ) || MonsterImmediateSkill::from_skill_id(skill_id).is_some()
@@ -1024,6 +1020,8 @@ fn owned_target_state_executor<Runtime: GameMainLoopRuntime>(
         PROMOTION_SKILL_ID => Some(execute_owned_monster_promotion),
         CURE_SKILL_ID => Some(execute_owned_monster_cure),
         HEARTEN_SKILL_ID => Some(execute_owned_monster_hearten),
+        FURY_SKILL_ID => Some(execute_owned_fury),
+        RAGE_BREAK_SKILL_ID => Some(execute_owned_monster_rage_break),
         _ => None,
     }
 }
@@ -1308,7 +1306,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         };
         (skill.id(), level)
     };
-    if !is_owned_monster_attack_skill(skill_id) {
+    if !is_owned_monster_attack_skill::<Runtime>(skill_id) {
         return false;
     }
     if target.is_none()
@@ -1433,19 +1431,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             game, owner, monster_id, skill_id, i32::from(skill_level), runtime,
         );
         return executed;
-    }
-    if skill_id == FURY_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_fury(
-            game,
-            owner,
-            monster_id,
-            target,
-            skill_level,
-            &skill_properties,
-            now_ms,
-            runtime,
-        );
     }
     if skill_id == YAKSHA_SLASH_SKILL_ID {
         let skill_properties = skill_properties.clone();

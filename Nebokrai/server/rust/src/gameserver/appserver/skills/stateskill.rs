@@ -35,6 +35,7 @@ use crate::nets::netserver::message::CMessage;
 pub(crate) enum StateSkillVisualTarget {
     Sufferer,
     SuffererOrUser,
+    User,
     UserOnly,
 }
 
@@ -65,6 +66,7 @@ pub(crate) trait RegisteredStateSkill {
     const ID: u32;
     const VISUAL: SkillVisualEffectKind;
     const VISUAL_FAILURES: &'static [u32] = &[2, 7, 10, 11, 13, 15];
+    const VISUAL_DWORD_FAILURES: &'static [u32] = &[];
     const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::Sufferer;
     const BEGIN_FAILURE_VISUAL: Option<u32> = Some(2);
 
@@ -106,7 +108,10 @@ pub(crate) fn publish_state_skill_visual<Skill: RegisteredStateSkill>(
     let mut message = CMessage::new(0x000b_fe01);
     if Skill::VISUAL_FAILURES.contains(&mode) {
         if source.identity().object_type == 400 {
-            message.add_byte(0);
+            // RP-отказ Fury/RageBreak имеет DWORD-префикс; остальные
+            // ошибки семейства используют BYTE даже в том же owner-е.
+            if Skill::VISUAL_DWORD_FAILURES.contains(&mode) { message.add_long(0); }
+            else { message.add_byte(0); }
             message.add_byte(mode as u8);
             let _ = message.send_to_player(game.net_server(), source.identity().id);
         }
@@ -114,6 +119,7 @@ pub(crate) fn publish_state_skill_visual<Skill: RegisteredStateSkill>(
     }
     let target = match mode {
         0 => None,
+        1 if matches!(Skill::VISUAL_TARGET, StateSkillVisualTarget::User) => Some(source),
         1 if matches!(Skill::VISUAL_TARGET, StateSkillVisualTarget::UserOnly) => None,
         1 => {
             let target = resolve_skill_sufferer(game, skill.lifecycle())

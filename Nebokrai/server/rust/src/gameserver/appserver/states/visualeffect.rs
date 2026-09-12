@@ -38,6 +38,8 @@ pub(crate) enum SkillVisualEffectKind {
     Hearten,
     ManaShield,
     MachineShield,
+    Fury,
+    RageBreak,
 }
 
 #[derive(Debug, Eq, PartialEq)]

@@ -5047,44 +5047,6 @@ impl CPlayer {
             .replace_heal_state(removed_skill_id, state)
     }
 
-    pub(crate) fn rage_break_state(&self) -> Option<super::skills::ragebreakstate::RageBreakState> {
-        self.move_shape.rage_break_state()
-    }
-
-    pub(crate) fn replace_rage_break_state(
-        &mut self,
-        state: super::skills::ragebreakstate::RageBreakState,
-    ) -> Option<super::skills::ragebreakstate::RageBreakState> {
-        self.move_shape.replace_rage_break_state(state)
-    }
-
-
-    pub(crate) fn take_rage_break_state(&mut self) -> Option<super::skills::ragebreakstate::RageBreakState> {
-        self.move_shape.take_rage_break_state()
-    }
-
-    pub(crate) fn restart_rage_break_state(&mut self, now_ms: u32) -> bool {
-        self.move_shape.restart_rage_break_state(now_ms)
-    }
-
-
-
-    pub(crate) fn push_fury_state(
-        &mut self,
-        state: super::skills::furystate::FuryState,
-    ) {
-        self.move_shape.push_fury_state(state);
-    }
-
-
-    pub(crate) fn fury_states(&self) -> impl Iterator<Item = &super::skills::furystate::FuryState> {
-        self.move_shape.fury_states()
-    }
-
-    pub(crate) fn remove_fury_state(&mut self, position: usize) -> Option<super::skills::furystate::FuryState> {
-        self.move_shape.remove_fury_state(position)
-    }
-
     pub(crate) fn remove_serialized_heal_states(&mut self, skill_ids: &[u32]) {
         self.move_shape.remove_serialized_heal_states(skill_ids);
     }

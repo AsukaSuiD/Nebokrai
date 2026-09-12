@@ -352,6 +352,10 @@ impl CGame {
                 crate::gameserver::appserver::skills::hearten::publish_hearten_visual(self, skill, mode),
             SkillVisualEffectKind::ManaShield | SkillVisualEffectKind::MachineShield =>
                 crate::gameserver::appserver::skills::selfshield::publish_self_shield_visual(self, skill, mode),
+            SkillVisualEffectKind::Fury =>
+                crate::gameserver::appserver::skills::fury::publish_fury_visual(self, skill, mode),
+            SkillVisualEffectKind::RageBreak =>
+                crate::gameserver::appserver::skills::ragebreak::publish_rage_break_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();
