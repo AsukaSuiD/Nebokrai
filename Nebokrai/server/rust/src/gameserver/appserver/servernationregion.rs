@@ -13,8 +13,10 @@
 //! за gameplay-контракт. First-hit guard state, morale mutation и одноразовый
 //! YuYingShi gate также принадлежат этому owner-у; создание NPC и сетевые
 //! side effects выполняет достигнутый `CGame` caller. Собственный ordered
-//! contend-list сохраняет early-remove quirk, damage/AI timer arithmetic и
-//! захват Алтаря. Предшествующий AI pass строго связывает четыре смерти stone
+//! contend-list сохраняет порядок, damage/AI timer arithmetic и захват Алтаря.
+//! CancelContendByPlayerID удаляет все записи игрока, после чего caller
+//! безусловно сбрасывает флаг захвата и время; NULL player даёт false.
+//! Предшествующий AI pass строго связывает четыре смерти stone
 //! guards со смертью адмирала и отдаёт ordered magic-stone replacements;
 //! player flags, сообщения и concrete NPC/monster lifetime остаются у caller-а.
 //! Полный `ServerNationRegion::AI` вызывается из реального `CGame::AI` и
@@ -139,12 +141,6 @@ pub(crate) struct NationContend {
     pub(crate) current_time: i32,
     pub(crate) max_time: i32,
     pub(crate) start_time_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationContendCancelOutcome {
-    Removed { legacy_return: Option<bool> },
-    MissingReset,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -575,24 +571,10 @@ impl ServerNationRegion {
             .collect()
     }
 
-    /// Найденная запись в EXE удаляется ранним return до player flag и
-    /// `0xBFF29(0)`; возвращаемый машинный `AL` в этой ветви не определён.
-    pub(crate) fn cancel_contend_by_player_id(
-        &mut self,
-        player_id: i32,
-    ) -> NationContendCancelOutcome {
-        if let Some(index) = self
-            .contenders
-            .iter()
-            .position(|contender| contender.player_id == player_id)
-        {
-            self.contenders.remove(index);
-            NationContendCancelOutcome::Removed {
-                legacy_return: None,
-            }
-        } else {
-            NationContendCancelOutcome::MissingReset
-        }
+    /// Список обрабатывается полностью до player-state и `0xBFF29(0)`.
+    /// Как у War, эти безусловные действия выполняет runtime после mutation.
+    pub(crate) fn remove_contenders_for_player(&mut self, player_id: i32) {
+        self.contenders.retain(|contender| contender.player_id != player_id);
     }
 
     pub(crate) fn add_contend(
@@ -1374,19 +1356,6 @@ pub(crate) fn convert_morale_to_exploit(
 //
 //
 
-// ============================================================================
-// FUNCTION: ServerNationRegion::CancelContendByPlayerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:1549
-// RVA: 0x000F1640
-// ADDRESS: 004f1640
-// PROTOTYPE: bool __thiscall CancelContendByPlayerID(CPlayer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: ServerNationRegion::OnPlayerDamage

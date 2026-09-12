@@ -261,7 +261,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         if let Some(player) = game.find_player_mut(player_id) { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
         let _ = game.publish_player_states(player_id);
         let destination = *path.last().expect("непустой путь проверен выше");
-        let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
+        let _ = game.set_player_tile_position(player_id, destination.0, destination.1);
         send_visual(game, player_id, level, 2, Some((destination.0, destination.1)));
         if let Some(state) = game.player_skill_state_mut::<FlashExecutionState>(player_id, FLASH_SKILL_ID) { state.path = path; state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
     }

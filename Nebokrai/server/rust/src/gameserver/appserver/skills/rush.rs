@@ -297,7 +297,6 @@ fn rush_ai<Runtime: GameMainLoopRuntime>(
         player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, impact.0, impact.1));
     }
     let Some(source) = resolve_state_move_shape(game, user.0, user.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
-    let source_region = source.shape().get_region_id();
     let (Ok(x), Ok(y)) = (source.shape().get_tile_x(), source.shape().get_tile_y()) else { return terminal(QueuedSkillExecutionState::Rejected); };
     let mut destination = (x, y);
     let Some(properties) = game.skill_base_properties(skill_id, level) else { return terminal(QueuedSkillExecutionState::Rejected); };
@@ -312,7 +311,7 @@ fn rush_ai<Runtime: GameMainLoopRuntime>(
         }
         destination = (x, y);
     }
-    let _ = game.relocate_player_shape(user.1.id, source_region, destination.0, destination.1);
+    let _ = game.set_player_tile_position(user.1.id, destination.0, destination.1);
     game.update_player_skill_visual(player_id, skill_id, 0);
     if let Some(kernel) = game.player_skill_execution_mut(player_id, skill_id) { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); }
     game.update_player_skill_visual(player_id, skill_id, 1);

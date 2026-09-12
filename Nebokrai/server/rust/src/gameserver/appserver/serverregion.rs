@@ -1,6 +1,7 @@
 //! Базовое состояние GameServer-region `CServerRegion`.
-//! Громовые BF-области сохраняют заранее установленный центр и возвращают
-//! непринятый объект caller-у для обязательного хвоста сериализации.
+//! BF-области сохраняют заранее установленный центр. FatalBlow и громовые
+//! призывы возвращают непринятый объект caller-у для хвоста сериализации;
+//! базовая атака боевого духа этого отдельного хвоста не имеет.
 //! Добавление Leiming2 не выключает соседние области автоматически;
 //! замена прежнего Tianhuo принадлежит его явному caller-у до AddObject.
 //!
@@ -1689,16 +1690,11 @@ impl CServerRegion {
     pub(crate) fn add_battle_fairy_base_magic_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
     ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
         self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
@@ -1716,24 +1712,21 @@ impl CServerRegion {
     pub(crate) fn add_fatal_blow_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::fatalblowphalanx::CFatalBlowPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::fatalblowphalanx::CFatalBlowPhalanx)> {
+        if let Err(block) = self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
             area_width,
             area_height,
             now_ms,
             context,
-        )?;
+        ) {
+            return Err((block, phalanx));
+        }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes
             .insert(id, SummonedSkillShape::FatalBlow(phalanx));

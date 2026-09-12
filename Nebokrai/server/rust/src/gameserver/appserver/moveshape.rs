@@ -3095,24 +3095,6 @@ impl CMoveShape {
         self.skill(skill_id, factory)?.battle_fairy_execution_state()
     }
 
-    pub(crate) fn battle_fairy_execution_mut(
-        &mut self,
-        skill_id: u32,
-        factory: &CSkillFactory,
-    ) -> Option<&mut BattleFairyExecution> {
-        self.skill_mut(skill_id, factory)?.battle_fairy_execution_state_mut()
-    }
-
-    pub(crate) fn install_battle_fairy_execution(
-        &mut self,
-        execution: BattleFairyExecution,
-        factory: &CSkillFactory,
-    ) -> bool {
-        let skill_id = execution.kernel().dispatch().skill_id();
-        self.skill_mut(skill_id, factory)
-            .is_some_and(|skill| skill.install_battle_fairy_execution(execution))
-    }
-
     pub(crate) fn skill_last_used_ms(&self, skill_id: u32, factory: &CSkillFactory) -> u32 {
         self.skill(skill_id, factory).map_or(0, |skill| skill.last_used_ms)
     }
@@ -3274,12 +3256,12 @@ impl CMoveShape {
 
     pub(crate) fn set_pos_xy(
         &mut self,
-        region: &mut CRegion,
+        region: Option<&mut CRegion>,
         x: f32,
         y: f32,
         facts: MoveShapePositionFacts,
     ) -> Result<(), MoveShapePositionBlock> {
-        set_pos_xy_core(Some(region), &mut self.shape, x, y, facts)
+        set_pos_xy_core(region, &mut self.shape, x, y, facts)
     }
 
     pub(crate) const fn is_died(current_hit_points: u32) -> bool {

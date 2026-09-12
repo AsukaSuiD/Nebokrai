@@ -1,408 +1,295 @@
-//! Базовая атака боевой феи GameServer (`SKILL_BATTLEFAIRY_BASE_ATTACK`).
-//! Успешный Begin возвращает Begun; проверка задержки первого AI выполняется
-//! при повторном входе в том же Run по исходному раннему отсчёту.
-//! BFBaseAttack::Begin (0x00517020) оставляет +0x50 равным нулю.
-//! Первый AI проверяет цель, отправляет start через effect(+8, 0)
-//! (0x00517802..0x0051780E), затем переводит стадию в Check и проверяет
-//! задержку. Смерть цели в этой первой фазе даёт один 4,10 и ZHGS0050;
-//! повторная проверка перед выстрелом сохраняет отдельный отказ ниже.
+//! BFBaseAttack (0x224), gameserver.exe/GameServer.pdb,
+//! appserver/skills/battlefairybasemagic.cpp.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/battlefairybasemagic.cpp`. Отдельный FIFO боевой феи
-//! проходит общий `SkillExecutionKernel`, но не блокирует движение игрока.
-//! Начало, выстрел и обязательное завершение используют визуальный тип `700`;
-//! ошибки используют отдельный префикс `4`. Общий owned Effect публикуется
-//! через `battlefairyskill`, а проверки цели, cooldown, стадии и создание
-//! `CBattleFairyBaseMagicPhalanx` принадлежат этому owner-у; cooldown
-//! использует exact `CSkill::IsRestored`. Общий
-//! `CState::GetSufferer` сохраняет player/NPC/monster/
-//! build/gate; NPC отклоняется как мёртвый, а постройки проходят собственный
-//! region-owned defence. `CGame` только предоставляет владельцев, регион и
-//! доставку.
-//! AI (0x00517610) при отсутствии цели вызывает End(0); смерть перед выстрелом
-//! выдаёт 4,10, ZHGS0050, ещё один 4,10 и End(0). После попытки Summon
-//! (+0x94, 0x005179d9) всегда следует End(1), независимо от создания снаряда.
-//! Задержка — unsigned now >= wrapping(start + delay), cmp/jb 0x00517836.
-//! Уже первый AI использует ранний отсчёт CState::Begin из отдельного
-//! контекста феи, а не локальное время после OnBeginSkill и проверок.
-//! Отказ до успешного Begin заканчивается action 3, затем внешним 4,2
-//! планировщика; повторный AI-отказ такого внешнего ответа не добавляет.
-//! В Rust этот внешний 4,2 отправляет только координатор после общего
-//! End(0), без дополнительной публикации в concrete Begin.
-//! Begin после общего начала создаёт Effect размером 0xC (vtable
-//! 0x00656988), сохраняет его в skill+0x34 и вызывает BeginVisualEffect(1)
-//! до конкретной проверки (0x0051704A..0x0051708A). Wire-контракт
-//! Effect::Update (0x005170E0) и его базовый хвост (0x005175B3) сохранены
-//! общей границей `battlefairyskill`; mode 1 берёт живую цель либо
-//! координаты skill+0x24/+0x28 и добавляет время из skill+0x54.
-//! Время выстрела записывается в skill+0x54 до Effect(mode 1): AI
-//! 0x00517940..0x0051799A временно вызывает SetTileXY с целочисленным
-//! CPlayer::m_ptWarSoul (+0xCA8/+0xCAC), вычисляет RealDistance(target)
-//! (0x0045B780) * summoned_speed и восстанавливает tile-позицию игрока.
-//! SetWarSoulXY (0x0042DF50) подтверждает POINT-поля; дробные visual X/Y
-//! лежат отдельно (+0xCB0/+0xCB4). SetTileXY (0x0045B170) добавляет 0.5f,
-//! а RealDistance использует truncated координаты и figure обеих сторон,
-//! не ближайшую точку постройки. Rust подставляет координаты только в
-//! Copy-проекцию ShapeView и сохраняет время в concrete execution; живой
-//! player и его пространственная регистрация при этом не изменяются.
+//! Общий зарегистрированный вход владеет Begin, visual и End; здесь остаются
+//! Check, AI и создание самостоятельного снаряда. Check использует исходную
+//! объектную S, а путь разрешает текущую базу. MP и WarSoul здесь не проверяются:
+//! предмет требуется только позднему Summon. Конфликты состояний выбираются
+//! в порядке массива, max0 не ограничивает дальность.
+//!
+//! Первый AI записывает CAN, проверяет смерть/self и публикует visual0.
+//! Абсолютный wrapping-срок проверяется в том же проходе. Повторный GetS перед
+//! выстрелом проверяет доступность цели, но время полёта и Summon используют
+//! U/S начала AI. Игрок временно проходит реальный SetTileXY в POINT боевого
+//! духа, затем возвращается в центр исходной клетки. Оба вызова сохраняют
+//! block/area-поля и отмену захвата; дробная исходная позиция не восстанавливается.
+//! ShapeView используется лишь как краткоживущая проекция текущей геометрии.
+//!
+//! Summon требует непустой путь, очищает S до проверки figure2 и только затем
+//! читает Master/WarSoul и параметры конструктора. Clock предшествует ID,
+//! SetCenter — позднему допуску региона. Country в Master остаётся нулевым.
+//! Любая попытка Summon завершается End(1), независимо от создания снаряда;
+//! ошибки AI дают End(0). Собственный attack-time End не обнуляет.
 
-use super::baseattack::real_distance;
 use super::basemagic::{
-    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
-    SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
-    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
-    SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
+    SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
+    SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
+    SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use super::battlefairyskill::{
+    check_battle_fairy_target_states, execute_registered_battle_fairy_skill,
+};
+use super::kernel::{BattleFairyExecution, SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::thunder::{fail_battle_fairy_summon, master_info, terminal};
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::BattleFairySkillDispatch;
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{ShapeFigure, ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
-use crate::nets::netserver::message::CMessage;
-
-const PLAYER_TYPE: i32 = 400;
-
-fn add_legacy_c_string(
-    message: &mut crate::nets::basemessage::CBaseMessage,
-    value: &[u8],
-) {
-    let length = value.iter().position(|byte| *byte == 0).unwrap_or(value.len());
-    message.add(&value[..length]);
-    message.add_byte(0);
-}
 
 pub(crate) const BATTLE_FAIRY_BASE_MAGIC_SKILL_ID: u32 = 0x224;
-pub(crate) const DENIED_STATE_A: u32 = 0x192;
-pub(crate) const DENIED_STATE_B: u32 = 0x67;
-pub(crate) const DENIED_STATE_C: u32 = 0xd2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyBaseMagicExecutionState {
     kernel: SkillExecutionKernel<BattleFairySkillDispatch>,
-    target: ShapeIdentity,
     attack_time: u32,
 }
 
 impl BattleFairyBaseMagicExecutionState {
-    pub(crate) const fn begin(
-        dispatch: BattleFairySkillDispatch,
-        target: ShapeIdentity,
-        started_at_ms: u32,
-    ) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-            target,
-            attack_time: 0,
-        }
+    pub(crate) const fn begin(dispatch: BattleFairySkillDispatch, started_at_ms: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, started_at_ms), attack_time: 0 }
     }
 
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<BattleFairySkillDispatch> {
         &self.kernel
     }
 
-    pub(crate) fn kernel_mut(
-        &mut self,
-    ) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
         &mut self.kernel
     }
 
-    pub(crate) const fn attack_time(&self) -> u32 {
-        self.attack_time
-    }
-
-    pub(crate) const fn target(self) -> ShapeIdentity {
-        self.target
-    }
+    pub(crate) const fn attack_time(&self) -> u32 { self.attack_time }
 }
 
 pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: BattleFairySkillDispatch,
-    _player_ai: &mut CPlayerAI,
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: BattleFairySkillDispatch, begin_target: Option<(i32, ShapeIdentity)>,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let rejected = || QueuedSkillExecutionOutcome {
-        state: QueuedSkillExecutionState::Rejected,
-        first_contact: false,
+    if dispatch.skill_id() != BATTLE_FAIRY_BASE_MAGIC_SKILL_ID {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    execute_registered_battle_fairy_skill(
+        game, player_id, instance, dispatch, runtime, None,
+        |game, instance, player_id, runtime| check_cast(game, instance, player_id, begin_target, runtime),
+        |dispatch, started| BattleFairyExecution::BaseMagic(
+            BattleFairyBaseMagicExecutionState::begin(dispatch, started),
+        ),
+        run_ai,
+    )
+}
+
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    begin_target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
+) -> bool {
+    let Some(player) = game.find_player(player_id) else { return false; };
+    let Some(target) = begin_target else { return false; };
+    if target.1.object_type == 400 && target.1.id == player.player_id() {
+        fail_battle_fairy_summon(game, instance, player_id, 10, b"ZHGS0045");
+        return false;
+    }
+    if !check_battle_fairy_target_states(game, player_id, target) { return false; }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return false;
     };
-    let pending = || QueuedSkillExecutionOutcome {
-        state: QueuedSkillExecutionState::Pending,
-        first_contact: false,
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let last_used = skill.last_used_ms();
+    if !skill_is_restored(last_used, reuse, runtime.now_milliseconds()) {
+        fail_battle_fairy_summon(game, instance, player_id, 13, b"ZHGS0048");
+        return false;
+    }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let path = game.skill_target_path(skill.lifecycle());
+    if properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) != 0
+        && path.len() > properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as usize
+    {
+        fail_battle_fairy_summon(game, instance, player_id, 11, b"ZHGS0049");
+        return false;
+    }
+    true
+}
+
+fn shape_view(game: &CGame, target: (i32, ShapeIdentity)) -> Option<ShapeView> {
+    let shape = resolve_state_move_shape(game, target.0, target.1)?.shape();
+    let identity = shape.identity();
+    let figure = match identity.object_type {
+        400 => game.find_player(identity.id)?.figure(),
+        500 => ShapeFigure::default(),
+        600 => {
+            let monster = game.find_region(shape.get_region_id())?.base().find_monster_by_id(identity.id)?;
+            let properties = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            CMonster::figure(properties)
+        }
+        1100 | 1200 => game.find_region(shape.get_region_id())?.stationary_build(identity)?.shape_view().figure,
+        _ => return None,
     };
-    let Some(player) = game.find_player(player_id) else {
-        return rejected();
+    Some(ShapeView {
+        identity,
+        tile_x: shape.get_tile_x().unwrap_or(i32::MIN),
+        tile_y: shape.get_tile_y().unwrap_or(i32::MIN),
+        pos_x_bits: shape.get_pos_x().to_bits(),
+        pos_y_bits: shape.get_pos_y().to_bits(),
+        figure,
+    })
+}
+
+fn target_failure(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    text: &[u8], second_visual: bool,
+) -> QueuedSkillExecutionOutcome {
+    game.update_registered_skill_visual(instance, 10);
+    if source.1.object_type == 400 { game.send_skill_system_info(source.1.id, text); }
+    if second_visual { game.update_registered_skill_visual(instance, 10); }
+    terminal(QueuedSkillExecutionState::Rejected)
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let Some(region_id) = player.server_region_id() else {
-        return rejected();
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let skill_level = match dispatch {
-        BattleFairySkillDispatch::SelfTarget { skill_level, .. }
-        | BattleFairySkillDispatch::Point { skill_level, .. }
-        | BattleFairySkillDispatch::Object { skill_level, .. } => skill_level,
+    let source = skill.lifecycle().user();
+    let target = resolve_skill_sufferer(game, skill.lifecycle());
+    if resolve_state_move_shape(game, source.0, source.1).is_none() || target.is_none() {
+        game.update_registered_skill_visual(instance, 10);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let target = target.expect("наличие S проверено до первой фазы");
+    if skill.execution_stage() == Some(SkillStage::Begin) {
+        let can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            skill.lifecycle_mut().set_available(can_be_breaked != 0);
+        }
+        if game.base_magic_target_dead(target.0, target.1) {
+            return target_failure(game, instance, source, b"ZHGS0050", false);
+        }
+        if source.1.object_type == target.1.object_type && source.1.id == target.1.id {
+            game.update_registered_skill_visual(instance, 10);
+            return target_failure(game, instance, source, b"ZHGS0045", false);
+        }
+        game.update_registered_skill_visual(instance, 0);
+        let Some(skill) = game.registered_skill_mut(instance) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+    }
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(skill) = game.registered_skill(instance) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let Some(properties) = game.skill_base_properties(
-        BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
-        skill_level,
-    ) else {
-        return rejected();
+    let started = skill.lifecycle().started_at_ms();
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    let Some(late_target) = resolve_skill_sufferer(game, skill.lifecycle()) else {
+        game.update_registered_skill_visual(instance, 10);
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let summoned_speed = properties.query_property(SKILL_USAGE_SUMMONED_SPEED);
-    let summoned_lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
-    let minimum_attack = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
-    let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    if game.base_magic_target_dead(late_target.0, late_target.1) {
+        return target_failure(game, instance, source, b"ZHGS0050", true);
+    }
+
+    let restore = if source.1.object_type == 400 {
+        let Some(player) = game.find_player(source.1.id) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let original = (
+            player.shape().get_tile_x().unwrap_or(i32::MIN),
+            player.shape().get_tile_y().unwrap_or(i32::MIN),
+        );
+        let point = player.war_soul_point();
+        let _ = game.set_player_tile_position(source.1.id, point.x, point.y);
+        Some(original)
+    } else { None };
+    let (Some(fire_source), Some(target_view)) = (shape_view(game, source), shape_view(game, target)) else {
+        if let Some((x, y)) = restore {
+            let _ = game.set_player_tile_position(source.1.id, x, y);
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let distance = fire_source.real_distance(Some(target_view));
+    let speed = properties.query_property(SKILL_USAGE_SUMMONED_SPEED);
+    let attack_time = (distance as u32).wrapping_mul(speed);
+    let stored = if let Some(BattleFairyExecution::BaseMagic(state)) = game.registered_skill_mut(instance)
+        .and_then(|skill| skill.battle_fairy_execution_state_mut())
+    {
+        state.attack_time = attack_time;
+        true
+    } else { false };
+    if let Some((x, y)) = restore {
+        let _ = game.set_player_tile_position(source.1.id, x, y);
+    }
+    if !stored { return terminal(QueuedSkillExecutionState::Rejected); }
+    game.update_registered_skill_visual(instance, 1);
+    summon(game, instance, source, target, runtime);
+    terminal(QueuedSkillExecutionState::Completed)
+}
+
+fn summon<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), runtime: &mut Runtime,
+) {
+    if resolve_state_move_shape(game, source.0, source.1).is_none()
+        || resolve_state_move_shape(game, target.0, target.1).is_none() { return; }
+    let Some(skill) = game.registered_skill(instance) else { return; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
+    let (Some(source_view), Some(target_view)) = (shape_view(game, source), shape_view(game, target)) else { return; };
+    let distance = source_view.real_distance(Some(target_view)) as u32;
+    let path = game.skill_target_path_with_length(skill.lifecycle(), distance);
+    let Some(&(tile_x, tile_y, _)) = path.first() else { return; };
+    if let Some(skill) = game.registered_skill_mut(instance) {
+        let destination = skill.lifecycle().destination();
+        skill.lifecycle_mut().set_point_target(destination);
+    }
+    if path.iter().any(|cell| cell.2 == 2) { return; }
+    let mut master = MasterInfo {
+        master_type: source.1.object_type, master_id: source.1.id, ..MasterInfo::default()
+    };
+    if source.1.object_type == 400 {
+        let Some(player) = game.find_player(source.1.id) else { return; };
+        let Some(goods) = player.war_soul_goods(game.goods_factory()) else { return; };
+        master = master_info(player);
+        master.master_country_id = 0;
+        let _ = goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
+    }
+    let _ = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
+    let Some(skill) = game.registered_skill(instance) else { return; };
+    let Some(BattleFairyExecution::BaseMagic(state)) = skill.battle_fairy_execution_state() else { return; };
+    let attack_time = state.attack_time();
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-    let started_at_ms = runtime.now_milliseconds();
-    let target = match dispatch {
-        BattleFairySkillDispatch::Object { target, .. } => target,
-        _ => {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-            game.send_skill_system_info(player_id, b"ZHGS0045");
-            return rejected();
-        }
-    };
-
-    if game.battle_fairy_base_magic(player_id).is_some()
-        && game.base_magic_target_view(region_id, target).is_none()
-    {
-        game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-        return rejected();
-    }
-
-    if game.battle_fairy_base_magic(player_id).is_none() {
-        if target.object_type == PLAYER_TYPE && target.id == player_id {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-            game.send_skill_system_info(player_id, b"ZHGS0045");
-            return rejected();
-        }
-        if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
-            || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B)
-        {
-            let mut message = CMessage::new(0x000b_f807);
-            message.add_ulong(0xffff_ffff);
-            add_legacy_c_string(message.base_mut(), game.get_string_by_id(b"ZHGS0046"));
-            let _ = message.send_to_player(game.net_server(), player_id);
-            return rejected();
-        }
-        if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C) {
-            let mut message = CMessage::new(0x000b_f807);
-            message.add_ulong(0xffff_ffff);
-            add_legacy_c_string(message.base_mut(), game.get_string_by_id(b"ZHGS0047"));
-            let _ = message.send_to_player(game.net_server(), player_id);
-            return rejected();
-        }
-        let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(
-            game.battle_fairy_skill_last_used_ms(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID),
-            reuse_delay_ms,
-            cooldown_now_ms,
-        ) {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 0x0d);
-            game.send_skill_system_info(player_id, b"ZHGS0048");
-            return rejected();
-        }
-        let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-            game.send_skill_system_info(player_id, b"ZHGS0050");
-            return rejected();
-        };
-        let (source_x, source_y) = match (
-            player.shape().get_tile_x(),
-            player.shape().get_tile_y(),
-        ) {
-            (Ok(x), Ok(y)) => (x, y),
-            _ => return rejected(),
-        };
-        let Some((target_x, target_y)) =
-            game.base_magic_target_point(region_id, source_x, source_y, target)
-        else {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-            game.send_skill_system_info(player_id, b"ZHGS0050");
-            return rejected();
-        };
-        let path = game.base_magic_path(
-            region_id,
-            source_x,
-            source_y,
-            target_x,
-            target_y,
-            None,
-        );
-        if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 0x0b);
-            game.send_skill_system_info(player_id, b"ZHGS0049");
-            return rejected();
-        }
-        let target_dead = game.base_magic_target_dead(region_id, target);
-        if target_dead {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-            game.send_skill_system_info(player_id, b"ZHGS0050");
-            return rejected();
-        }
-        let execution = BattleFairyBaseMagicExecutionState::begin(
-            dispatch,
-            target,
-            started_at_ms,
-        );
-        game.begin_battle_fairy_base_magic(player_id, execution);
-        return QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Begun,
-            ..pending()
-        };
-    } else if game.battle_fairy_base_magic(player_id)
-        .is_none_or(|state| state.kernel().dispatch() != dispatch)
-    {
-        return rejected();
-    }
-
-    if game.battle_fairy_base_magic(player_id)
-        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
-    {
-        if game.base_magic_target_dead(region_id, target) {
-            game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-            game.send_skill_system_info(player_id, b"ZHGS0050");
-            return rejected();
-        }
-        game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 0);
-        if let Some(kernel) = game.battle_fairy_execution_mut(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
-            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
-        }
-    }
-    if runtime.now_milliseconds() < game.battle_fairy_base_magic(player_id)
-            .map_or(started_at_ms, |state| state.kernel().started_at_ms())
-            .wrapping_add(delay_ms)
-    {
-        return pending();
-    }
-
-    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-        game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-        return rejected();
-    };
-    let target_dead = game.base_magic_target_dead(region_id, target);
-    if target_dead {
-        game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-        game.send_skill_system_info(player_id, b"ZHGS0050");
-        game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 10);
-        return rejected();
-    }
-    let Some(player) = game.find_player(player_id) else {
-        return rejected();
-    };
-    let Some(source_view) = player.shape_view() else {
-        return rejected();
-    };
-    let war_soul_point = player.war_soul_point();
-    let mut fire_source_view = source_view;
-    fire_source_view.pos_x_bits = (war_soul_point.x as f32 + 0.5).to_bits();
-    fire_source_view.pos_y_bits = (war_soul_point.y as f32 + 0.5).to_bits();
-    let Some((target_x, target_y)) = game.base_magic_target_point(
-        region_id,
-        source_view.tile_x,
-        source_view.tile_y,
-        target,
-    ) else {
-        return rejected();
-    };
-    let attack_time = fire_source_view
-        .real_distance(Some(target_view))
-        .wrapping_mul(summoned_speed as i32);
-    if let Some(super::kernel::BattleFairyExecution::BaseMagic(state)) =
-        game.battle_fairy_execution_state_mut(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID)
-    {
-        state.attack_time = attack_time as u32;
-    }
-    game.update_player_skill_visual(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, 1);
-
-    let forced_distance = real_distance(
-        source_view.tile_x,
-        source_view.tile_y,
-        target_x,
-        target_y,
-    ) as u32;
-    let path = game.base_magic_path(
-        region_id,
-        source_view.tile_x,
-        source_view.tile_y,
-        target_x,
-        target_y,
-        Some(forced_distance),
+    let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+    let Some(level) = game.registered_skill(instance).map(|skill| skill.level()) else { return; };
+    let lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
+    let started = runtime.now_milliseconds();
+    let id = game.allocate_summon_shape_id();
+    let mut phalanx = CBattleFairyBaseMagicPhalanx::new(
+        id, master, started, lifetime, level, minimum, maximum, element_modifier, attack_time, target.1,
     );
-    let has_war_soul = game
-        .find_player(player_id)
-        .and_then(|player| player.war_soul_goods(game.goods_factory()))
-        .is_some();
-    let mut summoned = false;
-    if has_war_soul && path.iter().all(|cell| cell.2 != 2) {
-        let player = game
-            .find_player(player_id)
-            .expect("владелец боевой феи сохранён");
-        let permissions = player.pk_permissions();
-        let master = MasterInfo {
-            master_type: PLAYER_TYPE,
-            master_id: player_id,
-            master_guild_id: player.faction_id(),
-            master_team_id: player.team_id(),
-            master_union_id: player.union_id(),
-            master_country_id: i32::from(player.country()),
-            permitted_to_kill_player: i32::from(permissions.player),
-            permitted_to_kill_teammate: i32::from(permissions.teammate),
-            permitted_to_kill_guild_member: i32::from(permissions.guild_member),
-            permitted_to_kill_criminal: i32::from(permissions.criminal),
-        };
-        let summon_id = game.allocate_summon_shape_id();
-        let summon_started_at_ms = runtime.now_milliseconds();
-        let mut phalanx = CBattleFairyBaseMagicPhalanx::new(
-            summon_id,
-            master,
-            summon_started_at_ms,
-            summoned_lifetime,
-            skill_level,
-            minimum_attack,
-            maximum_attack,
-            element_modifier,
-            attack_time as u32,
-            target,
-        );
-        phalanx.shape_mut().set_region_id(region_id);
-        let (tile_x, tile_y) = path
-            .first()
-            .map(|cell| (cell.0, cell.1))
-            .unwrap_or((source_view.tile_x, source_view.tile_y));
-        let result = game.add_battle_fairy_base_magic_phalanx(
-            region_id,
-            phalanx,
-            tile_x,
-            tile_y,
-            summon_started_at_ms,
-            runtime,
-        );
-        summoned = result.is_some_and(|result| result.is_ok());
-        tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой атаки боевой феи");
-    }
-
-    if let Some(state) = game.battle_fairy_execution_mut(player_id, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID) {
-        let _ = state
-            .advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = state
-            .advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = state
-            .advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    QueuedSkillExecutionOutcome {
-        state: if summoned {
-            QueuedSkillExecutionState::Completed
-        } else {
-            QueuedSkillExecutionState::RejectedAfterUse
-        },
-        first_contact: false,
-    }
+    phalanx.set_center(tile_x, tile_y);
+    let Some(region) = resolve_state_move_shape(game, source.0, source.1)
+        .map(|source| source.shape())
+        .filter(|shape| shape.is_assigned_to_server_region())
+        .map(|shape| shape.get_region_id())
+        .filter(|region| game.find_region(*region).is_some())
+    else { return; };
+    let _ = game.add_battle_fairy_base_magic_phalanx(
+        region, phalanx, started, runtime,
+    );
 }

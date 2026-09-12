@@ -343,8 +343,9 @@
 //! ClearEmotion всегда обнуляет оба поля, PerformEmotion делает это до guards
 //! и запоминает repeated ID/time только при разрешённом живом AI owner-е.
 //! Client relocation использует общие movement facts и `CShape` owner через
-//! `CServerRegion`; caller сохраняет исходный `BF603 -> SetTileXY -> GS0163`
-//! порядок и contend/symbol predicate, поэтому замещённый RAW удалён.
+//! `CServerRegion`; caller сохраняет исходный `BF603 -> SetTileXY` порядок.
+//! Общий SetTileXY после spatial mutation отменяет захват через фактическую
+//! связь формы с регионом и при успехе публикует GS0163.
 //! Quest movement также использует concrete `OnCannotMove` wire с текущими
 //! tile coordinates; player-AI caller очищает emotion перед постановкой шага.
 //! Friend owner хранит исходный ordered список до 40 byte-exact имён и online

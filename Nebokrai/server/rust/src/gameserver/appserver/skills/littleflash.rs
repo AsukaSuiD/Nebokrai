@@ -441,7 +441,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
         }
         let (destination, final_cell) = game.player_skill_state::<LittleFlashExecutionState>(player_id, dispatch.skill_id()).and_then(|state| Some((state.visual_destination, *state.path.last()?))).expect("непустой путь проверен");
         send_visual(game, player_id, skill_id, level, 2, destination);
-        let _ = game.relocate_player_shape(player_id, region_id, final_cell.0, final_cell.1);
+        let _ = game.set_player_tile_position(player_id, final_cell.0, final_cell.1);
         if let Some(state) = game.player_skill_state_mut::<LittleFlashExecutionState>(player_id, dispatch.skill_id()) { state.attacking_started = true; }
     }
 

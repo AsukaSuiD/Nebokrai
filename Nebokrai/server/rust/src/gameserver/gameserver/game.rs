@@ -1,4 +1,8 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! Все навыки боевого духа исполняются через сохранённый поколенческий ключ
+//! с опубликованным AI. Конкретные данные создаёт общий вход; очередь не
+//! хранит копии цели или фазы. Снаряды Fatal/BaseAttack завершаются после
+//! защиты цели, а не помечаются удалёнными заранее.
 //! Призывы боевого духа получают исходный объектный аргумент Check из
 //! локального Begin, отдельно от изменяемой S базы. Области живут независимо
 //! от навыка: Thunder обходит маску, Tianhuo завершает прежние формы своей
@@ -878,7 +882,7 @@ use crate::gameserver::appserver::message::organsysmessage::{
 use crate::gameserver::appserver::message::othermessage::dispatch_game_other_message;
 use crate::gameserver::appserver::message::petmessage::dispatch_game_pet_message;
 use crate::gameserver::appserver::message::playermessage::{
-    GamePlayerMessageRuntime, PlayerItemContendCancel, dispatch_game_player_message,
+    GamePlayerMessageRuntime, dispatch_game_player_message,
     equipment_state_elapsed_seconds,
 };
 use crate::gameserver::appserver::message::playershopmessage::dispatch_player_shop_message;
@@ -981,10 +985,10 @@ use crate::gameserver::appserver::servercountryregion::{
     CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
-    CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
+    CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleContender,
 };
 use crate::gameserver::appserver::servernationregion::{
-    NationCarriageReturnOutcome, NationContendCancelOutcome, NationMonsterDamageNotice,
+    NationCarriageReturnOutcome, NationMonsterDamageNotice,
     NationMoraleMutation, ServerNationRegion, classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
@@ -3467,13 +3471,6 @@ enum NationContendEnterOutcome {
     CountryAlreadyOwnsSymbol,
     CountryContenderExists { contender_player_id: i32 },
     Entered { first_for_country: bool },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NationPlayerDeathContendOutcome {
-    NotContending,
-    MissingReset,
-    RemovedLegacyReturnIndeterminate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13080,66 +13077,72 @@ impl CGame {
         Some(())
     }
 
-    /// Выполняет virtual `CancelContendByPlayerID`, который `CPlayer::UseItem`
-    /// вызывает до разбора свойства предмета. Subtype mutation идёт раньше
-    /// возможного `GS0147`; неопределённый legacy `AL` не подменяется.
-    pub(crate) fn cancel_player_contend_for_item(
-        &mut self,
-        player_id: i32,
-    ) -> PlayerItemContendCancel {
-        let Some(region_id) = self.find_player(player_id).and_then(CPlayer::server_region_id) else {
-            return PlayerItemContendCancel::NotCancelled;
+    /// Virtual `CancelContendByPlayerID`: военные регионы удаляют все записи
+    /// игрока, затем сбрасывают флаг и время даже при пустом списке. Проверка
+    /// текущего флага и причина уведомления принадлежат вызывающему игроку.
+    pub(crate) fn cancel_player_contend(&mut self, player_id: i32) -> bool {
+        let Some(region_id) = self.find_player(player_id).and_then(|player| {
+            player.shape().is_assigned_to_server_region().then(|| player.shape().get_region_id())
+        }) else {
+            return false;
         };
+        self.cancel_player_contend_in_region(region_id, player_id)
+    }
+
+    pub(crate) fn cancel_player_contend_in_region(&mut self, region_id: i32, player_id: i32) -> bool {
+        if self.find_player(player_id).is_none() {
+            return false;
+        }
         let Some(mut owner) = self.take_region_owner(region_id) else {
-            return PlayerItemContendCancel::NotCancelled;
+            return false;
         };
 
         let outcome = match &mut owner {
             ServerRegionOwner::Village(region) => {
                 region.war.remove_contenders_for_player(player_id);
-                let _ = self.publish_war_player_contend_state(&region.war.base, player_id, false);
-                let _ = self.send_nation_contend_time(player_id, 0);
-                PlayerItemContendCancel::CancelledNotify
+                self.finish_player_contend_cancel(&region.war.base, player_id)
             }
             ServerRegionOwner::City(region) => {
                 region.war.remove_contenders_for_player(player_id);
-                let _ = self.publish_war_player_contend_state(&region.war.base, player_id, false);
-                let _ = self.send_nation_contend_time(player_id, 0);
-                PlayerItemContendCancel::CancelledNotify
+                self.finish_player_contend_cancel(&region.war.base, player_id)
             }
             ServerRegionOwner::Country(_) | ServerRegionOwner::Base(_) => {
-                PlayerItemContendCancel::NotCancelled
+                false
             }
-            ServerRegionOwner::Nation(region) => match region.cancel_contend_by_player_id(player_id) {
-                NationContendCancelOutcome::MissingReset => {
-                    let _ = self.set_nation_player_contend_state(&region.war.base, player_id, false);
-                    let _ = self.send_nation_contend_time(player_id, 0);
-                    PlayerItemContendCancel::CancelledNotify
-                }
-                NationContendCancelOutcome::Removed { .. } => {
-                    PlayerItemContendCancel::CancelledLegacyNoticeIndeterminate
-                }
-            },
+            ServerRegionOwner::Nation(region) => self.cancel_nation_player_contend(region, player_id),
             ServerRegionOwner::GodsBattle(region) => {
-                match region.cancel_contend_by_player_id(player_id) {
-                    GodsBattleCancelByPlayer::MissingReset => {
-                        let _ = self.set_gods_battle_player_contend_state(
-                            &region.war.base,
-                            player_id,
-                            false,
-                        );
-                        let _ = self.send_gods_battle_contend_time(player_id, 0);
-                        PlayerItemContendCancel::CancelledNotify
-                    }
-                    GodsBattleCancelByPlayer::RemovedWithoutPlayerReset => {
-                        PlayerItemContendCancel::CancelledLegacyNoticeIndeterminate
-                    }
-                }
+                self.cancel_gods_battle_player_contend(region, player_id)
             }
         };
 
         self.restore_region_owner(owner);
         outcome
+    }
+
+    fn finish_player_contend_cancel(&mut self, region: &CServerRegion, player_id: i32) -> bool {
+        let _ = self.publish_war_player_contend_state(region, player_id, false);
+        let _ = self.send_nation_contend_time(player_id, 0);
+        true
+    }
+
+    fn cancel_nation_player_contend(&mut self, region: &mut ServerNationRegion, player_id: i32) -> bool {
+        if self.find_player(player_id).is_none() {
+            return false;
+        }
+        region.remove_contenders_for_player(player_id);
+        self.finish_player_contend_cancel(&region.war.base, player_id)
+    }
+
+    fn cancel_gods_battle_player_contend(
+        &mut self,
+        region: &mut CServerGodsBattleRegion,
+        player_id: i32,
+    ) -> bool {
+        if self.find_player(player_id).is_none() {
+            return false;
+        }
+        region.remove_contenders_for_player(player_id);
+        self.finish_player_contend_cancel(&region.war.base, player_id)
     }
 
     pub(crate) fn nation_cancel_contend_by_player_id(
@@ -13152,30 +13155,12 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let (outcome, delivery, state_delivery) = if self.find_player(player_id).is_none() {
-            (None, None, None)
-        } else {
-            let outcome = region.cancel_contend_by_player_id(player_id);
-            let (delivery, state_delivery) =
-                if matches!(outcome, NationContendCancelOutcome::MissingReset) {
-                    let state_delivery =
-                        self.set_nation_player_contend_state(&region.war.base, player_id, false);
-                    (
-                        Some(self.send_nation_contend_time(player_id, 0)),
-                        state_delivery,
-                    )
-                } else {
-                    (None, None)
-                };
-            (Some(outcome), delivery, state_delivery)
-        };
+        let cancelled = self.cancel_nation_player_contend(&mut region, player_id);
         self.restore_region_owner(ServerRegionOwner::Nation(region));
         tracing::debug!(
             region_id,
             player_id,
-            ?outcome,
-            ?delivery,
-            ?state_delivery,
+            cancelled,
             "отменён захват игрока на войне наций"
         );
         Some(())
@@ -13218,20 +13203,7 @@ impl CGame {
         max_time: u32,
         context: &mut Context,
     ) -> NationContendEnterOutcome {
-        if matches!(
-            region.cancel_contend_by_player_id(player_id),
-            NationContendCancelOutcome::MissingReset
-        ) {
-            let state_delivery =
-                self.set_nation_player_contend_state(&region.war.base, player_id, false);
-            let time_delivery = self.send_nation_contend_time(player_id, 0);
-            tracing::trace!(
-                player_id,
-                ?state_delivery,
-                time_delivery,
-                "сброшен прежний захват войны наций"
-            );
-        }
+        self.cancel_nation_player_contend(region, player_id);
         let first_for_country = region.add_contend(
             player_id,
             i32::from(country),
@@ -14105,27 +14077,13 @@ impl CGame {
         let was_contending = self
             .find_player(player_id)
             .is_some_and(CPlayer::contend_state);
-        let mut contend_state_delivery = None;
-        let mut contend_time_delivery = None;
         let mut notice_delivery = None;
-        let contend_outcome = if !was_contending {
-            NationPlayerDeathContendOutcome::NotContending
-        } else {
-            match region.cancel_contend_by_player_id(player_id) {
-                NationContendCancelOutcome::MissingReset => {
-                    contend_state_delivery =
-                        self.set_nation_player_contend_state(&region.war.base, player_id, false);
-                    contend_time_delivery = Some(self.send_nation_contend_time(player_id, 0));
-                    notice_delivery = Some(
-                        self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS0136")),
-                    );
-                    NationPlayerDeathContendOutcome::MissingReset
-                }
-                NationContendCancelOutcome::Removed { .. } => {
-                    NationPlayerDeathContendOutcome::RemovedLegacyReturnIndeterminate
-                }
-            }
-        };
+        let contend_cancelled = was_contending && self.cancel_nation_player_contend(&mut region, player_id);
+        if contend_cancelled {
+            notice_delivery = Some(
+                self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS0136")),
+            );
+        }
         let died_state_time_ms = self
             .globe_setup
             .died_state_time_seconds()
@@ -14143,9 +14101,7 @@ impl CGame {
             region_id,
             player_id,
             timing_finished,
-            ?contend_outcome,
-            ?contend_state_delivery,
-            ?contend_time_delivery,
+            contend_cancelled,
             ?notice_delivery,
             died_state_time_ms,
             ?died_state_start_time_ms,
@@ -25706,30 +25662,7 @@ impl CGame {
                 } else if region.is_player_contending_symbol(player_id, npc_id) {
                     "игрок уже захватывает NPC"
                 } else {
-                    if matches!(
-                        region.cancel_contend_by_player_id(player_id),
-                        GodsBattleCancelByPlayer::MissingReset
-                    ) {
-                        if let Some(delivery) = self.set_gods_battle_player_contend_state(
-                            &region.war.base,
-                            player_id,
-                            false,
-                        ) {
-                            tracing::trace!(
-                                region_id,
-                                player_id,
-                                delivery,
-                                "сброшено прежнее состояние захвата битвы богов"
-                            );
-                        }
-                        let delivery = self.send_gods_battle_contend_time(player_id, 0);
-                        tracing::trace!(
-                            region_id,
-                            player_id,
-                            delivery,
-                            "сброшено прежнее время захвата битвы богов"
-                        );
-                    }
+                    self.cancel_gods_battle_player_contend(&mut region, player_id);
                     let first_for_legacy_faction = region.add_contender(
                         player_id,
                         normal_faction,
@@ -32887,37 +32820,6 @@ impl CGame {
             .map(BattleFairyExecution::kernel)
     }
 
-    pub(crate) fn battle_fairy_execution_mut(&mut self, player_id: i32, skill_id: u32) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.players.get_mut(&player_id)?.move_shape_mut().battle_fairy_execution_mut(skill_id, &self.skill_factory)
-            .map(BattleFairyExecution::kernel_mut)
-    }
-
-    pub(crate) fn battle_fairy_execution_state_mut(&mut self, player_id: i32, skill_id: u32) -> Option<&mut BattleFairyExecution> {
-        self.players.get_mut(&player_id)?.move_shape_mut().battle_fairy_execution_mut(skill_id, &self.skill_factory)
-    }
-
-    pub(crate) fn insert_battle_fairy_execution(&mut self, player_id: i32, execution: impl Into<BattleFairyExecution>) -> bool {
-        let execution = execution.into();
-        self.players.get_mut(&player_id).is_some_and(|player| {
-            player.move_shape_mut().install_battle_fairy_execution(execution, &self.skill_factory)
-        })
-    }
-
-    pub(crate) fn begin_battle_fairy_state(&mut self, player_id: i32, state: SkillExecutionKernel<BattleFairySkillDispatch>) -> bool {
-        self.insert_battle_fairy_execution(player_id, BattleFairyExecution::State(state))
-    }
-
-    pub(crate) fn begin_battle_fairy_base_magic(&mut self, player_id: i32, state: crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState) -> bool {
-        self.insert_battle_fairy_execution(player_id, BattleFairyExecution::BaseMagic(state))
-    }
-
-    pub(crate) fn battle_fairy_base_magic(&self, player_id: i32) -> Option<crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState> {
-        match self.find_player(player_id)?.move_shape().battle_fairy_execution(BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, &self.skill_factory)? {
-            BattleFairyExecution::BaseMagic(state) => Some(*state),
-            _ => None,
-        }
-    }
-
     pub(crate) fn battle_fairy_skill_last_used_ms(&self, player_id: i32, skill_id: u32) -> u32 {
         self.player_skill_last_used_ms(player_id, skill_id)
     }
@@ -39158,16 +39060,12 @@ impl CGame {
         &mut self,
         region_id: i32,
         phalanx: CBattleFairyBaseMagicPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         started_at_ms: u32,
         runtime: &mut Runtime,
     ) -> Option<Result<i32, RegionMembershipBlock>> {
         let mut owner = self.take_region_owner(region_id)?;
         let result = owner.base_mut().add_battle_fairy_base_magic_phalanx(
             phalanx,
-            tile_x,
-            tile_y,
             self.area_width,
             self.area_height,
             started_at_ms,
@@ -40469,16 +40367,20 @@ impl CGame {
                 first_contact: false,
             };
         }
-        let summon_execute: Option<fn(
+        let targeted_execute: Option<fn(
             &mut Self, i32, RegisteredSkill, BattleFairySkillDispatch,
             Option<(i32, ShapeIdentity)>, &mut Runtime,
         ) -> QueuedSkillExecutionOutcome> = match dispatch.skill_id() {
             TIANHUO_SKILL_ID => Some(execute_battle_fairy_tianhuo),
             LEIMING2_SKILL_ID => Some(execute_battle_fairy_leiming2),
             THUNDER_SKILL_ID => Some(execute_battle_fairy_thunder),
+            FATAL_BLOW_SKILL_ID => Some(execute_battle_fairy_fatal_blow),
+            POISON_ARROW_SKILL_ID => Some(execute_battle_fairy_poison_arrow),
+            BLOOD_LOSS_SKILL_ID => Some(execute_battle_fairy_blood_loss),
+            BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => Some(execute_battle_fairy_base_magic),
             _ => None,
         };
-        if let Some(execute) = summon_execute {
+        if let Some(execute) = targeted_execute {
             return self.with_published_player_ai(player_id, player_ai, |game| {
                 execute(game, player_id, instance, dispatch, begin_target, runtime)
             });
@@ -40498,31 +40400,12 @@ impl CGame {
                 execute(game, player_id, instance, dispatch, runtime)
             });
         }
-        let execute: fn(
-            &mut Self,
-            i32,
-            BattleFairySkillDispatch,
-            &mut CPlayerAI,
-            &mut Runtime,
-        ) -> QueuedSkillExecutionOutcome = match dispatch.skill_id() {
-            FATAL_BLOW_SKILL_ID => execute_battle_fairy_fatal_blow,
-            POISON_ARROW_SKILL_ID => execute_battle_fairy_poison_arrow,
-            BLOOD_LOSS_SKILL_ID => execute_battle_fairy_blood_loss,
-            BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => execute_battle_fairy_base_magic,
-            _ => {
-                self.send_battle_fairy_skill_failure(player_id, 2);
-                tracing::debug!(
-                    player_id,
-                    ?dispatch,
-                    "Отклонён неизвестный ID навыка боевой феи"
-                );
-                return QueuedSkillExecutionOutcome {
-                    state: QueuedSkillExecutionState::Rejected,
-                    first_contact: false,
-                };
-            }
-        };
-        execute(self, player_id, dispatch, player_ai, runtime)
+        self.send_battle_fairy_skill_failure(player_id, 2);
+        tracing::debug!(player_id, ?dispatch, "Отклонён неизвестный ID навыка боевой феи");
+        QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Rejected,
+            first_contact: false,
+        }
     }
 
 
@@ -41956,7 +41839,9 @@ impl CGame {
         excluded_player_id: Option<i32>,
         message: &CMessage,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
-        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let shape = self.find_player(player_id)?.shape();
+        if !shape.is_assigned_to_server_region() { return None; }
+        let region_id = shape.get_region_id();
         let owner = self.take_region_owner(region_id)?;
         let delivery = self.find_player(player_id).map(|player| {
             let Some(runtime) = GameServerAroundRuntime::new(
@@ -42018,30 +41903,48 @@ impl CGame {
         Some(delivery)
     }
 
-    pub(crate) fn relocate_player_shape(
+    /// `CPlayer::SetTileXY`: двойное сложение до записи float, общий SetPosXY
+    /// с изменением блоков/области, затем virtual отмена захвата и GS0163.
+    /// Отсутствие региона не отменяет саму запись позиции. BFBaseAttack
+    /// проходит здесь дважды: WarSoulPoint и сохранённая клетка игрока.
+    pub(crate) fn set_player_tile_position(
         &mut self,
         player_id: i32,
-        region_id: i32,
         tile_x: i32,
         tile_y: i32,
     ) -> Option<Result<(), RegionMembershipBlock>> {
         let mut player = self.players.remove(&player_id)?;
-        let Some(mut owner) = self.take_region_owner(region_id) else {
-            self.players.insert(player_id, player);
-            return None;
-        };
         let facts = player.movement_position_facts(
             self.globe_setup.area_width(),
             self.globe_setup.area_height(),
         );
-        let result = owner.base_mut().set_move_shape_tile_position(
-            player.movement_shape_mut(),
-            tile_x,
-            tile_y,
-            facts,
-        );
-        self.restore_region_owner(owner);
+        let x = (f64::from(tile_x) + 0.5) as f32;
+        let y = (f64::from(tile_y) + 0.5) as f32;
+        let result = if player.shape().is_assigned_to_server_region() {
+            let region_id = player.shape().get_region_id();
+            let Some(mut owner) = self.take_region_owner(region_id) else {
+                self.players.insert(player_id, player);
+                return None;
+            };
+            let result = owner.base_mut().set_move_shape_position(
+                player.movement_shape_mut(), x, y, facts,
+            );
+            self.restore_region_owner(owner);
+            result
+        } else {
+            player.move_shape_mut().set_pos_xy(None, x, y, facts)
+                .map_err(RegionMembershipBlock::MoveShape)
+        };
         self.players.insert(player_id, player);
+        if self.find_player(player_id).is_some_and(CPlayer::contend_state)
+            && self.cancel_player_contend(player_id)
+        {
+            let _ = colored_player_notice_message(
+                0xffff_ffff,
+                0xffff_0000,
+                self.get_string_by_id(b"GS0163"),
+            ).send_to_player(self.net_server(), player_id);
+        }
         Some(result)
     }
 
@@ -42056,7 +41959,7 @@ impl CGame {
         tile_y: i32,
     ) -> Option<Result<(), RegionMembershipBlock>> {
         if identity.object_type == PLAYER_TYPE {
-            return self.relocate_player_shape(identity.id, region_id, tile_x, tile_y);
+            return self.set_player_tile_position(identity.id, tile_x, tile_y);
         }
 
         let area_width = self.globe_setup.area_width();
@@ -42361,21 +42264,17 @@ impl CGame {
         Some(result)
     }
 
+    /// Script 2102 в отличие от OnSetPosition публикует BF603 после virtual
+    /// SetTileXY, включая отмену захвата. Допуск по GetBlock здесь отсутствует.
     pub(crate) fn set_script_player_position(
         &mut self,
         player_id: i32,
         requested_x: i32,
         requested_y: i32,
     ) -> Option<Result<Option<Result<i32, ShapeCoordinateBlock>>, RegionMembershipBlock>> {
-        let mut player = self.players.remove(&player_id)?;
-        let Some(region_id) = player.server_region_id() else {
-            self.players.insert(player_id, player);
-            return None;
-        };
-        let Some(mut owner) = self.take_region_owner(region_id) else {
-            self.players.insert(player_id, player);
-            return None;
-        };
+        let shape = self.find_player(player_id)?.shape();
+        if !shape.is_assigned_to_server_region() { return None; }
+        let owner = self.find_region(shape.get_region_id())?;
         let width = owner.base().region.width;
         let height = owner.base().region.height;
         let tile_x = if requested_x >= width {
@@ -42392,29 +42291,17 @@ impl CGame {
         } else {
             requested_y
         };
-        let facts = player.movement_position_facts(
-            self.globe_setup.area_width(),
-            self.globe_setup.area_height(),
-        );
-        let result = owner.base_mut().set_move_shape_tile_position(
-            player.movement_shape_mut(),
-            tile_x,
-            tile_y,
-            facts,
-        );
-        let delivery = result.as_ref().ok().map(|_| {
-            let identity = player.shape().identity();
+        let result = self.set_player_tile_position(player_id, tile_x, tile_y)?;
+        Some(result.map(|()| {
+            let identity = self.find_player(player_id)?.shape().identity();
             let mut movement = CMessage::new(0x000b_f603);
             movement.add_long(identity.object_type);
             movement.add_long(identity.id);
             movement.add_long(tile_x);
             movement.add_long(tile_y);
             movement.add_long(0);
-            self.send_game_shape_around(owner.base(), player.shape(), None, &movement)
-        });
-        self.restore_region_owner(owner);
-        self.players.insert(player_id, player);
-        Some(result.map(|_| delivery))
+            self.send_player_shape_around(player_id, None, &movement)
+        }))
     }
 
     pub(crate) fn set_script_player_direction(
@@ -44407,15 +44294,30 @@ impl CGame {
             tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
             return true;
         }
-        if let (Some(Some((target, _))), SummonedSkillShape::FatalBlow(fatal)) = (tick, &phalanx) {
-            match self.fatal_blow_attack_ready(fatal, target, region_id) {
-                Some(false) => return true,
-                Some(true) => {
-                    self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
-                    self.end_damage_phalanx(region_id, phalanx_id);
+        if let SummonedSkillShape::FatalBlow(fatal) = &phalanx {
+            if let Some(Some((target, _))) = tick {
+                match self.fatal_blow_attack_ready(fatal, target, region_id) {
+                    Some(false) => return true,
+                    Some(true) => {
+                        self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+                    }
+                    None => {}
                 }
-                None => self.end_damage_phalanx(region_id, phalanx_id),
             }
+            self.end_damage_phalanx(region_id, phalanx_id);
+            return true;
+        }
+        if matches!(&phalanx, SummonedSkillShape::BattleFairyBaseMagic(_)) {
+            match tick {
+                Some(None) => return true,
+                Some(Some((target, _))) => {
+                    if resolve_state_move_shape(self, region_id, target).is_some() {
+                        self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
+                    }
+                }
+                None => {}
+            }
+            self.end_damage_phalanx(region_id, phalanx_id);
             return true;
         }
         if let (Some(Some(_)), SummonedSkillShape::FireWall(wall)) = (tick, &phalanx) {

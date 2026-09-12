@@ -5,9 +5,10 @@
 //! `0x8F901..0x8F905`: точное декодирование полей фиксированной ширины,
 //! направление и эмоция игрока, поиск региона, адресная и круговая wire-
 //! рассылка, а также порядок внешних владельцев AI, пространства и
-//! сериализации. Виртуальный `SymbolIsAttackAble` базового и городского
-//! регионов разрешается каноническим владельцем региона. `SetTileXY` игрока
-//! проходит конкретные изменения региона, области и блока, затем `GS0163`.
+//! сериализации. `SetTileXY` игрока проходит конкретные изменения области
+//! и блока, затем virtual CancelContendByPlayerID своего региона и `GS0163`.
+//! Поворот после BF601 и ClearEmotion отменяет захват в регионе сообщения
+//! и публикует GS0331; флаг игрока читается после этих отправок.
 //! Движение к заданию сохраняет защиту атаки, исправление поворота, адресный
 //! `OnCannotMove`, сброс эмоции и FIFO назначения в принадлежащем игроку
 //! `CPlayerAI`. Разрешение клиентской позиции читается из действующего
@@ -131,9 +132,9 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameClockContext>(
                 Some(value) => value,
                 None => return Some(Err(GameShapeMessageError::MissingField("direction"))),
             };
-            let Some((identity, contend_state)) = game.find_player_mut(player_id).map(|player| {
+            let Some(identity) = game.find_player_mut(player_id).map(|player| {
                 player.apply_client_direction(direction);
-                (player.shape().identity(), player.contend_state())
+                player.shape().identity()
             }) else {
                 return Some(Ok(()));
             };
@@ -150,7 +151,9 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameClockContext>(
             cleared.add_long(identity.id);
             cleared.add_long(0);
             let _ = game.send_player_shape_around(player_id, Some(player_id), &cleared);
-            if contend_state && game.region_symbol_attackable(region_id) {
+            if game.find_player(player_id).is_some_and(|player| player.contend_state())
+                && game.cancel_player_contend_in_region(region_id, player_id)
+            {
                 let _ = colored_player_notice_message(
                     0xffff_ffff,
                     0xffff_0000,
@@ -214,18 +217,6 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameClockContext>(
                 None => {
                     return Some(Ok(()));
                 }
-            }
-            let contend_state = identity.object_type == PLAYER_TYPE
-                && game
-                    .find_player(identity.id)
-                    .is_some_and(|player| player.contend_state());
-            if contend_state && game.region_symbol_attackable(region_id) {
-                let _ = colored_player_notice_message(
-                    0xffff_ffff,
-                    0xffff_0000,
-                    game.get_string_by_id(b"GS0163"),
-                )
-                .send_to_player(game.net_server(), identity.id);
             }
             debug!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, tile_x = position_fields.0, tile_y = position_fields.1, "изменена позиция shape");
         }

@@ -22,9 +22,10 @@
 //! в owning region и только затем изменяет manager kill-counter.
 //! Проверка first-contender намеренно сравнивает normal `m_lFactionID` с
 //! сохранённым GodsBattle faction: это несовпадение подтверждено RVA
-//! `0x000A9270`, а не исправлено по более позднему C++-донору. Найденный
-//! `CancelContendByPlayerID` также удаляет запись без player reset/time; reset
-//! происходит только в ветви отсутствующей записи, как в точном EXE.
+//! `0x000A9270`, а не исправлено по более позднему C++-донору.
+//! CancelContendByPlayerID удаляет все записи игрока, сохраняя порядок
+//! остальных; затем безусловно сбрасывает флаг захвата и время.
+//! Только NULL player возвращает false.
 //! `CGodsBattleMgr::OnEnterContend` аналогично сравнивает индекс NPC-set
 //! `0..2` с player faction `5/6`: для допустимого игрока ветвь `SZLGS7`
 //! недостижима, поэтому после гибели всех стражей собственный символ тоже
@@ -350,12 +351,6 @@ pub(crate) struct GodsBattleContender {
     pub(crate) start_time_ms: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleCancelByPlayer {
-    RemovedWithoutPlayerReset,
-    MissingReset,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GodsBattleContendAdvance {
     pub(crate) progress: Vec<(i32, i32)>,
@@ -523,22 +518,10 @@ impl CServerGodsBattleRegion {
             .any(|contender| contender.player_id == player_id && contender.symbol_id == symbol_id)
     }
 
-    /// Специализация GodsBattle намеренно не сбрасывает player-state/time,
-    /// когда contender найден и удалён: это подтверждённый legacy contract.
-    pub(crate) fn cancel_contend_by_player_id(
-        &mut self,
-        player_id: i32,
-    ) -> GodsBattleCancelByPlayer {
-        if let Some(index) = self
-            .contenders
-            .iter()
-            .position(|contender| contender.player_id == player_id)
-        {
-            self.contenders.remove(index);
-            GodsBattleCancelByPlayer::RemovedWithoutPlayerReset
-        } else {
-            GodsBattleCancelByPlayer::MissingReset
-        }
+    /// Список обрабатывается полностью до player-state и `0xBFF29(0)`.
+    /// Как у War, эти безусловные действия выполняет runtime после mutation.
+    pub(crate) fn remove_contenders_for_player(&mut self, player_id: i32) {
+        self.contenders.retain(|contender| contender.player_id != player_id);
     }
 
     /// Проверка first-for-faction использует normal `m_lFactionID`, тогда как
@@ -738,19 +721,6 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 //
 //
 
-// ============================================================================
-// FUNCTION: CServerGodsBattleRegion::CancelContendByPlayerID
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:452
-// RVA: 0x000A8010
-// ADDRESS: 004a8010
-// PROTOTYPE: bool __thiscall CancelContendByPlayerID(CPlayer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::~CServerGodsBattleRegion

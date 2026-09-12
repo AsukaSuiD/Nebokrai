@@ -115,16 +115,6 @@ pub(crate) struct PlayerItemUseFacts {
     pub(crate) forbid_return_level: i32,
 }
 
-/// Наблюдаемый результат virtual `CancelContendByPlayerID`, вызываемого перед
-/// item-specific ветвями. У Nation/GodsBattle найденная запись возвращается с
-/// неопределённым `AL`; mutation сохраняется, но текст не выдумывается.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerItemContendCancel {
-    NotCancelled,
-    CancelledNotify,
-    CancelledLegacyNoticeIndeterminate,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerItemSkillWire {
     pub(crate) value_84: u32,
@@ -723,19 +713,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             }
-            if game.find_player(player_id).is_some_and(|player| player.contend_state()) {
-                match game.cancel_player_contend_for_item(player_id) {
-                    PlayerItemContendCancel::CancelledNotify => {
-                        let _ = send_item_notice(game, player_id, b"GS0147", &[], 0xffff_0000);
-                    }
-                    PlayerItemContendCancel::CancelledLegacyNoticeIndeterminate => {
-                        tracing::warn!(
-                            player_id,
-                            "захват отменён, но исходный AL для GS0147 не определён"
-                        );
-                    }
-                    PlayerItemContendCancel::NotCancelled => {}
-                }
+            if game.find_player(player_id).is_some_and(|player| player.contend_state())
+                && game.cancel_player_contend(player_id)
+            {
+                let _ = send_item_notice(game, player_id, b"GS0147", &[], 0xffff_0000);
             }
 
             let mut consume = true;

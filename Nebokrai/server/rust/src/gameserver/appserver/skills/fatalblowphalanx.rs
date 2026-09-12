@@ -3,14 +3,17 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/fatalblowphalanx.cpp`. Снаряд хранит снимок владельца,
 //! цель, уровень и коэффициент навыка. На первом AI-проходе после создания он
-//! рассчитывает один физический удар и удаляется; до этого проверка срока жизни
-//! имеет приоритет. При наличии боевого духа и таблицы свойств формула
+//! пытается нанести физический удар; отсутствие master либо отказ IsAttackAble
+//! оставляют его до следующего прохода. Удаление следует после Attack, а
+//! строгий абсолютный wrapping-срок имеет приоритет. При наличии боевого духа и таблицы свойств формула
 //! выполняет один вызов `legacy MSVCRT RNG`; иначе сохраняется атака без
 //! составляющих урона, но с уже записанными идентификатором и коэффициентом навыка.
 //! Поиск цели, проверка `IsAttackAble`, защита и сетевые последствия остаются
 //! у исполняющего владельца, которому требуется доступ к нескольким сущностям.
 //! Атака боевого духа усекается через исходный `i64` с чтением младших 32 бит;
 //! процентный damage factor сохраняется в `f32` только после x87-умножения.
+//! Конструктор хранит CCH, но min/max формула получает только из живой таблицы.
+//! Wire передаёт Master, а не цель снаряда; отказ AddObject не отменяет BF502.
 
 use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use super::fatalblow::FATAL_BLOW_SKILL_ID;
@@ -43,8 +46,7 @@ pub(crate) struct CFatalBlowPhalanx {
     skill_level: i32,
     damage_factor: i32,
     target: ShapeIdentity,
-    minimum_attack: i32,
-    maximum_attack: i32,
+    _cch: i32,
 }
 
 pub(crate) fn calculate_owned_fatal_blow_attack(
@@ -91,9 +93,8 @@ impl CFatalBlowPhalanx {
         lifetime_ms: u32,
         skill_level: i32,
         damage_factor: i32,
+        cch: i32,
         target: ShapeIdentity,
-        minimum_attack: i32,
-        maximum_attack: i32,
     ) -> Self {
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity {
@@ -109,8 +110,7 @@ impl CFatalBlowPhalanx {
             skill_level,
             damage_factor,
             target,
-            minimum_attack,
-            maximum_attack,
+            _cch: cch,
         }
     }
 
@@ -130,9 +130,14 @@ impl CFatalBlowPhalanx {
         self.skill_level
     }
 
+    pub(crate) fn set_center(&mut self, x: i32, y: i32) {
+        self.shape.set_pos_xy_move_order(
+            (f64::from(x) + 0.5) as f32, (f64::from(y) + 0.5) as f32,
+        );
+    }
+
     pub(crate) fn tick(&mut self, now_ms: u32) -> FatalBlowPhalanxTick {
-        if now_ms.wrapping_sub(self.started_at_ms) > self.lifetime_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
+        if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
             FatalBlowPhalanxTick::Expired
         } else {
             FatalBlowPhalanxTick::Ready(self.target)
@@ -151,8 +156,8 @@ impl CFatalBlowPhalanx {
             &self.shape,
             FATAL_BLOW_SKILL_ID as i32,
             self.skill_level,
-            self.target.object_type,
-            self.target.id,
+            self.master.master_type,
+            self.master.master_id,
             self.started_at_ms,
             self.lifetime_ms,
             now_milliseconds,

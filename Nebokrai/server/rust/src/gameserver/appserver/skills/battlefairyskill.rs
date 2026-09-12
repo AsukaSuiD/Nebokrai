@@ -1,67 +1,39 @@
 //! Общий вход, visual и завершение семейства навыков боевого духа.
-//! Диапазон 0x212..=0x224 не получает искусственный prepared: в 19 телах
-//! AI (0x00517610..0x0052AAC0) нет записи флага владельца +0x44.
-//! Summon BFBaseAttack (0x00517E40), Leiming2 (0x00520990), Thunder
-//! (0x00521D30) и Tianhuo (0x00523280) также не выставляют этот флаг;
-//! вызывающий AI завершает навык через End(1), а созданная область живёт
-//! самостоятельно. Например, Leiming2 после virtual Summon(+0x8C)
-//! в 0x005208AB сразу переходит к End(1). Общая prepared-ветвь CPlayerAI
-//! не является основанием продлевать исполнение этих конкретных навыков.
+//! Источник: gameserver.exe/GameServer.pdb, семейство appserver/skills
+//! и базовый appserver/states/skill.cpp.
 //!
-//! Пакет `0xBFE01` с префиксом отказа `4` и общий `End(0)` с действием `3`
-//! используются несколькими конкретными владельцами навыков. Точные общие
-//! тела `End` по адресам `0x0051A700`, `0x0051BE50`, `0x0051E370`,
-//! `0x005222A0` и `0x005246C0` делегируют в `CStateSkill::End` либо
-//! `CSummonSkill::End`: успешный хвост изнашивает оружие, а cooldown
-//! фиксируется последним. Источник — gameserver.exe + GameServer.pdb,
-//! appserver/states/skill.cpp: CSkill::End (0x004d84c0) вызывает virtual
-//! +0x158 источника, который у CPlayer пуст. Дополнительного пересчёта
-//! свойств здесь нет; изменения состояний обрабатывают конкретные владельцы.
-//! Здесь остаётся общий терминальный хвост и состав packet-ов; проверки и
-//! формулы принадлежат соответствующим модулям-владельцам.
-//! Ошибки AI атак 0x21a..=0x21f вызывают End(0): Tianhuo (0x00522e5a),
-//! Leiming2 (0x005206b1), FatalBlow (0x0051f1ac), BloodLoss (0x0051b4af),
-//! PoisonArrow (0x00519e0c), Thunder (0x00521a51). Это не внешний
-//! OnLoseTargetWarSoul, прерывающий ещё активный навык через End(1).
-//! После собственного End(0) навыка повторный OnLoseTargetWarSoul видит
-//! IsEnded и не добавляет отказ, износ оружия или cooldown.
-//! Тот же End(0) используется LifeShield, Wangsheng, Huoxieshu и Lingzhishu.
-//! Все Po/Yu различают отсутствие цели или недостаток MP (End0) и смерть
-//! существующей цели (End1). Последний отказ передаётся как RejectedAfterUse:
-//! он сохраняет износ оружия и cooldown несмотря на отсутствие нового состояния.
-//! Базовая атака 0x224 также различает End(0) при потере цели и End(1)
-//! после попытки Summon (AI 0x005178fb/0x005179df).
 //! Очередь и background сохраняют поколенческий ключ до Begin/AI/contacts.
-//! Общий End читает GetUser из той же базы, выполняет AfterUse/reuse и лишь
-//! затем очищает source/target/visual и освобождает BF-payload. Удаление навыка
-//! из callback износа не переносит продолжение на новую регистрацию. AI на
-//! время этого callback опубликован у игрока; его новая команда не снимается.
-//! End(0) пространственных SetWarSoulXY/DelWarSoul использует ту же границу
-//! без runtime и часов. Выбор идёт из m_tgCurrentWarSoulSkill, без gates по
-//! current-команде/payload и без снятия команды; внешний int-End не заменяется
-//! concrete bool-End. Set требует target area, Delete проверяет навык до area.
-//! Отказ Begin сбрасывает созданную базу даже без payload, после чего расписание
-//! отправляет единственный внешний 4,2. Внутренние отказы владельцев сохранены.
-//! Все 19 skill-owned эффектов боевой феи выделяют ровно 0xC байт: только
-//! CVisualEffect, без собственных полей. Общий ресурс создаётся после базового
-//! Begin и до concrete checks; ID, уровень, GetUser/GetSufferer берутся из
-//! живого экземпляра, не из команды. Все Update, включая silent/ended/missing
-//! source, проходят общий base tail; wire mode 3 сам по себе не завершает ресурс.
-//! Различия wire сведены в один статический контракт: они не создают новых
-//! контейнеров или копий lifecycle. В частности, BloodLoss mode13 = [0,13],
-//! Leiming2 mode7 = [0,7], Po/Yu/transfer mode8 = DWORD(4), byte(8).
-//! Tianhuo mode1 сохраняет wire-ID 0x13A, LifeShield mode1 — лишь target 0,0.
-//! Native Fatal/Leiming временно меняют source.type на 700; around определяет
-//! CPlayer через RTTI (0x0041460F), не это поле. Rust сохраняет живую форму и
-//! пишет 700 в wire: existing around сохраняет также дальний team-tail, без
-//! мутации типа, копии owning shape или отдельного транспорта.
-//! Po/Yu/Wangsheng/Huoxieshu/Lingzhishu вызывают из Begin/AI End(bool)+0x94:
-//! Po/Yu (0x005246C0) rearm/update3 при source, transfer/Wang (0x0051BE50)
-//! update3 без rearm, затем inherited End. Этот вызов не подменяет их внешний
-//! End(int)+0x68, которому по-прежнему принадлежит отдельная фабричная политика.
-//! Собственный пролог перед visual отключает concrete AI, не завершая базу
-//! заранее. Idle не означает Begin и не служит отметкой tick: единый вход AI
-//! в этой фазе молчит, пока source/effect остаются доступны AfterUse.
+//! Материализация State/Fatal/BaseAttack переносит единственную базу без
+//! второго Begin. Полётные скаляры принадлежат concrete payload, а созданные
+//! снаряды и области живут независимо. Все 19 навыков 0x212..=0x224 обходятся
+//! без prepared; после попытки Summon AI завершает навык через End(1).
+//!
+//! End читает живого GetUser, выполняет AfterUse/износ и фиксирует cooldown
+//! последним; затем освобождает source/target/visual и payload. Player callback
+//! не добавляет UpdateProperty. AI опубликован у игрока, новая команда из
+//! callback сохраняется, а продолжение не переходит на удалённую регистрацию.
+//! Собственный пролог End отключает concrete AI до visual, но оставляет базу
+//! доступной AfterUse. Idle не является повторным Begin.
+//!
+//! Ошибки атак, LifeShield и transfer дают End(0); внешний OnLoseTargetWarSoul
+//! может вызвать End(1) только у ещё активного навыка. Po/Yu отличают смерть S
+//! от отсутствия S/MP: RejectedAfterUse сохраняет успешный хвост End(1).
+//! Concrete End(bool) Po/Yu/transfer сохраняет собственный rearm/visual3 и
+//! не подменяет внешний End(int), чью политику выбирает фабрика.
+//! Пространственные SetWarSoulXY/DelWarSoul выбирают m_tgCurrentWarSoulSkill
+//! без gates по current-команде/payload и не снимают команду; их End(0)
+//! не требует часов. Set требует target area, Delete проверяет навык до area.
+//! При отказе Begin сбрасывается и база без payload, затем расписание
+//! отправляет единственный внешний 4,2 сверх внутренних отказов владельца.
+//!
+//! Все skill-owned эффекты — общий CVisualEffect без собственных полей.
+//! Он создаётся между базовым Begin и concrete Check; visual читает ID,
+//! уровень, U/S из живого экземпляра. Даже молчащий Update проходит base tail,
+//! а mode3 сам по себе не завершает ресурс. Различия wire находятся в одном
+//! статическом контракте, без копий lifecycle и отдельных контейнеров.
+//! Fatal/Leiming требуют source.type=700 только в wire: выбор player-around
+//! в оригинале основан на RTTI. Живая форма не меняет тип, сохраняются обычная
+//! доставка и дальний team-tail. Формулы и проверки остаются у concrete owners.
 
 use super::basemagic::BASE_MAGIC_EFFECT_MESSAGE;
 use super::kernel::{BattleFairyExecution, SkillExecutionKernel, SkillTermination};
@@ -69,6 +41,7 @@ use super::skillfactory::{SkillEndEffect, SkillOwner};
 use super::stateskill::state_skill_outcome;
 use crate::gameserver::appserver::moveshape::{MoveShapeSkill, RegisteredSkillDispatch};
 use crate::gameserver::appserver::player::BattleFairySkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
@@ -196,9 +169,27 @@ pub(crate) fn publish_battle_fairy_visual(game: &CGame, skill: &MoveShapeSkill, 
     }
 }
 
-/// Общая материализация навыков с единственным BF State kernel. Координатор
-/// уже выполнил base Begin и опубликовал AI; здесь нет вторых часов или End.
-/// Concrete Check получает исходный аргумент U, AI разрешает свою живую базу.
+/// Конфликт выбирается по первой позиции исходного массива состояний, а не
+/// по приоритету ID. Цвет SystemInfo здесь белый, без дополнительного visual.
+pub(super) fn check_battle_fairy_target_states(
+    game: &CGame, player_id: i32, target: (i32, ShapeIdentity),
+) -> bool {
+    let Some(holder) = resolve_state_move_shape(game, target.0, target.1) else { return false; };
+    let conflict = holder.find_state_position(|state| matches!(state.state_id(), 0x192 | 0xd2 | 0x67))
+        .and_then(|(position, _)| holder.state_at(position))
+        .map(|(_, state)| state.state_id());
+    let Some(state_id) = conflict else { return true; };
+    let text = game.get_string_by_id(if state_id == 0xd2 { b"ZHGS0047" } else { b"ZHGS0046" });
+    let mut message = CMessage::new(0x0b_f807);
+    message.add_ulong(0xffff_ffff);
+    let length = text.iter().position(|byte| *byte == 0).unwrap_or(text.len());
+    message.base_mut().add(&text[..length]);
+    message.base_mut().add_byte(0);
+    let _ = message.send_to_player(game.net_server(), player_id);
+    false
+}
+
+/// Навыки без собственных скалярных полей используют тот же общий вход.
 pub(crate) fn execute_registered_battle_fairy_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -207,6 +198,27 @@ pub(crate) fn execute_registered_battle_fairy_state<Runtime: GameMainLoopRuntime
     runtime: &mut Runtime,
     begin_failure_visual: Option<u32>,
     check: impl FnOnce(&mut CGame, RegisteredSkill, i32, &mut Runtime) -> bool,
+    run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
+) -> QueuedSkillExecutionOutcome {
+    execute_registered_battle_fairy_skill(
+        game, player_id, instance, dispatch, runtime, begin_failure_visual, check,
+        |dispatch, started| BattleFairyExecution::State(SkillExecutionKernel::begin(dispatch, started)),
+        run_ai,
+    )
+}
+
+/// Общая материализация сохраняет единственную базу зарегистрированного
+/// экземпляра. Координатор уже выполнил base Begin и опубликовал AI; здесь
+/// нет вторых часов или End. Фабрика создаёт лишь собственные данные owner-а.
+pub(crate) fn execute_registered_battle_fairy_skill<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    instance: RegisteredSkill,
+    dispatch: BattleFairySkillDispatch,
+    runtime: &mut Runtime,
+    begin_failure_visual: Option<u32>,
+    check: impl FnOnce(&mut CGame, RegisteredSkill, i32, &mut Runtime) -> bool,
+    materialize: impl FnOnce(BattleFairySkillDispatch, u32) -> BattleFairyExecution,
     run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
 ) -> QueuedSkillExecutionOutcome {
     let Some(skill) = game.registered_skill(instance) else {
@@ -230,8 +242,8 @@ pub(crate) fn execute_registered_battle_fairy_state<Runtime: GameMainLoopRuntime
     let Some(skill) = game.registered_skill_mut(instance) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
-    let kernel = SkillExecutionKernel::begin(dispatch, skill.lifecycle().started_at_ms());
-    if !skill.install_battle_fairy_execution(BattleFairyExecution::State(kernel)) {
+    let execution = materialize(dispatch, skill.lifecycle().started_at_ms());
+    if !skill.install_battle_fairy_execution(execution) {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     }
     state_skill_outcome(QueuedSkillExecutionState::Begun)

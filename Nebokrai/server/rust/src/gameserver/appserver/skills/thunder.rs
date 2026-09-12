@@ -22,7 +22,7 @@ use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
 };
-use super::battlefairyskill::execute_registered_battle_fairy_state;
+use super::battlefairyskill::{check_battle_fairy_target_states, execute_registered_battle_fairy_state};
 use super::battlefairytransfer::send_goods_update;
 use super::fightdefense::truncate_original;
 use super::kernel::{SkillStage, battle_fairy_mana_text_cost, skill_is_restored};
@@ -38,7 +38,6 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
-use crate::nets::netserver::message::CMessage;
 
 pub(crate) const THUNDER_SKILL_ID: u32 = 0x21f;
 pub(crate) const THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
@@ -106,20 +105,7 @@ pub(super) fn check_battle_fairy_summon_prefix<Runtime: GameMainLoopRuntime>(
 ) -> Option<CSkillBaseProperties> {
     game.find_player(player_id)?;
     let target = begin_target?;
-    let holder = resolve_state_move_shape(game, target.0, target.1)?;
-    let conflict = holder.find_state_position(|state| matches!(state.state_id(), 0x192 | 0xd2 | 0x67))
-        .and_then(|(position, _)| holder.state_at(position))
-        .map(|(_, state)| state.state_id());
-    if let Some(state_id) = conflict {
-        let text = game.get_string_by_id(if state_id == 0xd2 { b"ZHGS0047" } else { b"ZHGS0046" });
-        let mut message = CMessage::new(0x0b_f807);
-        message.add_ulong(0xffff_ffff);
-        let length = text.iter().position(|byte| *byte == 0).unwrap_or(text.len());
-        message.base_mut().add(&text[..length]);
-        message.base_mut().add_byte(0);
-        let _ = message.send_to_player(game.net_server(), player_id);
-        return None;
-    }
+    if !check_battle_fairy_target_states(game, player_id, target) { return None; }
     let skill = game.registered_skill(instance)?;
     let properties = game.skill_base_properties(skill.id(), skill.level())?.clone();
     let (reuse, last_used, now) = if reuse_clock_first {
