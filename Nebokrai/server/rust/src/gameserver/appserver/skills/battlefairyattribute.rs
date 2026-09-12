@@ -1,66 +1,46 @@
-//! Общая вертикаль исполнения восьми атрибутных навыков боевого духа.
-//! Успешный Begin возвращает Begun до первого AI; общий координатор
-//! продолжает тот же owner без повторного допуска расписания.
+//! Атрибутные навыки CPojia..CYufa, gameserver.exe/GameServer.pdb,
+//! appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}.cpp.
 //!
-//! Конкретные идентификаторы и коды свойств принадлежат модулям навыков.
-//! Этот владелец семейства сохраняет общий порядок: проверка экипировки,
-//! задержки повторного применения и запаса MP, необратимое списание и
-//! `0xBF918`, задержка, действие применения 2, замена состояния и
-//! пересчёт свойств. Восстановление использует исходный абсолютный срок
-//! `CSkill::IsRestored`; задержка AI также сравнивает unsigned now с
-//! wrapping-суммой start + delay (CPojia 0x0052a89b, CYufa 0x00524266). `CGame`
-//! используется только для разрешения владельцев и фактической доставки.
-//! Источник: gameserver.exe + GameServer.pdb, CPojia..CYufa::AI
-//! (0x00523fc0..0x0052aac0). Каждый Begin после базового создаёт собственный
-//! CVisualEffect размером 0x0c и вызывает BeginVisualEffect(1) до CheckCondition.
-//! Общий visual-dispatch сохраняет режимы 0/1, ошибки и живые GetUser/GetSufferer;
-//! состояние на цели имеет отдельный visual. Собственный End(bool,+0x94)
-//! 0x005246c0 при живом GetUser повторяет BeginVisualEffect(1), Update(3),
-//! затем наследуемый End(int). Этот bool-хвост выполняет координатор только
-//! при завершении concrete Begin/AI, не при внешнем вызове int-слота +0x68.
-//! Отказы Po используют End(0); смерть GetSufferer у Yu вызывает End(1),
-//! а отсутствие цели или недостаток MP — End(0). Получатель усиления Yu —
-//! сам владелец, но GetSufferer остаётся объектом запроса: CYujia::Begin
-//! (0x00526440) сохраняет оба аргумента через CAttackSkill::Begin.
-//! После списания MP все восемь AI вызывают CPlayer::OnChangeStates (+0x164):
-//! self BFE02 и командная публикация предшествуют visual и обновлению товара.
-//! Pojia отправляет BF918 до start-visual (0x0052a827/0x0052a848), остальные
-//! семь — после (например, Yujia 0x00526d66/0x00526e03). Сериализуется сам
-//! equipment[10], без Wangsheng-проверки GetWarSoulGoods после списания.
-//! Отказ Begin после собственного End(0) получает внешний 4,2 от
-//! CPlayerAI::OnScheduleAboutWarSoul (0x00509861); отказ уже запущенного AI
-//! этого ответа не получает, поскольку OnLoseTargetWarSoul видит IsEnded.
-//! В Rust внешний 4,2 отправляет только координатор после общего End(0);
-//! собственный 4,2 при смерти цели в AI остаётся перед текстом и visual-End.
-//! После Begin и добавления состояния Po вызывает общий UpdateProperty цели
-//! без player-only gate (Pojia 0x0052AA9C, Pobing 0x00529C0C,
-//! Pomo 0x00528D7C, Pofa 0x00527EEC), до собственного End(+0x94).
-//! Primary replacement выбирает первый nonnull exact ID 0x212..0x219,
-//! без проверки level/value/срока (Pojia 0x0052A8D0..0x0052A8F4).
-//! Далее direct End(+0x1C), fresh same-index destructor остатка и NULL
-//! (0x0052A9E8..0x0052AA07), только затем ctor и новый Begin/append.
-//! Прямой base End не отправляет visual; RemoveState пересчитывает свойства
-//! до создания нового состояния, а внешний Update следует после Begin.
-//! У Po4 и Yujia внешний Update сохраняется и при отказе Begin; Yu3
-//! (Yubing/Yumo/Yufa: 0x005261A5/0x00525315/0x00524448) его пропускают.
-//! Новый timestamp читается ровно в Begin, после старого End. На время
-//! owning replacement настоящий AI источника опубликован у CPlayer.
-//! Object Begin состояния (Po/Yu 0x005E83B0/0x005E6EE0) создаёт loop1
-//! visual без initial Update. State BFE03 отправляется только последующим
-//! OnUpdateProperties через соответствующий GetUser/GetSufferer.
+//! Координатор выполняет общий Begin с visual loop1 и завершает тот же
+//! зарегистрированный экземпляр. Check принимает исходного CPlayer,
+//! требует equipment[10] с маркером боевой феи и ненулевой GetSufferer; тип,
+//! здоровье и дальность цели здесь не проверяются. Восстановление использует
+//! delay, а не reuse. MP0 допускается без чтения MP. Только Yumo списывает
+//! ненулевую стоимость уже в Check; первый AI затем списывает её повторно.
+//!
+//! AI сохраняет таблицу свойств и фактические U/S до побочных эффектов.
+//! Отсутствие CPlayer или equipment[10] оставляет ожидание; смерть S у всех
+//! восьми завершает с End(1), отсутствие S/региона U и нехватка MP — End(0).
+//! OnChangeStates следует после записи MP. Pojia сериализует и отправляет
+//! BF918 до CAN/visual0/condition, остальные семь — после. Отказ Serialize
+//! не подавляет пакет. Дальше перечитывается condition и проверяется
+//! абсолютный wrapping-срок start + delay, без нового начального clock.
+//!
+//! Первый прежний exact-ID проходит End и destructor свежего остатка слота.
+//! Только затем из сохранённой таблицы читаются keep/value: primary Begin
+//! с собственными часами и silent loop1 → append. Po держит состояние на S
+//! с state-U=S/state-S=U; Yu — на U с обоими указателями U. Внешний Update
+//! обязателен у Po и Yujia, у остальных Yu — лишь после успешного Begin.
+//! Собственный End(bool) остаётся у координатора и отличается от внешнего
+//! унаследованного End(int); ручного visual или второго завершения здесь нет.
 
 use super::battlefairyattributestate::{
-    begin_battle_fairy_attribute_state, BattleFairyAttributeKind,
-    BattleFairyAttributeState,
+    BattleFairyAttributeKind, BattleFairyAttributeState, begin_battle_fairy_attribute_state,
 };
 use super::kernel::{
-    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
+    BattleFairyExecution, SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost,
+    skill_is_restored,
 };
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{BattleFairyManaSpendOutcome, BattleFairySkillDispatch};
+use super::skillbaseproperties::CSkillBaseProperties;
+use super::stateskill::state_skill_outcome;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_BF_BATTLE_FAIRY, GAP_BF_MP,
+};
+use crate::gameserver::appserver::player::BattleFairySkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, resolve_state_move_shape,
+    end_and_destroy_state_at, resolve_skill_sufferer, resolve_state_move_shape,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
@@ -68,8 +48,6 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
@@ -95,177 +73,197 @@ pub(crate) const fn definition(skill_id: u32) -> Option<BattleFairyAttributeSkil
     }
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
+fn fail_mana(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32,
+    properties: &CSkillBaseProperties,
+) {
+    game.update_registered_skill_visual(instance, 7);
+    let cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    game.send_skill_system_info_with_unsigned(
+        player_id, b"ZHGS0052", battle_fairy_mana_text_cost(cost),
+    );
 }
 
-fn dispatch_fields(dispatch: BattleFairySkillDispatch) -> (u32, i32, Option<ShapeIdentity>) {
-    match dispatch {
-        BattleFairySkillDispatch::SelfTarget { skill_id, skill_level, .. }
-        | BattleFairySkillDispatch::Point { skill_id, skill_level, .. } => {
-            (skill_id, skill_level, None)
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, player_id: i32, runtime: &mut Runtime,
+) -> bool {
+    let Some(goods) = game.find_player(player_id)
+        .and_then(|player| player.equipment().get_goods(10))
+    else { return false; };
+    if goods.addon_property_value(game.goods_factory(), GAP_BF_BATTLE_FAIRY, 1) != 1 {
+        let text = game.get_string_by_id(b"ZHGS0011");
+        let _ = colored_player_notice_message(0xffff_ffff, 0, text)
+            .send_to_player(game.net_server(), player_id);
+        return false;
+    }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    if resolve_skill_sufferer(game, skill.lifecycle()).is_none() { return false; }
+    let skill_id = skill.id();
+    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else {
+        return false;
+    };
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), delay, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        game.send_skill_system_info(player_id, b"ZHGS0048");
+        return false;
+    }
+    if properties.query_property(SKILL_USAGE_USER_MP_LOSE) != 0 {
+        let current = goods.addon_property_value(game.goods_factory(), GAP_BF_MP, 1);
+        let cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+        let remaining = current.wrapping_sub(cost as i32);
+        if remaining < 0 {
+            fail_mana(game, instance, player_id, &properties);
+            return false;
         }
-        BattleFairySkillDispatch::Object { skill_id, skill_level, target } => {
-            (skill_id, skill_level, Some(target))
+        if skill_id == super::yumo::SKILL_ID {
+            let Some(goods) = game.find_player_mut(player_id)
+                .and_then(|player| player.equipment_mut().get_goods_mut(10))
+            else { return false; };
+            let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, remaining);
         }
     }
+    true
 }
 
-fn send_goods_update(game: &mut CGame, update: &crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate) {
-    let mut message = CMessage::new(update.message_type as i32);
-    message.add_long(update.player_id);
-    message.base_mut().add_guid(update.goods.ex_id);
-    message.add_ulong(update.old_client_payload.len() as u32);
-    message.base_mut().add(&update.old_client_payload);
-    let _ = message.send_to_player(game.net_server(), update.player_id);
+fn send_goods_update(game: &CGame, player_id: i32, identity: ShapeIdentity) {
+    // Между захватом предмета и этим чтением только OnChangeStates/visual:
+    // они не меняют inventory. Slot10 остаётся тем же native CGoods, без
+    // повторного допуска WarSoul или поиска одноимённого товара по GUID.
+    let Some(goods) = game.find_player(player_id)
+        .and_then(|player| player.equipment().get_goods(10))
+    else { return; };
+    let mut payload = Vec::new();
+    let _ = goods.serialize_for_old_client(
+        &mut payload, game.goods_factory(), game.globe_setup().da_kong_key(),
+    );
+    let mut message = CMessage::new(0x0b_f918);
+    message.add_long(player_id);
+    message.base_mut().add_guid(identity.ex_id);
+    message.add_ulong(payload.len() as u32);
+    message.base_mut().add(&payload);
+    let _ = message.send_to_player(game.net_server(), player_id);
 }
 
 pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: BattleFairySkillDispatch,
-    player_ai: &mut CPlayerAI,
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: BattleFairySkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(definition) = definition(dispatch.skill_id()) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(skill) = game.registered_skill(instance) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    if let Some(previous) = skill.battle_fairy_dispatch() {
+        if previous != dispatch {
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+        }
+        return run_ai(game, instance, definition, runtime);
+    }
+    if !check_cast(game, instance, player_id, runtime) {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    }
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let kernel = SkillExecutionKernel::begin(dispatch, started);
+    if !game.registered_skill_mut(instance).is_some_and(|skill| {
+        skill.install_battle_fairy_execution(BattleFairyExecution::State(kernel))
+    }) {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    }
+    state_skill_outcome(QueuedSkillExecutionState::Begun)
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, definition: BattleFairyAttributeSkill,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let (skill_id, skill_level, requested_target) = dispatch_fields(dispatch);
-    let Some(definition) = definition(skill_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
+    let Some(skill) = game.registered_skill(instance) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
-    let Some((region_id, source_identity)) = game.find_player(player_id).and_then(|player| {
-        Some((player.server_region_id()?, player.shape().identity()))
+    if skill.execution_stage().is_none_or(|stage| stage == SkillStage::Idle) {
+        return state_skill_outcome(QueuedSkillExecutionState::Pending);
+    }
+    let skill_id = skill.id();
+    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let (user_region, user) = skill.lifecycle().user();
+    let Some(user) = resolve_state_move_shape(game, user_region, user)
+        .map(|shape| shape.shape().identity()).filter(|user| user.object_type == 400)
+    else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
+    let Some(sufferer) = resolve_skill_sufferer(game, skill.lifecycle()) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    if game.base_magic_target_dead(sufferer.0, sufferer.1) {
+        game.update_registered_skill_visual(instance, 2);
+        game.send_skill_system_info(user.id, b"ZHGS0050");
+        return state_skill_outcome(QueuedSkillExecutionState::RejectedAfterUse);
+    }
+    let Some(source_region) = game.find_player(user.id).and_then(|player| {
+        player.shape().is_assigned_to_server_region().then(|| player.shape().get_region_id())
     }) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
-    let target = if definition.kind.targets_self() {
-        source_identity
-    } else {
-        let Some(target) = requested_target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        target
-    };
-    if game.move_shape_target_tile(Some(region_id), target).is_none() {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
-    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
-    let value = properties.query_property(definition.value_usage) as i32;
-    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
-
-    if game.battle_fairy_execution(player_id, skill_id).is_none() {
-        let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(
-            game.battle_fairy_skill_last_used_ms(player_id, skill_id),
-            delay_ms,
-            now_ms,
-        ) {
-            game.update_player_skill_visual(player_id, skill_id, 0x0d);
-            game.send_skill_system_info(player_id, b"ZHGS0048");
-            return terminal(QueuedSkillExecutionState::Rejected);
+    if skill.execution_stage() == Some(SkillStage::Begin) {
+        let Some((goods_identity, current)) = game.find_player(user.id)
+            .and_then(|player| player.equipment().get_goods(10))
+            .map(|goods| (goods.identity(), goods.addon_property_value(game.goods_factory(), GAP_BF_MP, 1)))
+        else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
+        let cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+        let remaining = current.wrapping_sub(cost as i32);
+        if remaining < 0 {
+            fail_mana(game, instance, user.id, &properties);
+            return state_skill_outcome(QueuedSkillExecutionState::Rejected);
         }
-        let Some(current) = game.find_player(player_id).and_then(|player| player.war_soul_mana(game.goods_factory())) else {
-            let text = game.get_string_by_id(b"ZHGS0011");
-            let _ = colored_player_notice_message(0xffff_ffff, 0, text).send_to_player(game.net_server(), player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        if current.wrapping_sub(mp_loss as i32) < 0 {
-            game.update_player_skill_visual(player_id, skill_id, 7);
-            game.send_skill_system_info_with_unsigned(
-                player_id,
-                b"ZHGS0052",
-                battle_fairy_mana_text_cost(mp_loss),
-            );
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        game.begin_battle_fairy_state(player_id, SkillExecutionKernel::begin(dispatch, now_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.battle_fairy_execution(player_id, skill_id).is_none_or(|state| state.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    let Some(sufferer) = requested_target
-        .filter(|target| game.base_magic_target_view(region_id, *target).is_some())
-    else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if game.base_magic_target_dead(region_id, sufferer) {
-        game.update_player_skill_visual(player_id, skill_id, 2);
-        game.send_skill_system_info(player_id, b"ZHGS0050");
-        return terminal(if definition.kind.targets_self() {
-            QueuedSkillExecutionState::RejectedAfterUse
-        } else {
-            QueuedSkillExecutionState::Rejected
-        });
-    }
-
-    if game.battle_fairy_execution(player_id, skill_id).is_some_and(|state| state.stage() == SkillStage::Begin) {
-        let Some(current) = game.find_player(player_id).and_then(|player| player.equipped_battle_fairy_mana(game.goods_factory())) else {
-            return terminal(QueuedSkillExecutionState::Pending);
-        };
-        if current.wrapping_sub(mp_loss as i32) < 0 {
-            game.update_player_skill_visual(player_id, skill_id, 7);
-            game.send_skill_system_info_with_unsigned(
-                player_id,
-                b"ZHGS0052",
-                battle_fairy_mana_text_cost(mp_loss),
-            );
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let factory = game.goods_factory().clone();
-        let da_kong_key = game.globe_setup().da_kong_key();
-        let spend = game.find_player_mut(player_id).map(|player| {
-            player.spend_attribute_skill_mana(mp_loss, &factory, da_kong_key)
-        }).unwrap_or(BattleFairyManaSpendOutcome::MissingEquipment);
-        let update = match spend {
-            BattleFairyManaSpendOutcome::Spent { update } => update,
-            BattleFairyManaSpendOutcome::MissingEquipment | BattleFairyManaSpendOutcome::SpentWithoutWarSoul => {
-                return terminal(QueuedSkillExecutionState::Pending);
-            }
-        };
-        let _ = game.publish_player_states(player_id);
+        let Some(goods) = game.find_player_mut(user.id)
+            .and_then(|player| player.equipment_mut().get_goods_mut(10))
+        else { return state_skill_outcome(QueuedSkillExecutionState::Pending); };
+        let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, remaining);
+        let _ = game.publish_player_states(user.id);
         let goods_before_visual = skill_id == super::pojia::SKILL_ID;
-        if goods_before_visual {
-            if let Some(update) = update.as_ref() { send_goods_update(game, update); }
+        if goods_before_visual { send_goods_update(game, user.id, goods_identity); }
+        let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            skill.lifecycle_mut().set_available(can_break != 0);
         }
-        game.update_player_skill_visual(player_id, skill_id, 0);
-        if let Some(state) = game.battle_fairy_execution_mut(player_id, skill_id) {
-            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
         }
-        if !goods_before_visual {
-            if let Some(update) = update.as_ref() { send_goods_update(game, update); }
-        }
+        if !goods_before_visual { send_goods_update(game, user.id, goods_identity); }
     }
-
-    let started_at_ms = game.battle_fairy_execution(player_id, skill_id).map(SkillExecutionKernel::started_at_ms)
-        .expect("выполнение атрибутного навыка создано или восстановлено");
-    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
-        return terminal(QueuedSkillExecutionState::Pending);
+    if game.registered_skill(instance).is_none_or(|skill| skill.execution_stage() != Some(SkillStage::Check)) {
+        return state_skill_outcome(QueuedSkillExecutionState::Pending);
     }
-    game.update_player_skill_visual(player_id, skill_id, 1);
-    game.with_published_player_ai(player_id, player_ai, |game| {
-        let previous = resolve_state_move_shape(game, region_id, target)
-            .and_then(|shape| shape.find_state_position(|state| state.state_id() == skill_id));
-        if let Some((index, _)) = previous {
-            let _ = end_and_destroy_state_at(game, region_id, target, index);
-        }
-        let state = BattleFairyAttributeState::new(skill_id, definition.kind, 0, keep_time_ms, value);
-        let begun = begin_battle_fairy_attribute_state(
-            game, region_id, target,
-            if definition.kind.targets_self() { target } else { source_identity },
-            state, &mut || runtime.now_milliseconds(),
-        );
-        if begun || !definition.kind.targets_self() || skill_id == super::yujia::SKILL_ID {
-            let _ = game.update_move_shape_properties(region_id, target);
-        }
-    });
-    if let Some(execution) = game.battle_fairy_execution_mut(player_id, skill_id) {
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return state_skill_outcome(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+        return state_skill_outcome(QueuedSkillExecutionState::Pending);
     }
-    terminal(QueuedSkillExecutionState::Completed)
+    game.update_registered_skill_visual(instance, 1);
+    let (region, holder) = if definition.kind.targets_self() {
+        (source_region, user)
+    } else {
+        sufferer
+    };
+    if let Some((position, _)) = resolve_state_move_shape(game, region, holder)
+        .and_then(|shape| shape.find_state_position(|state| state.state_id() == skill_id))
+    {
+        let _ = end_and_destroy_state_at(game, region, holder, position);
+    }
+    let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let value = properties.query_property(definition.value_usage) as i32;
+    let state = BattleFairyAttributeState::new(skill_id, definition.kind, 0, keep, value);
+    let begun = begin_battle_fairy_attribute_state(
+        game, region, holder, user, state, &mut || runtime.now_milliseconds(),
+    );
+    if begun || !definition.kind.targets_self() || skill_id == super::yujia::SKILL_ID {
+        let _ = game.update_move_shape_properties(region, holder);
+    }
+    state_skill_outcome(QueuedSkillExecutionState::Completed)
 }

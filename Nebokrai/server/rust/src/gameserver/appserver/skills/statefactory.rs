@@ -351,7 +351,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         0x212..=0x219 => StateRecordLayout::typed(
             BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::battlefairyattributestate::BattleFairyAttributeState::decode(payload, offset, _now()).ok().map(StateData::BattleFairyAttribute)
+                super::battlefairyattributestate::BattleFairyAttributeState::decode(payload, offset, _now).ok().map(StateData::BattleFairyAttribute)
             },
         ),
         // Исходный Load читает 10 байт, а Save пишет 12. Два дополнительных

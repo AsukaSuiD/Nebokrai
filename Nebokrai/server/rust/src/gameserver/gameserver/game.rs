@@ -40414,9 +40414,16 @@ impl CGame {
                 first_contact: false,
             };
         }
-        if dispatch.skill_id() == LIFE_SHIELD_SKILL_ID {
+        let registered_execute: Option<fn(
+            &mut Self, i32, RegisteredSkill, BattleFairySkillDispatch, &mut Runtime,
+        ) -> QueuedSkillExecutionOutcome> = match dispatch.skill_id() {
+            LIFE_SHIELD_SKILL_ID => Some(execute_battle_fairy_life_shield),
+            id if battle_fairy_attribute_definition(id).is_some() => Some(execute_battle_fairy_attribute),
+            _ => None,
+        };
+        if let Some(execute) = registered_execute {
             return self.with_published_player_ai(player_id, player_ai, |game| {
-                execute_battle_fairy_life_shield(game, player_id, instance, dispatch, runtime)
+                execute(game, player_id, instance, dispatch, runtime)
             });
         }
         let execute: fn(
@@ -40426,7 +40433,6 @@ impl CGame {
             &mut CPlayerAI,
             &mut Runtime,
         ) -> QueuedSkillExecutionOutcome = match dispatch.skill_id() {
-            id if battle_fairy_attribute_definition(id).is_some() => execute_battle_fairy_attribute,
             FATAL_BLOW_SKILL_ID => execute_battle_fairy_fatal_blow,
             TIANHUO_SKILL_ID => execute_battle_fairy_tianhuo,
             LEIMING2_SKILL_ID => execute_battle_fairy_leiming2,

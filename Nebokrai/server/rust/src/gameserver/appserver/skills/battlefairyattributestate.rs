@@ -1,44 +1,21 @@
-//! Канонические состояния семейства боевого духа `0x212..0x219`.
+//! Состояния Po/Yu (0x212..0x219): gameserver.exe/GameServer.pdb,
+//! appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}state.cpp.
 //!
-//! Источник: `gameserver.exe` и `GameServer.pdb`, владельцы
-//! `pojia/pobing/pomo/pofa/yujia/yubing/yumo/yufa state`. Порядок состояний
-//! остаётся порядком исходного `m_vStates`: замена удаляет прежнюю запись и
-//! добавляет новую в хвост. Первый state-пакет принадлежит OnUpdateProperties
-//! после silent Begin и передаёт клиентский остаток срока. Формулы игрока и монстра
-//! разделены, поскольку часть ослаблений в оригинале не поддерживала монстров.
-//! Все восемь concrete vtable (`Pojia..Yufa`) направляют клиентский срок на
-//! `CFuryState::GetRemainedTime` по `0x00605E10` с двумя чтениями часов.
-//! Те же vtable используют `Serialize` `0x005E7330` и `Unserialize`
-//! `0x005FD660`: DB-запись состоит из ID, остатка срока и signed value.
-//! Все direct End (+0x1C) используют CState::End (0x005DBCE0): ended,
-//! затем RemoveState через GetUser, без visual. Timer (0x005E6E20) вызывает
-//! другую перегрузку +0x48 (0x005E7310): visual и затем тот же base End.
-//! AI проверяет только unsigned deadline; User не является внешним guard.
-//! Перегрузка +0x48 вызывает Update(1) только существующего visual, затем
-//! безусловно base End. Visual Po (0x005E8450) разрешает User, Yu
-//! (0x005E6F80) — Sufferer после проверки собственного ended; NULL цель
-//! подавляет пакет, но сохраняет base visual tail. Часы End-пакету не нужны.
-//! Runtime Po* Begin получает (target, caster), Y* — (holder, holder);
-//! GetUser в обоих случаях совпадает с владельцем state-list
-//! (Pojia 0x0052AA6B..0x0052AA87, Yujia 0x00527002..0x0052701A).
-//! restart_battle_fairy_attribute_state сохраняет этот false-return для
-//! Begin(NULL, holder): без base Begin, изменения timestamp/ended и visual.
-//! Собственный Unserialize 0x005FD660 читает часы до remaining/value.
-//! Загруженный Begin(null, holder) возвращает до создания visual
-//! (0x005E83B0, 0x005E6EE0), поэтому base End лишь отмечает такой ключ:
-//! общий Clear удаляет остаток отдельно, таймер не выдумывает End-пакет.
-//! OnUpdateProperties(+0x24) требует GetUser до visual: Po* отправляют его
-//! user, Yu* — sufferer, после чего формула всегда обращается к user.
-//! Из монстровых ветвей существуют только Pobing0x005E7D90 (AddMin/MaxAtk,
-//! затем проверка живого getter) и Pomo0x005E7870 (Get/SetElementModifier).
-//! Усиления Yu* меняют только игрока. Visual проверяет собственный ended;
-//! ended/отсутствие цели сохраняют base tail, отсутствующий resource — нет.
-//! Первичный object Begin восьми owners проверяет только User: Pojia
-//! 0x005E83B0 и Yujia 0x005E6EE0 вызывают CState::Begin 0x005DBD70,
-//! который при ненулевом User читает один clock и сохраняет обе identity.
-//! По текущим callers User всегда держатель арены; Sufferer у Po — caster,
-//! у Yu — тот же держатель. Silent loop1 visual создаётся общим каталогом
-//! при регистрации успешного Begin; нет отдельной ручной state-публикации.
+//! User всегда держатель арены; Sufferer у Po — caster, у Yu — сам держатель.
+//! Object Begin требует User, читает собственные часы и создаёт silent loop1.
+//! OnUpdateProperties требует User: Po публикует ему, Yu — Sufferer,
+//! а формула всегда меняет User. Среди монстровых формул существуют только
+//! снижение атаки Pobing и element modifier Pomo; Yu меняют лишь игрока.
+//! Повторные состояния применяются в живом порядке общей арены, без второго
+//! агрегата. Замена завершает прежний экземпляр и добавляет новый в хвост.
+//! Прямой End — базовый ended→RemoveState у User без visual. Таймер после
+//! строгого unsigned deadline сначала обновляет существующий visual,
+//! затем выполняет тот же End. NULL цели подавляет пакет, но не visual tail.
+//! DB codec: ID→живой remaining→signed value; положительный remaining читает
+//! часы дважды. Load читает собственный clock перед keep/value. Техническая
+//! запись первичного наложения часов не читает. SetRegion меняет только User.
+//! Begin(NULL, holder) после загрузки отказывает до базы: сохраняет timestamp,
+//! ended и visual. Пустой User не заменяется holder; общий Clear удаляет остаток.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -101,17 +78,34 @@ impl BattleFairyAttributeState {
     pub(crate) const fn started_at_ms(self) -> u32 { self.started_at_ms }
     pub(crate) const fn keep_time_ms(self) -> u32 { self.keep_time_ms }
     pub(crate) const fn value(self) -> i32 { self.value }
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+    pub(crate) fn decode(
+        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+    ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
         let Some(definition) = super::battlefairyattribute::definition(skill_id) else { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); };
-        Ok(Self::new(skill_id, definition.kind, now_ms, reader.read_u32()?, reader.read_i32()?))
+        let started_at_ms = now();
+        Ok(Self::new(skill_id, definition.kind, started_at_ms, reader.read_u32()?, reader.read_i32()?))
     }
-    pub(crate) fn encoded(self, now_ms: u32) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms); let remaining = if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) };
-        let mut bytes = [0; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES]; bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes()); bytes[4..8].copy_from_slice(&remaining.to_le_bytes()); bytes[8..].copy_from_slice(&self.value.to_le_bytes()); bytes
+    pub(crate) fn encoded(
+        &self, now: &mut dyn FnMut() -> u32,
+    ) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
+        self.encoded_with_remaining(|| self.client_state_time(now))
     }
-    pub(crate) fn encoded_for_install(self) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] { self.encoded(self.started_at_ms) }
+
+    pub(crate) fn encoded_for_install(&self) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
+        self.encoded_with_remaining(|| self.keep_time_ms)
+    }
+
+    fn encoded_with_remaining(
+        &self, remaining: impl FnOnce() -> u32,
+    ) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
+        let mut bytes = [0; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES];
+        bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes());
+        bytes[4..8].copy_from_slice(&remaining().to_le_bytes());
+        bytes[8..].copy_from_slice(&self.value.to_le_bytes());
+        bytes
+    }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms

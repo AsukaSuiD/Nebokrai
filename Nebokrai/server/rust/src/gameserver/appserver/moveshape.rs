@@ -1659,7 +1659,7 @@ impl CMoveShape {
                 StateData::Callosity(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::BossBlueFury(state) => Some(state.encoded(now_ms).to_vec()),
                 StateData::PoisonArrow(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::BattleFairyAttribute(state) => Some(state.encoded(now_ms).to_vec()),
+                StateData::BattleFairyAttribute(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 // Эти неизменяемые записи уже синхронизированы при установке.
                 // В частности, не обнуляем сохранённый padding tagWuXingState.
                 StateData::PersistentAgility(_) | StateData::TaiJi(_)

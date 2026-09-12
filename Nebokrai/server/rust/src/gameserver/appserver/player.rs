@@ -9781,25 +9781,6 @@ impl CPlayer {
         factory: &CGoodsFactory,
         da_kong_key: bool,
     ) -> BattleFairyManaSpendOutcome {
-        self.spend_equipped_battle_fairy_mana_inner(amount, factory, da_kong_key, true)
-    }
-
-    pub(crate) fn spend_attribute_skill_mana(
-        &mut self,
-        amount: u32,
-        factory: &CGoodsFactory,
-        da_kong_key: bool,
-    ) -> BattleFairyManaSpendOutcome {
-        self.spend_equipped_battle_fairy_mana_inner(amount, factory, da_kong_key, false)
-    }
-
-    fn spend_equipped_battle_fairy_mana_inner(
-        &mut self,
-        amount: u32,
-        factory: &CGoodsFactory,
-        da_kong_key: bool,
-        require_war_soul: bool,
-    ) -> BattleFairyManaSpendOutcome {
         let player_id = self.player_id();
         let Some(goods) = self.equipment_mut().get_goods_mut(10) else {
             return BattleFairyManaSpendOutcome::MissingEquipment;
@@ -9810,7 +9791,7 @@ impl CPlayer {
             1,
             current.wrapping_sub(amount as i32),
         );
-        if require_war_soul && goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
             return BattleFairyManaSpendOutcome::SpentWithoutWarSoul;
         }
         let identity = goods.identity();
