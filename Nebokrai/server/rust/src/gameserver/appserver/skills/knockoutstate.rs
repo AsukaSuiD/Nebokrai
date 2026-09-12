@@ -174,9 +174,6 @@ pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region_id: i32, t
     if target.object_type == 400 {
         return finish_player_blind_states_on_defense(game, target.id, now_ms);
     }
-    if target.object_type != 600 {
-        return false;
-    }
     let order = resolve_state_move_shape(game, region_id, target)
         .map(|shape| shape.blind_state_instances()).unwrap_or_default();
     let mut changed = false;

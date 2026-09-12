@@ -132,8 +132,6 @@
 //! Сбор душ хранится здесь без таймера; его DB-запись кодирует тот же payload. Порядок
 //! очищаемых и ослепляющих состояний проецируется из общей
 //! арены, без отдельных ID-наборов, теряющих повторные экземпляры.
-//! `CStrikeState` хранится типизированно в общей 8-байтной DB-записи,
-//! участвует в запретах движения и боя и удаляется при строгом истечении.
 //! Рыцарский удар хранит здесь единственную каноническую блокировку движения
 //! и боя; замена, истечение и снятие очищением меняют те же счётчики.
 //! Подготовка яростного удара также имеет здесь единственный типизированный
@@ -141,7 +139,7 @@
 //! скрытой устаревшей двоичной записи.
 //! `PillarState` хранится здесь же: проверки рывков, строгий таймер и поздний
 //! коэффициент защиты читают один экземпляр без параллельной сырой записи.
-//! Blind/Rush/Rush2 используют общий timed payload с отдельными ID и сроками
+//! Blind/Rush/Rush2/Strike используют общий timed payload с отдельными ID и сроками
 //! каждого экземпляра; их запреты и DB-записи принадлежат той же арене.
 //! `CNotDisappearAfterDead` использует точный client-time override
 //! `CExStateNew::GetRemainedTime`: нулевой срок и достигнутый wrapping deadline
@@ -1543,10 +1541,7 @@ impl CMoveShape {
                     state_id.to_le_bytes(),
                     (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
                 ].concat()),
-                StateData::Strike(state) => Some([
-                    state_id.to_le_bytes(),
-                    state.client_time(&mut timed_state_now_milliseconds).to_le_bytes(),
-                ].concat()),
+                StateData::Strike(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::KnockOut(state) => Some([
                     state_id.to_le_bytes(),
                     (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
@@ -4352,19 +4347,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::ApplyFinalDamage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1607
-// RVA: 0x000D0DA0
-// ADDRESS: 004d0da0
-// PROTOTYPE: void __thiscall ApplyFinalDamage(tagAttackInformation * param_1, vector<CMoveShape::tagDamage*,std::allocator<CMoveShape::tagDamage*>_> * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::AddExStatesToByteArray

@@ -38707,7 +38707,12 @@ impl CGame {
     ) {
         if let Some(shape) = crate::gameserver::appserver::states::state::resolve_state_move_shape_mut(self, region_id, victim) {
             shape.set_killed_by(attacker);
-            shape.shape_mut().set_action(6);
+            if !matches!(victim.object_type, 1100 | 1200) {
+                shape.shape_mut().set_action(6);
+            }
+        }
+        if matches!(victim.object_type, 1100 | 1200) {
+            self.finish_stationary_build_death(region_id, victim);
         }
         let _ = crate::gameserver::appserver::states::state::clear_move_shape_states(
             self, region_id, victim, true,
@@ -43160,7 +43165,7 @@ impl CGame {
         };
         let update = owner
             .stationary_build_mut(identity)
-            .and_then(CBuild::finish_combat_death);
+            .and_then(|build| build.set_action(6));
         let finished = update.is_some();
         if let Some(update) = update {
             let _ = owner.base_mut().apply_build_block(update);

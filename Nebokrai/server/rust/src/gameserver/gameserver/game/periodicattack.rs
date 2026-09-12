@@ -1,4 +1,6 @@
 //! Общая координация заимствований для уже рассчитанных атак навыков.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/moveshape.cpp
+//! и appserver/skills/fightdefense.cpp.
 //!
 //! Конкретные формулы, периодический шаг состояний и визуальное сетевое
 //! представление принадлежат модулям навыка и состояния. Этот дочерний модуль
@@ -6,6 +8,11 @@
 //! `OnBeenAttacked` через общую защиту и
 //! выполняет обработку смерти и сетевые побочные эффекты, требующие нескольких
 //! независимых владельцев `CGame`.
+//! Зарегистрированные защиты проходят собственные Begin/Defense/End по живым
+//! позициям арены. После них ApplyFinalDamage читает актуальные HP/MP;
+//! клиентские записи отражают положительную знаковую разницу, не сумму powers.
+//! OnAction предшествует реакции выбранного AI; общий удар не создаёт Stiffen
+//! и не меняет action синхронно вместо отложенной Defense-команды.
 //! Прямые попадания используют общий OnBeenAttacked-пролог смерти до 0xBF60B:
 //! StopAllSkills, OnBeenMurdered и WhenBeenKilled видят опубликованный регион.
 //! После пакета общий CMoveShape сохраняет identity убийцы и action 6;
@@ -23,8 +30,30 @@ use super::*;
 use crate::gameserver::appserver::skills::monsterattack::{
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
+use crate::gameserver::appserver::skills::skillfactory::SkillCategory;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
 
 impl CGame {
+    // Единственный factory-owner категории Defense — CFightDefense. Читаем
+    // живые позиции, чтобы отсутствие или повторение A сохраняло native цикл.
+    fn begin_received_base_defense(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        index: &mut usize,
+        now: &mut dyn FnMut() -> u32,
+    ) -> Option<RegisteredSkill> {
+        loop {
+            let address = self.registered_move_shape_skill_at(region_id, target, SkillCategory::Defense, *index)?;
+            *index += 1;
+            let skill = self.registered_skill_mut(address)?;
+            if skill.id() != SKILL_BASE_DEFENSE { continue; }
+            skill.lifecycle_mut().begin_objects(Some((region_id, target)), Some((region_id, target)), &mut *now);
+            skill.lifecycle_mut().finish_begin(true);
+            return Some(address);
+        }
+    }
+
     fn live_player_target_attackable(&self, source_id: i32, target_id: i32) -> bool {
         if self.find_player(target_id).is_none_or(|player| player.city_war_died_state()) {
             return false;
@@ -91,7 +120,7 @@ impl CGame {
             crate::gameserver::appserver::skills::skillfactory::UNKNOWN_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID
             | LORD_FAST_ATTACK_SKILL_ID | MACHINERY_STOMP_SKILL_ID
-            | LORD_WIDERANGING_ATTACK_SKILL_ID | IGNITION_SKILL_ID
+            | LORD_WIDERANGING_ATTACK_SKILL_ID | IGNITION_SKILL_ID | STRIKE_SKILL_ID
         ) {
             self.increase_owned_player_rp(player_id, true, 0);
         }
@@ -115,6 +144,106 @@ impl CGame {
         self.apply_defended_player_attack_to_stationary_build(player_id, region_id, identity,
             view.tile_x, view.tile_y, &attack, runtime);
         self.increase_owned_skill_attacker_rp(player_id, attack.skill_id);
+    }
+
+    /// Общий CMoveShape::OnBeenAttacked у здания — другой virtual slot, чем
+    /// отдельный CBuild::OnBeenAttacked. Здесь нет IsAttackAble и death-script;
+    /// после защиты работают обычные OnAction, death-пролог и очистка состояний.
+    pub(crate) fn apply_direct_player_skill_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        _player_id: i32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        mut attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        let Some(build) = self.find_region(region_id).and_then(|region| region.stationary_build(identity))
+        else { return; };
+        if build.hp() == 0 || build.move_shape().is_god()
+            || !build.move_shape().shape().is_assigned_to_server_region()
+        { return; }
+        let region_id = build.move_shape().shape().get_region_id();
+        let mut defense_index = 0;
+        while let Some(defense_skill) = self.begin_received_base_defense(
+            region_id, identity, &mut defense_index, &mut || runtime.now_milliseconds(),
+        ) {
+            let Some(build) = self.find_region(region_id).and_then(|region| region.stationary_build(identity))
+            else { return; };
+            let (defense, element_resistance) = (build.defence(), build.element_resistance());
+            let source_id = attack.attacker_id;
+            if attack.attacker_type == PLAYER_TYPE && CSkillFactory::is_war_soul_skill(attack.skill_id)
+                && self.find_player(source_id).is_none()
+            {
+                let _ = self.end_registered_instance_without_after_use(defense_skill, SkillTermination::Completed);
+                continue;
+            }
+            let defense_source = (attack.attacker_type == PLAYER_TYPE)
+                .then(|| self.find_player(source_id)).flatten().map(|source| {
+                let occupation = source.occupation();
+                if let Some((properties, _, restored)) = self.war_soul_defense_projection(source_id, attack.skill_id) {
+                    (properties, occupation, Some(restored))
+                } else {
+                    (source.combat_properties(), occupation, None)
+                }
+            });
+            if self.received_player_defense_allowed(region_id, identity, source_id)
+                && let Some((properties, occupation, _)) = defense_source
+            {
+                let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+                defend_build_base_attack(
+                    &mut attack, properties, occupation, defense, element_resistance,
+                    &self.globe_setup, &mut random,
+                );
+            } else {
+                attack.clear();
+            }
+            self.restore_war_soul_defense_projection(source_id, defense_source.and_then(|(_, _, restored)| restored));
+            let _ = self.end_registered_instance_without_after_use(defense_skill, SkillTermination::Completed);
+        }
+        let (health, damage) = {
+            let Some(build) = self.find_region_mut(region_id).and_then(|region| region.stationary_build_mut(identity))
+            else { return; };
+            let result = attack.final_damage_values(build.hp(), u32::MAX, None);
+            build.set_hp(result.health);
+            (result.health, result.hp_record)
+        };
+        if health == 0 {
+            let attacker = KillingAttackIdentity::from(&attack);
+            self.begin_move_shape_death(region_id, identity, attacker, runtime);
+            let mut died = CMessage::new(0x000b_f60b);
+            died.add_long(attack.attacker_type);
+            died.add_long(attack.attacker_id);
+            died.add_long(identity.object_type);
+            died.add_long(identity.id);
+            if damage > 0 { died.add_ulong(damage); }
+            died.base_mut().add_char(1);
+            Self::append_base_attack_tail(&mut died, &attack);
+            let _ = self.send_move_shape_around(region_id, identity, &died);
+            self.record_move_shape_death(region_id, identity, attacker, runtime);
+        } else if attack.full_miss != 0 {
+            let mut missed = CMessage::new(0x000b_f612);
+            missed.add_byte(attack.full_miss);
+            missed.add_long(identity.object_type);
+            missed.add_long(identity.id);
+            let _ = self.send_move_shape_around(region_id, identity, &missed);
+        } else if damage > 0 {
+            let _ = super::finish_blind_states_on_defense(self, region_id, identity, 0);
+            let Some(health) = self.find_region(region_id).and_then(|region| region.stationary_build(identity))
+                .map(CBuild::hp)
+            else { return; };
+            let mut hurt = CMessage::new(0x000b_f60a);
+            hurt.add_long(attack.attacker_type);
+            hurt.add_long(attack.attacker_id);
+            hurt.add_long(identity.object_type);
+            hurt.add_long(identity.id);
+            Self::append_hurt_damage_records(&mut hurt, damage, 0);
+            hurt.add_ulong(health);
+            Self::append_base_attack_tail(&mut hurt, &attack);
+            let _ = self.send_move_shape_around(region_id, identity, &hurt);
+            if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
+                let _ = self.city_gate_on_been_hurted(region_id, identity.id, attack.attacker_type, attack.attacker_id);
+            }
+        }
     }
 
 
@@ -315,8 +444,8 @@ impl CGame {
     }
 
     /// Применяет уже рассчитанное попадание к вынесенной боевой фее игрока.
-    /// Флаг остаётся на runtime-root, потому что одна атомарная операция меняет
-    /// экипировку, обычные HP/MP и выполняет соответствующую доставку.
+    /// Эта ветвь меняет экипировку и выполняет соответствующую доставку,
+    /// не проходя обычные Defense и ApplyFinalDamage.
     pub(crate) fn apply_owned_skill_attack_to_war_soul<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
@@ -350,25 +479,10 @@ impl CGame {
         {
             return;
         }
-        let (target_properties, target_health, target_mana, target_war_soul_mana) = (
-            target.combat_properties(), target.health(), target.mana(),
-            target.war_soul_mana(&self.goods_factory),
-        );
-        let mut attacker_properties = self.find_player(master.master_id)
-            .map(|attacker| (attacker.combat_properties(), attacker.occupation()));
         let _ = self.player_on_first_attack_at_victim(
             master.master_id, target_id, Some(region_id), runtime,
         );
-        let mut restored_war_soul_scales = None;
-        if !war_soul_hit
-            && let Some((attacker_properties, _)) = attacker_properties.as_mut()
-            && let Some((properties, _, restored)) =
-                self.war_soul_defense_projection(master.master_id, attack.skill_id)
-        {
-            *attacker_properties = properties;
-            restored_war_soul_scales = Some(restored);
-        }
-        if war_soul_hit {
+        if war_soul_hit && target_id != attack.attacker_id {
             let raw_damage = attack.damages.iter().fold(0_i32, |total, power| {
                 total.wrapping_add(power.hp_damage)
             });
@@ -392,52 +506,90 @@ impl CGame {
                 }
                 let _ = self.send_battle_fairy_goods_update(&outcome.update);
             }
+            return;
         } else {
-            let pillar_damage_factor = self.find_player(target_id)
-                .and_then(CPlayer::pillar_state).map(|state| state.damage_factor());
-            let mut defense_shields = self
-                .find_player_mut(target_id)
-                .map(CPlayer::take_defense_shields)
-                .unwrap_or_default();
-            if self.received_player_defense_allowed(region_id, ShapeIdentity {
+            let identity = ShapeIdentity {
                 object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID,
-            }, master.master_id)
-                && let Some((attacker_properties, attacker_occupation)) = attacker_properties
-            {
-                let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-                defend_player_base_attack(
-                    &mut attack,
-                    attacker_properties,
-                    attacker_occupation,
-                    target_properties,
-                    target_mana,
-                    target_war_soul_mana,
-                    &self.globe_setup,
-                    &mut random,
-                    defense_shields.as_mut_slice(),
-                    pillar_damage_factor,
+            };
+            let mut defense_index = 0;
+            while let Some(defense_skill) = self.begin_received_base_defense(
+                region_id, identity, &mut defense_index, &mut || runtime.now_milliseconds(),
+            ) {
+                let Some(target) = self.find_player(target_id) else { return; };
+                let (target_properties, target_mana, target_war_soul_mana, pillar_damage_factor) = (
+                    target.combat_properties(), target.mana(),
+                    target.war_soul_mana(&self.goods_factory),
+                    target.pillar_state().map(|state| state.damage_factor()),
                 );
-            } else {
-                attack.clear();
+                // Clear предыдущего Defense меняет также источник и skill-id.
+                let source_id = attack.attacker_id;
+                if attack.attacker_type == PLAYER_TYPE && CSkillFactory::is_war_soul_skill(attack.skill_id)
+                    && self.find_player(source_id).is_none()
+                {
+                    let _ = self.end_registered_instance_without_after_use(defense_skill, SkillTermination::Completed);
+                    continue;
+                }
+                let defense_source = (attack.attacker_type == PLAYER_TYPE)
+                    .then(|| self.find_player(source_id)).flatten().map(|source| {
+                        let occupation = source.occupation();
+                        if let Some((properties, _, restored)) = self.war_soul_defense_projection(source_id, attack.skill_id) {
+                            (properties, occupation, Some(restored))
+                        } else {
+                            (source.combat_properties(), occupation, None)
+                        }
+                    });
+                let mut defense_shields = self.find_player_mut(target_id)
+                    .map(CPlayer::take_defense_shields).unwrap_or_default();
+                if self.received_player_defense_allowed(region_id, identity, source_id)
+                    && let Some((attacker_properties, attacker_occupation, _)) = defense_source
+                {
+                    let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+                    defend_player_base_attack(
+                        &mut attack, attacker_properties, attacker_occupation,
+                        target_properties, target_mana, target_war_soul_mana,
+                        &self.globe_setup, &mut random, defense_shields.as_mut_slice(),
+                        pillar_damage_factor,
+                    );
+                } else {
+                    attack.clear();
+                }
+                if let Some(target) = self.find_player_mut(target_id) {
+                    target.restore_defense_shields(defense_shields);
+                }
+                self.restore_war_soul_defense_projection(
+                    source_id, defense_source.and_then(|(_, _, restored)| restored),
+                );
+                let _ = self.end_registered_instance_without_after_use(defense_skill, SkillTermination::Completed);
             }
-            if let Some(target) = self.find_player_mut(target_id) {
-                target.restore_defense_shields(defense_shields);
-            }
-            self.restore_war_soul_defense_projection(
-                master.master_id,
-                restored_war_soul_scales,
-            );
         }
-        let (damage, mana_damage) =
-            Self::applied_attack_damage(&attack, target_health, target_mana);
-        if damage == 0 && mana_damage == 0 {
+        let (current_health, damage, mana_damage) = {
+            let Some(target) = self.find_player_mut(target_id) else { return; };
+            let result = attack.final_damage_values(
+                target.health(), target.maximum_health(),
+                Some((target.mana(), target.maximum_mana())),
+            );
+            // Пустая атака не вызывает SetHP/MP: повторный setter мог бы
+            // обрезать уже существующее значение выше текущего максимума.
+            if !attack.damages.is_empty() || attack.damage_modifier != 0 {
+                target.set_health(result.health);
+            }
+            if !attack.damages.is_empty() {
+                target.set_mana(result.mana.unwrap_or(target.mana()));
+            }
+            (result.health, result.hp_record, result.mp_record)
+        };
+        if damage != 0 {
+            self.increase_owned_player_rp(target_id, false, damage as u16);
+        }
+        let _ = self.publish_player_states(target_id);
+        if current_health != 0 && damage == 0 && mana_damage == 0 {
             if attack.full_miss != 0 {
                 let mut missed = CMessage::new(0x000b_f612);
                 missed.add_byte(attack.full_miss);
                 missed.add_long(PLAYER_TYPE);
                 missed.add_long(target_id);
                 let _ = self.send_player_shape_around(target_id, None, &missed);
-            } else if !war_soul_hit {
+            } else {
                 // OnBeenAttacked изнашивает броню и при пустом результате,
                 // хотя hurt-пакета и реакции AI в этой ветке нет.
                 self.damage_player_armor(target_id);
@@ -445,37 +597,12 @@ impl CGame {
             self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
-        let current_health = target_health - damage;
-        if let Some(target) = self.find_player_mut(target_id) {
-            target.set_health(current_health);
-            target.set_mana(target_mana - mana_damage);
-            if current_health != 0 && attack.full_miss == 0 {
-                target.movement_shape_mut().set_action(5);
-            }
-        }
-        if damage != 0 {
-            self.increase_owned_player_rp(target_id, false, damage as u16);
-        }
         if current_health != 0 && attack.full_miss == 0 {
-            let _ = self.queue_player_hurt_ai(target_id, damage, runtime);
-            let _ = self.retarget_passive_pets_after_player_hurt(
-                target_id,
-                ShapeIdentity {
-                    object_type: master.master_type,
-                    id: master.master_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-            );
-            let _ = self.notify_country_after_player_hurt(
-                target_id,
-                ShapeIdentity {
-                    object_type: master.master_type,
-                    id: master.master_id,
-                    ex_id: CGuid::GUID_INVALID,
-                },
-                runtime,
-            );
+            self.enter_player_combat_state(target_id);
             let _ = super::finish_player_blind_states_on_defense(self, target_id, 0);
+            if let Some(target) = self.find_player_mut(target_id) {
+                target.player_ai_mut().when_been_hurted(runtime.now_milliseconds());
+            }
         }
         if current_health == 0 {
             let victim = ShapeIdentity {
@@ -486,11 +613,11 @@ impl CGame {
             let attacker = KillingAttackIdentity::from(&attack);
             self.begin_move_shape_death(region_id, victim, attacker, runtime);
             let mut died = CMessage::new(0x000b_f60b);
-            died.add_long(master.master_type);
-            died.add_long(master.master_id);
+            died.add_long(attack.attacker_type);
+            died.add_long(attack.attacker_id);
             died.add_long(PLAYER_TYPE);
             died.add_long(target_id);
-            died.add_ulong(damage);
+            if damage > 0 { died.add_ulong(damage); }
             died.base_mut().add_char(1);
             Self::append_base_attack_tail(&mut died, &attack);
             let _ = self.send_player_shape_around(target_id, None, &died);
@@ -502,16 +629,22 @@ impl CGame {
             missed.add_long(target_id);
             let _ = self.send_player_shape_around(target_id, None, &missed);
         } else {
+            let Some(health) = self.find_player(target_id).map(CPlayer::health) else { return; };
             let mut hurt = CMessage::new(0x000b_f60a);
-            hurt.add_long(master.master_type);
-            hurt.add_long(master.master_id);
+            hurt.add_long(attack.attacker_type);
+            hurt.add_long(attack.attacker_id);
             hurt.add_long(PLAYER_TYPE);
             hurt.add_long(target_id);
             Self::append_hurt_damage_records(&mut hurt, damage, mana_damage);
-            hurt.add_ulong(current_health);
+            hurt.add_ulong(health);
             Self::append_base_attack_tail(&mut hurt, &attack);
             let _ = self.send_player_shape_around(target_id, None, &hurt);
+            let attacker = ShapeIdentity {
+                object_type: attack.attacker_type, id: attack.attacker_id, ex_id: CGuid::GUID_INVALID,
+            };
             self.damage_player_armor(target_id);
+            let _ = self.retarget_passive_pets_after_player_hurt(target_id, attacker);
+            let _ = self.notify_country_after_player_hurt(target_id, attacker, runtime);
         }
         self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
     }
@@ -712,16 +845,12 @@ impl CGame {
         else {
             return;
         };
-        let Some((target_properties, target_health, god, x, y)) =
+        let Some((target_health, god)) =
             self.find_region(region_id).and_then(|owner| {
                 let monster = owner.base().find_monster_by_id(target_id)?;
-                let shape = monster.move_shape().shape();
                 Some((
-                    monster.combat_properties(&property),
                     monster.hit_points(),
                     monster.move_shape().is_god(),
-                    shape.get_tile_x().ok()?,
-                    shape.get_tile_y().ok()?,
                 ))
             })
         else {
@@ -734,35 +863,68 @@ impl CGame {
             return;
         }
         let identity = ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID };
-        let defense_source = self.received_player_defense_allowed(region_id, identity, master.master_id)
-            .then(|| self.find_player(master.master_id)
-                .map(|attacker| (attacker.combat_properties(), attacker.occupation(), attacker.level())))
-            .flatten()
-            .map(|(properties, occupation, level)| {
-                if let Some((properties, level, restored)) =
-                    self.war_soul_defense_projection(master.master_id, attack.skill_id)
-                {
-                    (properties, occupation, level, Some(restored))
-                } else {
-                    (properties, occupation, level, None)
-                }
-            });
-        let now_ms = runtime.now_milliseconds();
-        if let Some((properties, occupation, level, restored)) = defense_source {
-            let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-            defend_monster_base_attack(
-                &mut attack, properties, occupation, level, target_properties, &self.globe_setup, &mut random,
-            );
-            self.restore_war_soul_defense_projection(master.master_id, restored);
-        } else {
-            attack.clear();
+        let mut defense_index = 0;
+        while let Some(defense_skill) = self.begin_received_base_defense(
+            region_id, identity, &mut defense_index, &mut || runtime.now_milliseconds(),
+        ) {
+            let source_id = attack.attacker_id;
+            if attack.attacker_type == PLAYER_TYPE && CSkillFactory::is_war_soul_skill(attack.skill_id)
+                && self.find_player(source_id).is_none()
+            {
+                let _ = self.end_registered_instance_without_after_use(defense_skill, SkillTermination::Completed);
+                continue;
+            }
+            let defense_source = (attack.attacker_type == PLAYER_TYPE)
+                .then(|| self.find_player(source_id)
+                    .map(|attacker| (attacker.combat_properties(), attacker.occupation(), attacker.level())))
+                .flatten()
+                .map(|(properties, occupation, level)| {
+                    if let Some((properties, level, restored)) =
+                        self.war_soul_defense_projection(source_id, attack.skill_id)
+                    {
+                        (properties, occupation, level, Some(restored))
+                    } else {
+                        (properties, occupation, level, None)
+                    }
+                });
+            if self.received_player_defense_allowed(region_id, identity, source_id)
+                && let Some((properties, occupation, level, _)) = defense_source
+            {
+                let Some(target_properties) = self.find_region(region_id)
+                    .and_then(|region| region.base().find_monster_by_id(target_id))
+                    .map(|monster| monster.combat_properties(&property))
+                else { return; };
+                let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+                defend_monster_base_attack(
+                    &mut attack, properties, occupation, level, target_properties, &self.globe_setup, &mut random,
+                );
+            } else {
+                attack.clear();
+            }
+            self.restore_war_soul_defense_projection(source_id, defense_source.and_then(|(_, _, _, restored)| restored));
+            let _ = self.end_registered_instance_without_after_use(defense_skill, SkillTermination::Completed);
         }
-        let damage = attack.hp_damage().min(target_health);
-        let current_health = target_health - damage;
-        let lord_hurt_plan = (property.ai == 19
-            && attack.full_miss == 0
-            && damage != 0
-            && current_health != 0)
+        let Some(monster) = self.find_region_mut(region_id)
+            .and_then(|region| region.base_mut().find_monster_by_id_mut(target_id))
+        else { return; };
+        let final_damage = attack.final_damage_values(monster.hit_points(), u32::MAX, None);
+        monster.set_hit_points(final_damage.health);
+        let damage = final_damage.hp_record;
+        let current_health = final_damage.health;
+        let hurt_response = attack.full_miss == 0 && damage != 0 && current_health != 0;
+        if hurt_response {
+            let _ = super::finish_blind_states_on_defense(self, region_id, identity, 0);
+        }
+        let Some(monster) = self.find_region(region_id)
+            .and_then(|region| region.base().find_monster_by_id(target_id))
+        else { return; };
+        let active_ai = monster.active_ai();
+        let ai_type = monster.active_primary_ai_type().unwrap_or(0);
+        let react = hurt_response && active_ai.is_some();
+        let now_ms = if react && !matches!(ai_type, 2 | 19 | 20) {
+            runtime.now_milliseconds()
+        } else { 0 };
+        let lord_hurt_plan = (react && ai_type == 19)
             .then(|| {
                 crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
                     self,
@@ -771,23 +933,16 @@ impl CGame {
                     &property,
                 )
             });
-        let stiffen_setup = self.globe_setup.stiffen_setup();
-        let mut stiffen_delay = 0;
         if let Some(mut owner) = self.take_region_owner(region_id) {
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
-                if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                    stiffen_delay = monster.roll_stiffen(
-                        damage,
-                        &property,
-                        stiffen_setup,
-                        || runtime.now_milliseconds(),
-                        |maximum| game_legacy_random(&mut self.random_state, maximum),
-                    );
-                }
-                monster.set_hit_points(current_health);
-                if damage != 0 && attack.full_miss == 0 && current_health != 0 {
-                    monster.move_shape_mut().shape_mut().set_action(5);
-                    if property.ai == 1 {
+                if react {
+                    if matches!(active_ai, Some(crate::gameserver::appserver::ai::aifactory::ActiveMonsterAi::Pet)) {
+                        monster.when_pet_been_hurted_by(ShapeIdentity {
+                            object_type: attack.attacker_type,
+                            id: attack.attacker_id,
+                            ex_id: CGuid::GUID_INVALID,
+                        }, now_ms);
+                    } else if ai_type == 1 {
                         monster.when_passive_gladiator_hurted_by(
                             ShapeIdentity {
                                 object_type: master.master_type,
@@ -797,22 +952,22 @@ impl CGame {
                             now_ms,
                             false,
                         );
-                    } else if property.ai == 2 {
+                    } else if ai_type == 2 {
                         // Владелец AI2 применит реакцию после освобождения
                         // изменяемого заимствования монстра.
-                    } else if property.ai == 13 {
+                    } else if ai_type == 13 {
                         // Поиск AI13 выполняется после освобождения изменяемого
                         // заимствования монстра.
-                    } else if property.ai == 11 {
+                    } else if ai_type == 11 {
                         // Поиск AI11 выполняется после освобождения изменяемого
                         // заимствования монстра.
-                    } else if property.ai == 20 {
+                    } else if ai_type == 20 {
                         // AI20 разрешает владельца периодического эффекта и
                         // связывает близнеца после освобождения заимствования.
-                    } else if property.ai == 19 {
+                    } else if ai_type == 19 {
                         // AI19 применяет Defense, spatial-step и выбор цели
                         // после освобождения заимствования монстра.
-                    } else if matches!(property.ai, 8 | 17 | 100 | 101) {
+                    } else if matches!(ai_type, 8 | 17 | 100 | 101) {
                         monster.when_been_hurted(now_ms);
                     } else {
                         monster.when_been_hurted_by(
@@ -827,10 +982,8 @@ impl CGame {
                     }
                 }
             }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && property.ai == 2
+            if react
+                && ai_type == 2
             {
                 crate::gameserver::appserver::ai::smartgladiator::apply_player_hurt_response(
                     self,
@@ -841,10 +994,8 @@ impl CGame {
                     runtime,
                 );
             }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && property.ai == 11
+            if react
+                && ai_type == 11
             {
                 crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt(
                     self,
@@ -854,10 +1005,8 @@ impl CGame {
                     now_ms,
                 );
             }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && property.ai == 13
+            if react
+                && ai_type == 13
             {
                 crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt(
                     self,
@@ -867,10 +1016,8 @@ impl CGame {
                     now_ms,
                 );
             }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && property.ai == 20
+            if react
+                && ai_type == 20
             {
                 let _ = retarget_jiumai_after_hurt(
                     self,
@@ -898,10 +1045,8 @@ impl CGame {
                     plan,
                 );
             }
-            if attack.full_miss == 0
-                && damage != 0
-                && current_health != 0
-                && matches!(property.ai, 8 | 17 | 100 | 101)
+            if react
+                && matches!(ai_type, 8 | 17 | 100 | 101)
             {
                 crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
                     self,
@@ -910,32 +1055,6 @@ impl CGame {
                     &property,
                 );
             }
-            if stiffen_delay != 0
-                && let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id)
-            {
-                monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
-            }
-            if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                let mut published_owner = Some(owner);
-                let _ = self.with_published_region(&mut published_owner, |game| {
-                    super::finish_blind_states_on_defense(
-                        game,
-                        region_id,
-                        ShapeIdentity {
-                            object_type: MONSTER_TYPE,
-                            id: target_id,
-                            ex_id: CGuid::GUID_INVALID,
-                        },
-                        now_ms,
-                    )
-                });
-                let Some(restored_owner) = published_owner else { return };
-                owner = restored_owner;
-                if owner.base().find_monster_by_id(target_id).is_none() {
-                    self.restore_region_owner(owner);
-                    return;
-                }
-            }
             self.restore_region_owner(owner);
         }
         if attack.full_miss != 0 && current_health != 0 {
@@ -943,26 +1062,29 @@ impl CGame {
             missed.add_byte(attack.full_miss);
             missed.add_long(MONSTER_TYPE);
             missed.add_long(target_id);
-            let _ = self.send_shape_position_around(region_id, x, y, &missed);
+            let _ = self.send_move_shape_around(region_id, identity, &missed);
             self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
-        if damage == 0 {
+        if damage == 0 && current_health != 0 {
             self.increase_owned_skill_attacker_rp(master.master_id, attack.skill_id);
             return;
         }
         if current_health != 0 {
+            let Some(health) = self.find_region(region_id)
+                .and_then(|region| region.base().find_monster_by_id(target_id)).map(CMonster::hit_points)
+            else { return; };
             let mut hurt = CMessage::new(0x000b_f60a);
-            hurt.add_long(master.master_type);
-            hurt.add_long(master.master_id);
+            hurt.add_long(attack.attacker_type);
+            hurt.add_long(attack.attacker_id);
             hurt.add_long(MONSTER_TYPE);
             hurt.add_long(target_id);
             hurt.add_byte(1);
             hurt.add_byte(0);
             hurt.add_ulong(damage);
-            hurt.add_ulong(current_health);
+            hurt.add_ulong(health);
             Self::append_base_attack_tail(&mut hurt, &attack);
-            let _ = self.send_shape_position_around(region_id, x, y, &hurt);
+            let _ = self.send_move_shape_around(region_id, identity, &hurt);
             let _ = self.monster_on_been_hurted(
                 region_id,
                 target_id,
@@ -982,11 +1104,11 @@ impl CGame {
         let attacker = KillingAttackIdentity::from(&attack);
         self.begin_move_shape_death(region_id, victim, attacker, runtime);
         let mut died = CMessage::new(0x000b_f60b);
-        died.add_long(master.master_type);
-        died.add_long(master.master_id);
+        died.add_long(attack.attacker_type);
+        died.add_long(attack.attacker_id);
         died.add_long(MONSTER_TYPE);
         died.add_long(target_id);
-        died.add_ulong(damage);
+        if damage != 0 { died.add_ulong(damage); }
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_move_shape_around(region_id, victim, &died);

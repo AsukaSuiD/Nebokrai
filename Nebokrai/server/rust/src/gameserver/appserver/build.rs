@@ -1,34 +1,18 @@
-//! Runtime-состояние обычной GameServer-постройки `CBuild`.
+//! Постройка CBuild (0x44C), её свойства, footprint и сериализация.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/build.h/.cpp.
 //!
-//! Конструктор RVA `0x001DD570`, `SetScriptFile` `0x001CBAC0`, `SetAction`
-//! `0x001DD1C0`, `SetTileXY` `0x001DD2B0`, property accessors
-//! `0x001DD5F0..0x001DD630` и destructor `0x001DD640` имеют статус
-//! `IMPLEMENTED`; исходники `build.h/.cpp`, точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Type `0x44C`
-//! подтверждён factory RVA `0x000FC190` и country flag decoder
-//! `ServerCountryRegion::DecordFromByteArray` RVA `0x001CD3F0`.
-//!
-//! Rust хранит canonical `CMoveShape`, достигнутые property-поля и byte-exact script.
-//! `BuildBlockUpdate` применяет owning `CServerRegion`:
-//! обычный `CBuild` освобождает клетку только action `6`, тогда как subclass
-//! `CCityGate` также освобождает её при `7`. x87 `i32 -> f32 -> trunc i32`
-//! для title coordinates сохранён общим helper-ом этого владельца. Owned
-//! `Vec<u8>` и `Drop` заменяют `std::string`/destructor noise. `GetFigure`
-//! материализован в общий `ShapeView`, поэтому country flags участвуют в
-//! region membership и общем поиске боевых целей. Typed client publication
-//! позволяет `CGame` выполнить city send после возврата region owner-а;
-//! оставшийся runtime context обслуживает country-owner. Общий client
-//! serializer использует тот же canonical `CMoveShape`, а не
-//! повторно собранный shadow-prefix. Достигнутая базовая атака также использует
-//! этого owner-а для attackability, свойств защиты, HP/death mutation и точного
-//! освобождения footprint. Унаследованный `CSkill::GetTargetPath` достигает
-//! точной ближайшей точки этого footprint перед расчётом projectile path.
-//! Точный vtable показывает, что все три action-callback `CBuild::AI` сведены
-//! к общему нулевому no-op. `OnDied` не завершает country-war напрямую:
-//! region-slot `+0x68` у `ServerCountryRegion` также остаётся базовым no-op;
-//! победная цепочка принадлежит отдельному сообщению `CountryWarSys`. Derived
-//! `CCityGate` заменяет сам `OnDied` пустым virtual slot-ом, поэтому script
-//! обычной постройки для ворот при смерти не запускается.
+//! Единственный CMoveShape участвует в общем registry, поиске боевых целей
+//! и клиентском wire. Vec<u8>/Drop заменяют строку и служебное владение C++.
+//! BuildBlockUpdate применяет регион: постройка освобождает footprint при
+//! action 6, ворота также при 7. Координаты сохраняют преобразование
+//! i32 → f32 → trunc i32; GetTargetPath выбирает ближайшую точку footprint.
+//! Action-callbacks AI пусты. OnDied обычной постройки может запустить script,
+//! но не завершает country-war: победу обрабатывает CountryWarSys отдельно.
+//! У ворот OnDied пустой.
+//! Конструктор регистрирует базовую атаку и CFightDefense в общей арене.
+//! Попадание через CMoveShape::OnBeenAttacked не вызывает отдельный обработчик
+//! CBuild с одним аргументом: смерть проходит общий End/очистку состояний,
+//! а отсутствие CBaseAI не подменяется синхронным запуском OnDied/script.
 
 use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;
@@ -112,6 +96,8 @@ impl CBuild {
         let tile_x = legacy_build_title_tile(init.tile_x);
         let tile_y = legacy_build_title_tile(init.tile_y);
         let mut move_shape = CMoveShape::default();
+        move_shape.insert_new_skill(1, 1);
+        move_shape.insert_new_skill(super::moveshape::SKILL_BASE_DEFENSE, 1);
         move_shape.shape_mut().set_identity(ShapeIdentity {
             object_type: BUILD_OBJECT_TYPE as i32,
             id: init.id,
@@ -188,10 +174,6 @@ impl CBuild {
     /// packet выполняются раньше отдельного virtual `SetAction(6)`.
     pub(crate) fn apply_combat_damage(&mut self, damage: u32) {
         self.hp = self.hp.saturating_sub(damage);
-    }
-
-    pub(crate) fn finish_combat_death(&mut self) -> Option<BuildBlockUpdate> {
-        (self.hp == 0).then(|| self.set_action(6)).flatten()
     }
 
     pub(crate) fn refresh_hp(&mut self) {
@@ -438,19 +420,6 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 // корректно не создаёт для обычной постройки отдельного action-runtime.
 //
 
-// ============================================================================
-// FUNCTION: CBuild::ApplyFinalDamage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:208
-// RVA: 0x001DD270
-// ADDRESS: 005dd270
-// PROTOTYPE: void __thiscall ApplyFinalDamage(tagAttackInformation * param_1, vector<CMoveShape::tagDamage*,std::allocator<CMoveShape::tagDamage*>_> * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBuild::GetFigure

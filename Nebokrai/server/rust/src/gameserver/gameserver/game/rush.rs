@@ -1,12 +1,15 @@
 //! Общие runtime-границы контактного удара и принудительного перемещения.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/rush.cpp,
-//! rush2.cpp и boalock.cpp. Создание состояний и порядок эффектов принадлежат
+//! rush2.cpp, strike.cpp и boalock.cpp. Создание состояний и порядок эффектов принадлежат
 //! навыкам; пустая атака проходит тот же OnBeenAttacked, что обычный урон.
 
 use super::*;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 
 impl CGame {
+    /// Прямой virtual OnBeenAttacked(..., false), без IsAttackAble.
+    /// MasterInfo сохраняет четыре флага PK до Calculate; отдельные
+    /// guard-проверки Normal/Country читают живого игрока.
     pub(crate) fn apply_owned_skill_contact<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
@@ -22,7 +25,7 @@ impl CGame {
             MONSTER_TYPE => self.apply_owned_skill_attack_to_monster(
                 master, target.id, region_id, attack, runtime,
             ),
-            1100 | 1200 => self.apply_owned_skill_attack_to_stationary_build(
+            1100 | 1200 => self.apply_direct_player_skill_attack_to_stationary_build(
                 master.master_id, region_id, target, attack, runtime,
             ),
             _ => {}

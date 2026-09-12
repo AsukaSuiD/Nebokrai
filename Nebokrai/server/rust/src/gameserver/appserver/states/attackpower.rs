@@ -1,7 +1,8 @@
 //! Типизированное описание рассчитанной атаки GameServer.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/states/attackpower.cpp`. Сохраняются порядок составляющих урона,
+//! `appserver/states/attackpower.cpp` и ApplyFinalDamage из appserver/moveshape.cpp.
+//! Сохраняются порядок составляющих урона,
 //! идентификаторы навыка и атакующего, сведения PK и признаки завершающей
 //! защиты. `Vec` заменяет исходный вектор указателей без изменения числовой и
 //! сетевой семантики полей. Значение формируется на стадии `Calculate`, а
@@ -40,7 +41,44 @@ pub(crate) struct AttackInformation {
     pub(crate) damages: Vec<AttackPower>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FinalAttackDamage {
+    pub(crate) health: u32,
+    pub(crate) mana: Option<u32>,
+    pub(crate) hp_record: u32,
+    pub(crate) mp_record: u32,
+}
+
 impl AttackInformation {
+    /// CMoveShape::ApplyFinalDamage: компоненты читаются как DWORD по порядку,
+    /// затем применяется modifier. SetHP игрока ограничивает каждый результат
+    /// текущим максимумом; у остальных владельцев передаётся u32::MAX.
+    /// Записи damage используют положительную знаковую разницу, поэтому
+    /// отсутствие записи само по себе не означает отсутствие изменения HP.
+    pub(crate) fn final_damage_values(
+        &self, health: u32, maximum_health: u32, mana: Option<(u32, u32)>,
+    ) -> FinalAttackDamage {
+        let mut remaining_health = health;
+        let mut remaining_mana = mana.map(|(current, _)| current);
+        for power in &self.damages {
+            remaining_health = remaining_health.saturating_sub(power.hp_damage as u32).min(maximum_health);
+            if let (Some(current), Some((_, maximum))) = (&mut remaining_mana, mana) {
+                *current = current.saturating_sub(power.mp_damage as u32).min(maximum);
+            }
+        }
+        if self.damage_modifier != 0 {
+            remaining_health = remaining_health.saturating_sub(self.damage_modifier as u32).min(maximum_health);
+        }
+        FinalAttackDamage {
+            health: remaining_health,
+            mana: remaining_mana,
+            hp_record: (health.wrapping_sub(remaining_health) as i32).max(0) as u32,
+            mp_record: mana.zip(remaining_mana).map_or(0, |((old, _), current)| {
+                (old.wrapping_sub(current) as i32).max(0) as u32
+            }),
+        }
+    }
+
     /// Clear защиты сбрасывает всю атаку, кроме уровня навыка, а не только
     /// сумму урона. Пустой результат остаётся обычным попаданием без full-miss.
     pub(crate) fn clear(&mut self) {

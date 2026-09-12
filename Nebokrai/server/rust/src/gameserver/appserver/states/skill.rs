@@ -125,6 +125,13 @@ impl CGame {
         resolve_state_move_shape(self, address.holder.0, address.holder.1)?.skill_at(address.slot)
     }
 
+    pub(crate) fn registered_move_shape_skill_at(
+        &self, region_id: i32, holder: ShapeIdentity, category: SkillCategory, index: usize,
+    ) -> Option<RegisteredSkill> {
+        let slot = resolve_state_move_shape(self, region_id, holder)?.skill_slot_at(category, index)?;
+        Some(RegisteredSkill { holder: (region_id, holder), slot })
+    }
+
     pub(crate) fn registered_skill_mut(&mut self, address: RegisteredSkill) -> Option<&mut MoveShapeSkill> {
         resolve_state_move_shape_mut(self, address.holder.0, address.holder.1)?.skill_at_mut(address.slot)
     }
@@ -326,6 +333,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::blind::publish_blind_visual(self, skill, mode),
             SkillVisualEffectKind::Rush | SkillVisualEffectKind::Rush2 =>
                 crate::gameserver::appserver::skills::rush::publish_rush_visual(self, skill, mode),
+            SkillVisualEffectKind::Strike =>
+                crate::gameserver::appserver::skills::strike::publish_strike_visual(self, skill, mode),
         }
         if let Some(effect) = self.registered_skill_mut(address).and_then(MoveShapeSkill::visual_effect_mut) {
             effect.update_base_tail();

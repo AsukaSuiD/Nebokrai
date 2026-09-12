@@ -706,7 +706,7 @@ state_callbacks! {
     | StateData::KnockOut(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::SpiderWeb(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
     | StateData::Seal(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) }
-    | StateData::Strike(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    | StateData::Strike(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
             skills::blindstate::update_blind_state(game, region, target, key, runtime.now_milliseconds());
         },
