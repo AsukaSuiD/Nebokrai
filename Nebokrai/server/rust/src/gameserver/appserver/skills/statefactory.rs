@@ -206,7 +206,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         SEAL_STATE_ID => StateRecordLayout::typed(
             SEAL_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::sealstate::SealState::decode(payload, offset, _now()).ok().map(StateData::Seal)
+                super::sealstate::SealState::decode(payload, offset, _now).ok().map(StateData::Seal)
             },
         ),
         GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => StateRecordLayout::typed(

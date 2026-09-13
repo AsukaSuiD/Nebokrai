@@ -338,7 +338,7 @@ skill_owners! {
     CInfernol: Attack, USER_RESET_PHASE, Weapon => 0x135,
     CSevenShootingStar: Attack, STAR, Weapon => 0x136,
     CChaosSphere: Summon, USER_RESET_PHASE, Weapon => 0x137,
-    CSeal: Attack, USER, Weapon => 0x138,
+    CSeal: Attack, USER_RESET_PHASE, Weapon => 0x138,
     CYinYang: Summon, USER_RESET_PHASE, Weapon => 0x139,
     CGodPunishment: Summon, COMMON_RESET_PHASE, Weapon => 0x13a,
     CSoulCollect: State, USER_OR_SUFFERER, Weapon => 0x13b,

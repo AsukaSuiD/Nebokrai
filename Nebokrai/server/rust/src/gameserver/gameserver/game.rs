@@ -729,7 +729,6 @@ mod thunderblow;
 mod thunderslash;
 mod rush;
 mod bossbluequake;
-mod seal;
 mod thunder;
 mod snowstorm;
 mod leiming2;
@@ -1184,10 +1183,7 @@ use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKI
 use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash::LITTLE_FLASH_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
-use crate::gameserver::appserver::skills::seal::{
-    cancel_player_seal, complete_player_seal, execute_player_seal, is_seal_target,
-    SEAL_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::seal::SEAL_SKILL_ID;
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
 };
@@ -38931,12 +38927,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                SEAL_SKILL_ID => Some(complete_player_seal(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 SOUL_COLLECT_SKILL_ID => Some(complete_player_soul_collect(
                     self,
                     player_id,
@@ -39040,7 +39030,6 @@ impl CGame {
             MONSTER_RANGE_ATTACK_SKILL_ID => {
                 finish_player_monster_range_attack(self, player_id, &mut player_ai, runtime, false)
             }
-            SEAL_SKILL_ID => cancel_player_seal(self, player_id, &mut player_ai, runtime),
             SOUL_COLLECT_SKILL_ID => {
                 cancel_player_soul_collect(self, player_id, &mut player_ai, runtime)
             }
@@ -39383,7 +39372,6 @@ impl CGame {
             _ if is_lord_fast_attack_dispatch(dispatch) => execute_player_lord_fast_attack,
             _ if is_player_monster_base_attack(dispatch) => execute_player_monster_base_attack,
             _ if dispatch.skill_id() == MONSTER_RANGE_ATTACK_SKILL_ID => execute_player_monster_range_attack,
-            _ if is_seal_target(dispatch) => execute_player_seal,
             _ if dispatch.skill_id() == HEARTEN_SKILL_ID => execute_player_hearten,
             _ if dispatch.skill_id() == PROMOTION_SKILL_ID => execute_player_promotion,
             _ if match dispatch {

@@ -107,7 +107,6 @@ use super::rage::RageExecutionState;
 use super::rainarrow::RainArrowExecutionState;
 use super::rush::RushExecutionState;
 use super::scorpion::ScorpionExecutionState;
-use super::seal::SealExecutionState;
 use super::sevenshootingstar::SevenShootingStarExecutionState;
 use super::spidermist::PlayerSpiderMistExecutionState;
 use super::spiderweb::PlayerSpiderWebExecutionState;
@@ -238,7 +237,6 @@ player_skill_states! {
     BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState) paths(clear_end_paths),
     SpriteBurn(SpriteBurnExecutionState),
     Lightning(LightningExecutionState) prepare(prepare_derived_end),
-    Seal(SealExecutionState),
 }
 
 impl From<SkillExecutionKernel<PlayerSkillDispatch>> for PlayerSkillExecution {

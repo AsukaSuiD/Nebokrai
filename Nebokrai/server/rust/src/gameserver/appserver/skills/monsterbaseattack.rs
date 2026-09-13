@@ -311,6 +311,7 @@ use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::yakshaslash::{YAKSHA_SLASH_SKILL_ID, execute_owned_monster_yaksha_slash};
+use super::seal::{SEAL_SKILL_ID, execute_owned_monster_seal};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::archer::select_archer_enemy;
@@ -843,7 +844,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
         if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
             || is_zonal_cast_skill(skill_id)
-            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | LIGHTNING_SKILL_ID | CHAIN_LIGHTNING_SKILL_ID | INFERNOL_SKILL_ID)
+            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | LIGHTNING_SKILL_ID | CHAIN_LIGHTNING_SKILL_ID | INFERNOL_SKILL_ID | SEAL_SKILL_ID)
         {
             return 1;
         }
@@ -1126,6 +1127,7 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         KNOCK_OUT_SKILL_ID => Some(execute_owned_monster_knock_out),
         SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
         YAKSHA_SLASH_SKILL_ID => Some(execute_owned_monster_yaksha_slash),
+        SEAL_SKILL_ID => Some(execute_owned_monster_seal),
         SPIDER_POISON_SKILL_ID => Some(execute_owned_spider_poison),
         PROMOTION_SKILL_ID => Some(execute_owned_monster_promotion),
         CURE_SKILL_ID => Some(execute_owned_monster_cure),

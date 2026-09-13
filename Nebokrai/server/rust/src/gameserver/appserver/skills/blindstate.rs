@@ -12,7 +12,7 @@
 //! Строгий wrapping deadline действует и при нулевом сроке. Восьмибайтный
 //! ID/remaining codec читает часы перед remaining при Load и после ID при Save.
 //! Общие AI/End обслуживают также KnockOut/SpiderWeb/Seal/Strike/KnightCut/BoaLock. Для primary
-//! KnockOut/SpiderWeb/BossBlueQuake/KnightCut/BoaLock payload-адаптер сохраняет тот же Begin;
+//! KnockOut/SpiderWeb/BossBlueQuake/KnightCut/BoaLock payload-адаптер и Seal сохраняют тот же Begin;
 //! caller выбирает append либо освобождённый прежний слот без второго хранилища.
 //! OnAction не объединён: Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
 //! Rush/Rush2/SpiderWeb/Strike/BoaLock ничего не делают.
@@ -131,7 +131,7 @@ pub(crate) fn begin_primary_blind_state<T: BlindStatePayload>(
     begin_primary_blind_state_at(game, holder_region, holder, user, sufferer, state, None, now)
 }
 
-/// KnockOut, Mosou и KnightCut создают новый payload до поиска прежнего.
+/// KnockOut, Mosou, KnightCut и Seal создают новый payload до поиска прежнего.
 /// Полный End и destructor освобождают ту же позицию до нового Begin.
 pub(crate) fn replace_primary_blind_state<T: BlindStatePayload>(
     game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),

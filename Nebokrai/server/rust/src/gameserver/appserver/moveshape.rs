@@ -310,9 +310,7 @@ use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
 use crate::gameserver::appserver::skills::spiderwebstate::{
     SPIDER_WEB_STATE_BYTES, SpiderWebState,
 };
-use crate::gameserver::appserver::skills::sealstate::{
-    SEAL_STATE_BYTES, SealState,
-};
+use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::strikestate::StrikeState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
@@ -1648,10 +1646,7 @@ impl CMoveShape {
                 StateData::Script(state) => Some(state.encoded(&mut timed_state_now_milliseconds)),
                 StateData::ConsumableRestore(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Blind(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::Seal(state) => Some([
-                    state_id.to_le_bytes(),
-                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
-                ].concat()),
+                StateData::Seal(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Strike(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::KnockOut(state) => Some([
                     state_id.to_le_bytes(),
@@ -2314,22 +2309,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
-        let previous = self.state_entries.first_key::<SealState>()
-            .and_then(|key| self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES));
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-
-
-
-    pub(crate) fn take_seal_state(&mut self) -> Option<SealState> {
-        let key = self.state_entries.first_key::<SealState>()?;
-        let state = self.remove_applied_state_record::<SealState>(key, SEAL_STATE_BYTES)?;
-        Some(state)
-    }
 
 
 

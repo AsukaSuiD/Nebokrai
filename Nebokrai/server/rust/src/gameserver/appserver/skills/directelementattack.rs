@@ -1,15 +1,16 @@
-//! Прямое элементальное попадание Lightning, ChainLightning и Infernol.
+//! Прямое элементальное попадание Lightning, ChainLightning, Infernol и Seal.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightning.cpp,
-//! chainlightning.cpp и infernol.cpp, Attack/CalculateAttackPower.
+//! chainlightning.cpp, infernol.cpp и seal.cpp, Attack/CalculateAttackPower.
 //! Допуск, смерть цели и список повторных попаданий принадлежат AI/Attack
 //! владельца. Здесь сохраняются PK источника, свежая таблица Calculate и сырой
 //! OnBeenAttacked; отсутствие таблицы оставляет исходный UNKNOWN/1 и пустой урон.
 //! ChainLightning и Infernol читают уровень цели и оружейный множитель;
-//! только ChainLightning после контакта начисляет RP источнику. Lightning
-//! сохраняет единичный множитель без этих чтений. Infernol не читает usage
+//! только ChainLightning после контакта начисляет RP источнику. Lightning и Seal
+//! сохраняют единичный множитель без этих чтений. Infernol не читает usage
 //! 20002: его final modifier остаётся конструкторским нулём.
 //! EM игрока захватывается до таблицы. Его масштабирование и усечение выполнены
 //! до MAX→MIN→RNG→свежего MIN→живого AddElement, затем CCH→RNG100.
+//! Seal завершает расчёт после AddElement: не читает CCH и не делает второй RNG.
 //! Расширенное вычисление EM и критического множителя
 //! усекается к нулю; промежуточного округления EM к f32 нет. Vec владеет уроном.
 
@@ -17,6 +18,7 @@ use super::chainlightning::CHAIN_LIGHTNING_SKILL_ID;
 use super::fightdefense::truncate_original;
 use super::infernol::INFERNOL_SKILL_ID;
 use super::lightning::LIGHTNING_SKILL_ID;
+use super::seal::SEAL_SKILL_ID;
 use super::weaponattack::{SourceProperty, apply_weapon_critical, source_master, source_property};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
@@ -29,6 +31,7 @@ enum DirectElementProfile {
     Lightning,
     ChainLightning,
     Infernol,
+    Seal,
 }
 
 impl DirectElementProfile {
@@ -37,6 +40,7 @@ impl DirectElementProfile {
             LIGHTNING_SKILL_ID => Some(Self::Lightning),
             CHAIN_LIGHTNING_SKILL_ID => Some(Self::ChainLightning),
             INFERNOL_SKILL_ID => Some(Self::Infernol),
+            SEAL_SKILL_ID => Some(Self::Seal),
             _ => None,
         }
     }
@@ -51,6 +55,10 @@ impl DirectElementProfile {
 
     const fn increases_player_rp(self) -> bool {
         matches!(self, Self::ChainLightning)
+    }
+
+    const fn uses_critical(self) -> bool {
+        !matches!(self, Self::Seal)
     }
 }
 
@@ -89,8 +97,10 @@ fn calculate(
     let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
     let damage = (element as i32).wrapping_add(random).wrapping_add(minimum).wrapping_add(bonus).max(0);
     attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 });
-    let Some(chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
-    apply_weapon_critical(game, i32::from(chance as u16), attack);
+    if profile.uses_critical() {
+        let Some(chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
+        apply_weapon_critical(game, i32::from(chance as u16), attack);
+    }
 }
 
 pub(super) fn apply_direct_element_attack<Runtime: GameMainLoopRuntime>(

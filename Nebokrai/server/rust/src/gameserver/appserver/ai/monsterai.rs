@@ -148,7 +148,7 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                 let monster = region.base().find_monster_by_id(monster_id)?;
                 if !monster.selected_base_ai()?.stiffen_attack_needs_end() { return None; }
                 let skill = monster.move_shape().current_skill(game.skill_factory())?;
-                (matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash
+                (matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash | SkillOwner::CSeal
                     | SkillOwner::CHeal | SkillOwner::CHeal2 | SkillOwner::CSuperHeal | SkillOwner::CSuperHeal2
                     | SkillOwner::CGodBless | SkillOwner::CGodBless2
                     | SkillOwner::CWeak | SkillOwner::CPoisonFog | SkillOwner::CSnowStorm

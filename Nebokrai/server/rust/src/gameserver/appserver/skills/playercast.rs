@@ -79,7 +79,8 @@ impl RegisteredPlayerCastOwner {
                 | super::scopedarrowcast::EXPLOSIVE_ARROW_3_SKILL_ID => Self::ScopedArrow,
             super::scorpion::SCORPION_SKILL_ID => Self::Scorpion,
             super::boalock::BOA_LOCK_SKILL_ID => Self::BoaLock,
-            super::strike::STRIKE_SKILL_ID | super::yakshaslash::YAKSHA_SLASH_SKILL_ID => Self::TargetedProjectile,
+            super::strike::STRIKE_SKILL_ID | super::yakshaslash::YAKSHA_SLASH_SKILL_ID
+                | super::seal::SEAL_SKILL_ID => Self::TargetedProjectile,
             super::kerosene::KEROSENE_SKILL_ID | super::ignition::IGNITION_SKILL_ID => Self::Combustion,
             super::heartlessarrow::HEARTLESS_ARROW_SKILL_ID => Self::HeartlessArrow,
             super::heartlessarrow2::HEARTLESS_ARROW_2_SKILL_ID
