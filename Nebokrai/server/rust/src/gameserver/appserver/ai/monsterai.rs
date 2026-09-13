@@ -152,6 +152,7 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                     | SkillOwner::CHeal | SkillOwner::CHeal2 | SkillOwner::CSuperHeal | SkillOwner::CSuperHeal2
                     | SkillOwner::CGodBless | SkillOwner::CGodBless2 | SkillOwner::CSoulCollect
                     | SkillOwner::CEnergyBolt | SkillOwner::CSnakeBolt | SkillOwner::CZombieClaw
+                    | SkillOwner::CChuckStone | SkillOwner::CSkeletonArchery
                     | SkillOwner::CWeak | SkillOwner::CPoisonFog | SkillOwner::CSnowStorm
                     | SkillOwner::CYinYang | SkillOwner::CYinYang2
                     | SkillOwner::CGodThunder | SkillOwner::CGodThunder2
@@ -593,7 +594,7 @@ pub(crate) fn approach_attack_range<Runtime: GameMainLoopRuntime>(
     false
 }
 
-/// Virtual Tracing перед новым Begin навыков с базовым диапазоном. Стоящий питомец и
+/// Virtual Tracing перед новым Begin с диапазоном зарегистрированного навыка. Стоящий питомец и
 /// стационарный OnSchedule проверяют свой диапазон снаружи без вызова Tracing.
 pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -618,6 +619,7 @@ pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let (skill_id, skill_level) = (skill.id(), skill.level());
+    let minimum = skill.minimum_range(game.skill_factory()) as i32;
     let target = monster.ai_target()
         .and_then(|identity| crate::gameserver::appserver::skills::monsterattack::resolve_owned_monster_attack_target(
             game, owner, identity,
@@ -641,7 +643,7 @@ pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
             .unwrap_or(1)
     };
     let distance = source.real_distance(Some(target));
-    if distance >= 1 && distance <= maximum(game) { return true; }
+    if distance >= minimum && distance <= maximum(game) { return true; }
     let chase_range = if monster.is_tamed()
         && monster.master_info().master_type == 400 && monster.master_info().master_id != 0
     {
@@ -655,7 +657,7 @@ pub(crate) fn trace_owned_target_state_skill<Runtime: GameMainLoopRuntime>(
     if matches!(active_ai, ActiveMonsterAi::Primary(kind) if kind.has_guard_station()) {
         let maximum_distance = maximum(game);
         return super::cityguardwithsword::trace_city_sword_target(
-            game, owner.base_mut(), monster_id, source, target, 1, maximum_distance, chase_range, runtime,
+            game, owner.base_mut(), monster_id, source, target, minimum, maximum_distance, chase_range, runtime,
         ) == super::cityguardwithsword::CitySwordTraceOutcome::Ready;
     }
     if distance > chase_range {

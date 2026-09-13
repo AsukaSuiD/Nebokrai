@@ -32,6 +32,10 @@
 //! конструктора вместо повторного чтения текущего критического шанса.
 //! BaseMagicPhalanx использует только общий критический хвост: её сохранённый
 //! диапазон и единственный элементный компонент рассчитывает сам владелец.
+//! ChuckStone/SkeletonArchery (appserver/skills/chuckstone.cpp и
+//! skeletonarchery.cpp) используют RawRange без оружейного множителя и RP.
+//! Их Calculate не меняет исходные UNKNOWN/1 даже при найденной таблице;
+//! перед тремя компонентами записываются только нулевой damage modifier и hit.
 //! Vec владеет уроном.
 
 use super::energyholdingstate::consume_energy_holding_multiplier;
@@ -251,6 +255,25 @@ pub(super) fn apply_weapon_critical(
             power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
         }
     }
+}
+
+pub(super) fn apply_direct_projectile_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    target: (i32, ShapeIdentity), runtime: &mut Runtime,
+) {
+    let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
+    let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return; };
+    if std::ptr::eq(user, sufferer) { return; }
+    let Some(master) = source_master(game, source) else { return; };
+    let mut attack = AttackInformation::for_master(master);
+    if let Some(properties) = game.registered_skill(instance)
+        .and_then(|skill| game.skill_base_properties(skill.id(), skill.level()))
+    {
+        attack.damage_modifier = 0;
+        attack.hit_modifier = properties.query_property(USER_HIT_MODIFIER) as i32;
+        fill_ordinary_weapon_damage(game, source, PlayerWeaponRoll::RawRange, &mut attack);
+    }
+    game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
 }
 
 pub(super) fn calculate_player_weapon_attack(

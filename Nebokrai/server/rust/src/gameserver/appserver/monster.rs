@@ -303,7 +303,6 @@ use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
-use super::skills::monsterprojectile::MonsterProjectileProgress;
 use super::skills::targetedprojectile::TargetedProjectileProgress;
 use super::skills::lightning::LightningProgress;
 use super::skills::chainlightning::ChainLightningProgress;
@@ -384,8 +383,6 @@ macro_rules! monster_skill_progress {
 monster_skill_progress! {
     FastAttack(MonsterFastAttackProgress)
         prepare(|state: &mut MonsterFastAttackProgress| *state = MonsterFastAttackProgress::default()),
-    Projectile(MonsterProjectileProgress)
-        prepare(MonsterProjectileProgress::prepare_derived_end),
     TargetedProjectile(TargetedProjectileProgress)
         prepare(|state: &mut TargetedProjectileProgress| *state = TargetedProjectileProgress::default()),
     Lightning(LightningProgress)

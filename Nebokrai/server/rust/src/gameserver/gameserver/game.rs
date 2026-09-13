@@ -1080,15 +1080,6 @@ use crate::gameserver::appserver::skills::littlestar::{
     cancel_player_little_star, complete_player_little_star, execute_player_little_star, is_player_little_star_dispatch,
     LITTLE_STAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::directprojectile::{
-    cancel_player_direct_projectile, is_player_direct_projectile_dispatch,
-};
-use crate::gameserver::appserver::skills::chuckstone::{
-    execute_player_chuck_stone, CHUCK_STONE_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::skeletonarchery::{
-    execute_player_skeleton_archery, SKELETON_ARCHERY_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::yunshenglightning::{
     cancel_player_yunsheng_lightning, execute_player_yunsheng_lightning,
     is_player_yunsheng_lightning_dispatch, YUNSHENG_LIGHTNING_SKILL_ID,
@@ -1215,14 +1206,11 @@ use crate::gameserver::appserver::skills::machinerystomp::{
     wide_arc_attack_cell_candidates,
 };
 use crate::gameserver::appserver::skills::monsterattack::{
-    finish_owned_monster_attack_impact, monster_attack_cell_candidates,
+    finish_owned_monster_attack_impact,
 };
 use crate::gameserver::appserver::skills::monsterrangeattack::{
     execute_owned_monster_range_target,
     range_attack_cell_candidates, range_attack_scope_cells,
-};
-use crate::gameserver::appserver::skills::monsterprojectile::{
-    execute_owned_monster_projectile_target,
 };
 use crate::gameserver::appserver::skills::hearten::{
     cancel_player_hearten, execute_player_hearten, HEARTEN_SKILL_ID,
@@ -38354,7 +38342,6 @@ impl CGame {
         };
         let mut range_dispatch = None;
         let mut wide_arc_dispatch = None;
-        let mut projectile_dispatch = None;
         let mut owner = Some(owner);
         let handled = execute_owned_monster_base_attack(
             self,
@@ -38363,7 +38350,6 @@ impl CGame {
             runtime,
             &mut range_dispatch,
             &mut wide_arc_dispatch,
-            &mut projectile_dispatch,
         );
         let Some(mut owner) = owner else { return handled };
         let _ = synchronize_jiumai_target_loss(owner.base_mut(), monster_id);
@@ -38445,43 +38431,6 @@ impl CGame {
             if let Some(mut owner) = self.take_region_owner(region_id) {
                 finish_owned_monster_attack_impact(
                     owner.base_mut(), dispatch.monster_id, MONSTER_RANGE_ATTACK_SKILL_ID,
-                    &self.skill_factory, runtime,
-                );
-                self.restore_region_owner(owner);
-            }
-        }
-        if let Some(dispatch) = projectile_dispatch {
-            let candidates = if let Some(owner) = self.take_region_owner(region_id) {
-                let candidates = monster_attack_cell_candidates(
-                    self,
-                    &owner,
-                    dispatch.monster_id,
-                    dispatch.impact_x,
-                    dispatch.impact_y,
-                );
-                self.restore_region_owner(owner);
-                candidates
-            } else {
-                Vec::new()
-            };
-            for identity in candidates {
-                let Some(owner) = self.take_region_owner(region_id) else {
-                    break;
-                };
-                let mut owner = Some(owner);
-                let _ = execute_owned_monster_projectile_target(
-                    self,
-                    &mut owner,
-                    &dispatch,
-                    identity,
-                    runtime,
-                );
-                let Some(owner) = owner else { break };
-                self.restore_region_owner(owner);
-            }
-            if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_monster_attack_impact(
-                    owner.base_mut(), dispatch.monster_id, dispatch.skill_id,
                     &self.skill_factory, runtime,
                 );
                 self.restore_region_owner(owner);
@@ -38950,9 +38899,6 @@ impl CGame {
             LITTLE_STAR_SKILL_ID => {
                 cancel_player_little_star(self, player_id, &mut player_ai, runtime)
             }
-            CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
-                cancel_player_direct_projectile(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             YUNSHENG_LIGHTNING_SKILL_ID => {
                 cancel_player_yunsheng_lightning(self, player_id, &mut player_ai, runtime)
             }
@@ -39313,8 +39259,6 @@ impl CGame {
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
             _ if is_seven_shooting_star_dispatch(dispatch) => execute_player_seven_shooting_star,
             _ if is_player_little_star_dispatch(dispatch) => execute_player_little_star,
-            _ if is_player_direct_projectile_dispatch(dispatch) && dispatch.skill_id() == CHUCK_STONE_SKILL_ID => execute_player_chuck_stone,
-            _ if is_player_direct_projectile_dispatch(dispatch) && dispatch.skill_id() == SKELETON_ARCHERY_SKILL_ID => execute_player_skeleton_archery,
             _ if is_player_yunsheng_lightning_dispatch(dispatch) => execute_player_yunsheng_lightning,
             _ if is_player_corpse_ptomaine_dispatch(dispatch) => execute_player_corpse_ptomaine,
             _ if is_player_monster_thorn_dispatch(dispatch) => execute_player_monster_thorn,

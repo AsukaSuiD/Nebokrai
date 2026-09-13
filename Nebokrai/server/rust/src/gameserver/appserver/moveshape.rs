@@ -4,6 +4,9 @@
 //! исполнения команды. Игрок и монстр используют одно и то же хранение.
 //! EnergyBolt/SnakeBolt/ZombieClaw сохраняют там область первого успешного
 //! Begin; End очищает путь и параметры полёта, не заменяя эту область.
+//! ChuckStone/SkeletonArchery хранят полёт в том же экземпляре; их скаляры
+//! сбрасываются перед возвратом движения. GetMinDistance общий для клиента
+//! и ИИ, с конкретным usage владельца и signed-положительной границей 1.
 //! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
 //! dispatcher-ом states/state.rs. Здесь хранится одна PDB-структура
 //! tagProperties (+0x84, 25 signed LONG); её читают native monster getters.
@@ -399,6 +402,7 @@ enum SkillRetainedData {
     None,
     BaseProjectile(super::skills::baseprojectilecast::BaseProjectileProgress),
     PathProjectile(super::skills::energybolt::PathProjectileProgress),
+    DirectProjectile(super::skills::directprojectile::DirectProjectileProgress),
 }
 
 impl SkillRetainedData {
@@ -408,6 +412,8 @@ impl SkillRetainedData {
                 Self::BaseProjectile(Default::default()),
             SkillOwner::CEnergyBolt | SkillOwner::CSnakeBolt | SkillOwner::CZombieClaw =>
                 Self::PathProjectile(Default::default()),
+            SkillOwner::CChuckStone | SkillOwner::CSkeletonArchery =>
+                Self::DirectProjectile(Default::default()),
             _ => Self::None,
         }
     }
@@ -785,6 +791,20 @@ impl MoveShapeSkill {
         }
     }
 
+    pub(crate) fn direct_projectile_progress(&self) -> Option<&super::skills::directprojectile::DirectProjectileProgress> {
+        match &self.retained_data {
+            SkillRetainedData::DirectProjectile(progress) => Some(progress),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn direct_projectile_progress_mut(&mut self) -> Option<&mut super::skills::directprojectile::DirectProjectileProgress> {
+        match &mut self.retained_data {
+            SkillRetainedData::DirectProjectile(progress) => Some(progress),
+            _ => None,
+        }
+    }
+
     pub(crate) fn path_projectile_progress_mut(&mut self) -> Option<&mut super::skills::energybolt::PathProjectileProgress> {
         match &mut self.retained_data {
             SkillRetainedData::PathProjectile(progress) => Some(progress),
@@ -991,6 +1011,9 @@ impl MoveShapeSkill {
             RegisteredSkillExecution::Monster(execution) => execution.prepare_derived_end(),
             RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_) => {}
         }
+        if let SkillRetainedData::DirectProjectile(progress) = &mut self.retained_data {
+            progress.prepare_derived_end();
+        }
         true
     }
 
@@ -1050,6 +1073,14 @@ impl MoveShapeSkill {
 
     pub(crate) const fn level(&self) -> i32 {
         self.level
+    }
+
+    pub(crate) fn minimum_range(&self, factory: &CSkillFactory) -> u32 {
+        self.owner.minimum_range_usage()
+            .and_then(|usage| factory.query_skill_base_properties(self.id, self.level)
+                .map(|properties| properties.query_property(usage)))
+            .filter(|value| (*value as i32) > 0)
+            .unwrap_or(1)
     }
 
     pub(crate) const fn skill_type(&self) -> u32 {

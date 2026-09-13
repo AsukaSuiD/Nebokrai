@@ -51,6 +51,7 @@ pub(crate) enum SkillVisualEffectKind {
     ThunderBlow2,
     TargetedProjectile,
     PathProjectile,
+    DirectProjectile,
     KnockOut,
     SpiderWeb,
     SpiderPoison,

@@ -280,7 +280,7 @@ use super::lordwiderangingattack::{
 use super::machinerystomp::{
     MACHINERY_STOMP_SKILL_ID, WideArcAttackDispatch, prepare_owned_wide_arc_attack,
 };
-use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
+use super::directprojectile::execute_owned_monster_direct_projectile;
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::knockoutruntime::{KNOCK_OUT_SKILL_ID, execute_owned_monster_knock_out};
 use super::promotion::{PROMOTION_SKILL_ID, execute_owned_monster_promotion};
@@ -530,8 +530,6 @@ fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) ->
             | LORD_FAST_ATTACK_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID
             | MONSTER_THORN_SKILL_ID
-            | SKELETON_ARCHERY_SKILL_ID
-            | CHUCK_STONE_SKILL_ID
             | YUNSHENG_LIGHTNING_SKILL_ID
             | CORPSE_PTOMAINE_SKILL_ID
             | CORPSE_CANDLE_BLASTING_SKILL_ID
@@ -841,6 +839,11 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
+        if matches!(skill_id, CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID) {
+            return region.find_monster_by_id(monster_id)
+                .and_then(|monster| monster.move_shape().skill(skill_id, game.skill_factory()))
+                .map_or(1, |skill| skill.minimum_range(game.skill_factory()) as i32);
+        }
         if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
             || is_zonal_cast_skill(skill_id)
             || matches!(skill_id, ENERGY_BOLT_SKILL_ID | SNAKE_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID)
@@ -1110,6 +1113,8 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         GOD_BLESS_2_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_2_SKILL_ID, Runtime>),
         SOUL_COLLECT_SKILL_ID => Some(execute_owned_monster_soul_collect::<Runtime>),
         ENERGY_BOLT_SKILL_ID => Some(execute_owned_monster_energy_bolt::<Runtime>),
+        CHUCK_STONE_SKILL_ID => Some(execute_owned_monster_direct_projectile::<CHUCK_STONE_SKILL_ID, Runtime>),
+        SKELETON_ARCHERY_SKILL_ID => Some(execute_owned_monster_direct_projectile::<SKELETON_ARCHERY_SKILL_ID, Runtime>),
         SNAKE_BOLT_SKILL_ID => Some(execute_owned_monster_snake_bolt::<Runtime>),
         ZOMBIE_CLAW_SKILL_ID => Some(execute_owned_monster_zombie_claw::<Runtime>),
         WEAK_SKILL_ID => Some(execute_owned_monster_zonal_cast::<WEAK_SKILL_ID, Runtime>),
@@ -1152,7 +1157,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
     wide_arc_dispatch: &mut Option<WideArcAttackDispatch>,
-    projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
 ) -> bool {
     let Some(region_owner) = owner.as_mut() else { return false; };
     let Some(active_ai) = region_owner.base().find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
@@ -1433,9 +1437,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if (pet_ai && pet_action == 2) || (!pet_ai && uses_stationary_attack_schedule(property.ai)) {
             let Some(target_view) = schedule_target_view else { return false; };
             let distance = monster_view.real_distance(Some(target_view));
-            // Эти owner-ы наследуют minimum=1 и signed-положительный maximum.
-            // NULL properties допускает дистанцию 1 до собственного CheckCast.
-            if distance < 1 || distance > game.skill_base_properties(skill_id, i32::from(skill_level))
+            let minimum = region_owner.base().find_monster_by_id(monster_id)
+                .and_then(|monster| monster.move_shape().skill(skill_id, game.skill_factory()))
+                .map_or(1, |skill| skill.minimum_range(game.skill_factory()) as i32);
+            // GetMinDistance владельца и базовый signed-положительный maximum.
+            // NULL properties оставляет границу 1 до собственного CheckCast.
+            if distance < minimum || distance > game.skill_base_properties(skill_id, i32::from(skill_level))
                 .map(|properties| properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as i32)
                 .filter(|maximum| *maximum > 0).unwrap_or(1)
             {
@@ -1496,21 +1503,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
     let now_ms = runtime.now_milliseconds();
-    if matches!(skill_id, SKELETON_ARCHERY_SKILL_ID | CHUCK_STONE_SKILL_ID) {
-        let skill_properties = skill_properties.clone();
-        return prepare_owned_monster_projectile(
-            game,
-            region_owner,
-            monster_id,
-            target,
-            skill_id,
-            skill_level,
-            &skill_properties,
-            now_ms,
-            projectile_dispatch,
-            runtime,
-        );
-    }
     if skill_id == YUNSHENG_LIGHTNING_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_yunsheng_lightning(

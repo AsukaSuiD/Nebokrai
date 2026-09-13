@@ -156,6 +156,7 @@ pub(crate) mod appserver {
         pub(crate) mod daubpoison;
         pub(crate) mod daubpoisonstate;
         pub(crate) mod directprojectile;
+        pub(crate) mod directprojectilevisual;
         pub(crate) mod corpsecandleblasting;
         pub(crate) mod corpseptomaine;
         pub(crate) mod fatalblow;
@@ -307,7 +308,6 @@ pub(crate) mod appserver {
         pub(crate) mod monsterbaseattack;
         pub(crate) mod monsterattack;
         pub(crate) mod monsterfastattack;
-        pub(crate) mod monsterprojectile;
         pub(crate) mod monsterrangeattack;
         pub(crate) mod monstertaming;
         pub(crate) mod mosou;

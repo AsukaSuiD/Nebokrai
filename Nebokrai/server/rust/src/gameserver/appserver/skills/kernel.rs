@@ -87,7 +87,6 @@ use super::boalock::BoaLockExecutionState;
 use super::bossbluequake::PlayerBossBlueQuakeExecutionState;
 use super::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
 use super::chainlightning::ChainLightningExecutionState;
-use super::directprojectile::PlayerDirectProjectileExecutionState;
 use super::fatalblow::FatalBlowExecutionState;
 use super::flash::FlashExecutionState;
 use super::ghostcut::GhostCutExecutionState;
@@ -207,7 +206,6 @@ player_skill_states! {
     ThunderBlow2(ThunderBlow2Execution) prepare(prepare_derived_end),
     ArmyBreak(ArmyBreakExecutionState) prepare(prepare_derived_end),
     LittleFlash(LittleFlashExecutionState) paths(clear_end_paths),
-    DirectProjectile(PlayerDirectProjectileExecutionState),
     SummonCreature(PlayerSummonCreatureExecutionState),
     LordFastAttack(LordFastAttackExecutionState),
     BaseProjectile(BaseProjectileExecutionState),
@@ -397,6 +395,12 @@ impl SkillLifecycle {
     /// Begin, сброса координат или замены региона и времени исходной базы.
     pub(crate) fn set_sufferer_identity(&mut self, identity: ShapeIdentity) {
         self.sufferer.1 = Self::native_identity(identity);
+    }
+
+    /// Прямой снаряд после выбора клетки вновь закрепляет найденного GetS,
+    /// сохраняя записанную точку и время исходного Begin.
+    pub(crate) fn set_sufferer(&mut self, region_id: i32, identity: ShapeIdentity) {
+        self.sufferer = (region_id, Self::native_identity(identity));
     }
 
     pub(crate) const fn destination(&self) -> (i32, i32) {

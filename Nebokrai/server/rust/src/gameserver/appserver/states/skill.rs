@@ -184,13 +184,7 @@ impl CGame {
         address: RegisteredSkill,
     ) -> Option<[u32; 3]> {
         let skill = self.registered_skill(address)?;
-        let minimum = if let Some(usage) = skill.owner().minimum_range_usage() {
-            let value = self.skill_base_properties(skill.id(), skill.level())
-                .map(|properties| properties.query_property(usage)).unwrap_or(0);
-            if (value as i32) > 0 { value } else { 1 }
-        } else {
-            1
-        };
+        let minimum = skill.minimum_range(self.skill_factory());
         let skill = self.registered_skill(address)?;
         let maximum = self.skill_base_properties(skill.id(), skill.level())
             .map(|properties| properties.query_property(5003)).unwrap_or(0);
@@ -425,6 +419,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::targetedprojectile::publish_targeted_projectile_visual(self, skill, mode),
             SkillVisualEffectKind::PathProjectile =>
                 crate::gameserver::appserver::skills::pathprojectilevisual::publish_path_projectile_visual(self, skill, mode),
+            SkillVisualEffectKind::DirectProjectile =>
+                crate::gameserver::appserver::skills::directprojectilevisual::publish_direct_projectile_visual(self, skill, mode),
             SkillVisualEffectKind::KnockOut =>
                 crate::gameserver::appserver::skills::knockoutruntime::publish_knock_out_visual(self, skill, mode),
             SkillVisualEffectKind::SpiderWeb =>
