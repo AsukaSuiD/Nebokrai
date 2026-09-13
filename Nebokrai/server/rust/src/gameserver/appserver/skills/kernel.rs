@@ -87,7 +87,6 @@ use super::boalock::BoaLockExecutionState;
 use super::bossbluequake::PlayerBossBlueQuakeExecutionState;
 use super::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
 use super::chainlightning::ChainLightningExecutionState;
-use super::chaossphere::ChaosSphereExecutionState;
 use super::directprojectile::PlayerDirectProjectileExecutionState;
 use super::energybolt::PlayerPathProjectileExecutionState;
 use super::fatalblow::FatalBlowExecutionState;
@@ -238,7 +237,6 @@ player_skill_states! {
     BossBlueQuake(PlayerBossBlueQuakeExecutionState),
     BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState) paths(clear_end_paths),
     SpriteBurn(SpriteBurnExecutionState),
-    ChaosSphere(ChaosSphereExecutionState),
     Lightning(LightningExecutionState),
     Seal(SealExecutionState),
 }

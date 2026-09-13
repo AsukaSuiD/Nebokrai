@@ -158,7 +158,8 @@ impl CGame {
         let destination_x = if x < 0 { 0 } else if x >= width { width.wrapping_sub(1) } else { x };
         // Native сравнивает Y с высотой, но при выходе подставляет ширину.
         let destination_y = if y < 0 { 0 } else if y >= height { width.wrapping_sub(1) } else { y };
-        let (Ok(old_x), Ok(old_y)) = (shape.get_tile_x(), shape.get_tile_y()) else { return false; };
+        let old_x = shape.get_tile_x().unwrap_or(i32::MIN);
+        let old_y = shape.get_tile_y().unwrap_or(i32::MIN);
         let identity = shape.identity();
         let mut message = CMessage::new(0x000b_f604);
         message.add_long(identity.id);

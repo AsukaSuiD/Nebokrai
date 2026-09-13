@@ -1,9 +1,6 @@
-//! Формат области `CYinYangPhalanx2` (`0x146`).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/yinyangphalanx2.cpp`. Lifecycle, replacement и формула
-//! побайтно совпадают с `CYinYangPhalanx`; общий типизированный владелец не
-//! дублируется. Отличие — маска 1×1 на каждом уровне, подтверждённая размерами
-//! `0x006A4E00..0x006A4E14` и байтами `0x006A4DFC..0x006A4DFE`.
+//! Маска второй области инь-ян.
+//! Источник: gameserver.exe/GameServer.pdb, yinyangphalanx2.cpp.
+//! Все уровни используют 1×1. Независимый экземпляр создаётся фабрикой
+//! yinyangphalanx; маска, часы и обход принадлежат maskedelementphalanx.
 
 pub(crate) const YIN_YANG_2_SCOPE: (i32, i32, &[bool]) = (1, 1, &[true]);

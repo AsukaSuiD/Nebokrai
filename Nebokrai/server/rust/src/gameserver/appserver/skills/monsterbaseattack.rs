@@ -291,6 +291,8 @@ use super::snowstorm::SNOW_STORM_SKILL_ID;
 use super::poisonfog::POISON_FOG_SKILL_ID;
 use super::weak::WEAK_SKILL_ID;
 use super::zonalcast::{execute_owned_monster_zonal_cast, is_zonal_cast_skill};
+use super::firewall::FIRE_WALL_SKILL_ID;
+use super::chaossphere::CHAOS_SPHERE_SKILL_ID;
 use super::yinyang::YIN_YANG_SKILL_ID;
 use super::yinyang2::YIN_YANG_2_SKILL_ID;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
@@ -1105,6 +1107,8 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         WEAK_SKILL_ID => Some(execute_owned_monster_zonal_cast::<WEAK_SKILL_ID, Runtime>),
         POISON_FOG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<POISON_FOG_SKILL_ID, Runtime>),
         SNOW_STORM_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SNOW_STORM_SKILL_ID, Runtime>),
+        FIRE_WALL_SKILL_ID => Some(execute_owned_monster_zonal_cast::<FIRE_WALL_SKILL_ID, Runtime>),
+        CHAOS_SPHERE_SKILL_ID => Some(execute_owned_monster_zonal_cast::<CHAOS_SPHERE_SKILL_ID, Runtime>),
         YIN_YANG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<YIN_YANG_SKILL_ID, Runtime>),
         YIN_YANG_2_SKILL_ID => Some(execute_owned_monster_zonal_cast::<YIN_YANG_2_SKILL_ID, Runtime>),
         GOD_THUNDER_SKILL_ID => Some(execute_owned_monster_zonal_cast::<GOD_THUNDER_SKILL_ID, Runtime>),

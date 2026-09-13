@@ -9,7 +9,7 @@
 //! Разные маски и атаки остаются у общего владельца формы с исходным skill ID.
 
 use super::weaponattack::{SourceProperty, source_property};
-use super::yinyangphalanx::CYinYangPhalanx;
+use super::yinyangphalanx::new_yin_yang_phalanx;
 use super::zonalcast::prepare_element_summon;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
@@ -35,7 +35,7 @@ pub(super) fn summon_yin_yang<Runtime: GameMainLoopRuntime>(
     let lifetime = properties.query_property(30_001);
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
-    let mut phalanx = CYinYangPhalanx::new_for_skill(
+    let mut phalanx = new_yin_yang_phalanx(
         skill_id, id, master, started, lifetime, level, minimum, maximum, element, cch,
     );
     phalanx.shape_mut().set_pos_xy_base(
@@ -44,5 +44,5 @@ pub(super) fn summon_yin_yang<Runtime: GameMainLoopRuntime>(
     let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
     if !user.shape().is_assigned_to_server_region() { return; }
     let region = user.shape().get_region_id();
-    let _ = game.add_yin_yang_phalanx(region, phalanx, started, runtime);
+    let _ = game.add_masked_element_phalanx(region, phalanx, started, runtime, None);
 }

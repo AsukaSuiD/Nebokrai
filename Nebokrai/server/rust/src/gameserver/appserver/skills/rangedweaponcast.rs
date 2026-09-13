@@ -28,6 +28,8 @@
 //! сохраняет запрет движения после достаточного положительного MP.
 //! SnowStorm использует те же signed MP-проверки, но сообщает только visual7:
 //! повторного запроса цены для GS0288 у него нет.
+//! FireWall запрещает BLOCK1 и BLOCK2; остальные проверки препятствий
+//! сохраняют исходный запрет только BLOCK2.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::skill_is_restored;
@@ -117,6 +119,7 @@ pub(super) enum ArrowCastPathRule {
 pub(super) enum CastPathBlock {
     Ignore,
     Generic,
+    GroundAndFly,
     Named { target: (i32, ShapeIdentity), message: &'static [u8] },
 }
 
@@ -145,11 +148,16 @@ pub(super) fn check_skill_path_with_limit(
         if let Some(player) = player { game.send_skill_system_info(player, b"GS0290"); }
         return false;
     }
-    if !matches!(block, CastPathBlock::Ignore) && path.iter().any(|cell| cell.2 == 2) {
+    let blocked = match block {
+        CastPathBlock::Ignore => false,
+        CastPathBlock::GroundAndFly => path.iter().any(|cell| matches!(cell.2, 1 | 2)),
+        _ => path.iter().any(|cell| cell.2 == 2),
+    };
+    if blocked {
         game.update_registered_skill_visual(instance, 15);
         if let Some(player) = player {
             match block {
-                CastPathBlock::Generic => game.send_skill_system_info(player, b"GS0282"),
+                CastPathBlock::Generic | CastPathBlock::GroundAndFly => game.send_skill_system_info(player, b"GS0282"),
                 CastPathBlock::Named { target, message } => {
                     if let Some(target) = resolve_state_move_shape(game, target.0, target.1) {
                         game.send_skill_system_info_with_text(player, message, target.shape().base_object().get_name());

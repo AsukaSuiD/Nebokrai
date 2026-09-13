@@ -223,7 +223,6 @@ impl CGame {
         }
         match skill_id {
             BASE_ATTACK_SKILL_ID
-            | FIRE_WALL_SKILL_ID
             | SEVEN_SHOOTING_STAR_SKILL_ID
             | CHAIN_LIGHTNING_SKILL_ID
             | THUNDER_BLOW_SKILL_ID
@@ -252,7 +251,6 @@ impl CGame {
             | MONSTER_FAST_ATTACK_SKILL_ID
             | MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID
-            | CHAOS_SPHERE_SKILL_ID
             | LIGHTNING_SKILL_ID
             | SEAL_SKILL_ID
             | SOUL_COLLECT_SKILL_ID

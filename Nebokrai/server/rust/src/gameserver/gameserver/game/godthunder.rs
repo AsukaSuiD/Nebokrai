@@ -7,7 +7,9 @@
 //! master пропускает только обычную проверку допуска, но не Attack/IsDied.
 
 use super::*;
-use crate::gameserver::appserver::skills::elementphalanxattack::apply_element_phalanx_attack;
+use crate::gameserver::appserver::skills::elementphalanxattack::{
+    apply_element_phalanx_attack, apply_element_phalanx_war_soul,
+};
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 
 impl CGame {
@@ -124,19 +126,10 @@ impl CGame {
             .map(|owner| owner.base().war_souls_at(x, y).keys().copied().collect())
             .unwrap_or_default();
         for target_id in players {
-            let Some(phalanx) = self.god_thunder_phalanx(holder_region, id) else { return; };
-            let target = self.find_player(target_id as i32);
-            let source = self.find_player(phalanx.master().master_id);
-            let (Some(target), Some(source)) = (target, source) else { continue; };
-            if target_id as i32 == phalanx.master().master_id { continue; }
-            if target.shape().get_action() == 6 || target.is_dead() { continue; }
-            let target = (target.shape().get_region_id(), target.shape().identity());
-            let source = (source.shape().get_region_id(), source.shape().identity());
-            if !self.live_skill_target_attackable_between(source, target) { continue; }
             let Some(snapshot) = self.god_thunder_phalanx(holder_region, id)
                 .map(CGodThunderPhalanx::attack_snapshot)
             else { return; };
-            apply_element_phalanx_attack(self, snapshot, target, true, runtime);
+            apply_element_phalanx_war_soul(self, snapshot, target_id as i32, runtime);
         }
     }
 }

@@ -1700,60 +1700,23 @@ impl CServerRegion {
     pub(crate) fn add_chaos_sphere_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::chaosspherephalanx::CChaosSpherePhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::chaosspherephalanx::CChaosSpherePhalanx)> {
+        if let Err(error) = self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
             area_width,
             area_height,
             now_ms,
             context,
-        )?;
-        let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::ChaosSphere(phalanx));
-        Ok(id)
-    }
-
-    pub(crate) fn add_fire_wall_phalanx<Context: ServerRegionMembershipContext>(
-        &mut self,
-        mut phalanx: super::skills::firewallphalanx::CFireWallPhalanx,
-        tile_x: i32,
-        tile_y: i32,
-        area_width: i32,
-        area_height: i32,
-        now_ms: u32,
-        context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
-            phalanx.shape_mut(),
-            ShapeRuntimeFacts::default(),
-            area_width,
-            area_height,
-            now_ms,
-            context,
-        )?;
-        for existing in self.owned_skill_phalanxes.values_mut() {
-            if let SummonedSkillShape::FireWall(existing) = existing {
-                existing.replace_affect_region(
-                    phalanx.skill_level(),
-                    tile_x,
-                    tile_y,
-                );
-            }
+        ) {
+            return Err((error, phalanx));
         }
         let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes
-            .insert(id, SummonedSkillShape::FireWall(phalanx));
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::ChaosSphere(phalanx));
         Ok(id)
     }
 
@@ -1840,21 +1803,21 @@ impl CServerRegion {
         Ok(id)
     }
 
-    pub(crate) fn add_yin_yang_phalanx<Context: ServerRegionMembershipContext>(
+    pub(crate) fn add_masked_element_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
-        mut phalanx: super::skills::yinyangphalanx::CYinYangPhalanx,
+        mut phalanx: super::skills::maskedelementphalanx::MaskedElementPhalanx,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, (RegionMembershipBlock, super::skills::yinyangphalanx::CYinYangPhalanx)> {
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::maskedelementphalanx::MaskedElementPhalanx)> {
         if let Err(error) = self.add_object(
             phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context,
         ) {
             return Err((error, phalanx));
         }
         let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::YinYang(phalanx));
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::MaskedElement(phalanx));
         Ok(id)
     }
 
@@ -2333,6 +2296,23 @@ impl CServerRegion {
         let mut shapes = Vec::new();
         for index in self.neighbor_area_indices(center) {
             self.areas[index].get_all_shapes(&registered, &mut shapes);
+        }
+        shapes
+    }
+
+    /// FindAroundObject для призванных фигур: девять area и внутренний
+    /// порядок FindShapes; исключение исходной фигуры остаётся у caller-а.
+    pub(crate) fn summon_shapes_around_area<Resolver: ShapeResolver>(
+        &self, area_index: usize, resolver: &Resolver,
+    ) -> Vec<ShapeView> {
+        let Some(center) = self.areas.get(area_index) else { return Vec::new(); };
+        let center = ShapeAreaCoordinates { x: center.x(), y: center.y() };
+        let registered = RegisteredShapeResolver { registry: &self.registry, resolver };
+        let mut shapes = Vec::new();
+        for index in self.neighbor_area_indices(center) {
+            self.areas[index].find_shapes(
+                super::summonshape::SUMMON_SHAPE_TYPE, &registered, &mut shapes,
+            );
         }
         shapes
     }

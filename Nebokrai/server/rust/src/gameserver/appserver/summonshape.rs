@@ -22,7 +22,6 @@ use crate::gameserver::appserver::skills::fireboltphalanx::CFireBoltPhalanx;
 use crate::gameserver::appserver::skills::fireballphalanx::CFireBallPhalanx;
 use crate::gameserver::appserver::skills::thunderfirephalanx::CThunderFirePhalanx;
 use crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalanx;
-use crate::gameserver::appserver::skills::firewallphalanx::CFireWallPhalanx;
 use crate::gameserver::appserver::skills::poisonfogphalanx::CPoisonFogPhalanx;
 use crate::gameserver::appserver::skills::thunderphalanx::CThunderPhalanx;
 use crate::gameserver::appserver::skills::thunderblowphalanx::CThunderBlowPhalanx;
@@ -32,7 +31,7 @@ use crate::gameserver::appserver::skills::tianhuophalanx::CTianhuoPhalanx;
 use crate::gameserver::appserver::skills::spidermistphalanx::CSpiderMistPhalanx;
 use crate::gameserver::appserver::skills::snowstormphalanx::CSnowStormPhalanx;
 use crate::gameserver::appserver::skills::weakphalanx::CWeakPhalanx;
-use crate::gameserver::appserver::skills::yinyangphalanx::CYinYangPhalanx;
+use crate::gameserver::appserver::skills::maskedelementphalanx::MaskedElementPhalanx;
 use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
@@ -53,7 +52,6 @@ pub(crate) enum SummonedSkillShape {
     FireBall(CFireBallPhalanx),
     ThunderFire(CThunderFirePhalanx),
     ChaosSphere(CChaosSpherePhalanx),
-    FireWall(CFireWallPhalanx),
     PoisonFog(CPoisonFogPhalanx),
     Thunder(CThunderPhalanx),
     ThunderBlow(CThunderBlowPhalanx),
@@ -63,7 +61,7 @@ pub(crate) enum SummonedSkillShape {
     SpiderMist(CSpiderMistPhalanx),
     SnowStorm(CSnowStormPhalanx),
     Weak(CWeakPhalanx),
-    YinYang(CYinYangPhalanx),
+    MaskedElement(MaskedElementPhalanx),
     GodPunishment(CGodPunishmentPhalanx),
     GodThunder(CGodThunderPhalanx),
     HeartlessArrow(CHeartlessArrowPhalanx),
@@ -126,7 +124,6 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.shape(),
             Self::ThunderFire(shape) => shape.shape(),
             Self::ChaosSphere(shape) => shape.shape(),
-            Self::FireWall(shape) => shape.shape(),
             Self::PoisonFog(shape) => shape.shape(),
             Self::Thunder(shape) => shape.shape(),
             Self::ThunderBlow(shape) => shape.shape(),
@@ -136,7 +133,7 @@ impl SummonedSkillShape {
             Self::SpiderMist(shape) => shape.shape(),
             Self::SnowStorm(shape) => shape.shape(),
             Self::Weak(shape) => shape.shape(),
-            Self::YinYang(shape) => shape.shape(),
+            Self::MaskedElement(shape) => shape.shape(),
             Self::GodPunishment(shape) => shape.shape(),
             Self::GodThunder(shape) => shape.shape(),
             Self::HeartlessArrow(shape) => shape.shape(),
@@ -156,7 +153,6 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.shape_mut(),
             Self::ThunderFire(shape) => shape.shape_mut(),
             Self::ChaosSphere(shape) => shape.shape_mut(),
-            Self::FireWall(shape) => shape.shape_mut(),
             Self::PoisonFog(shape) => shape.shape_mut(),
             Self::Thunder(shape) => shape.shape_mut(),
             Self::ThunderBlow(shape) => shape.shape_mut(),
@@ -166,7 +162,7 @@ impl SummonedSkillShape {
             Self::SpiderMist(shape) => shape.shape_mut(),
             Self::SnowStorm(shape) => shape.shape_mut(),
             Self::Weak(shape) => shape.shape_mut(),
-            Self::YinYang(shape) => shape.shape_mut(),
+            Self::MaskedElement(shape) => shape.shape_mut(),
             Self::GodPunishment(shape) => shape.shape_mut(),
             Self::GodThunder(shape) => shape.shape_mut(),
             Self::HeartlessArrow(shape) => shape.shape_mut(),
@@ -197,7 +193,6 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ThunderFire(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ChaosSphere(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::FireWall(shape) => shape.encode_client_snapshot(),
             Self::PoisonFog(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Thunder(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::ThunderBlow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
@@ -207,7 +202,7 @@ impl SummonedSkillShape {
             Self::SpiderMist(shape) => shape.encode_client_snapshot(),
             Self::SnowStorm(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Weak(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::YinYang(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::MaskedElement(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::GodPunishment(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
             }
@@ -228,7 +223,6 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.master(),
             Self::ThunderFire(shape) => shape.master(),
             Self::ChaosSphere(shape) => shape.master(),
-            Self::FireWall(shape) => shape.master(),
             Self::PoisonFog(shape) => shape.master(),
             Self::Thunder(shape) => shape.master(),
             Self::ThunderBlow(shape) => shape.master(),
@@ -238,7 +232,7 @@ impl SummonedSkillShape {
             Self::SpiderMist(shape) => shape.master(),
             Self::SnowStorm(shape) => shape.master(),
             Self::Weak(shape) => shape.master(),
-            Self::YinYang(shape) => shape.master(),
+            Self::MaskedElement(shape) => shape.master(),
             Self::GodPunishment(shape) => shape.master(),
             Self::GodThunder(shape) => shape.master(),
             Self::HeartlessArrow(shape) => shape.master(),

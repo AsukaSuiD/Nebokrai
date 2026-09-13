@@ -1,11 +1,13 @@
-//! Элементальное попадание областей YinYang и GodThunder.
+//! Элементальное попадание областей YinYang, GodThunder, FireWall и ChaosSphere.
 //! Источник: gameserver.exe/GameServer.pdb, CalculateAttackPower/Attack владельцев
-//! yinyangphalanx{,2}.cpp и godthunderphalanx{,2}.cpp.
+//! yinyangphalanx{,2}.cpp, godthunderphalanx{,2}.cpp, firewallphalanx.cpp
+//! и chaosspherephalanx.cpp.
 //! Урон берётся из снимка формы, но Player по attacker ID и оружейный множитель
 //! разрешаются при каждом попадании. Поиск Player не зависит от master type;
 //! его отсутствие сохраняет пустую исходную атаку, не отменяя raw receipt.
 //! Допуск принадлежит обходу; здесь IsDied→PK seed→Calculate→receipt, без RP.
-//! Только второй GodThunder передаёт признак попадания по боевому духу.
+//! GodThunder2 и ChaosSphere сначала проверяют глобальных Player цели/источника
+//! и передают признак попадания по боевому духу; body-допуск хранится в обходе.
 
 use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -74,4 +76,19 @@ pub(crate) fn apply_element_phalanx_attack<Runtime: GameMainLoopRuntime>(
     } else {
         game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
     }
+}
+
+pub(crate) fn apply_element_phalanx_war_soul<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, snapshot: ElementPhalanxAttack, target_id: i32,
+    runtime: &mut Runtime,
+) {
+    let target = game.find_player(target_id);
+    let source = game.find_player(snapshot.master.master_id);
+    let (Some(target), Some(source)) = (target, source) else { return; };
+    if target_id == snapshot.master.master_id { return; }
+    if target.shape().get_action() == 6 || target.is_dead() { return; }
+    let target = (target.shape().get_region_id(), target.shape().identity());
+    let source = (source.shape().get_region_id(), source.shape().identity());
+    if !game.live_skill_target_attackable_between(source, target) { return; }
+    apply_element_phalanx_attack(game, snapshot, target, true, runtime);
 }
