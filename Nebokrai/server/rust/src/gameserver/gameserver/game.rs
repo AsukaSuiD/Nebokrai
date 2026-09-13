@@ -1345,9 +1345,6 @@ use crate::gameserver::appserver::skills::godblessstate::{
 use crate::gameserver::appserver::skills::cure::{
     cancel_player_cure, complete_player_cure, execute_player_cure, is_cure_target, CURE_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::nonfun::{
-    execute_player_non_fun, is_non_fun_skill,
-};
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
 };
@@ -39613,11 +39610,6 @@ impl CGame {
             _ if is_soul_mirror_skill(dispatch) => execute_player_soul_mirror,
             _ if is_god_bless_skill(dispatch) => execute_player_god_bless,
             _ if is_cure_target(dispatch) => execute_player_cure,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => is_non_fun_skill(skill_id),
-            } => execute_player_non_fun,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }

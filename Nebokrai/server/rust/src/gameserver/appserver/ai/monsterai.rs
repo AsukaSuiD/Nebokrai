@@ -150,7 +150,8 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                 let skill = monster.move_shape().current_skill(game.skill_factory())?;
                 (matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash
                     | SkillOwner::CHeal | SkillOwner::CHeal2 | SkillOwner::CSuperHeal | SkillOwner::CSuperHeal2)
-                    || crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill(skill.id()))
+                    || crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill(skill.id())
+                    || crate::gameserver::appserver::skills::nonfun::is_non_fun_skill(skill.id()))
                     .then_some((region.region_id(), monster.move_shape().shape().identity(), skill.id()))
             });
             let (release_target, ended_skill) = if let Some((region, source, skill_id)) = registered {

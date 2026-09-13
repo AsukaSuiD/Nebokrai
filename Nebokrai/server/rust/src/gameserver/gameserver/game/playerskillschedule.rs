@@ -35,13 +35,13 @@
 //! CSkillFactory::QuerySkill (0x00469870). Базовый lifecycle и concrete-данные
 //! читаются из зарегистрированного экземпляра; один current_skill_id не
 //! доказывает начало или завершение.
-//! NonFun наследует тот же допуск, но его мгновенное исполнение хранится
-//! отдельно от владельцев с внешним End.
+//! NonFun наследует тот же допуск и использует общий зарегистрированный
+//! Begin/AI/End без собственных проверок, visual или промежуточных фаз.
 //! Единственная SkillLifecycle хранится в Inactive до concrete-данных,
 //! затем перемещается в их kernel. CState::Begin пишет source/target, время
 //! и ended=false до OnBeginSkill; неудача не откатывает эту запись.
 //! Установка kernel сохраняет ту же базу, без timestamp-маркеров CPlayerAI.
-//! Владельцы общего playercast выполняют Begin и создают visual внутри него.
+//! Владельцы общего playercast выполняют Begin и, если требуется, создают visual.
 //! Расписание, active и background передают ему захваченный
 //! ключ; после его End здесь освобождаются только payload и та же команда.
 //! Поэтому отсутствие concrete-данных не означает IsEnded: перевод всех
@@ -51,8 +51,7 @@
 //! Выбор TargetRule хранит только игровое различие целей, не второй перечень
 //! полей CPlayerAI. Перечень ниже ограничивает подключённые owners, включая
 //! NonFun, Swordship и немедленные состояния, но не выбирает поле или тип
-//! исполнения. Поддержка concrete End проверяется отдельно его dispatcher-ом;
-//! полный registered End и визуальные ресурсы ещё требуют подключения.
+//! исполнения. Их внешний End идёт через тот же registered dispatcher.
 //! Cure (0x005ad590) допускает цель того же типа, что источник, либо монстра-
 //! повозку: вызов 0x004e6d30 — CMonster::IsCarriage, не IsTamed. Promotion
 //! (0x00568680) требует только ненулевые источник/цель; Seal (0x005a9b00)
@@ -281,7 +280,6 @@ impl CGame {
             | MONSTER_TAMING_SKILL_ID
             | ITEM_SKILL_2_ID
             | RAGE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
-            _ if is_non_fun_skill(skill_id) => Some(PlayerSkillBeginPolicy::Inherited),
             _ => None,
         }
     }

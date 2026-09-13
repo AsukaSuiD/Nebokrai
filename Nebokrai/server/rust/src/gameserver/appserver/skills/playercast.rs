@@ -10,7 +10,7 @@
 //! Удалённый callback-ом экземпляр не заменяется новым совпадением ID.
 //! Released из concrete End оставляет исполнение активным; даже терминальный
 //! результат AI не разрешает расписанию удалить выпущенный callback-ом cast.
-//! Немедленные состояния используют тот же вход без создания visual;
+//! Немедленные состояния и NonFun используют тот же вход без создания visual;
 //! прежний visual при таком Begin не заменяется.
 
 use super::kernel::{PlayerSkillExecution, SkillStage, SkillTermination};
@@ -29,7 +29,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -86,15 +86,16 @@ impl RegisteredPlayerCastOwner {
                 | super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID => Self::HeartlessArrowArea,
             id if super::immediatestate::is_immediate_state_skill(id) => Self::ImmediateState,
             id if super::heal::is_heal_skill(id) => Self::Heal,
+            id if super::nonfun::is_non_fun_skill(id) => Self::NonFun,
             _ => return None,
         })
     }
 
     fn completion_end_argument(self, skill_id: u32) -> i32 {
-        // Выпуск RainArrow и AI Swordship передают End(0); внешний End(1)
+        // Выпуск RainArrow, AI Swordship и NonFun передают End(0); внешний End(1)
         // по-прежнему выполняет AfterUse. Это не политика смены региона.
         match self {
-            Self::RainArrow => 0,
+            Self::RainArrow | Self::NonFun => 0,
             Self::ImmediateState => super::immediatestate::immediate_completion_end_argument(skill_id),
             _ => 1,
         }
@@ -109,6 +110,7 @@ impl RegisteredPlayerCastOwner {
             Self::GodPunishment => super::godpunishment::execute_player_god_punishment::<Runtime>,
             Self::ImmediateState => super::immediatestate::execute_player_immediate_state::<Runtime>,
             Self::Heal => super::heal::execute_player_heal::<Runtime>,
+            Self::NonFun => super::nonfun::execute_player_non_fun::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,

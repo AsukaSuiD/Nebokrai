@@ -147,6 +147,8 @@
 //! задаёт эффект, а `OnFighting` завершает активный ход даже после `End(0)`:
 //! Swordship устанавливает состояние без reuse, WuXing отвергает type `600`
 //! без эффекта и reuse. Это завершение не добавляется фоновой очереди.
+//! Все 50 NonFun проходят тот же активный Begin/Attack/End(0) без своих
+//! проверок и эффектов. Их minimum равен 1; AutoStart они не используют.
 //! Объектный `CBaseAttack` (`1`) получает здесь только Begin расписания;
 //! его собственные AI/Calculate/Attack находятся в baseattack и публикуют
 //! исходный регион для общих visual/OnBeenAttacked/End. ID навыка остаётся
@@ -245,6 +247,7 @@ use super::firebolt::{FIRE_BOLT_SKILL_ID, execute_owned_monster_fire_bolt};
 use super::fireball::{FIRE_BALL_SKILL_ID, execute_owned_monster_fire_ball};
 use super::godpunishment::{GOD_PUNISHMENT_SKILL_ID, execute_owned_monster_god_punishment};
 use super::heal::{HEAL_SKILL_ID, execute_owned_monster_heal, is_heal_skill};
+use super::nonfun::{execute_owned_monster_non_fun, is_non_fun_skill};
 use super::heal2::HEAL_2_SKILL_ID;
 use super::superheal::SUPER_HEAL_SKILL_ID;
 use super::superheal2::SUPER_HEAL_2_SKILL_ID;
@@ -824,7 +827,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
-        if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id)
+        if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
             || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID)
         {
             return 1;
@@ -1101,6 +1104,7 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         FURY_SKILL_ID => Some(execute_owned_fury),
         RAGE_BREAK_SKILL_ID => Some(execute_owned_monster_rage_break),
         _ if is_immediate_state_skill(skill_id) => Some(execute_owned_monster_immediate_state),
+        _ if is_non_fun_skill(skill_id) => Some(execute_owned_monster_non_fun),
         _ => None,
     }
 }
