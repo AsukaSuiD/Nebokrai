@@ -250,7 +250,6 @@ impl CGame {
             | MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
-            | SOUL_MIRROR_SKILL_ID
             | BLIND_SKILL_ID
             | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
             SPIDER_WEB_SKILL_ID

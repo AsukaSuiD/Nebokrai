@@ -342,7 +342,7 @@ skill_owners! {
     CYinYang: Summon, USER_RESET_PHASE, Weapon => 0x139,
     CGodPunishment: Summon, COMMON_RESET_PHASE, Weapon => 0x13a,
     CSoulCollect: State, USER_OR_SUFFERER, Weapon => 0x13b,
-    CSoulMirror: Attack, USER, Weapon => 0x13c,
+    CSoulMirror: Attack, USER_RESET_PHASE, Weapon => 0x13c,
     CFireBall: Summon, USER_RESET_PHASE, Weapon => 0x13d,
     CChainLightning: Attack, USER_RESET_PHASE, Weapon => 0x13e,
     CThunderBlow: Summon, COMMON, Weapon => 0x13f,

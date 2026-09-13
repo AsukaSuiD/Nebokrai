@@ -293,6 +293,7 @@ use super::weak::WEAK_SKILL_ID;
 use super::zonalcast::{execute_owned_monster_zonal_cast, is_zonal_cast_skill};
 use super::firewall::FIRE_WALL_SKILL_ID;
 use super::chaossphere::CHAOS_SPHERE_SKILL_ID;
+use super::soulmirror::SOUL_MIRROR_SKILL_ID;
 use super::lightning::{LIGHTNING_SKILL_ID, execute_owned_monster_lightning};
 use super::chainlightning::{CHAIN_LIGHTNING_SKILL_ID, execute_owned_monster_chain_lightning};
 use super::infernol::{INFERNOL_SKILL_ID, execute_owned_monster_infernol};
@@ -1113,6 +1114,7 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         SNOW_STORM_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SNOW_STORM_SKILL_ID, Runtime>),
         FIRE_WALL_SKILL_ID => Some(execute_owned_monster_zonal_cast::<FIRE_WALL_SKILL_ID, Runtime>),
         CHAOS_SPHERE_SKILL_ID => Some(execute_owned_monster_zonal_cast::<CHAOS_SPHERE_SKILL_ID, Runtime>),
+        SOUL_MIRROR_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SOUL_MIRROR_SKILL_ID, Runtime>),
         LIGHTNING_SKILL_ID => Some(execute_owned_monster_lightning),
         CHAIN_LIGHTNING_SKILL_ID => Some(execute_owned_monster_chain_lightning),
         INFERNOL_SKILL_ID => Some(execute_owned_monster_infernol),

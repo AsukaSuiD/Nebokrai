@@ -1265,10 +1265,6 @@ use crate::gameserver::appserver::skills::soulcollect::{
     cancel_player_soul_collect, complete_player_soul_collect,
     execute_player_soul_collect, is_soul_collect_skill, SOUL_COLLECT_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::soulmirror::{
-    cancel_player_soul_mirror, complete_player_soul_mirror,
-    execute_player_soul_mirror, is_soul_mirror_skill, SOUL_MIRROR_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::godbless::GOD_BLESS_SKILL_ID;
 use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
@@ -38933,12 +38929,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                SOUL_MIRROR_SKILL_ID => Some(complete_player_soul_mirror(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 _ => None,
             }
         } else {
@@ -39032,9 +39022,6 @@ impl CGame {
             }
             SOUL_COLLECT_SKILL_ID => {
                 cancel_player_soul_collect(self, player_id, &mut player_ai, runtime)
-            }
-            SOUL_MIRROR_SKILL_ID => {
-                cancel_player_soul_mirror(self, player_id, &mut player_ai, runtime)
             }
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
@@ -39390,7 +39377,6 @@ impl CGame {
             } => execute_player_monster_taming,
             _ if is_knock_out_dispatch(dispatch) => execute_player_knock_out,
             _ if is_soul_collect_skill(dispatch) => execute_player_soul_collect,
-            _ if is_soul_mirror_skill(dispatch) => execute_player_soul_mirror,
             _ if is_cure_target(dispatch) => execute_player_cure,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }

@@ -1,11 +1,12 @@
 //! Общее исполнение областных призывов Weak, PoisonFog, SnowStorm, YinYang,
-//! GodThunder, FireWall и ChaosSphere.
+//! GodThunder, FireWall, ChaosSphere и SoulMirror.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/weak.cpp,
 //! poisonfog.cpp, snowstorm.cpp, yinyang.cpp/yinyang2.cpp и
-//! godthunder.cpp/godthunder2.cpp, firewall.cpp и chaossphere.cpp.
+//! godthunder.cpp/godthunder2.cpp, firewall.cpp, chaossphere.cpp и
+//! soulmirror.cpp.
 //! Все формы Begin сохраняют базовую цель,
 //! создают visual loop1 и проверяют исходного U; отказ даёт End0 без extra2.
-//! Check использует абсолютный reuse. ChaosSphere вовсе не читает путь;
+//! Check использует абсолютный reuse. ChaosSphere и SoulMirror вовсе не читают путь;
 //! FireWall запрещает BLOCK1|2, Weak проверяет только дальность;
 //! PoisonFog требует арбалет. Player MP0 — тихий отказ, signed-разность допускает
 //! Move0; остальные CMoveShape проходят без запрета движения.
@@ -14,7 +15,7 @@
 //! Его AI читает только U и базовую точку. Weak в каждом AI проверяет смерть S,
 //! затем сохраняет её X/Y и очищает identity S; SnowStorm, YinYang и GodThunder
 //! оставляют S неизменной. Все они удерживают начальные координаты через callbacks.
-//! FireWall также сохраняет S. ChaosSphere превращает её в точку из единственной
+//! FireWall и SoulMirror также сохраняют S. ChaosSphere превращает её в точку из единственной
 //! пары прочитанных X/Y, без повторного чтения координат как у Weak.
 //! Одна таблица AI переживает MP→OnChangeStates→CAN→направление→visual0.
 //! PoisonFog повторно проверяет оружие после расхода MP, без возврата расхода.
@@ -22,7 +23,8 @@
 //!
 //! Задержка — unsigned start+delay; после visual0 нет нового active-gate в том же
 //! AI. PoisonFog перед visual1 разрешает captured U Move1 и берёт базовую точку
-//! после callback; остальные владельцы передают сохранённые координаты.
+//! после callback; SoulMirror передаёт owner-области current U, остальные
+//! владельцы передают сохранённые координаты.
 //! Любая попытка Summon завершается End1 независимо от её результата.
 //! Общий End сбрасывает фазу, разрешает свежий U Move1 и сохраняет actual argument.
 //! RegisteredSkill/SlotMap и общий kernel хранят единственное исполнение;
@@ -46,6 +48,7 @@ use super::rangedweaponcast::{
     prepare_ranged_weapon_player, spend_cast_mana, spend_cast_mana_without_text, terminal,
 };
 use super::snowstorm::{SNOW_STORM_SKILL_ID, summon_snow_storm};
+use super::soulmirror::{SOUL_MIRROR_SKILL_ID, apply_soul_mirror_area};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, end_state_skill, execute_owned_state_skill,
@@ -76,7 +79,7 @@ const CAN_BREAK: u32 = 10_006;
 pub(crate) const fn is_zonal_cast_skill(id: u32) -> bool {
     matches!(id, WEAK_SKILL_ID | POISON_FOG_SKILL_ID | SNOW_STORM_SKILL_ID
         | YIN_YANG_SKILL_ID | YIN_YANG_2_SKILL_ID | GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID
-        | FIRE_WALL_SKILL_ID | CHAOS_SPHERE_SKILL_ID)
+        | FIRE_WALL_SKILL_ID | CHAOS_SPHERE_SKILL_ID | SOUL_MIRROR_SKILL_ID)
 }
 
 pub(super) fn prepare_element_summon(
@@ -130,7 +133,7 @@ fn check_zonal_cast<Runtime: GameMainLoopRuntime>(
         if let Some(player) = text_player { game.send_skill_system_info(player, b"GS0278"); }
         return false;
     }
-    if id != CHAOS_SPHERE_SKILL_ID {
+    if !matches!(id, CHAOS_SPHERE_SKILL_ID | SOUL_MIRROR_SKILL_ID) {
         let path = game.skill_target_path(skill.lifecycle());
         let block = match id {
             WEAK_SKILL_ID => CastPathBlock::Ignore,
@@ -244,6 +247,7 @@ fn run_zonal_cast_ai<Runtime: GameMainLoopRuntime>(
         GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID => summon_god_thunder(game, instance, source, destination, runtime),
         FIRE_WALL_SKILL_ID => summon_fire_wall(game, instance, source, destination, runtime),
         CHAOS_SPHERE_SKILL_ID => summon_chaos_sphere(game, instance, source, runtime),
+        SOUL_MIRROR_SKILL_ID => apply_soul_mirror_area(game, instance, source, &properties, runtime),
         _ => {}
     }
     terminal(QueuedSkillExecutionState::Completed)
@@ -313,7 +317,12 @@ pub(crate) fn publish_zonal_cast_visual(game: &CGame, skill: &MoveShapeSkill, mo
     }
     let destination = match mode {
         0 => None,
-        1 => Some(if skill.id() == POISON_FOG_SKILL_ID { skill.lifecycle().destination() } else {
+        1 => Some(if skill.id() == SOUL_MIRROR_SKILL_ID {
+            (
+                source.get_tile_x().unwrap_or(i32::MIN),
+                source.get_tile_y().unwrap_or(i32::MIN),
+            )
+        } else if skill.id() == POISON_FOG_SKILL_ID { skill.lifecycle().destination() } else {
             resolve_skill_sufferer(game, skill.lifecycle())
                 .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
                 .map_or_else(|| skill.lifecycle().destination(), |target| (
