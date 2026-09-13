@@ -1825,51 +1825,33 @@ impl CServerRegion {
     pub(crate) fn add_god_thunder_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::godthunderphalanx::CGodThunderPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::godthunderphalanx::CGodThunderPhalanx)> {
+        if let Err(error) = self.add_object(
+            phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context,
+        ) {
+            return Err((error, phalanx));
+        }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes.insert(id, SummonedSkillShape::GodThunder(phalanx));
-        Ok(id)
-    }
-
-    pub(crate) fn add_god_thunder_2_phalanx<Context: ServerRegionMembershipContext>(
-        &mut self,
-        mut phalanx: super::skills::godthunderphalanx2::CGodThunderPhalanx2,
-        tile_x: i32, tile_y: i32, area_width: i32, area_height: i32,
-        now_ms: u32, context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
-        let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::GodThunder2(phalanx));
         Ok(id)
     }
 
     pub(crate) fn add_yin_yang_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::yinyangphalanx::CYinYangPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
-        for existing in self.owned_skill_phalanxes.values_mut() {
-            if let SummonedSkillShape::YinYang(existing) = existing {
-                if existing.skill_id() == phalanx.skill_id() {
-                    existing.replace_affect_region(phalanx.skill_level(), tile_x, tile_y);
-                }
-            }
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::yinyangphalanx::CYinYangPhalanx)> {
+        if let Err(error) = self.add_object(
+            phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context,
+        ) {
+            return Err((error, phalanx));
         }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes.insert(id, SummonedSkillShape::YinYang(phalanx));

@@ -291,6 +291,10 @@ use super::snowstorm::SNOW_STORM_SKILL_ID;
 use super::poisonfog::POISON_FOG_SKILL_ID;
 use super::weak::WEAK_SKILL_ID;
 use super::zonalcast::{execute_owned_monster_zonal_cast, is_zonal_cast_skill};
+use super::yinyang::YIN_YANG_SKILL_ID;
+use super::yinyang2::YIN_YANG_2_SKILL_ID;
+use super::godthunder::GOD_THUNDER_SKILL_ID;
+use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
@@ -1101,6 +1105,10 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         WEAK_SKILL_ID => Some(execute_owned_monster_zonal_cast::<WEAK_SKILL_ID, Runtime>),
         POISON_FOG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<POISON_FOG_SKILL_ID, Runtime>),
         SNOW_STORM_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SNOW_STORM_SKILL_ID, Runtime>),
+        YIN_YANG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<YIN_YANG_SKILL_ID, Runtime>),
+        YIN_YANG_2_SKILL_ID => Some(execute_owned_monster_zonal_cast::<YIN_YANG_2_SKILL_ID, Runtime>),
+        GOD_THUNDER_SKILL_ID => Some(execute_owned_monster_zonal_cast::<GOD_THUNDER_SKILL_ID, Runtime>),
+        GOD_THUNDER_2_SKILL_ID => Some(execute_owned_monster_zonal_cast::<GOD_THUNDER_2_SKILL_ID, Runtime>),
         HEAL_SKILL_ID => Some(execute_owned_monster_heal::<HEAL_SKILL_ID, Runtime>),
         HEAL_2_SKILL_ID => Some(execute_owned_monster_heal::<HEAL_2_SKILL_ID, Runtime>),
         SUPER_HEAL_SKILL_ID => Some(execute_owned_monster_heal::<SUPER_HEAL_SKILL_ID, Runtime>),

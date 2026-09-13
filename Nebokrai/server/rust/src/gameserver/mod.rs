@@ -172,6 +172,7 @@ pub(crate) mod appserver {
         pub(crate) mod godpunishmentphalanx;
         pub(crate) mod godthunder;
         pub(crate) mod godthunderphalanx;
+        pub(crate) mod elementphalanxattack;
         pub(crate) mod godthunder2;
         pub(crate) mod godthunderphalanx2;
         pub(crate) mod lightning;

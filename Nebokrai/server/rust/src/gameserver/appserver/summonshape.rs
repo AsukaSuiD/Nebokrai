@@ -35,7 +35,6 @@ use crate::gameserver::appserver::skills::weakphalanx::CWeakPhalanx;
 use crate::gameserver::appserver::skills::yinyangphalanx::CYinYangPhalanx;
 use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
-use crate::gameserver::appserver::skills::godthunderphalanx2::CGodThunderPhalanx2;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::shape::CShape;
@@ -67,7 +66,6 @@ pub(crate) enum SummonedSkillShape {
     YinYang(CYinYangPhalanx),
     GodPunishment(CGodPunishmentPhalanx),
     GodThunder(CGodThunderPhalanx),
-    GodThunder2(CGodThunderPhalanx2),
     HeartlessArrow(CHeartlessArrowPhalanx),
 }
 
@@ -141,7 +139,6 @@ impl SummonedSkillShape {
             Self::YinYang(shape) => shape.shape(),
             Self::GodPunishment(shape) => shape.shape(),
             Self::GodThunder(shape) => shape.shape(),
-            Self::GodThunder2(shape) => shape.shape(),
             Self::HeartlessArrow(shape) => shape.shape(),
         }
     }
@@ -172,7 +169,6 @@ impl SummonedSkillShape {
             Self::YinYang(shape) => shape.shape_mut(),
             Self::GodPunishment(shape) => shape.shape_mut(),
             Self::GodThunder(shape) => shape.shape_mut(),
-            Self::GodThunder2(shape) => shape.shape_mut(),
             Self::HeartlessArrow(shape) => shape.shape_mut(),
         }
     }
@@ -211,12 +207,11 @@ impl SummonedSkillShape {
             Self::SpiderMist(shape) => shape.encode_client_snapshot(),
             Self::SnowStorm(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Weak(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::YinYang(shape) => shape.encode_client_snapshot(),
+            Self::YinYang(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::GodPunishment(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
             }
             Self::GodThunder(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::GodThunder2(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
         }
     }
 
@@ -246,7 +241,6 @@ impl SummonedSkillShape {
             Self::YinYang(shape) => shape.master(),
             Self::GodPunishment(shape) => shape.master(),
             Self::GodThunder(shape) => shape.master(),
-            Self::GodThunder2(shape) => shape.master(),
             Self::HeartlessArrow(shape) => shape.master(),
         }
     }

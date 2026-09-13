@@ -1,175 +1,148 @@
-//! Периодическая область божественного грома `CGodThunderPhalanx` (`0x140`).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/godthunderphalanx.cpp`. Три таблицы уровней по адресам
-//! `0x006A509C/0x006A50A8/0x006A50B4` совпадают: это маска 3×3 из единиц.
-//! `Initialize` заранее расходует два значения MSVCRT RNG на каждую цель каждого
-//! окна и допускает повтор клетки. AI читает только текущее окно с шагом девять;
-//! формула затем расходует RNG на урон и критический удар для каждой цели.
-//! Критический множитель применяется в расширенной точности x87 и усекается к
-//! нулю при записи урона обратно в `i32`.
+//! Периодические области божественного грома 0x140/0x143.
+//! Источник: gameserver.exe/GameServer.pdb, godthunderphalanx{,2}.cpp.
+//! Первый вариант использует полную маску 3×3, второй — округлую 7×7 и
+//! предварительный обход боевых духов. Конструктор выделяет окна; Initialize
+//! после SetTile сохраняет X/Y RNG с повторами клеток. AI пишет last-attack
+//! до callbacks, а номер окна — после них. Массив имеет шаг полной площади,
+//! но wire передаёт его непрерывный префикс (life/frequency)*target_count.
+//! Нулевую частоту, выход числа целей за окно и невозможное выделение памяти
+//! отклоняем явно вместо исходного деления на ноль/выхода за массив.
+//! Для server decode 0x005F5D90 подтверждённого вызывающего пути нет;
+//! отдельный runtime API для него не создаётся.
 
-use super::fightdefense::truncate_original;
+use super::elementphalanxattack::ElementPhalanxAttack;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
+use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
+use super::godthunderphalanx2::{GOD_THUNDER_2_SCOPE, GOD_THUNDER_2_SCOPE_SIDE};
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
-use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
-const SCOPE_AREA: u32 = 9;
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GodThunderPhalanxTick { Pending, Attack { sampled_at_ms: u32 }, Expired }
+pub(crate) enum GodThunderParametersError {
+    UnknownSkill,
+    ZeroFrequency,
+    TooManyTargets,
+    CellArrayTooLarge,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CGodThunderPhalanx {
     shape: CShape,
-    master: MasterInfo,
+    attack: ElementPhalanxAttack,
     started_at_ms: u32,
     lifetime_ms: u32,
-    skill_level: i32,
     frequency_ms: u32,
-    minimum_attack: i32,
-    maximum_attack: i32,
-    element_modifier: i32,
     target_count: u32,
-    cch: i32,
     last_attack_ms: u32,
     attack_count: u32,
     cells: Vec<(i32, i32)>,
 }
 
-
-pub(crate) fn calculate_owned_god_thunder_attack(game: &mut CGame, phalanx: &CGodThunderPhalanx, target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let player = game.find_player(phalanx.master().master_id)?;
-    let combat = player.combat_properties();
-    let occupation = player.occupation();
-    let level = player.level();
-    let (divisor, minimum) = game.globe_setup().weapon_damage_factors();
-    let factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum);
-    let critical_rate = game.globe_setup().critical_rate();
-    Some(phalanx.calculate_attack(combat, occupation, level, factor, critical_rate, &mut |maximum| game.skill_random_below(maximum)))
-}
-
 impl CGodThunderPhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
-    pub(crate) fn new(
-        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
-        skill_level: i32, frequency_ms: u32, minimum_attack: i32,
-        maximum_attack: i32, element_modifier: i32, target_count: u32, cch: i32,
-    ) -> Self {
+    #[allow(clippy::too_many_arguments, reason = "поля конструктора исходной области")]
+    pub(crate) fn new_for_skill(
+        skill_id: u32, id: i32, master: MasterInfo, started_at_ms: u32,
+        lifetime_ms: u32, skill_level: i32, frequency_ms: u32,
+        minimum: i32, maximum: i32, element: i32, target_count: u32,
+        critical_chance: i32,
+    ) -> Result<Self, GodThunderParametersError> {
+        let area = match skill_id {
+            GOD_THUNDER_SKILL_ID => 9,
+            GOD_THUNDER_2_SKILL_ID => 49,
+            _ => return Err(GodThunderParametersError::UnknownSkill),
+        };
+        let windows = lifetime_ms.checked_div(frequency_ms)
+            .ok_or(GodThunderParametersError::ZeroFrequency)?;
+        if target_count > area { return Err(GodThunderParametersError::TooManyTargets); }
+        let count = windows.checked_mul(area)
+            .filter(|count| count.checked_mul(8).is_some())
+            .ok_or(GodThunderParametersError::CellArrayTooLarge)?;
+        let mut cells = Vec::new();
+        cells.try_reserve_exact(count as usize)
+            .map_err(|_| GodThunderParametersError::CellArrayTooLarge)?;
+        cells.resize(count as usize, (0, 0));
         let mut shape = CShape::with_constructor_defaults();
-        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
-        Self {
-            shape, master, started_at_ms, lifetime_ms, skill_level,
-            frequency_ms: frequency_ms.max(1), minimum_attack, maximum_attack,
-            element_modifier, target_count, cch, last_attack_ms: 0,
-            attack_count: 0, cells: Vec::new(),
-        }
+        shape.set_identity(ShapeIdentity {
+            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
+        });
+        Ok(Self {
+            shape,
+            attack: ElementPhalanxAttack {
+                master, skill_id, skill_level, minimum, maximum, element, critical_chance,
+            },
+            started_at_ms, lifetime_ms, frequency_ms, target_count,
+            last_attack_ms: 0, attack_count: 0, cells,
+        })
     }
 
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
-    pub(crate) const fn master(&self) -> MasterInfo { self.master }
-    pub(crate) fn finish(&mut self) { self.shape.set_change_state(SHAPE_CHANGE_DELETE); }
+    pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
+    pub(crate) const fn attack_snapshot(&self) -> ElementPhalanxAttack { self.attack }
+    pub(crate) const fn has_war_soul_pass(&self) -> bool {
+        self.attack.skill_id == GOD_THUNDER_2_SKILL_ID
+    }
+    pub(crate) const fn scope_area(&self) -> u32 {
+        if self.has_war_soul_pass() { 49 } else { 9 }
+    }
 
-    pub(crate) fn initialize(
-        &mut self, tile_x: i32, tile_y: i32,
-        random_below: &mut dyn FnMut(i32) -> i32,
-    ) {
-        let windows = self.lifetime_ms / self.frequency_ms;
-        self.cells = vec![(0, 0); windows.wrapping_mul(SCOPE_AREA) as usize];
-        let origin_x = tile_x.wrapping_sub(1);
-        let origin_y = tile_y.wrapping_sub(1);
-        for window in 0..windows {
-            for target in 0..self.target_count {
-                let x = random_below(3);
-                let y = random_below(3);
-                let index = window.wrapping_mul(SCOPE_AREA).wrapping_add(target) as usize;
-                if let Some(cell) = self.cells.get_mut(index) {
-                    *cell = (origin_x.wrapping_add(x), origin_y.wrapping_add(y));
-                }
+    pub(crate) fn initialize(&mut self, random: &mut dyn FnMut(i32) -> i32) {
+        let side = if self.has_war_soul_pass() { GOD_THUNDER_2_SCOPE_SIDE } else { 3 };
+        let rounded = self.has_war_soul_pass();
+        let area = self.scope_area() as usize;
+        let origin_x = self.shape.get_tile_x().unwrap_or(i32::MIN).wrapping_sub(side >> 1);
+        let origin_y = self.shape.get_tile_y().unwrap_or(i32::MIN).wrapping_sub(side >> 1);
+        self.cells.fill((0, 0));
+        for window in self.cells.chunks_exact_mut(area) {
+            for cell in window.iter_mut().take(self.target_count as usize) {
+                let (x, y) = loop {
+                    let x = random(side);
+                    let y = random(side);
+                    if !rounded || GOD_THUNDER_2_SCOPE[(y * side + x) as usize] != 0 {
+                        break (x, y);
+                    }
+                };
+                *cell = (origin_x.wrapping_add(x), origin_y.wrapping_add(y));
             }
         }
     }
 
-    pub(crate) fn tick(&mut self, now_ms: u32) -> GodThunderPhalanxTick {
-        if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
-            self.finish();
-            return GodThunderPhalanxTick::Expired;
-        }
-        if self.frequency_ms.wrapping_add(self.last_attack_ms) < now_ms {
-            self.last_attack_ms = now_ms;
-            self.attack_count = self.attack_count.wrapping_add(1);
-            return GodThunderPhalanxTick::Attack { sampled_at_ms: now_ms };
-        }
-        GodThunderPhalanxTick::Pending
+    pub(crate) const fn expired_at(&self, now: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.lifetime_ms) < now
+    }
+    pub(crate) const fn attack_due_at(&self, now: u32) -> bool {
+        self.frequency_ms.wrapping_add(self.last_attack_ms) < now
+    }
+    pub(crate) fn mark_attack_at(&mut self, now: u32) { self.last_attack_ms = now; }
+    pub(crate) fn advance_attack_window(&mut self) {
+        self.attack_count = self.attack_count.wrapping_add(1);
+    }
+    pub(crate) fn current_cell(&self, index: u32) -> Option<(i32, i32)> {
+        let index = self.attack_count.wrapping_mul(self.scope_area()).wrapping_add(index);
+        // Native может исчерпать массив до срока; не воспроизводим чтение
+        // чужой памяти и не создаём вместо него дополнительные клетки.
+        self.cells.get(index as usize).copied()
     }
 
-    pub(crate) fn attack_cells(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let window = self.attack_count.wrapping_sub(1);
-        let start = window.wrapping_mul(SCOPE_AREA) as usize;
-        self.cells
-            .get(start..start.saturating_add(SCOPE_AREA as usize))
-            .unwrap_or_default().iter().copied()
-            .take_while(|cell| *cell != (0, 0))
-    }
-
-    pub(crate) fn encode_client_snapshot(&self, mut now: impl FnMut() -> u32) -> Option<Vec<u8>> {
-        let first = now();
-        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first { 0 } else {
-            self.lifetime_ms.wrapping_sub(now()).wrapping_add(self.started_at_ms)
-        };
+    pub(crate) fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_i32(GOD_THUNDER_SKILL_ID as i32);
-            writer.write_i32(self.skill_level);
-            writer.write_i32(self.shape.identity().object_type);
-            writer.write_i32(self.shape.identity().id);
-            writer.write_u32(remained);
-            writer.write_u32(self.lifetime_ms);
-            writer.write_u32(self.frequency_ms);
-            let serialized_count = (self.lifetime_ms / self.frequency_ms).wrapping_mul(self.target_count);
-            writer.write_u32(serialized_count);
-            for &(x, y) in self.cells.iter().take(serialized_count as usize) {
-                writer.write_i32(x); writer.write_i32(y);
-            }
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u32(self.attack.skill_id);
+        writer.write_i32(self.attack.skill_level);
+        writer.write_i32(self.attack.master.master_type);
+        writer.write_i32(self.attack.master.master_id);
+        writer.write_u32(timed_client_state_time(self.started_at_ms, self.lifetime_ms, now));
+        writer.write_u32(self.lifetime_ms);
+        writer.write_u32(self.frequency_ms);
+        let count = (self.lifetime_ms / self.frequency_ms).wrapping_mul(self.target_count);
+        writer.write_u32(count);
+        for &(x, y) in self.cells.iter().take(count as usize) {
+            writer.write_i32(x); writer.write_i32(y);
         }
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
-    }
-
-    pub(crate) fn calculate_attack(
-        &self, combat: PlayerCombatProperties, occupation: u8, attacker_level: u8,
-        weapon_damage_factor: f32, critical_rate: f32,
-        random_below: &mut dyn FnMut(i32) -> i32,
-    ) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-        let width = self.maximum_attack.wrapping_sub(self.minimum_attack).wrapping_abs().wrapping_add(1);
-        let damage = self.minimum_attack.wrapping_add(random_below(width)).wrapping_add(self.element_modifier).max(0);
-        let mut attack = AttackInformation {
-            skill_id: GOD_THUNDER_SKILL_ID, skill_level: self.skill_level as u8,
-            attacker_type: self.master.master_type, attacker_id: self.master.master_id,
-            attacker_team_id: self.master.master_team_id,
-            attacker_faction_id: self.master.master_guild_id,
-            attacker_union_id: self.master.master_union_id,
-            hit_modifier: 100, damage_factor: weapon_damage_factor,
-            damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0,
-            damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }],
-        };
-        if random_below(100) < self.cch {
-            attack.critical = true;
-            for power in &mut attack.damages {
-                power.hp_damage = truncate_original(
-                    f64::from(power.hp_damage) * f64::from(critical_rate),
-                );
-            }
-        }
-        (attack, combat, occupation, attacker_level)
     }
 }

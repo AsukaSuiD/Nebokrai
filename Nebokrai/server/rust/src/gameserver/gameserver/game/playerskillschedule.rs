@@ -255,10 +255,6 @@ impl CGame {
             | CHAOS_SPHERE_SKILL_ID
             | LIGHTNING_SKILL_ID
             | SEAL_SKILL_ID
-            | YIN_YANG_SKILL_ID
-            | YIN_YANG_2_SKILL_ID
-            | GOD_THUNDER_SKILL_ID
-            | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID
             | SOUL_MIRROR_SKILL_ID
             | BLIND_SKILL_ID

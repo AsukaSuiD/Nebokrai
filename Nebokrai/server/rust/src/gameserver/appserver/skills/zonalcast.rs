@@ -1,6 +1,7 @@
-//! Общее исполнение областных призывов CWeak, CPoisonFog и CSnowStorm.
+//! Общее исполнение областных призывов Weak, PoisonFog, SnowStorm, YinYang и GodThunder.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/weak.cpp,
-//! poisonfog.cpp и snowstorm.cpp. Все формы Begin сохраняют базовую цель,
+//! poisonfog.cpp, snowstorm.cpp, yinyang.cpp/yinyang2.cpp и
+//! godthunder.cpp/godthunder2.cpp. Все формы Begin сохраняют базовую цель,
 //! создают visual loop1 и проверяют исходного U; отказ даёт End0 без extra2.
 //! Check использует абсолютный reuse и свежий путь. Weak не проверяет BLOCK2;
 //! PoisonFog требует арбалет. Player MP0 — тихий отказ, signed-разность допускает
@@ -8,21 +9,28 @@
 //!
 //! PoisonFog превращает найденную S в точку ещё до таблицы/reuse в Check.
 //! Его AI читает только U и базовую точку. Weak в каждом AI проверяет смерть S,
-//! затем сохраняет её X/Y и очищает identity S; SnowStorm оставляет S неизменной.
-//! Weak/SnowStorm удерживают найденные в начале AI координаты через callbacks.
+//! затем сохраняет её X/Y и очищает identity S; SnowStorm, YinYang и GodThunder
+//! оставляют S неизменной. Все они удерживают начальные координаты через callbacks.
 //! Одна таблица AI переживает MP→OnChangeStates→CAN→направление→visual0.
 //! PoisonFog повторно проверяет оружие после расхода MP, без возврата расхода.
 //! SnowStorm отправляет только visual-ошибки, без GS-текстов и лишнего MP-query.
 //!
 //! Задержка — unsigned start+delay; после visual0 нет нового active-gate в том же
 //! AI. PoisonFog перед visual1 разрешает captured U Move1 и берёт базовую точку
-//! после callback; два других владельца передают сохранённые координаты.
+//! после callback; остальные владельцы передают сохранённые координаты.
 //! Любая попытка Summon завершается End1 независимо от её результата.
 //! Общий End сбрасывает фазу, разрешает свежий U Move1 и сохраняет actual argument.
 //! RegisteredSkill/SlotMap и общий kernel хранят единственное исполнение;
 //! независимые формулы, конструкторы и регистрация областей остаются у владельцев.
+//! Общий префикс YinYang/GodThunder сохраняет Master(country0) и Player EM,
+//! затем читает свежую таблицу. Unsigned usage20015 умножается на расширенный
+//! literal0.01f и signed EM; FISTP с усечением выполняется до CCH и остальных
+//! запросов конструктора, без промежуточного округления к f32.
 
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::godthunder::{GOD_THUNDER_SKILL_ID, summon_god_thunder};
+use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
 use super::playercast::execute_registered_player_cast;
 use super::poisonfog::{POISON_FOG_SKILL_ID, summon_poison_fog};
 use super::rangedweaponcast::{
@@ -31,11 +39,16 @@ use super::rangedweaponcast::{
     prepare_ranged_weapon_player, spend_cast_mana, spend_cast_mana_without_text, terminal,
 };
 use super::snowstorm::{SNOW_STORM_SKILL_ID, summon_snow_storm};
+use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, end_state_skill, execute_owned_state_skill,
 };
 use super::weak::{WEAK_SKILL_ID, summon_weak};
+use super::weaponattack::source_master;
+use super::yinyang::{YIN_YANG_SKILL_ID, summon_yin_yang};
+use super::yinyang2::YIN_YANG_2_SKILL_ID;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
@@ -54,7 +67,23 @@ const REUSE: u32 = 10_005;
 const CAN_BREAK: u32 = 10_006;
 
 pub(crate) const fn is_zonal_cast_skill(id: u32) -> bool {
-    matches!(id, WEAK_SKILL_ID | POISON_FOG_SKILL_ID | SNOW_STORM_SKILL_ID)
+    matches!(id, WEAK_SKILL_ID | POISON_FOG_SKILL_ID | SNOW_STORM_SKILL_ID
+        | YIN_YANG_SKILL_ID | YIN_YANG_2_SKILL_ID | GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID)
+}
+
+pub(super) fn prepare_element_summon(
+    game: &CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+) -> Option<(MasterInfo, CSkillBaseProperties, i32)> {
+    let mut master = source_master(game, source)?;
+    master.master_country_id = 0;
+    let element = if source.1.object_type == 400 {
+        game.find_player(source.1.id)?.combat_properties().element_modify
+    } else { 0 };
+    let skill = game.registered_skill(instance)?;
+    let properties = game.skill_base_properties(skill.id(), skill.level())?.clone();
+    let modifier = properties.query_property(20_015);
+    let scaled = truncate_original(f64::from(modifier) * f64::from(0.01_f32) * f64::from(element));
+    Some((master, properties, scaled))
 }
 
 fn resolved_user(game: &CGame, skill: &MoveShapeSkill) -> Option<(i32, ShapeIdentity)> {
@@ -126,7 +155,7 @@ fn run_zonal_cast_ai<Runtime: GameMainLoopRuntime>(
             let target_identity = (target.shape().get_region_id(), target.shape().identity());
             if game.move_shape_health(target_identity.0, target_identity.1) == Some(0) {
                 game.update_registered_skill_visual(instance, 10);
-                if id == WEAK_SKILL_ID
+                if id != SNOW_STORM_SKILL_ID
                     && let Some((_, user)) = source.filter(|(_, user)| user.object_type == 400)
                 { game.send_skill_system_info(user.id, b"GS0285"); }
                 return terminal(QueuedSkillExecutionState::Rejected);
@@ -197,6 +226,8 @@ fn run_zonal_cast_ai<Runtime: GameMainLoopRuntime>(
             }
         }
         SNOW_STORM_SKILL_ID => summon_snow_storm(game, instance, source, destination, runtime),
+        YIN_YANG_SKILL_ID | YIN_YANG_2_SKILL_ID => summon_yin_yang(game, instance, source, destination, runtime),
+        GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID => summon_god_thunder(game, instance, source, destination, runtime),
         _ => {}
     }
     terminal(QueuedSkillExecutionState::Completed)
