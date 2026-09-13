@@ -1,10 +1,5 @@
-//! Вторая идентичность семейного состояния `CGodBlessState2` (`0x145`).
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/godblessstate2.cpp`. Layout, формулы, срок и визуальные
-//! пакеты начала совпадают с `GodBlessState`; обе идентичности взаимно
-//! вытесняют первый найденный экземпляр, сохраняя прочие загруженные дубли.
-//! End отличается: vtable 0x00660074 +0x1C = 0x005D5B80 помечает ended
-//! и удаляет точную запись sufferer, НЕ отправляя визуального завершения.
+//! ID CGodBlessState2 из gameserver.exe/GameServer.pdb, godblessstate2.cpp.
+//! Общий payload в godblessstate сохраняет его Begin с обязательным U,
+//! loop0 и End без visual; ID остаётся независимой записью в арене и DB.
 
 pub(crate) const GOD_BLESS_STATE_2_ID: u32 = 0x145;

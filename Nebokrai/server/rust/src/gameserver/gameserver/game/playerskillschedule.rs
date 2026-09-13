@@ -265,8 +265,6 @@ impl CGame {
             | POISON_FOG_SKILL_ID
             | SNOW_STORM_SKILL_ID
             | WEAK_SKILL_ID
-            | GOD_BLESS_SKILL_ID
-            | GOD_BLESS_2_SKILL_ID
             | GIBE_SKILL_ID => Some(PlayerSkillBeginPolicy::Inherited),
             SPIDER_WEB_SKILL_ID
             | KNOCK_OUT_SKILL_ID

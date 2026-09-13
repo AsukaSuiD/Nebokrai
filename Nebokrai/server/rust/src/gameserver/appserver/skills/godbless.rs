@@ -1,43 +1,56 @@
-//! Божественное благословение `CGodBless` (`0x12F`).
+//! Божественное благословение CGodBless/CGodBless2.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/godbless{,2}.cpp.
+//! Оба Begin сохраняют исходную цель в общей базе, создают visual loop1
+//! и проверяют только исходного U. Нет проверки S, пути или оружия.
+//! После абсолютного reuse источник не типа Player проходит без Move0;
+//! Player MP0 означает тихий отказ, иначе signed DWORD-разность допускает Move0.
+//! Отказ Begin вызывает End0 без дополнительного visual2.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/godbless.cpp`. Здесь находятся выбор цели, cooldown,
-//! двустадийный расход MP, задержка, `SkillExecutionKernel`, визуальный пакет,
-//! формулы трёх прибавок и replacement `GodBlessState`. Обычный неприручённый
-//! и не транспортный монстр подтверждённо заменяется самим заклинателем.
-//! `CGame` оставляет только доступ к владельцам, применение и доставку.
-//! Каждая прибавка сохраняет обе исходные точки округления до `float`, после
-//! чего x87 усекает итог к нулю перед созданием состояния.
-//! Семейный reuse-gate использует exact `CSkill::IsRestored`, отдельно от
-//! elapsed-задержки каста.
-//! Begin заканчивается возвратом Begun после создания исполнения. Проверки
-//! и эффекты первого AI остаются после этой границы; координатор вызывает AI
-//! в том же Run после постановки Attack, не сдвигая исходное время Begin.
-//! Первичная replacement-граница публикует настоящий AI источника. God1
-//! сначала завершает Extended Original/type0x12F, затем обе версии заменяют
-//! первый GodBless1/2 по runtime-позиции. Новый ctor и Begin выполняются
-//! после старого End; clock начала срока принадлежит Begin, не формуле.
-//! AI завершает skill через End(1) и при отказе нового state Begin
-//! (0x005B0930/0x00550E70); такой отказ не превращается в отмену каста.
+//! AI удерживает одну таблицу и найденные U/S через callbacks. GodBless
+//! при NULL S использует захваченного U; GodBless2 требует именно Monster
+//! при каждом входе AI, иначе Player получает visual10/GS0305 и End0.
+//! Обычный неприручённый монстр без Carriage AI заменяется свежим U,
+//! с записью базовых type/id S. Поэтому GodBless2 после такой замены и
+//! ожидания задержки может отвергнуть уже изменившуюся S на следующем AI.
+//! Нет проверки смерти или смены направления. Первый AI выполняет
+//! MP→OnChangeStates→CAN→visual0→condition; выпуск ждёт unsigned start+delay.
+//!
+//! После visual1 захваченный U даёт живой уровень оружия либо ноль.
+//! Свойства читаются в порядке MIN_COEFF→MIN→MAX_COEFF→MAX→ELEMENT_COEFF→ELEMENT.
+//! Каждое unsigned wrapping-произведение с 0.01f сохраняется в f32,
+//! затем прибавление константы отдельно сохраняется в f32. Значения живут
+//! через удаление прежнего состояния; только потом PERSIST→FISTP
+//! ELEMENT/MAX/MIN→ctor→primary Begin→append→безусловный UpdateProperty.
+//! Различие DelExStateByType у GodBless принадлежит общему установщику.
+//! Выпуск заканчивается End1 даже при отказе state Begin; ранние отказы — End0.
+//! Общий End сбрасывает фазу, разрешает свежий U либо S Move1 и сохраняет
+//! исходный аргумент. Общий kernel и SlotMap исключают отдельную копию исполнения.
 
-use super::baseattack::time_reached;
-use super::godblessstate::GodBlessState;
-use super::godbless2::GOD_BLESS_2_SKILL_ID;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::stateskill::finish_state_skill;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use super::godbless2::GOD_BLESS_2_SKILL_ID;
+use super::godblessstate::GodBlessState;
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::playercast::execute_registered_player_cast;
+use super::rangedweaponcast::{check_cast_mana, spend_cast_mana, terminal};
+use super::skillbaseproperties::CSkillBaseProperties;
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
+    execute_owned_state_skill, publish_state_skill_visual,
+};
+use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
-use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
+};
 
 pub(crate) const GOD_BLESS_SKILL_ID: u32 = 0x12f;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
-const USER_MP_LOSE: u32 = 2;
 const TARGET_ELEMENT_GAIN: u32 = 115;
 const TARGET_MINIMUM_GAIN: u32 = 116;
 const TARGET_MAXIMUM_GAIN: u32 = 117;
@@ -47,128 +60,170 @@ const TARGET_MAXIMUM_COEFFICIENT: u32 = 122;
 const DELAY_TIME: u32 = 10_001;
 const STATE_PERSIST_TIME: u32 = 10_002;
 const REUSE_DELAY_TIME: u32 = 10_005;
+const CAN_BE_BREAKED: u32 = 10_006;
 
-#[derive(Clone, Copy)]
-struct Target { identity: ShapeIdentity, x: i32, y: i32 }
-
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false } }
-
-fn requested_target(game: &CGame, region_id: i32, player_id: i32, skill_id: u32, dispatch: PlayerSkillDispatch) -> Option<Target> {
-    let requested = match dispatch {
-        PlayerSkillDispatch::Object { skill_id: requested_skill, target } if requested_skill == skill_id && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
-        PlayerSkillDispatch::SelfTarget { skill_id: requested_skill, .. } | PlayerSkillDispatch::Point { skill_id: requested_skill, .. } if requested_skill == GOD_BLESS_SKILL_ID && requested_skill == skill_id => ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID },
-        _ => return None,
-    };
-    let identity = if requested.object_type == MONSTER_TYPE {
-        let ordinary = game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(requested.id)).and_then(|monster| {
-            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            Some(!monster.is_tamed() && !monster.is_carriage(property))
-        }).unwrap_or(false);
-        if ordinary { ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID } } else { requested }
-    } else { requested };
-    let (x, y) = game.move_shape_target_tile(Some(region_id), identity)?;
-    Some(Target { identity, x, y })
+pub(crate) const fn is_god_bless_skill(skill_id: u32) -> bool {
+    matches!(skill_id, GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID)
 }
 
-fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-    match code {
-        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        _ => {}
+fn resolved_user(game: &CGame, skill: &MoveShapeSkill) -> Option<(i32, ShapeIdentity)> {
+    let (region, identity) = skill.lifecycle().user();
+    let user = resolve_state_move_shape(game, region, identity)?.shape();
+    Some((user.get_region_id(), user.identity()))
+}
+
+pub(crate) fn check_god_bless_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((region, identity)) = original_user else { return false; };
+    let Some(user) = resolve_state_move_shape(game, region, identity).map(|user| user.shape()) else { return false; };
+    let source = (user.get_region_id(), user.identity());
+    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        if let Some(player) = player { game.send_skill_system_info(player, b"GS0278"); }
+        return false;
     }
+    check_cast_mana(game, instance, source, &properties)
 }
 
-fn send_cast(game: &mut CGame, player_id: i32, skill_id: u32, target: Target, level: i32, apply: bool) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(if apply { 2 } else { 1 });
-    message.add_long(skill_id as i32);
-    message.add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if apply {
-        message.add_long(target.identity.object_type); message.add_long(target.identity.id); message.add_long(target.x); message.add_long(target.y);
-    } else { message.add_long(player.shape().get_direction()); }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+fn gain(properties: &CSkillBaseProperties, coefficient: u32, constant: u32, weapon: u32) -> f32 {
+    let coefficient = properties.query_property(coefficient);
+    let scaled = (f64::from(coefficient.wrapping_mul(weapon)) * f64::from(0.01_f32)) as f32;
+    let constant = properties.query_property(constant);
+    (f64::from(constant) + f64::from(scaled)) as f32
 }
 
-fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
-fn finish_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, _player_ai: &mut CPlayerAI, skill_id: u32, runtime: &mut Runtime) { restore_player_movement(game, player_id); finish_state_skill(game, player_id, skill_id, runtime); }
-fn abort_player_god_bless(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); }
-pub(crate) fn complete_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, skill_id).map(SkillExecutionKernel::dispatch) else { return false }; let skill_id = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id }; finish_player_god_bless(game, player_id, player_ai, skill_id, runtime); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed) }
-pub(crate) fn cancel_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = game.player_skill_execution(player_id, skill_id).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_god_bless(game, player_id); game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled) }
-
-fn gains(base: u32, coefficient: u32, weapon: u32) -> u32 {
-    let scaled_bits = coefficient.wrapping_mul(weapon);
-    let scaled = (f64::from(scaled_bits) * f64::from(0.01_f32)) as f32;
-    let gain = (f64::from(base) + f64::from(scaled)) as f32;
-    truncate_original(f64::from(gain)) as u32
-}
-
-pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    let skill_id = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
-    if !matches!(skill_id, GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID) { return terminal(QueuedSkillExecutionState::Rejected); }
-    if skill_id == GOD_BLESS_2_SKILL_ID && !matches!(dispatch, PlayerSkillDispatch::Object { target: ShapeIdentity { object_type: MONSTER_TYPE, .. }, .. }) {
-        game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10);
-        game.send_skill_system_info(player_id, b"GS0305");
+pub(crate) fn run_god_bless_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let skill_id = skill.id();
+    let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let source = resolved_user(game, skill);
+    let target = resolve_skill_sufferer(game, skill.lifecycle())
+        .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
+        .map(|target| (target.shape().get_region_id(), target.shape().identity()));
+    let Some(source) = source else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+    let monster = target.filter(|(_, identity)| identity.object_type == MONSTER_TYPE)
+        .and_then(|(region, identity)| game.find_region(region)?.base().find_monster_by_id(identity.id));
+    if skill_id == GOD_BLESS_2_SKILL_ID && monster.is_none() {
+        if let Some(player) = player {
+            game.update_registered_skill_visual(instance, 10);
+            game.send_skill_system_info(player, b"GS0305");
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(skill_id, game.skill_factory()), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(skill_id, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let mp_loss = properties.query_property(USER_MP_LOSE);
-    let delay = properties.query_property(DELAY_TIME);
-    let cooldown = properties.query_property(REUSE_DELAY_TIME);
-    let keep_time = properties.query_property(STATE_PERSIST_TIME);
-    let minimum_base = properties.query_property(TARGET_MINIMUM_GAIN);
-    let minimum_coefficient = properties.query_property(TARGET_MINIMUM_COEFFICIENT);
-    let maximum_base = properties.query_property(TARGET_MAXIMUM_GAIN);
-    let maximum_coefficient = properties.query_property(TARGET_MAXIMUM_COEFFICIENT);
-    let element_base = properties.query_property(TARGET_ELEMENT_GAIN);
-    let element_coefficient = properties.query_property(TARGET_ELEMENT_COEFFICIENT);
-    if game.player_skill_execution(player_id, skill_id).is_none() {
-        let started = runtime.now_milliseconds();
-        let cooldown_now = runtime.now_milliseconds();
-        if !skill_is_restored(
-            game.player_skill_last_used_ms(player_id, skill_id),
-            cooldown,
-            cooldown_now,
-        ) {
-            send_failure(game, player_id, 0x0d, mp_loss);
+    let ordinary_monster = monster.is_some_and(|monster| !monster.is_tamed() && !matches!(
+        monster.active_ai(), Some(ActiveMonsterAi::Carriage | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)),
+    ));
+    let target = if ordinary_monster {
+        let Some(target) = game.registered_skill(instance).and_then(|skill| resolved_user(game, skill)) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            skill.lifecycle_mut().set_sufferer_identity(target.1);
+        }
+        target
+    } else { target.unwrap_or(source) };
+    if stage == SkillStage::Begin {
+        if !spend_cast_mana(game, instance, player, &properties) {
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        if mp_loss == 0 || initial_mana < mp_loss { if mp_loss != 0 { send_failure(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
-        if requested_target(game, region_id, player_id, skill_id, dispatch).is_none() { return terminal(QueuedSkillExecutionState::Rejected); }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, skill_id).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    let Some(target) = requested_target(game, region_id, player_id, skill_id, dispatch) else { abort_player_god_bless(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
-    if game.player_skill_execution(player_id, skill_id).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if mana < mp_loss { send_failure(game, player_id, 7, mp_loss); abort_player_god_bless(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        send_cast(game, player_id, skill_id, target, level, false);
-        if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        let can_break = properties.query_property(CAN_BE_BREAKED);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_available(can_break != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
     }
-    let started = game.player_skill_execution(player_id, skill_id).map(SkillExecutionKernel::started_at_ms).expect("выполнение божественного благословения создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending); }
-    send_cast(game, player_id, skill_id, target, level, true);
-    let weapon = game.find_player(player_id).map(|player| player.weapon_damage_level(game.goods_factory()) as u32).unwrap_or(0);
-    let minimum_gain = gains(minimum_base, minimum_coefficient, weapon);
-    let maximum_gain = gains(maximum_base, maximum_coefficient, weapon);
-    let element_gain = gains(element_base, element_coefficient, weapon);
-    let user = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
-    let _ = game.with_published_player_ai(player_id, player_ai, |game| {
-        game.install_god_bless_state(region_id, target.identity, user, skill_id,
-            || GodBlessState::new(skill_id, 0, keep_time, minimum_gain, maximum_gain, element_gain), runtime)
-    });
-    if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_god_bless(game, player_id, player_ai, skill_id, runtime);
+    let delay = properties.query_property(DELAY_TIME);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(delay) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    game.update_registered_skill_visual(instance, 1);
+    let weapon = player.and_then(|player| game.find_player(player))
+        .map_or(0, |player| player.weapon_damage_level(game.goods_factory()) as u32);
+    let minimum = gain(&properties, TARGET_MINIMUM_COEFFICIENT, TARGET_MINIMUM_GAIN, weapon);
+    let maximum = gain(&properties, TARGET_MAXIMUM_COEFFICIENT, TARGET_MAXIMUM_GAIN, weapon);
+    let element = gain(&properties, TARGET_ELEMENT_COEFFICIENT, TARGET_ELEMENT_GAIN, weapon);
+    let _ = game.install_god_bless_state(source, target, skill_id, || {
+        let keep = properties.query_property(STATE_PERSIST_TIME);
+        let element = truncate_original(f64::from(element)) as u32;
+        let maximum = truncate_original(f64::from(maximum)) as u32;
+        let minimum = truncate_original(f64::from(minimum)) as u32;
+        GodBlessState::new(skill_id, keep, minimum, maximum, element)
+    }, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 
-pub(crate) const fn is_god_bless_skill(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } })
+pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::GodBless,
+        |game, instance, _, runtime| check_god_bless_cast(game, instance, original_user, runtime),
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_god_bless_ai,
+    )
+}
+
+struct GodBlessSkill<const ID: u32>;
+impl<const ID: u32> RegisteredStateSkill for GodBlessSkill<ID> {
+    const ID: u32 = ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::GodBless;
+    const VISUAL_FAILURES: &'static [u32] = if ID == GOD_BLESS_2_SKILL_ID { &[2, 7, 10, 13] } else { &[2, 7, 13] };
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::SuffererOrUser;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = None;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, _begin_target: StateSkillBeginTarget,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let user = game.registered_skill(instance).and_then(|skill| resolved_user(game, skill));
+        check_god_bless_cast(game, instance, user, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let outcome = run_god_bless_ai(game, instance, runtime);
+        match outcome.state {
+            QueuedSkillExecutionState::Rejected => end_state_skill(game, instance, 0, runtime),
+            QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::RejectedAfterUse =>
+                end_state_skill(game, instance, 1, runtime),
+            _ => outcome,
+        }
+    }
+}
+
+pub(crate) fn execute_owned_monster_god_bless<const ID: u32, Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<GodBlessSkill<ID>, Runtime>(game, owner, monster_id, target, skill_level, runtime)
+}
+
+pub(crate) fn publish_god_bless_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    match skill.id() {
+        GOD_BLESS_SKILL_ID => publish_state_skill_visual::<GodBlessSkill<GOD_BLESS_SKILL_ID>>(game, skill, mode),
+        GOD_BLESS_2_SKILL_ID => publish_state_skill_visual::<GodBlessSkill<GOD_BLESS_2_SKILL_ID>>(game, skill, mode),
+        _ => {}
+    }
 }

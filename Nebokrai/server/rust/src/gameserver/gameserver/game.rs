@@ -1334,10 +1334,7 @@ use crate::gameserver::appserver::skills::godthunderphalanx::{
 use crate::gameserver::appserver::skills::godthunderphalanx2::{
     calculate_owned_god_thunder_2_attack, GodThunder2PhalanxTick,
 };
-use crate::gameserver::appserver::skills::godbless::{
-    cancel_player_god_bless, complete_player_god_bless, execute_player_god_bless,
-    is_god_bless_skill, GOD_BLESS_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::godbless::GOD_BLESS_SKILL_ID;
 use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
     GOD_BLESS_STATE_ID,
@@ -38979,13 +38976,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => Some(complete_player_god_bless(
-                    self,
-                    player_id,
-                    skill_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 CURE_SKILL_ID => Some(complete_player_cure(
                     self,
                     player_id,
@@ -39243,9 +39233,6 @@ impl CGame {
                 cancel_player_snow_storm(self, player_id, &mut player_ai, runtime)
             }
             WEAK_SKILL_ID => cancel_player_weak(self, player_id, &mut player_ai, runtime),
-            GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => {
-                cancel_player_god_bless(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
             PROMOTION_SKILL_ID => {
                 cancel_player_promotion(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
@@ -39608,7 +39595,6 @@ impl CGame {
             _ if is_god_thunder_2_dispatch(dispatch) => execute_player_god_thunder_2,
             _ if is_soul_collect_skill(dispatch) => execute_player_soul_collect,
             _ if is_soul_mirror_skill(dispatch) => execute_player_soul_mirror,
-            _ if is_god_bless_skill(dispatch) => execute_player_god_bless,
             _ if is_cure_target(dispatch) => execute_player_cure,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }

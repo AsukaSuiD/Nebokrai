@@ -246,6 +246,8 @@ use super::basemagic::{BASE_MAGIC_SKILL_ID as BASE_MAGIC_PROJECTILE_SKILL_ID, ex
 use super::firebolt::{FIRE_BOLT_SKILL_ID, execute_owned_monster_fire_bolt};
 use super::fireball::{FIRE_BALL_SKILL_ID, execute_owned_monster_fire_ball};
 use super::godpunishment::{GOD_PUNISHMENT_SKILL_ID, execute_owned_monster_god_punishment};
+use super::godbless::{GOD_BLESS_SKILL_ID, execute_owned_monster_god_bless};
+use super::godbless2::GOD_BLESS_2_SKILL_ID;
 use super::heal::{HEAL_SKILL_ID, execute_owned_monster_heal, is_heal_skill};
 use super::nonfun::{execute_owned_monster_non_fun, is_non_fun_skill};
 use super::heal2::HEAL_2_SKILL_ID;
@@ -828,7 +830,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
         if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
-            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID)
+            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID)
         {
             return 1;
         }
@@ -1090,6 +1092,8 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         FIRE_BOLT_SKILL_ID => Some(execute_owned_monster_fire_bolt),
         FIRE_BALL_SKILL_ID => Some(execute_owned_monster_fire_ball),
         GOD_PUNISHMENT_SKILL_ID => Some(execute_owned_monster_god_punishment),
+        GOD_BLESS_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_SKILL_ID, Runtime>),
+        GOD_BLESS_2_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_2_SKILL_ID, Runtime>),
         HEAL_SKILL_ID => Some(execute_owned_monster_heal::<HEAL_SKILL_ID, Runtime>),
         HEAL_2_SKILL_ID => Some(execute_owned_monster_heal::<HEAL_2_SKILL_ID, Runtime>),
         SUPER_HEAL_SKILL_ID => Some(execute_owned_monster_heal::<SUPER_HEAL_SKILL_ID, Runtime>),

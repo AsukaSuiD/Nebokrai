@@ -1,47 +1,22 @@
-//! Каноническое состояние божественного благословения `CGodBlessState` (`0x12F`).
+//! Состояния CGodBlessState/CGodBlessState2 с общей формулой и DB-записью.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/godblessstate{,2}.cpp.
+//! Срок и три прибавки принадлежат payload; независимые U/S, ended и visual —
+//! тому же поколенческому экземпляру общей арены. DB-запись из 20 байтов содержит
+//! ID, остаток и min/max/element. Decode получает часы перед полями; ctor оставляет время 0.
+//! Остаток требует второго чтения времени только до наступления срока,
+//! AI завершает точный ключ при строгом unsigned start+keep < now.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/godblessstate.cpp`. Состояние владеет сроком и тремя
-//! прибавками. Игрок сохраняет сужение прибавок до `u16` и ограничение атаки
-//! `INT_MAX`; монстр применяет исходное wrapping-сложение полных `u32`.
-//! `CGame` только координирует независимых владельцев и around-доставку.
-//! Обе идентичности используют общую 20-байтовую persisted-запись: ID,
-//! remaining time и три прибавки; загрузка активируется при spatial login.
-//! Обе concrete vtable направляют `GetRemainedTime` на точное тело
-//! `0x00601480` с отдельным вторым чтением часов для положительного остатка.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! End вариантов различается: vtable 0x00661864 → 0x00601610 выполняет
-//! visual → ended → GetSufferer → RemoveState; у GodBless2 vtable 0x00660074
-//! ведёт на 0x005D5B80 с тем же хвостом, но БЕЗ visual. Прямой End не читает
-//! часы; AI проверяет срок и вызывает это же завершение точного экземпляра.
-//! God1 вызывает visual только при существующем ресурсе; Update(1)
-//! 0x00601880 учитывает visual.ended и GetSufferer, затем общий visual-tail.
-//! NULL sufferer оставляет завершённый payload для внешнего destructor;
-//! одноимённая форма в другом регионе не владеет этим поколенческим ключом.
-
-//! Restart воспроизводит только Begin(NULL, holder) (0x00601790/0x005EE380):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
-//! GodBless1 создаёт принадлежащий записи loop=1 visual без немедленного пакета.
-//! GodBless2 требует ненулевой User и при таком restart возвращает 0 до базы.
-
-//! Unserialize 0x00601830 сохраняет один собственный clock в timestamp;
-//! decode получает его в now_ms для этой wire-записи, а restart не заменяет его.
-
-//! Общий OnUpdateProperties 0x00601690: GetSufferer → существующий visual
-//! Update(0) → type600/400 и RTTI → min/max/element_modify. Monster setters
-//! складывают полные raw DWORD с модификаторами; player сохраняет WORD gains.
-//! God2 Begin 0x005EE380 создаёт loop=0 БЕЗ initial Update, поэтому первый
-//! property visual отправляет BFE03 и завершает ресурс; формула работает далее.
-//! DecodeExStates назначает sufferer до Begin: loaded player получает формулу
-//! даже при отказе Begin(NULL,holder), но отсутствующий visual не подменяется.
-//! Первичный ctor 0x00601370/0x005EE0B0 оставляет timestamp=0, без часов.
-//! Begin God1 требует sufferer, God2 — user; общий CState::Begin 0x005DBD70
-//! читает один clock только при ненулевом user. Первичная установка делает
-//! это после End прежнего экземпляра, до append и property callback.
-//! Silent visual и base user/sufferer metadata переходят общему arena-owner
-//! в той же границе без промежуточного callback; persisted codec не меняется.
+//! Объектный Begin God1 требует S, God2 — U; при ненулевом U базовые часы
+//! предшествуют чтению регионов U/S. Loop1/0 создаётся без initial Update.
+//! Restart(NULL, holder) God1 сохраняет U и время, заменяет S и visual;
+//! God2 отказывает до базы, сохраняя запись. SetRegion переносит оба региона.
+//! Property удерживает первую S через отдельный fresh-S visual, затем меняет
+//! min/max/element: у игрока WORD-прибавки и потолок INT_MAX атаки, у монстра
+//! полное wrapping-сложение DWORD. Loop0 God2 заканчивается после первого
+//! BFE03; отсутствие visual не подавляет формулу, в том числе после загрузки.
+//! End God1 делает visual1 → ended → fresh S → RemoveState, God2 пропускает
+//! visual. Часов и fallback к держателю нет; чужая арена не владеет ключом.
+//! SlotMap и общий wire-код заменяют native указатели и STL без нового runtime.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual,
@@ -71,9 +46,9 @@ pub(crate) struct GodBlessState {
 }
 
 impl GodBlessState {
-    pub(crate) const fn new(skill_id: u32, started_at_ms: u32, keep_time_ms: u32, minimum_attack_gain: u32, maximum_attack_gain: u32, element_gain: u32) -> Self {
+    pub(crate) const fn new(skill_id: u32, keep_time_ms: u32, minimum_attack_gain: u32, maximum_attack_gain: u32, element_gain: u32) -> Self {
         debug_assert!(matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID));
-        Self { skill_id, started_at_ms, keep_time_ms, minimum_attack_gain, maximum_attack_gain, element_gain }
+        Self { skill_id, started_at_ms: 0, keep_time_ms, minimum_attack_gain, maximum_attack_gain, element_gain }
     }
     pub(crate) fn begin_for_install(
         &mut self,
@@ -96,7 +71,9 @@ impl GodBlessState {
         if !matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID) {
             return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
         }
-        Ok(Self::new(skill_id, now_ms, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
+        let mut state = Self::new(skill_id, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?);
+        state.started_at_ms = now_ms;
+        Ok(state)
     }
 
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }

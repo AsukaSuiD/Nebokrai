@@ -2321,7 +2321,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn god_bless_state(&self) -> Option<GodBlessState> { self.state_entries.first::<GodBlessState>().copied() }
 
 
 

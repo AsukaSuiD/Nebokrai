@@ -29,7 +29,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun, GodBless,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -87,6 +87,7 @@ impl RegisteredPlayerCastOwner {
             id if super::immediatestate::is_immediate_state_skill(id) => Self::ImmediateState,
             id if super::heal::is_heal_skill(id) => Self::Heal,
             id if super::nonfun::is_non_fun_skill(id) => Self::NonFun,
+            id if super::godbless::is_god_bless_skill(id) => Self::GodBless,
             _ => return None,
         })
     }
@@ -111,6 +112,7 @@ impl RegisteredPlayerCastOwner {
             Self::ImmediateState => super::immediatestate::execute_player_immediate_state::<Runtime>,
             Self::Heal => super::heal::execute_player_heal::<Runtime>,
             Self::NonFun => super::nonfun::execute_player_non_fun::<Runtime>,
+            Self::GodBless => super::godbless::execute_player_god_bless::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,
