@@ -849,6 +849,13 @@ impl CMonster {
         }
     }
 
+    /// Отложенный AutoStart передаёт Begin тому же экземпляру навыка до AI.
+    /// Прежние Swordship/WuXing уже подготовлены на границе входа в область.
+    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
+        self.selected_base_ai_mut().map(CBaseAI::begin_pending_back_stage_skill_ids)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn back_stage_skill_id(&self, index: usize) -> Option<u32> {
         self.selected_base_ai()?.back_stage_skill_id(index)
     }
@@ -1851,7 +1858,8 @@ impl CMonster {
         }
         if skill_ended
             && self.current_active_attack_cast(factory).is_some_and(|cast| {
-                super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(cast.dispatch().skill_id).is_some()
+                !super::skills::immediatestate::is_property_state_skill(cast.dispatch().skill_id)
+                    && super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(cast.dispatch().skill_id).is_some()
             })
         {
             self.move_shape.shape_mut().set_action(1);
@@ -2158,7 +2166,9 @@ impl CMonster {
         if termination.is_none() {
             self.finish_attack_skill_resources(skill_id);
         }
-        if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
+        if !super::skills::immediatestate::is_property_state_skill(skill_id)
+            && super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some()
+        {
             self.move_shape.finish_immediate_skill(skill_id, factory);
         }
         self.move_shape.set_current_skill_id(None);

@@ -1,29 +1,14 @@
-//! Каноническое состояние `COriginState`.
-//!
-//! Игрок получает знаково расширенные младшие 16 бит параметра через
-//! wrapping-сложение с `element_modify`. Состояние `304` не имеет собственного
-//! таймера или визуального сообщения. Monster-ветвь передаёт полный signed gain
-//! в wrapping-additive `SetElementModify`; clamp/factor применяет итоговый
-//! monster property getter.
-//! Constructor RVA `0x00201210` задаёт ID `0x130` и нулевой gain.
-//! Exact persisted-запись общей пары `0x005E23D0/0x00601350` — `ID + i32 gain`.
-
-//! End +0x1C таблицы 0x00661814 →0x005ECFC0→CState::End0x005DBCE0:
-//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin и возвращает 1.
-//! Restart Begin(NULL, holder) сохраняет user и timestamp, снимает IsEnded;
-//! собственных guards, visual, часов и сброса payload нет.
-//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
-//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
-//! от payload и не заменяет отсутствующего user держателем состояния.
-//! Runtime COrigin::AI0x005AFA70 вызывает state Begin(self,self).
-
-//! OnUpdateProperties (точный vtable +0x24 OriginState) сначала
-//! разрешает GetSufferer; NULL возвращает 0. Type600/400 и RTTI выбирают
-//! живые monster modifiers либо player tagProperty. Визуала, таймера,
-//! повторного пересчёта и чтения итогового monster getter в этом callback нет.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/originstate.cpp.
-
+//! Постоянная сила стихии COriginState.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/originstate.cpp/.h.
+//! Primary Begin(U,S) в immediatestateinstallation читает базовые часы.
+//! DB-restart Begin(NULL,S) сохраняет U/timestamp, обновляет S и снимает ended.
+//! End отмечает ended, затем удаляет себя через свежий GetUser; NULL U
+//! не заменяется держателем. SetRegion меняет только регион U.
+//! Property читает свежую S без ended-gate: игрок знаково расширяет i16 gain
+//! и складывает с element_modify с переполнением; монстр прибавляет полный
+//! i32 к модификатору. Итоговый monster getter сохраняет свои clamp/factor.
+//! Default задаёт нулевой gain; DB8 — little-endian ID + i32 gain.
+//! SlotMap хранит базу отдельно от payload. Собственных часов AI и visual нет.
 
 use super::origin::ORIGIN_SKILL_ID;
 use crate::gameserver::appserver::states::state::resolve_applied_state_sufferer;

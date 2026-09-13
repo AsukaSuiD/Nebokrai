@@ -10,6 +10,8 @@
 //! Удалённый callback-ом экземпляр не заменяется новым совпадением ID.
 //! Released из concrete End оставляет исполнение активным; даже терминальный
 //! результат AI не разрешает расписанию удалить выпущенный callback-ом cast.
+//! Немедленные состояния используют тот же вход без создания visual;
+//! прежний visual при таком Begin не заменяется.
 
 use super::kernel::{PlayerSkillExecution, SkillStage, SkillTermination};
 use super::stateskill::state_skill_outcome;
@@ -27,7 +29,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -82,6 +84,7 @@ impl RegisteredPlayerCastOwner {
             super::heartlessarrow::HEARTLESS_ARROW_SKILL_ID => Self::HeartlessArrow,
             super::heartlessarrow2::HEARTLESS_ARROW_2_SKILL_ID
                 | super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID => Self::HeartlessArrowArea,
+            id if super::immediatestate::is_property_state_skill(id) => Self::ImmediateState,
             _ => return None,
         })
     }
@@ -99,6 +102,7 @@ impl RegisteredPlayerCastOwner {
         let execute = match self {
             Self::BaseProjectile => super::baseprojectilecast::execute_player_base_projectile::<Runtime>,
             Self::GodPunishment => super::godpunishment::execute_player_god_punishment::<Runtime>,
+            Self::ImmediateState => super::immediatestate::execute_player_immediate_state::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,
@@ -166,6 +170,30 @@ pub(super) fn execute_registered_player_cast<Runtime: GameMainLoopRuntime>(
     materialize: impl FnOnce(PlayerSkillDispatch, u32) -> PlayerSkillExecution,
     run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
 ) -> QueuedSkillExecutionOutcome {
+    execute_registered_player_cast_impl(
+        game, player_id, instance, dispatch, runtime, Some(visual_kind), check, materialize, run_ai,
+    )
+}
+
+pub(super) fn execute_registered_player_cast_without_visual<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+    check: impl FnOnce(&mut CGame, RegisteredSkill, i32, &mut Runtime) -> bool,
+    materialize: impl FnOnce(PlayerSkillDispatch, u32) -> PlayerSkillExecution,
+    run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
+) -> QueuedSkillExecutionOutcome {
+    execute_registered_player_cast_impl(
+        game, player_id, instance, dispatch, runtime, None, check, materialize, run_ai,
+    )
+}
+
+fn execute_registered_player_cast_impl<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime, visual_kind: Option<SkillVisualEffectKind>,
+    check: impl FnOnce(&mut CGame, RegisteredSkill, i32, &mut Runtime) -> bool,
+    materialize: impl FnOnce(PlayerSkillDispatch, u32) -> PlayerSkillExecution,
+    run_ai: impl FnOnce(&mut CGame, RegisteredSkill, &mut Runtime) -> QueuedSkillExecutionOutcome,
+) -> QueuedSkillExecutionOutcome {
     let Some(skill) = game.registered_skill(instance) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
@@ -187,7 +215,9 @@ pub(super) fn execute_registered_player_cast<Runtime: GameMainLoopRuntime>(
     let Some(skill) = game.registered_skill_mut(instance) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
-    skill.replace_visual_effect(SkillVisualEffect::new(visual_kind, 1));
+    if let Some(visual_kind) = visual_kind {
+        skill.replace_visual_effect(SkillVisualEffect::new(visual_kind, 1));
+    }
     let mut execution = materialize(dispatch, skill.lifecycle().started_at_ms());
     execution.kernel_mut().clear_phase_for_end();
     if !skill.install_player_execution(execution) {

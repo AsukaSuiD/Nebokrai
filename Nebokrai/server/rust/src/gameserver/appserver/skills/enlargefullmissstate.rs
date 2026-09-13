@@ -1,23 +1,12 @@
-//! Каноническая достигнутая часть `CEnlargeFullMissState`.
-//! OnUpdateProperties (0x005E2120) читает живого GetSufferer и применяет
-//! подтверждённую player-only формулу без visual и часов; NULL даёт false.
-//!
-//! Для игрока состояние `603` прибавляет младшие 16 бит знакового параметра
-//! к `full_miss` точным WORD-сложением с переполнением. Собственного
-//! визуального сообщения и таймера нет. DB-запись состоит ровно из
-//! little-endian ID и знаковой 32-битной прибавки.
-//! Constructor RVA `0x001E2080` задаёт ID `0x25B` и нулевой gain; `Default`
-//! сохраняет этот контракт без временного base-state/SEH noise.
-
-//! End +0x1C таблицы 0x0065F044 →0x005ECFC0→CState::End0x005DBCE0:
-//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin и возвращает 1.
-//! Restart Begin(NULL, holder) сохраняет user и timestamp, снимает IsEnded;
-//! собственных guards, visual, часов и сброса payload нет.
-//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
-//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
-//! от payload и не заменяет отсутствующего user держателем состояния.
-//! Runtime state Begin0x00516830 получает одинаковый EBP в обоих аргументах.
+//! Постоянное полное уклонение CEnlargeFullMissState.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/enlargefullmissstate.cpp/.h.
+//! Property читает свежую S без ended-gate; только игрок получает WORD
+//! wrapping-add младших 16 бит gain. Собственных visual и часов AI нет.
+//! Primary Begin(U,S) в immediatestateinstallation читает базовые часы;
+//! DB-restart Begin(NULL,S) сохраняет U/timestamp, обновляет S и снимает ended.
+//! End отмечает ended и удаляет себя через свежий U, не подставляя держателя;
+//! SetRegion меняет только регион U. SlotMap хранит базу отдельно от payload.
+//! Default задаёт нулевой gain; DB8 — little-endian ID + i32 gain.
 
 use super::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
 use crate::gameserver::appserver::moveshape::StateKey;

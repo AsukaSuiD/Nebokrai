@@ -287,9 +287,9 @@ use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES};
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
-use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
-use crate::gameserver::appserver::skills::enlargemaxhpstate::{ENLARGE_MAX_HP_STATE_BYTES, EnlargeMaxHpState};
-use crate::gameserver::appserver::skills::enlargemaxmpstate::{ENLARGE_MAX_MP_STATE_BYTES, EnlargeMaxMpState};
+use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
+use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
+use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
 use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
@@ -312,7 +312,7 @@ use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
 use crate::gameserver::appserver::skills::blindstate::BlindState;
 use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
-use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
+use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::{
     PillarState,
 };
@@ -346,7 +346,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, SkillCategory, SkillOwner};
 use crate::gameserver::appserver::skills::statefactory::{decode_state_record_into_cache, known_state_record_offsets, known_state_record_spans};
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
-use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
+use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
     TianShenXiaFanState,
 };
@@ -1964,55 +1964,8 @@ impl CMoveShape {
         self.state_entries.first::<TaiJiState>().copied()
     }
 
-    pub(crate) fn replace_taiji_state(&mut self, state: TaiJiState) -> Option<TaiJiState> {
-        self.remove_serialized_state_record(state.skill_id(), TAIJI_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        {
-            let previous = self.state_entries.take_first::<TaiJiState>();
-            self.state_entries.append(state);
-            previous
-        }
-    }
-
-    pub(crate) fn replace_enlarge_max_hp_state(
-        &mut self,
-        state: EnlargeMaxHpState,
-    ) -> Option<EnlargeMaxHpState> {
-        self.remove_serialized_state_record(state.skill_id(), ENLARGE_MAX_HP_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        {
-            let previous = self.state_entries.take_first::<EnlargeMaxHpState>();
-            self.state_entries.append(state);
-            previous
-        }
-    }
-
-    pub(crate) fn replace_enlarge_full_miss_state(
-        &mut self,
-        state: EnlargeFullMissState,
-    ) -> Option<EnlargeFullMissState> {
-        let previous = self.state_entries.take_first::<EnlargeFullMissState>();
-        self.remove_serialized_state_record(state.skill_id(), ENLARGE_FULL_MISS_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        self.state_entries.append(state);
-        previous
-    }
-
     pub(crate) fn enlarge_full_miss_state(&self) -> Option<EnlargeFullMissState> {
         self.state_entries.first::<EnlargeFullMissState>().copied()
-    }
-
-    pub(crate) fn replace_enlarge_max_mp_state(
-        &mut self,
-        state: EnlargeMaxMpState,
-    ) -> Option<EnlargeMaxMpState> {
-        self.remove_serialized_state_record(state.skill_id(), ENLARGE_MAX_MP_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        {
-            let previous = self.state_entries.take_first::<EnlargeMaxMpState>();
-            self.state_entries.append(state);
-            previous
-        }
     }
 
     pub(crate) fn enlarge_max_hp_state(&self) -> Option<EnlargeMaxHpState> {
@@ -2021,16 +1974,6 @@ impl CMoveShape {
 
     pub(crate) fn enlarge_max_mp_state(&self) -> Option<EnlargeMaxMpState> {
         self.state_entries.first::<EnlargeMaxMpState>().copied()
-    }
-
-    pub(crate) fn replace_origin_state(&mut self, state: OriginState) -> Option<OriginState> {
-        self.remove_serialized_state_record(state.skill_id(), ORIGIN_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        {
-            let previous = self.state_entries.take_first::<OriginState>();
-            self.state_entries.append(state);
-            previous
-        }
     }
 
     pub(crate) fn origin_state(&self) -> Option<OriginState> {

@@ -1,24 +1,13 @@
-//! Каноническая достигнутая часть `CEnlargeMaxHpState`.
-//! OnUpdateProperties (0x005E2420) читает живого GetSufferer и применяет
-//! подтверждённую player-only формулу без visual и часов; NULL даёт false.
-//!
-//! Для игрока состояние `601` складывает текущий максимум HP и знаковый
-//! параметр как `u32` с переполнением, после чего ограничивает результат
-//! значением `i32::MAX`. Собственного визуального сообщения и таймера нет.
-//! Исходный owner PDB — `skills/enlargemaxhpstate.cpp/.h`, точная пара
-//! GameServer. Constructor RVA `0x001E2350` задаёт skill ID `0x259` и нулевой
-//! gain; `Default` выражает этот контракт без временного CState/STL noise.
-//! Exact persisted-запись общей пары `0x005E23D0/0x00601350` — `ID + i32 gain`.
-
-//! End +0x1C таблицы 0x0065F0E4 →0x005ECFC0→CState::End0x005DBCE0:
-//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin и возвращает 1.
-//! Restart Begin(NULL, holder) сохраняет user и timestamp, снимает IsEnded;
-//! собственных guards, visual, часов и сброса payload нет.
-//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
-//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
-//! от payload и не заменяет отсутствующего user держателем состояния.
-//! Runtime state Begin0x00516D00 получает одинаковый EBP в обоих аргументах.
+//! Постоянное увеличение максимума HP CEnlargeMaxHpState.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/enlargemaxhpstate.cpp/.h.
+//! Property читает свежую S без ended-gate; только игрок получает u32
+//! wrapping-add gain к максимуму HP с ограничением i32::MAX.
+//! Primary Begin(U,S) в immediatestateinstallation читает базовые часы;
+//! DB-restart Begin(NULL,S) сохраняет U/timestamp, обновляет S и снимает ended.
+//! End отмечает ended и удаляет себя через свежий U, не подставляя держателя;
+//! SetRegion меняет только регион U. SlotMap хранит базу отдельно от payload.
+//! Default задаёт нулевой gain; DB8 — little-endian ID + i32 gain.
+//! Собственных visual и часов AI нет.
 
 use super::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
 use crate::gameserver::appserver::moveshape::StateKey;

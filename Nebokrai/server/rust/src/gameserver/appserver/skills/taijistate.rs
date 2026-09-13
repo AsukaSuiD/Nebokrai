@@ -1,29 +1,14 @@
-//! Каноническая достигнутая часть `CTaiJiState`.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает постоянное
-//! состояние `0x12d` без собственного визуального эффекта. Для игрока
-//! `OnUpdateProperties` использует младшие 16 бит параметра и насыщает
-//! сопротивление стихиям до `i32::MAX`. Монстр передаёт полный signed gain в
-//! wrapping-additive `CMonster::SetElementResistant`; minimum/factor остаются
-//! у итогового monster property getter-а.
-//! Exact-пара `Serialize/Unserialize` `0x005E23D0/0x00601350` сохраняет
-//! восьмибайтную запись `ID + signed gain`.
-
-//! End +0x1C таблицы 0x006617C4 →0x005ECFC0→CState::End0x005DBCE0:
-//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601050: null user завершает Begin с отказом до базы,
-//! без изменения IsEnded, timer и payload. Restart сохраняет именно этот отказ.
-//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
-//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
-//! от payload и не заменяет отсутствующего user держателем состояния.
-//! Runtime CTaiJi::AI0x005AF770 вызывает state Begin(self,self).
-
-//! OnUpdateProperties (точный vtable +0x24 TaiJiState) сначала
-//! разрешает GetSufferer; NULL возвращает 0. Type600/400 и RTTI выбирают
-//! живые monster modifiers либо player tagProperty. Визуала, таймера,
-//! повторного пересчёта и чтения итогового monster getter в этом callback нет.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/taijistate.cpp.
-
+//! Постоянное сопротивление стихиям CTaiJiState.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/taijistate.cpp/.h.
+//! Primary Begin(U,S) в immediatestateinstallation читает базовые часы.
+//! Begin(NULL,S), включая DB-restart, отказывает до изменения базы/ended.
+//! End отмечает ended, затем удаляет себя через свежий GetUser; NULL U
+//! не заменяется держателем. SetRegion меняет только регион U.
+//! Property читает свежую S без ended-gate: игрок складывает u16 gain с
+//! сопротивлением как u32 и ограничивает i32::MAX, монстр прибавляет полный
+//! i32 к модификатору. Итоговый monster getter сохраняет свои clamp/factor.
+//! Default задаёт нулевой gain; DB8 — little-endian ID + i32 gain.
+//! SlotMap хранит базу отдельно от payload. Собственных часов AI и visual нет.
 
 use super::taiji::TAIJI_SKILL_ID;
 use crate::gameserver::appserver::states::state::resolve_applied_state_sufferer;
@@ -36,7 +21,7 @@ use crate::gameserver::appserver::player::PlayerCombatProperties;
 
 pub(crate) const TAIJI_STATE_BYTES: usize = 8;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TaiJiState {
     element_resistance_gain: i32,
 }
@@ -123,34 +108,3 @@ pub(crate) fn end_tai_ji_state(
     }
     end_base_applied_state(game, region_id, holder, key, TAIJI_STATE_BYTES)
 }
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранён недостигнутый конструктор по умолчанию; общий callback свойств реализован.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taijistate.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taijistate.h
-
-// ============================================================================
-// FUNCTION: CTaiJiState::CTaiJiState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taijistate.cpp:24
-// RVA: 0x00200FD0
-// ADDRESS: 00600fd0
-// PROTOTYPE: undefined __thiscall CTaiJiState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// CTaiJiState::OnUpdateProperties (0x006010F0) реализован
-// в update_tai_ji_state_properties; monster modifier меняется напрямую.
-
-// COMPONENT_VARIANT_END: GameServer

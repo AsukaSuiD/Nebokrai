@@ -4916,41 +4916,6 @@ impl CPlayer {
 
 
 
-    pub(crate) fn replace_taiji_state(
-        &mut self,
-        state: super::skills::taijistate::TaiJiState,
-    ) -> Option<super::skills::taijistate::TaiJiState> {
-        self.move_shape.replace_taiji_state(state)
-    }
-
-    pub(crate) fn replace_enlarge_max_hp_state(
-        &mut self,
-        state: super::skills::enlargemaxhpstate::EnlargeMaxHpState,
-    ) -> Option<super::skills::enlargemaxhpstate::EnlargeMaxHpState> {
-        self.move_shape.replace_enlarge_max_hp_state(state)
-    }
-
-    pub(crate) fn replace_enlarge_full_miss_state(
-        &mut self,
-        state: super::skills::enlargefullmissstate::EnlargeFullMissState,
-    ) -> Option<super::skills::enlargefullmissstate::EnlargeFullMissState> {
-        self.move_shape.replace_enlarge_full_miss_state(state)
-    }
-
-    pub(crate) fn replace_enlarge_max_mp_state(
-        &mut self,
-        state: super::skills::enlargemaxmpstate::EnlargeMaxMpState,
-    ) -> Option<super::skills::enlargemaxmpstate::EnlargeMaxMpState> {
-        self.move_shape.replace_enlarge_max_mp_state(state)
-    }
-
-    pub(crate) fn replace_origin_state(
-        &mut self,
-        state: super::skills::originstate::OriginState,
-    ) -> Option<super::skills::originstate::OriginState> {
-        self.move_shape.replace_origin_state(state)
-    }
-
     pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
         self.move_shape.promotion_heal_recover_factor()
     }

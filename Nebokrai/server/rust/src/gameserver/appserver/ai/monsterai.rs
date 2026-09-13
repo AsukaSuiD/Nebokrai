@@ -148,7 +148,8 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                 let monster = region.base().find_monster_by_id(monster_id)?;
                 if !monster.selected_base_ai()?.stiffen_attack_needs_end() { return None; }
                 let skill = monster.move_shape().current_skill(game.skill_factory())?;
-                matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash)
+                (matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash)
+                    || crate::gameserver::appserver::skills::immediatestate::is_property_state_skill(skill.id()))
                     .then_some((region.region_id(), monster.move_shape().shape().identity(), skill.id()))
             });
             let (release_target, ended_skill) = if let Some((region, source, skill_id)) = registered {

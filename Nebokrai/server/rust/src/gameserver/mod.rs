@@ -269,6 +269,7 @@ pub(crate) mod appserver {
         pub(crate) mod superhealstate2;
         pub(crate) mod huoxieshu;
         pub(crate) mod immediatestate;
+        pub(crate) mod immediatestateinstallation;
         pub(crate) mod infernol;
         pub(crate) mod jucut;
         pub(crate) mod kerosene;
