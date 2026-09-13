@@ -1272,9 +1272,7 @@ use crate::gameserver::appserver::skills::hearten::{
 use crate::gameserver::appserver::skills::gibe::{
     cancel_player_gibe, execute_player_gibe, GIBE_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::heal::{
-    cancel_player_heal, complete_player_heal, execute_player_heal, is_heal_skill,
-};
+use crate::gameserver::appserver::skills::heal::is_heal_skill;
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
@@ -29011,43 +29009,9 @@ impl CGame {
                 let Some(current) = self.move_shape_health(target_region, target) else { return false };
                 let Some(maximum) = self.move_shape_maximum_health(target_region, target) else { return false };
                 let value = current.wrapping_add(gain).min(maximum);
-                match target.object_type {
-                    MONSTER_TYPE => {
-                        let Some(monster) = self.find_region_mut(target_region)
-                            .and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.id))
-                            else { return false };
-                        monster.set_hit_points(value);
-                    }
-                    1_100 | 1_200 => {
-                        let Some(build) = self.find_region_mut(target_region)
-                            .and_then(|owner| owner.stationary_build_mut(target))
-                            else { return false };
-                        build.set_hp(value);
-                    }
-                    _ => return false,
-                }
+                if self.set_move_shape_health(target_region, target, value).is_none() { return false; }
             }
-            match target.object_type {
-                PLAYER_TYPE => { let _ = self.publish_player_states(target.id); }
-                MONSTER_TYPE => {
-                    if let Some(owner) = self.find_region(target_region) {
-                        let _ = self.publish_owned_monster_states(owner.base(), target.id);
-                    }
-                }
-                1_100 | 1_200 => {
-                    if let Some(health) = self.move_shape_health(target_region, target) {
-                        let mut message = CMessage::new(0x000b_fe02);
-                        message.add_long(target.object_type);
-                        message.add_long(target.id);
-                        message.add_ulong(health);
-                        message.add_ulong(0);
-                        message.add_short(0);
-                        message.add_short(0);
-                        let _ = self.send_move_shape_around(target_region, target, &message);
-                    }
-                }
-                _ => {}
-            }
+            let _ = self.publish_move_shape_states(target_region, target);
         }
         if resolve_state_move_shape(self, region_id, holder)
             .and_then(|shape| shape.applied_state::<ConsumableRestoreState>(key)).is_none()
@@ -29113,6 +29077,42 @@ impl CGame {
                 Some(monster.maximum_hp(property))
             }
             1_100 | 1_200 => Some(self.find_region(region_id)?.stationary_build(holder)?.max_hp),
+            _ => None,
+        }
+    }
+
+    /// Общий virtual SetHP для живых получателей восстановления. Ограничение
+    /// прибавки и порядок getters принадлежат конкретному состоянию.
+    pub(crate) fn set_move_shape_health(
+        &mut self, region_id: i32, target: ShapeIdentity, health: u32,
+    ) -> Option<()> {
+        match target.object_type {
+            PLAYER_TYPE => self.find_player_mut(target.id)?.set_health(health),
+            MONSTER_TYPE => self.find_region_mut(region_id)?.base_mut()
+                .find_monster_by_id_mut(target.id)?.set_hit_points(health),
+            1_100 | 1_200 => self.find_region_mut(region_id)?.stationary_build_mut(target)?.set_hp(health),
+            _ => return None,
+        }
+        Some(())
+    }
+
+    /// OnChangeStates после восстановления: игрок сохраняет ретрансляцию
+    /// группе, монстр и строение — базовый BFE02 и рассылку вокруг формы.
+    pub(crate) fn publish_move_shape_states(&mut self, region_id: i32, target: ShapeIdentity) -> Option<()> {
+        match target.object_type {
+            PLAYER_TYPE => self.publish_player_states(target.id),
+            MONSTER_TYPE => self.publish_owned_monster_states(self.find_region(region_id)?.base(), target.id),
+            1_100 | 1_200 => {
+                let mut message = CMessage::new(0x000b_fe02);
+                message.add_long(target.object_type);
+                message.add_long(target.id);
+                message.add_ulong(self.move_shape_health(region_id, target)?);
+                message.add_ulong(0);
+                message.add_short(0);
+                message.add_short(0);
+                let _ = self.send_move_shape_around(region_id, target, &message);
+                Some(())
+            }
             _ => None,
         }
     }
@@ -39019,13 +39019,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                _ if is_heal_skill(skill_id) => Some(complete_player_heal(
-                    self,
-                    player_id,
-                    skill_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 MONSTER_BASE_ATTACK_SKILL_ID => Some(finish_player_monster_base_attack(self, player_id, &mut player_ai, runtime, true)),
                 MONSTER_RANGE_ATTACK_SKILL_ID => Some(finish_player_monster_range_attack(self, player_id, &mut player_ai, runtime, true)),
                 LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
@@ -39276,9 +39269,6 @@ impl CGame {
                 cause.uses_nonzero_end(),
                 runtime,
             ),
-            _ if is_heal_skill(skill_id) => {
-                cancel_player_heal(self, player_id, skill_id, &mut player_ai, runtime)
-            }
                 _ => {
                     if let Some(player) = self.find_player_mut(player_id) {
                         player.restore_player_ai(player_ai);
@@ -39598,14 +39588,6 @@ impl CGame {
             _ if is_seal_target(dispatch) => execute_player_seal,
             _ if dispatch.skill_id() == HEARTEN_SKILL_ID => execute_player_hearten,
             _ if dispatch.skill_id() == PROMOTION_SKILL_ID => execute_player_promotion,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. } => is_heal_skill(skill_id),
-                PlayerSkillDispatch::Object { skill_id, target } => {
-                    is_heal_skill(skill_id)
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                }
-            } => execute_player_heal,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }

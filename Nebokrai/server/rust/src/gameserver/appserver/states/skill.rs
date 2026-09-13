@@ -400,6 +400,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::heartlessarrow2::publish_heartless_arrow_visual(self, skill, mode),
             SkillVisualEffectKind::BaseProjectile =>
                 crate::gameserver::appserver::skills::baseprojectilecheck::publish_base_projectile_visual(self, skill, mode),
+            SkillVisualEffectKind::Heal =>
+                crate::gameserver::appserver::skills::heal::publish_heal_visual(self, skill, mode),
             SkillVisualEffectKind::Ignition => {
                 if !crate::gameserver::appserver::skills::ignition::publish_ignition_visual(self, skill, mode) {
                     return;

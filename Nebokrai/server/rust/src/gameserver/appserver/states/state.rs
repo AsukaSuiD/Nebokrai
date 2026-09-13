@@ -757,7 +757,8 @@ state_callbacks! {
         },
         skills::healstate::end_heal_state,
         skills::healstate::restart_heal_state,
-        |_, _, _, _, _| true
+        |_, _, _, _, _| true,
+        set_state_sufferer_region
     ),
     StateData::PoisonArrow(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {

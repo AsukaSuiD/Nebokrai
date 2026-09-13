@@ -279,9 +279,7 @@ use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissS
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
-use crate::gameserver::appserver::skills::healstate::{
-    HEAL_STATE_BYTES, HealState,
-};
+use crate::gameserver::appserver::skills::healstate::HealState;
 use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
@@ -1864,52 +1862,6 @@ impl CMoveShape {
 
 
 
-    pub(crate) fn replace_heal_state(
-        &mut self,
-        removed_skill_id: u32,
-        state: HealState,
-    ) -> Option<HealState> {
-        let key = self.state_entries.keys::<HealState>().into_iter().find(|key| {
-            self.state_entries.get(*key).and_then(HealState::as_data_ref)
-                .is_some_and(|current| current.skill_id() == removed_skill_id)
-        });
-        let previous = key.and_then(|key| self.state_entries.take::<HealState>(key));
-        self.remove_serialized_state_record(removed_skill_id, HEAL_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded_for_install());
-        self.state_entries.append(state);
-        previous
-    }
-
-    pub(crate) fn remove_serialized_heal_states(&mut self, skill_ids: &[u32]) {
-        for skill_id in skill_ids {
-            self.remove_serialized_state_record(*skill_id, HEAL_STATE_BYTES);
-        }
-    }
-
-    pub(crate) fn remove_serialized_heal_state(&mut self, skill_id: u32, occurrence: usize) {
-        if let Some(offset) = known_state_record_offsets(&self.ex_states).into_iter()
-            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(skill_id))
-            .nth(occurrence)
-        {
-            self.remove_serialized_state_record_at(offset, HEAL_STATE_BYTES);
-        }
-    }
-
-
-
-    pub(crate) fn remove_heal_state_key(&mut self, key: StateKey) -> Option<HealState> {
-        let state = HealState::as_data_ref(self.state_entries.get(key)?)?;
-        let skill_id = state.skill_id();
-        let occurrence = self.state_entries.keys::<HealState>().into_iter()
-            .take_while(|current| *current != key)
-            .filter(|current| self.state_entries.get(*current).and_then(HealState::as_data_ref)
-                .is_some_and(|state| state.skill_id() == skill_id))
-            .count();
-        let state = self.state_entries.take::<HealState>(key)?;
-        self.remove_serialized_heal_state(skill_id, occurrence);
-        Some(state)
-    }
-
 
 
 
@@ -1958,13 +1910,6 @@ impl CMoveShape {
     pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {
         self.state_entries.iter::<DefenseShieldState>().find_map(|state| match state {
             DefenseShieldState::Promotion(state) => Some(state.magic_attack_factor()),
-            _ => None,
-        })
-    }
-
-    pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
-        self.state_entries.iter::<DefenseShieldState>().find_map(|state| match state {
-            DefenseShieldState::Promotion(state) => Some(state.heal_recover_factor()),
             _ => None,
         })
     }

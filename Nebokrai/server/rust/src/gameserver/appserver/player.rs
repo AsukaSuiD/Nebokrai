@@ -4902,28 +4902,7 @@ impl CPlayer {
 
 
 
-    pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
-        self.move_shape.promotion_heal_recover_factor()
-    }
 
-
-
-    pub(crate) fn replace_heal_state(
-        &mut self,
-        removed_skill_id: u32,
-        state: super::skills::healstate::HealState,
-    ) -> Option<super::skills::healstate::HealState> {
-        self.move_shape
-            .replace_heal_state(removed_skill_id, state)
-    }
-
-    pub(crate) fn remove_serialized_heal_states(&mut self, skill_ids: &[u32]) {
-        self.move_shape.remove_serialized_heal_states(skill_ids);
-    }
-
-    pub(crate) fn remove_serialized_heal_state(&mut self, skill_id: u32, occurrence: usize) {
-        self.move_shape.remove_serialized_heal_state(skill_id, occurrence);
-    }
 
 
     pub(crate) fn replace_boss_blue_quake_state(

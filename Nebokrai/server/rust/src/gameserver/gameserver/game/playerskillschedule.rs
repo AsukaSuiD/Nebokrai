@@ -282,10 +282,6 @@ impl CGame {
             | ITEM_SKILL_2_ID
             | RAGE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
             _ if is_non_fun_skill(skill_id) => Some(PlayerSkillBeginPolicy::Inherited),
-            _ if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) =>
-            {
-                Some(PlayerSkillBeginPolicy::Owner)
-            }
             _ => None,
         }
     }
