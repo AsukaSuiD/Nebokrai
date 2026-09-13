@@ -41,6 +41,7 @@ pub(crate) enum SkillVisualEffectKind {
     ZonalCast,
     Lightning,
     ChainLightning,
+    Infernol,
     Blind,
     Rush,
     Rush2,

@@ -29,7 +29,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun, GodBless, ZonalCast, Lightning, ChainLightning,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun, GodBless, ZonalCast, Lightning, ChainLightning, Infernol,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -91,6 +91,7 @@ impl RegisteredPlayerCastOwner {
             id if super::zonalcast::is_zonal_cast_skill(id) => Self::ZonalCast,
             super::lightning::LIGHTNING_SKILL_ID => Self::Lightning,
             super::chainlightning::CHAIN_LIGHTNING_SKILL_ID => Self::ChainLightning,
+            super::infernol::INFERNOL_SKILL_ID => Self::Infernol,
             _ => return None,
         })
     }
@@ -119,6 +120,7 @@ impl RegisteredPlayerCastOwner {
             Self::ZonalCast => super::zonalcast::execute_player_zonal_cast::<Runtime>,
             Self::Lightning => super::lightning::execute_player_lightning::<Runtime>,
             Self::ChainLightning => super::chainlightning::execute_player_chain_lightning::<Runtime>,
+            Self::Infernol => super::infernol::execute_player_infernol::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,

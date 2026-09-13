@@ -415,6 +415,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::lightning::publish_lightning_visual(self, skill, mode),
             SkillVisualEffectKind::ChainLightning =>
                 crate::gameserver::appserver::skills::chainlightning::publish_chain_lightning_visual(self, skill, mode),
+            SkillVisualEffectKind::Infernol =>
+                crate::gameserver::appserver::skills::infernol::publish_infernol_visual(self, skill, mode),
             SkillVisualEffectKind::Blind =>
                 crate::gameserver::appserver::skills::blind::publish_blind_visual(self, skill, mode),
             SkillVisualEffectKind::Rush | SkillVisualEffectKind::Rush2 =>

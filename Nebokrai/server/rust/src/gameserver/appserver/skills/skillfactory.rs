@@ -335,7 +335,7 @@ skill_owners! {
     CFireBolt: Summon, USER_RESET_PHASE, Weapon => 0x132,
     CLightning: Attack, COMMON_RESET_PHASE, Weapon => 0x133,
     CFireWall: Summon, USER_RESET_PHASE, Weapon => 0x134,
-    CInfernol: Attack, USER, Weapon => 0x135,
+    CInfernol: Attack, USER_RESET_PHASE, Weapon => 0x135,
     CSevenShootingStar: Attack, STAR, Weapon => 0x136,
     CChaosSphere: Summon, USER_RESET_PHASE, Weapon => 0x137,
     CSeal: Attack, USER, Weapon => 0x138,

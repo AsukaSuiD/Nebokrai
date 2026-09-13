@@ -1,11 +1,13 @@
-//! Прямое элементальное попадание Lightning и ChainLightning.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightning.cpp
-//! и chainlightning.cpp, Attack/CalculateAttackPower.
+//! Прямое элементальное попадание Lightning, ChainLightning и Infernol.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightning.cpp,
+//! chainlightning.cpp и infernol.cpp, Attack/CalculateAttackPower.
 //! Допуск, смерть цели и список повторных попаданий принадлежат AI/Attack
 //! владельца. Здесь сохраняются PK источника, свежая таблица Calculate и сырой
 //! OnBeenAttacked; отсутствие таблицы оставляет исходный UNKNOWN/1 и пустой урон.
-//! ChainLightning читает уровень цели и оружейный множитель, а после контакта
-//! начисляет RP источнику; Lightning сохраняет единичный множитель без этих чтений.
+//! ChainLightning и Infernol читают уровень цели и оружейный множитель;
+//! только ChainLightning после контакта начисляет RP источнику. Lightning
+//! сохраняет единичный множитель без этих чтений. Infernol не читает usage
+//! 20002: его final modifier остаётся конструкторским нулём.
 //! EM игрока захватывается до таблицы. Его масштабирование и усечение выполнены
 //! до MAX→MIN→RNG→свежего MIN→живого AddElement, затем CCH→RNG100.
 //! Расширенное вычисление EM и критического множителя
@@ -13,12 +15,44 @@
 
 use super::chainlightning::CHAIN_LIGHTNING_SKILL_ID;
 use super::fightdefense::truncate_original;
+use super::infernol::INFERNOL_SKILL_ID;
+use super::lightning::LIGHTNING_SKILL_ID;
 use super::weaponattack::{SourceProperty, apply_weapon_critical, source_master, source_property};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectElementProfile {
+    Lightning,
+    ChainLightning,
+    Infernol,
+}
+
+impl DirectElementProfile {
+    fn from_skill_id(skill_id: u32) -> Option<Self> {
+        match skill_id {
+            LIGHTNING_SKILL_ID => Some(Self::Lightning),
+            CHAIN_LIGHTNING_SKILL_ID => Some(Self::ChainLightning),
+            INFERNOL_SKILL_ID => Some(Self::Infernol),
+            _ => None,
+        }
+    }
+
+    const fn uses_weapon_modifier(self) -> bool {
+        matches!(self, Self::ChainLightning | Self::Infernol)
+    }
+
+    const fn reads_damage_modifier(self) -> bool {
+        !matches!(self, Self::Infernol)
+    }
+
+    const fn increases_player_rp(self) -> bool {
+        matches!(self, Self::ChainLightning)
+    }
+}
 
 fn calculate(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
@@ -29,11 +63,14 @@ fn calculate(
         player.combat_properties().element_modify
     } else { 0 };
     let Some(skill) = game.registered_skill(instance) else { return; };
+    let Some(profile) = DirectElementProfile::from_skill_id(skill.id()) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
     attack.skill_id = skill.id();
     attack.skill_level = skill.level() as u8;
-    attack.damage_modifier = properties.query_property(20_002) as i32;
-    if skill.id() == CHAIN_LIGHTNING_SKILL_ID {
+    attack.damage_modifier = if profile.reads_damage_modifier() {
+        properties.query_property(20_002) as i32
+    } else { 0 };
+    if profile.uses_weapon_modifier() {
         let Some(level) = game.move_shape_level(target.0, target.1) else { return; };
         attack.damage_factor = if source.1.object_type == 400 {
             let Some(player) = game.find_player(source.1.id) else { return; };
@@ -64,9 +101,14 @@ pub(super) fn apply_direct_element_attack<Runtime: GameMainLoopRuntime>(
     let Some(target_shape) = resolve_state_move_shape(game, target.0, target.1) else { return; };
     if std::ptr::eq(source_shape, target_shape) { return; }
     let Some(master) = source_master(game, source) else { return; };
-    let chain = game.registered_skill(instance).is_some_and(|skill| skill.id() == CHAIN_LIGHTNING_SKILL_ID);
+    let profile = game.registered_skill(instance)
+        .and_then(|skill| DirectElementProfile::from_skill_id(skill.id()));
     let mut attack = AttackInformation::for_master(master);
     calculate(game, instance, source, target, &mut attack);
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
-    if chain && source.1.object_type == 400 { game.increase_owned_player_rp(source.1.id, true, 0); }
+    if profile.is_some_and(DirectElementProfile::increases_player_rp)
+        && source.1.object_type == 400
+    {
+        game.increase_owned_player_rp(source.1.id, true, 0);
+    }
 }

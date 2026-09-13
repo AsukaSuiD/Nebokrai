@@ -225,7 +225,6 @@ impl CGame {
             BASE_ATTACK_SKILL_ID
             | SEVEN_SHOOTING_STAR_SKILL_ID
             | THUNDER_BLOW_SKILL_ID
-            | INFERNOL_SKILL_ID
             | LITTLE_STAR_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID

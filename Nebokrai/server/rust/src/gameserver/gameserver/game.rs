@@ -1073,9 +1073,6 @@ use crate::gameserver::appserver::skills::roar::ROAR_SKILL_ID;
 use crate::gameserver::appserver::skills::energyholding::ENERGY_HOLDING_SKILL_ID;
 use crate::gameserver::appserver::skills::poisonfog::POISON_FOG_SKILL_ID;
 use crate::gameserver::appserver::skills::poisonfogphalanx::PoisonFogPhalanxTick;
-use crate::gameserver::appserver::skills::infernol::{
-    cancel_player_infernol, execute_player_infernol, is_infernol_dispatch, INFERNOL_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::sevenshootingstar::{
     cancel_player_seven_shooting_star, execute_player_seven_shooting_star,
     is_seven_shooting_star_dispatch, SEVEN_SHOOTING_STAR_SKILL_ID,
@@ -38984,9 +38981,6 @@ impl CGame {
             ITEM_SKILL_2_ID => {
                 cancel_player_item_skill_2(self, player_id, &mut player_ai, runtime)
             }
-            INFERNOL_SKILL_ID => {
-                cancel_player_infernol(self, player_id, &mut player_ai, runtime)
-            }
             RAGE_SKILL_ID => cancel_player_rage(self, player_id, &mut player_ai, runtime),
             RAGE_BREAK_SKILL_ID => {
                 cancel_player_rage_break(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
@@ -39366,7 +39360,6 @@ impl CGame {
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
-            _ if is_infernol_dispatch(dispatch) => execute_player_infernol,
             _ if is_seven_shooting_star_dispatch(dispatch) => execute_player_seven_shooting_star,
             _ if is_player_little_star_dispatch(dispatch) => execute_player_little_star,
             _ if is_player_path_projectile_dispatch(dispatch) && dispatch.skill_id() == ENERGY_BOLT_SKILL_ID => execute_player_energy_bolt,
