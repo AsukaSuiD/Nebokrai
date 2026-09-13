@@ -1,4 +1,4 @@
-//! Региональный жизненный цикл прицельных снарядов Archery и BaseMagic.
+//! Региональный жизненный цикл прицельных снарядов Archery, BaseMagic и FireBolt.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые skills и phalanx.
 //! Summon задаёт клетку до свежего региона источника, затем вызывает Add
 //! без отдельной сериализации или BF502. Часы срока жизни и задержки
@@ -9,13 +9,13 @@
 
 use super::*;
 use crate::gameserver::appserver::skills::archeryphalanx::apply_archery_attack;
-use crate::gameserver::appserver::skills::basemagicphalanx::apply_base_magic_attack;
 use crate::gameserver::appserver::skills::baseprojectilephalanx::BaseProjectileFlight;
 
 fn flight(phalanx: &SummonedSkillShape) -> Option<&BaseProjectileFlight> {
     match phalanx {
         SummonedSkillShape::Archery(phalanx) => Some(phalanx.flight()),
         SummonedSkillShape::BaseMagic(phalanx) => Some(phalanx.flight()),
+        SummonedSkillShape::FireBolt(phalanx) => Some(phalanx.flight()),
         _ => None,
     }
 }
@@ -24,6 +24,7 @@ fn flight_mut(phalanx: &mut SummonedSkillShape) -> Option<&mut BaseProjectileFli
     match phalanx {
         SummonedSkillShape::Archery(phalanx) => Some(phalanx.flight_mut()),
         SummonedSkillShape::BaseMagic(phalanx) => Some(phalanx.flight_mut()),
+        SummonedSkillShape::FireBolt(phalanx) => Some(phalanx.flight_mut()),
         _ => None,
     }
 }
@@ -84,7 +85,11 @@ impl CGame {
                     }
                     SummonedSkillShape::BaseMagic(phalanx) => {
                         let snapshot = phalanx.attack_snapshot();
-                        apply_base_magic_attack(self, snapshot, (region, target), runtime);
+                        snapshot.apply(self, (region, target), false, runtime);
+                    }
+                    SummonedSkillShape::FireBolt(phalanx) => {
+                        let snapshot = phalanx.attack_snapshot();
+                        snapshot.apply(self, (region, target), false, runtime);
                     }
                     _ => {}
                 }

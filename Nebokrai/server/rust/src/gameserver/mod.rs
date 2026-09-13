@@ -125,6 +125,7 @@ pub(crate) mod appserver {
         pub(crate) mod baseprojectilecast;
         pub(crate) mod baseprojectilecheck;
         pub(crate) mod baseprojectilephalanx;
+        pub(crate) mod elementprojectileattack;
         pub(crate) mod archeryphalanx;
         pub(crate) mod basemagic;
         pub(crate) mod basemagicphalanx;

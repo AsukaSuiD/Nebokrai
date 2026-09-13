@@ -1058,18 +1058,6 @@ use crate::gameserver::appserver::skills::wangsheng::{
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::skills::meteorarrowmass::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::skills::daubpoison::DAUB_POISON_SKILL_ID;
-use crate::gameserver::appserver::skills::firebolt::{
-    cancel_player_fire_bolt, execute_player_fire_bolt, is_fire_bolt_target, FIRE_BOLT_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::fireboltphalanx::{
-    calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
-};
-use crate::gameserver::appserver::skills::fireball::{
-    cancel_player_fire_ball, execute_player_fire_ball, is_fire_ball_dispatch, FIRE_BALL_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::fireballphalanx::{
-    calculate_owned_fire_ball_attack, FireBallPhalanxTick,
-};
 use crate::gameserver::appserver::skills::itemskill2::{
     cancel_player_item_skill_2, execute_player_item_skill_2, is_item_skill_2_dispatch,
     ITEM_SKILL_2_ID,
@@ -39129,12 +39117,6 @@ impl CGame {
             BASE_ATTACK_SKILL_ID => {
                 cancel_player_base_attack(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
-            FIRE_BOLT_SKILL_ID => {
-                cancel_player_fire_bolt(self, player_id, &mut player_ai, runtime)
-            }
-            FIRE_BALL_SKILL_ID => {
-                cancel_player_fire_ball(self, player_id, &mut player_ai, runtime)
-            }
             FIRE_WALL_SKILL_ID => {
                 cancel_player_fire_wall(
                     self,
@@ -39563,8 +39545,6 @@ impl CGame {
                 }
             } => baseattackruntime::execute_player_base_attack,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
-            _ if is_fire_bolt_target(dispatch) => execute_player_fire_bolt,
-            _ if is_fire_ball_dispatch(dispatch) => execute_player_fire_ball,
             _ if is_item_skill_2_dispatch(dispatch) => execute_player_item_skill_2,
             _ if is_chain_lightning_dispatch(dispatch) => execute_player_chain_lightning,
             _ if is_thunder_blow_dispatch(dispatch) => execute_player_thunder_blow,
@@ -43215,12 +43195,7 @@ impl CGame {
             SummonedSkillShape::FatalBlow(phalanx) => {
                 calculate_owned_fatal_blow_attack(self, phalanx)
             }
-            SummonedSkillShape::FireBolt(phalanx) => {
-                calculate_owned_fire_bolt_attack(self, phalanx, target_level)
-            }
-            SummonedSkillShape::FireBall(phalanx) => {
-                calculate_owned_fire_ball_attack(self, phalanx, target_level)
-            }
+            SummonedSkillShape::FireBolt(_) | SummonedSkillShape::FireBall(_) => None,
             SummonedSkillShape::ThunderFire(phalanx) => {
                 calculate_owned_thunder_fire_attack(self, phalanx, target_level)
             }
@@ -43321,7 +43296,7 @@ impl CGame {
     }
 
     /// Обход области считает попытки Attack, а не принятый целью урон.
-    /// Боевые феи не попадают в body-dedup и не останавливают FireBall.
+    /// Боевые феи не попадают в body-dedup и не учитываются в результате.
     fn apply_scanned_summoned_skill_to_target<Runtime: GameMainLoopRuntime>(
         &mut self,
         phalanx: &SummonedSkillShape,
@@ -43332,7 +43307,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> bool {
         let deduplicate = matches!(phalanx,
-            SummonedSkillShape::FireBall(_) | SummonedSkillShape::ChaosSphere(_)
+            SummonedSkillShape::ChaosSphere(_)
             | SummonedSkillShape::ThunderFire(_) | SummonedSkillShape::FireWall(_)
             | SummonedSkillShape::YinYang(_) | SummonedSkillShape::Leiming2(_)
             | SummonedSkillShape::Thunder(_)
@@ -43394,7 +43369,7 @@ impl CGame {
         &mut self, phalanx: &SummonedSkillShape, region_id: i32, x: i32, y: i32,
         attacked: &mut Vec<ShapeIdentity>, runtime: &mut Runtime,
     ) -> bool {
-        if matches!(phalanx, SummonedSkillShape::FireBall(_) | SummonedSkillShape::ChaosSphere(_)
+        if matches!(phalanx, SummonedSkillShape::ChaosSphere(_)
             | SummonedSkillShape::GodThunder2(_))
         {
             let players: Vec<_> = self.find_region(region_id)
@@ -43429,9 +43404,15 @@ impl CGame {
     ) -> bool {
         if matches!(self.find_region(region_id)
             .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
-            Some(SummonedSkillShape::Archery(_) | SummonedSkillShape::BaseMagic(_)))
+            Some(SummonedSkillShape::Archery(_) | SummonedSkillShape::BaseMagic(_) | SummonedSkillShape::FireBolt(_)))
         {
             return self.run_base_projectile(region_id, phalanx_id, runtime);
+        }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::FireBall(_)))
+        {
+            return self.run_fire_ball_phalanx(region_id, phalanx_id, runtime);
         }
         if matches!(self.find_region(region_id)
             .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
@@ -43468,7 +43449,6 @@ impl CGame {
             return false;
         };
         let mut chaos_tick = None;
-        let mut fire_ball_tick = None;
         let mut thunder_fire_tick = None;
         let tick = owner
             .base_mut()
@@ -43495,19 +43475,7 @@ impl CGame {
                     }
                     FatalBlowPhalanxTick::Expired => None,
                 },
-                SummonedSkillShape::FireBolt(phalanx) => {
-                    match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
-                        FireBoltPhalanxTick::Pending => Some(None),
-                        FireBoltPhalanxTick::Attack { target, sampled_at_ms } => {
-                            Some(Some((target, sampled_at_ms)))
-                        }
-                        FireBoltPhalanxTick::Expired => None,
-                    }
-                }
-                SummonedSkillShape::FireBall(phalanx) => {
-                    fire_ball_tick = Some(phalanx.tick(lifetime_now_ms));
-                    Some(None)
-                }
+                SummonedSkillShape::FireBolt(_) | SummonedSkillShape::FireBall(_) => Some(None),
                 SummonedSkillShape::ThunderFire(phalanx) => {
                     thunder_fire_tick = Some(phalanx.tick(lifetime_now_ms));
                     Some(None)
@@ -43624,27 +43592,6 @@ impl CGame {
             return false;
         };
         let mut attacked_targets = Vec::new();
-        if let (Some(tick), SummonedSkillShape::FireBall(_)) = (fire_ball_tick, &phalanx) {
-            match tick {
-                FireBallPhalanxTick::Pending => {}
-                FireBallPhalanxTick::Active { force_move, scan } => {
-                    if let Some((x, y, _)) = scan
-                        && self.find_region(region_id).is_some_and(|owner| owner.base().block_at(x, y) == Some(3))
-                    {
-                        let mut attempted = false;
-                        for (x, y) in crate::gameserver::appserver::skills::fireballphalanx::CFireBallPhalanx::scope_cells(x, y) {
-                            attempted |= self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
-                        }
-                        if attempted { self.end_damage_phalanx(region_id, phalanx_id); }
-                    }
-                    if let Some((x, y, duration)) = force_move {
-                        self.force_move_summoned_shape(region_id, phalanx_id, x, y, duration);
-                    }
-                }
-                FireBallPhalanxTick::Expired => self.end_damage_phalanx(region_id, phalanx_id),
-            }
-            return true;
-        }
         if let (Some(tick), SummonedSkillShape::ThunderFire(_)) = (thunder_fire_tick, &phalanx) {
             match tick {
                 ThunderFirePhalanxTick::Pending => {}

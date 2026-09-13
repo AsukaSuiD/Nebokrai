@@ -33,7 +33,8 @@ pub(crate) enum RegisteredPlayerCastOwner {
 impl RegisteredPlayerCastOwner {
     pub(crate) fn from_skill_id(id: u32) -> Option<Self> {
         Some(match id {
-            super::archery::ARCHERY_SKILL_ID | super::basemagic::BASE_MAGIC_SKILL_ID => Self::BaseProjectile,
+            super::archery::ARCHERY_SKILL_ID | super::basemagic::BASE_MAGIC_SKILL_ID
+                | super::firebolt::FIRE_BOLT_SKILL_ID | super::fireball::FIRE_BALL_SKILL_ID => Self::BaseProjectile,
             super::flash::FLASH_SKILL_ID => Self::Flash,
             super::littleflash::LITTLE_FLASH_SKILL_ID | super::littleflash2::LITTLE_FLASH_2_SKILL_ID => Self::LittleFlash,
             super::rush::RUSH_SKILL_ID => Self::Rush,

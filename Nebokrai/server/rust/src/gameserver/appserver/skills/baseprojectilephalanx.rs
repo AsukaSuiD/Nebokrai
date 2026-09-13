@@ -1,6 +1,6 @@
-//! Общие данные полёта региональных снарядов Archery и BaseMagic.
+//! Общие данные полёта прицельных снарядов Archery, BaseMagic и FireBolt.
 //! Источник: gameserver.exe/GameServer.pdb, archeryphalanx.cpp и
-//! basemagicphalanx.cpp. Цель хранится как type/id с GUID_INVALID;
+//! basemagicphalanx.cpp и fireboltphalanx.cpp. Цель хранится как type/id с GUID_INVALID;
 //! срок жизни и задержка сравниваются как абсолютные unsigned суммы.
 //! Их общий End только отмечает удаление. Клиентский encoder пишет
 //! master type/id, а не сохранённую цель. Неиспользуемая CScope заменена

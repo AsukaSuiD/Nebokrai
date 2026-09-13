@@ -1663,45 +1663,18 @@ impl CServerRegion {
         Ok(id)
     }
 
-    pub(crate) fn add_fire_bolt_phalanx<Context: ServerRegionMembershipContext>(
-        &mut self,
-        mut phalanx: super::skills::fireboltphalanx::CFireBoltPhalanx,
-        tile_x: i32,
-        tile_y: i32,
-        area_width: i32,
-        area_height: i32,
-        now_ms: u32,
-        context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
-            phalanx.shape_mut(),
-            ShapeRuntimeFacts::default(),
-            area_width,
-            area_height,
-            now_ms,
-            context,
-        )?;
-        let id = phalanx.shape().identity().id;
-        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::FireBolt(phalanx));
-        Ok(id)
-    }
-
     pub(crate) fn add_fire_ball_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::fireballphalanx::CFireBallPhalanx,
-        tile_x: i32,
-        tile_y: i32,
         area_width: i32,
         area_height: i32,
         now_ms: u32,
         context: &mut Context,
-    ) -> Result<i32, RegionMembershipBlock> {
-        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        self.add_object(
+    ) -> Result<i32, (RegionMembershipBlock, super::skills::fireballphalanx::CFireBallPhalanx)> {
+        if let Err(error) = self.add_object(
             phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width,
             area_height, now_ms, context,
-        )?;
+        ) { return Err((error, phalanx)); }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes.insert(id, SummonedSkillShape::FireBall(phalanx));
         Ok(id)

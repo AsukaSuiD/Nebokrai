@@ -1,36 +1,46 @@
-//! Совместимое исполнение CArchery и CBaseMagic для игрока и монстра.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/archery.cpp
-//! и basemagic.cpp; AI 0x005B2370/0x005B4330, Summon 0x005B2B10/0x005B49A0.
-//! Begin создаёт visual до Check. Один зарегистрированный экземпляр хранит
-//! базу и постоянное время полёта; End 0x005AE7A0 очищает phase перед Move1
-//! и SummonEnd, но оставляет время полёта. Очереди принадлежат существующим AI.
+//! Общий cast базовых и огненных снарядов Archery, BaseMagic, FireBolt, FireBall.
+//! Источник: gameserver.exe/GameServer.pdb, одноимённые appserver/skills/*.cpp.
+//! Begin создаёт visual до Check; ошибки завершаются End0, выпуск — End1.
+//! End очищает фазу перед Move1/SummonEnd, но оставляет время полёта у
+//! зарегистрированного Archery/BaseMagic/FireBolt. FireBall такого поля не имеет.
+//! Очередь и единственная база принадлежат существующему реестру игрока/монстра.
 //!
-//! Первый AI стрельбы: смерть→самоцель→CAN→смерть→захваченные S.Y/X;
-//! магии: CAN→смерть→самоцель→два свежих GetS для Y/X. Затем оба читают
-//! захваченные U.Y/X, поворачивают, вызывают visual0→Move0→condition.
-//! Самоцель даёт два visual10. Выпуск использует unsigned start+delay,
-//! Move1 до двух свежих GetS; смерть даёт visual10→текст→visual10.
-//! Расстояние и Summon используют захваченные полные U/S, visual — свежие.
-//! Ни MP, ни prepared, ни повторного допуска/RP здесь нет.
+//! FireBolt/FireBall списывают MP и вызывают OnChangeStates до CAN. Archery
+//! проверяет смерть/самоцель до CAN и смерть повторно; Magic/FireBolt — после.
+//! FireBall не требует S и не проверяет смерть в AI: один свежий S задаёт X/Y,
+//! иначе берётся базовая точка. Magic/Bolt перечитывают GetS для Y и X отдельно.
+//! Archery использует захваченного S; U всегда захвачен в начале AI. Самоцель
+//! Archery/Magic даёт два visual10, Bolt — один. FireBall блокирует движение
+//! в Check, остальные — после visual0 первого AI. Поздний отказ не возвращает MP.
 //!
-//! Summon строит свежий путь RealDistance; непустой путь очищает S до BLOCK2.
-//! После MasterInfo магия дополнительно читает EM вхолостую, затем оба читают
-//! flight→target→EM→MAX→MIN→level→life→clock→ID и добавляют отдельный снаряд.
-//! Archery игнорирует MIN/MAX/EM конструктора, BaseMagic сохраняет их.
-//! Нет явного BF502; результат Add не меняет успешный End1. Формулы — у phalanx.
-//! SlotMap и Vec заменяют указатели и временный STL, без второй базы cast.
+//! Выпуск сравнивает unsigned start+delay, разрешает движение до visual1.
+//! Прицельные варианты дважды перечитывают S; поздняя смерть даёт
+//! visual10→текст→visual10. Расстояние и Summon используют захваченные U/S.
+//! Ball вызывает GetFacePos, но аргументы point-Summon не участвуют в его пути.
+//! Его путь задаётся forced MAX, остальных — RealDistance. Исходно пустой
+//! путь прекращает Summon; непустой очищает S до BLOCK2. Ball отсекает хвост,
+//! допускает пустой остаток и ставит форму на текущую клетку U; другие отказывают.
+//!
+//! После MasterInfo все, кроме Archery, читают EM вхолостую. Огненные варианты
+//! затем потребляют первый слот SoulCollect через полноценный End. MIN/MAX/EM
+//! и души принадлежат независимому снаряду; Archery игнорирует эти три числа.
+//! Add не определяет успешный End1. Только Ball явно кодирует и публикует BF502.
+//! Нет prepared или повторного допуска/RP. SlotMap/Vec заменяют указатели/STL.
 
 use super::archeryphalanx::CArcheryPhalanx;
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_SUMMONED_LIFETIME,
-    SKILL_USAGE_SUMMONED_SPEED,
+    SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::basemagicphalanx::CBaseMagicPhalanx;
 use super::baseprojectilecheck::{base_projectile_attack_path, check_base_projectile_cast};
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::playercast::execute_registered_player_cast;
-use super::rangedweaponcast::terminal;
+use super::rangedweaponcast::{spend_cast_mana, terminal};
+use super::soulcollectstate::consume_soul_collect_snapshot;
+use super::fireboltphalanx::CFireBoltPhalanx;
+use super::fireballphalanx::CFireBallPhalanx;
 use super::skillfactory::SkillOwner;
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, end_state_skill, execute_owned_state_skill,
@@ -51,17 +61,22 @@ use crate::gameserver::gameserver::game::{
 use crate::public::tools::get_line_direction;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BaseProjectileKind { Archery, Magic }
+pub(crate) enum BaseProjectileKind { Archery, Magic, FireBolt, FireBall }
 impl BaseProjectileKind {
     pub(crate) const fn from_skill_id(id: u32) -> Option<Self> {
         match id {
             super::archery::ARCHERY_SKILL_ID => Some(Self::Archery),
             super::basemagic::BASE_MAGIC_SKILL_ID => Some(Self::Magic),
+            super::firebolt::FIRE_BOLT_SKILL_ID => Some(Self::FireBolt),
+            super::fireball::FIRE_BALL_SKILL_ID => Some(Self::FireBall),
             _ => None,
         }
     }
     pub(crate) const fn owner(self) -> SkillOwner {
-        match self { Self::Archery => SkillOwner::CArchery, Self::Magic => SkillOwner::CBaseMagic }
+        match self {
+            Self::Archery => SkillOwner::CArchery, Self::Magic => SkillOwner::CBaseMagic,
+            Self::FireBolt => SkillOwner::CFireBolt, Self::FireBall => SkillOwner::CFireBall,
+        }
     }
 }
 
@@ -93,30 +108,51 @@ fn distance(game: &CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdent
 
 fn summon<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), runtime: &mut Runtime,
+    target: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
 ) {
-    if resolve_state_move_shape(game, source.0, source.1).is_none()
-        || resolve_state_move_shape(game, target.0, target.1).is_none()
-    { return; }
+    if resolve_state_move_shape(game, source.0, source.1).is_none() { return; }
     let Some(skill) = game.registered_skill(instance) else { return; };
     let Some(kind) = BaseProjectileKind::from_skill_id(skill.id()) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
-    let Some(length) = distance(game, source, target) else { return; };
-    let path = base_projectile_attack_path(game, instance, length as u32);
+    let length = if kind == BaseProjectileKind::FireBall {
+        properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE)
+    } else {
+        let Some(target) = target else { return; };
+        let Some(length) = distance(game, source, target) else { return; };
+        length as u32
+    };
+    let mut path = base_projectile_attack_path(game, instance, length);
     if path.is_empty() { return; }
     let Some(skill) = game.registered_skill_mut(instance) else { return; };
     let destination = skill.lifecycle().destination();
     skill.lifecycle_mut().set_point_target(destination);
-    if path.iter().any(|cell| cell.2 == 2) { return; }
+    if let Some(block) = path.iter().position(|cell| cell.2 == 2) {
+        if kind == BaseProjectileKind::FireBall { path.truncate(block); } else { return; }
+    }
     let Some(mut master) = source_master(game, source) else { return; };
     master.master_country_id = 0;
-    if kind == BaseProjectileKind::Magic {
+    if kind != BaseProjectileKind::Archery {
         let _ = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
     }
+    let souls = if matches!(kind, BaseProjectileKind::FireBolt | BaseProjectileKind::FireBall) {
+        consume_soul_collect_snapshot(game, source)
+    } else { (0, 0) };
     let Some(skill) = game.registered_skill(instance) else { return; };
-    let Some(flight) = skill.base_projectile_progress().map(BaseProjectileProgress::attack_time_ms) else { return; };
-    let Some(target_shape) = resolve_state_move_shape(game, target.0, target.1) else { return; };
-    let target = target_shape.shape().identity();
+    let (flight, target, speed) = match kind {
+        BaseProjectileKind::FireBall =>
+            (0, None, properties.query_property(SKILL_USAGE_SUMMONED_SPEED)),
+        BaseProjectileKind::FireBolt => {
+            let Some(target) = target.and_then(|target| resolve_state_move_shape(game, target.0, target.1)) else { return; };
+            let target = target.shape().identity();
+            let Some(flight) = skill.base_projectile_progress().map(BaseProjectileProgress::attack_time_ms) else { return; };
+            (flight, Some(target), 0)
+        }
+        BaseProjectileKind::Archery | BaseProjectileKind::Magic => {
+            let Some(flight) = skill.base_projectile_progress().map(BaseProjectileProgress::attack_time_ms) else { return; };
+            let Some(target) = target.and_then(|target| resolve_state_move_shape(game, target.0, target.1)) else { return; };
+            (flight, Some(target.shape().identity()), 0)
+        }
+    };
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
     let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
     let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
@@ -124,12 +160,31 @@ fn summon<Runtime: GameMainLoopRuntime>(
     let lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
-    let phalanx = match kind {
-        BaseProjectileKind::Archery => SummonedSkillShape::Archery(
+    let phalanx = match (kind, target) {
+        (BaseProjectileKind::Archery, Some(target)) => SummonedSkillShape::Archery(
             CArcheryPhalanx::new(id, master, started, lifetime, level, flight as u32, target)),
-        BaseProjectileKind::Magic => SummonedSkillShape::BaseMagic(
+        (BaseProjectileKind::Magic, Some(target)) => SummonedSkillShape::BaseMagic(
             CBaseMagicPhalanx::new(id, master, started, lifetime, level, minimum, maximum,
                 element_modifier, flight as u32, target)),
+        (BaseProjectileKind::FireBolt, Some(target)) => SummonedSkillShape::FireBolt(
+            CFireBoltPhalanx::new(id, master, started, lifetime, level, minimum, maximum,
+                element_modifier, target, flight as u32, souls.0, souls.1)),
+        (BaseProjectileKind::FireBall, _) => {
+            let points = path.iter().map(|cell| (cell.0, cell.1)).collect();
+            let phalanx = CFireBallPhalanx::new(id, master, started, lifetime, level, minimum, maximum,
+                element_modifier, points, speed, souls.0, souls.1 as u32);
+            let position = path.first().map(|cell| (cell.0, cell.1)).or_else(|| {
+                let source = resolve_state_move_shape(game, source.0, source.1)?;
+                let y = source.shape().get_tile_y().unwrap_or(i32::MIN);
+                let x = source.shape().get_tile_x().unwrap_or(i32::MIN);
+                Some((x, y))
+            });
+            if let Some((x, y)) = position {
+                let _ = game.spawn_fire_ball_phalanx(source, phalanx, x, y, started, runtime);
+            }
+            return;
+        }
+        _ => return,
     };
     let (x, y, _) = path[0];
     let _ = game.spawn_base_projectile(source, phalanx, x, y, started, runtime);
@@ -141,7 +196,7 @@ fn direction_target(
 ) -> Option<&crate::gameserver::appserver::moveshape::CMoveShape> {
     let target = match kind {
         BaseProjectileKind::Archery => captured_target,
-        BaseProjectileKind::Magic =>
+        BaseProjectileKind::Magic | BaseProjectileKind::FireBolt | BaseProjectileKind::FireBall =>
             resolve_skill_sufferer(game, game.registered_skill(instance)?.lifecycle())?,
     };
     resolve_state_move_shape(game, target.0, target.1)
@@ -167,29 +222,38 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     };
     let (region, identity) = skill.lifecycle().user();
     let source = resolve_state_move_shape(game, region, identity);
-    let target = resolve_skill_sufferer(game, skill.lifecycle())
-        .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity));
-    let (Some(source), Some(target)) = (source, target) else {
-        game.update_registered_skill_visual(instance, 10);
+    let target = if kind == BaseProjectileKind::FireBall { None } else {
+        resolve_skill_sufferer(game, skill.lifecycle())
+            .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
+    };
+    let Some(source) = source else {
+        if kind != BaseProjectileKind::FireBall { game.update_registered_skill_visual(instance, 10); }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let is_self = std::ptr::eq(source, target);
+    if target.is_none() && kind != BaseProjectileKind::FireBall {
+        game.update_registered_skill_visual(instance, 10);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let is_self = target.is_some_and(|target| std::ptr::eq(source, target));
     let source = (source.shape().get_region_id(), source.shape().identity());
-    let target = (target.shape().get_region_id(), target.shape().identity());
+    let target = target.map(|target| (target.shape().get_region_id(), target.shape().identity()));
     let player = (source.1.object_type == 400).then_some(source.1.id);
     if stage == SkillStage::Begin {
-        if kind == BaseProjectileKind::Magic {
+        if matches!(kind, BaseProjectileKind::FireBolt | BaseProjectileKind::FireBall)
+            && !spend_cast_mana(game, instance, player, &properties)
+        { return terminal(QueuedSkillExecutionState::Rejected); }
+        if kind != BaseProjectileKind::Archery {
             let can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
             if let Some(skill) = game.registered_skill_mut(instance) {
                 skill.lifecycle_mut().set_available(can_break != 0);
             }
         }
-        if game.move_shape_health(target.0, target.1) == Some(0) {
+        if target.is_some_and(|target| game.move_shape_health(target.0, target.1) == Some(0)) {
             target_failure(game, instance, player, b"GS0285");
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if is_self {
-            game.update_registered_skill_visual(instance, 10);
+            if kind != BaseProjectileKind::FireBolt { game.update_registered_skill_visual(instance, 10); }
             target_failure(game, instance, player, b"GS0286");
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -198,24 +262,39 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
             if let Some(skill) = game.registered_skill_mut(instance) {
                 skill.lifecycle_mut().set_available(can_break != 0);
             }
-            if game.move_shape_health(target.0, target.1) == Some(0) {
+            if target.is_some_and(|target| game.move_shape_health(target.0, target.1) == Some(0)) {
                 target_failure(game, instance, player, b"GS0285");
                 return terminal(QueuedSkillExecutionState::Rejected);
             }
         }
-        let Some(target_y) = direction_target(game, instance, kind, target)
-            .map(|shape| shape.shape().get_tile_y().unwrap_or(i32::MIN))
-        else { return terminal(QueuedSkillExecutionState::Rejected); };
-        let Some(target_x) = direction_target(game, instance, kind, target)
-            .map(|shape| shape.shape().get_tile_x().unwrap_or(i32::MIN))
-        else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let (target_x, target_y) = if kind == BaseProjectileKind::FireBall {
+            let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+            match resolve_skill_sufferer(game, skill.lifecycle())
+                .and_then(|target| resolve_state_move_shape(game, target.0, target.1))
+            {
+                Some(target) => (target.shape().get_tile_x().unwrap_or(i32::MIN),
+                    target.shape().get_tile_y().unwrap_or(i32::MIN)),
+                None => skill.lifecycle().destination(),
+            }
+        } else {
+            let Some(target) = target else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let Some(target_y) = direction_target(game, instance, kind, target)
+                .map(|shape| shape.shape().get_tile_y().unwrap_or(i32::MIN))
+            else { return terminal(QueuedSkillExecutionState::Rejected); };
+            let Some(target_x) = direction_target(game, instance, kind, target)
+                .map(|shape| shape.shape().get_tile_x().unwrap_or(i32::MIN))
+            else { return terminal(QueuedSkillExecutionState::Rejected); };
+            (target_x, target_y)
+        };
         let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
         let source_y = user.shape().get_tile_y().unwrap_or(i32::MIN);
         let source_x = user.shape().get_tile_x().unwrap_or(i32::MIN);
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.shape_mut().set_direction(direction); }
         game.update_registered_skill_visual(instance, 0);
-        if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.set_moveable(false); }
+        if kind != BaseProjectileKind::FireBall
+            && let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1)
+        { user.set_moveable(false); }
         if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
     }
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -224,6 +303,14 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     };
     if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
     if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.set_moveable(true); }
+    if kind == BaseProjectileKind::FireBall {
+        game.update_registered_skill_visual(instance, 1);
+        if let Some(source) = resolve_state_move_shape(game, source.0, source.1) {
+            let _ = source.shape().get_face_position();
+        }
+        summon(game, instance, source, None, runtime);
+        return terminal(QueuedSkillExecutionState::Completed);
+    }
     if game.registered_skill(instance).and_then(|skill| resolve_skill_sufferer(game, skill.lifecycle())).is_none() {
         game.update_registered_skill_visual(instance, 10);
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -238,13 +325,14 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
         game.update_registered_skill_visual(instance, 10);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
+    let Some(target) = target else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(length) = distance(game, source, target) else { return terminal(QueuedSkillExecutionState::Rejected); };
     let speed = properties.query_property(SKILL_USAGE_SUMMONED_SPEED);
     if let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::base_projectile_progress_mut) {
         progress.attack_time_ms = length.wrapping_mul(speed as i32);
     }
     game.update_registered_skill_visual(instance, 1);
-    summon(game, instance, source, target, runtime);
+    summon(game, instance, source, Some(target), runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 

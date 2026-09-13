@@ -31,8 +31,8 @@
 //! Зарегистрированные навыки ниже сохраняют getters диапазона при отсутствии
 //! свойств. Новый Begin идёт после диапазона либо Tracing и интервала ИИ;
 //! уже начатый навык получает AI без повторного допуска расписанием.
-//! Archery/BaseMagic используют тот же зарегистрированный цикл игрока/монстра и базовый
-//! диапазон minimum1/положительный maximum, в том числе при поиске цели.
+//! Базовые снаряды, FireBolt и FireBall используют зарегистрированный цикл
+//! игрока/монстра и minimum1/положительный maximum, в том числе при поиске цели.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -240,6 +240,8 @@ use super::monsterrangeattack::{
 use super::chuckstone::CHUCK_STONE_SKILL_ID;
 use super::archery::{ARCHERY_SKILL_ID, execute_owned_monster_archery};
 use super::basemagic::{BASE_MAGIC_SKILL_ID as BASE_MAGIC_PROJECTILE_SKILL_ID, execute_owned_monster_base_magic};
+use super::firebolt::{FIRE_BOLT_SKILL_ID, execute_owned_monster_fire_bolt};
+use super::fireball::{FIRE_BALL_SKILL_ID, execute_owned_monster_fire_ball};
 use super::bossbluefury::{BOSS_BLUE_FURY_SKILL_ID, execute_owned_boss_blue_fury};
 use super::bossbluequake::{BOSS_BLUE_QUAKE_SKILL_ID, execute_owned_boss_blue_quake};
 use super::bossfiendsummon::BOSS_FIEND_SUMMON_SKILL_ID;
@@ -814,7 +816,9 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
-        if matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID) { return 1; }
+        if matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID) {
+            return 1;
+        }
         game.skill_base_properties(skill_id, skill_level)
             .map_or(0, |properties| properties.query_property(5_004) as i32)
     });
@@ -1012,6 +1016,8 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
     match skill_id {
         ARCHERY_SKILL_ID => Some(execute_owned_monster_archery),
         BASE_MAGIC_PROJECTILE_SKILL_ID => Some(execute_owned_monster_base_magic),
+        FIRE_BOLT_SKILL_ID => Some(execute_owned_monster_fire_bolt),
+        FIRE_BALL_SKILL_ID => Some(execute_owned_monster_fire_ball),
         KNOCK_OUT_SKILL_ID => Some(execute_owned_monster_knock_out),
         SPIDER_WEB_SKILL_ID => Some(execute_owned_spider_web),
         YAKSHA_SLASH_SKILL_ID => Some(execute_owned_monster_yaksha_slash),

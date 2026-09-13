@@ -1,17 +1,21 @@
-//! Проверки и визуальные сообщения базовой стрельбы и магии.
+//! Проверки и визуальные сообщения стрельбы, базовой и огненной магии.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/archery.cpp,
-//! basemagic.cpp и унаследованные GetTargetPath из appserver/states/skill.cpp.
+//! basemagic.cpp, firebolt.cpp, fireball.cpp и унаследованные GetTargetPath
+//! из appserver/states/skill.cpp.
 //! Check сохраняет исходного U и необязательного S, но строит свежий базовый
 //! путь. MAX0 не ограничивает дальность; ненулевой MAX читается повторно
-//! и у Archery допускает ещё одну клетку. Magic отклоняет указательную
+//! и у Archery допускает ещё одну клетку. Магия отклоняет указательную
 //! самоцель до свойств, но допускает NULL S; Archery не проверяет самоцель.
 //! Только стрельба проверяет BLOCK2 и лук/арбалет игрока. Текст BLOCK2 зависит
 //! от наличия visual; оружейный режим 14 не имеет собственного пакета.
-//! У Magic отдельные сообщения самоцели, reuse и дальности. MP и Move0
-//! не входят в Check обоих владельцев.
+//! У магии отдельные сообщения самоцели, reuse и дальности. FireBolt/FireBall
+//! дополнительно проверяют MP игрока: нулевая цена — тихий отказ, недостаток
+//! даёт visual7 и GS0288. Только FireBall запрещает движение при успехе;
+//! остальные CMoveShape проходят без проверки MP и изменения движения.
 //!
 //! Visual1 сохраняет базовую точку и нулевые type/id при отсутствующем S;
-//! его время берётся из единственного опубликованного progress игрока/монстра.
+//! время берётся из постоянного progress игрока/монстра. У FireBall DWORD
+//! времени полёта отсутствует в сообщении.
 //! Базовый visual-хвост вызывается при любом режиме и отсутствии участников.
 //! Некорректная float-координата сохраняет native FISTP sentinel i32::MIN.
 //! Путь с заданной длиной использует общий региональный механизм, без второй
@@ -20,6 +24,7 @@
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::baseprojectilecast::BaseProjectileKind;
 use super::kernel::skill_is_restored;
+use super::rangedweaponcast::{check_cast_mana, check_cast_mana_without_movement};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -40,7 +45,7 @@ pub(super) fn check_base_projectile_cast<Runtime: GameMainLoopRuntime>(
     let Some(source) = original_user.and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
     else { return false; };
     let player = (source.shape().identity().object_type == PLAYER_TYPE).then_some(source.shape().identity().id);
-    if kind == BaseProjectileKind::Magic && original_target
+    if kind != BaseProjectileKind::Archery && original_target
         .and_then(|(region, identity)| resolve_state_move_shape(game, region, identity))
         .is_some_and(|target| std::ptr::eq(source, target))
     {
@@ -48,12 +53,13 @@ pub(super) fn check_base_projectile_cast<Runtime: GameMainLoopRuntime>(
         if let Some(player) = player { game.send_skill_system_info(player, b"GS0286"); }
         return false;
     }
+    let source = (source.shape().get_region_id(), source.shape().identity());
     let Some(skill) = game.registered_skill(instance) else { return false; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
         game.update_registered_skill_visual(instance, 13);
-        if kind == BaseProjectileKind::Magic && let Some(player) = player {
+        if kind != BaseProjectileKind::Archery && let Some(player) = player {
             game.send_skill_system_info(player, b"GS0278");
         }
         return false;
@@ -65,7 +71,7 @@ pub(super) fn check_base_projectile_cast<Runtime: GameMainLoopRuntime>(
     {
         game.update_registered_skill_visual(instance, 11);
         if let Some(player) = player {
-            if kind == BaseProjectileKind::Magic {
+            if kind != BaseProjectileKind::Archery {
                 game.send_skill_system_info(player, b"GS0290");
             } else if let Some(target) = original_target {
                 if let Some(target) = resolve_state_move_shape(game, target.0, target.1) {
@@ -75,7 +81,12 @@ pub(super) fn check_base_projectile_cast<Runtime: GameMainLoopRuntime>(
         }
         return false;
     }
-    if kind == BaseProjectileKind::Magic { return true; }
+    match kind {
+        BaseProjectileKind::Magic => return true,
+        BaseProjectileKind::FireBolt => return check_cast_mana_without_movement(game, instance, source, &properties),
+        BaseProjectileKind::FireBall => return check_cast_mana(game, instance, source, &properties),
+        BaseProjectileKind::Archery => {}
+    }
     if path.iter().any(|cell| cell.2 == 2) {
         if game.registered_skill(instance).is_some_and(|skill| skill.visual_effect().is_some()) {
             game.update_registered_skill_visual(instance, 15);
@@ -148,7 +159,9 @@ pub(crate) fn publish_base_projectile_visual(game: &CGame, skill: &MoveShapeSkil
         message.add_long(target_id);
         message.add_long(x);
         message.add_long(y);
-        message.add_long(skill.base_projectile_progress().map_or(0, |progress| progress.attack_time_ms()));
+        if kind != BaseProjectileKind::FireBall {
+            message.add_long(skill.base_projectile_progress().map_or(0, |progress| progress.attack_time_ms()));
+        }
     } else { message.add_long(source.get_direction()); }
     if source.is_assigned_to_server_region()
         && let Some(region) = game.find_region(source.get_region_id())

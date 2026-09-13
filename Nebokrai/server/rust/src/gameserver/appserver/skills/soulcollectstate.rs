@@ -5,21 +5,24 @@
 //! коэффициент и не более `skill_level` душ. Каждое успешное пополнение
 //! публикует окончание прежнего снимка до нового снимка. Удаление публикует
 //! только окончание. Создание визуального ресурса в Begin не отправляет
-//! обновление; пакеты пары End→Begin принадлежат AddSoul. Exact persisted-запись содержит ID, skill level
-//! и число душ, но теряет `variable_percent`; после загрузки он нулевой.
-
-//! Vtable 0x0065EFE4: End +0x1C→0x005E1D20 публикует visual phase2,
-//! пишет IsEnded=1, затем GetSufferer и RemoveState. AI при этом пустой;
-//! это не отменяет прямой End. Payload остаётся живым до доставки visual.
-//! Object Begin +0x08→0x005E1E00: без null-guards вызывает base Begin,
-//! создаёт visual(0xC) и BeginVisualEffect(1), затем возвращает 1. Update
-//! не вызывается: restart не публикует пакет и не меняет число душ.
+//! обновление; пакеты пары End→Begin принадлежат AddSoul. Запись в БД содержит
+//! ID, уровень и число душ, но теряет `variable_percent`; после загрузки он нулевой.
+//!
+//! End публикует visual phase2 через свежего Sufferer, пишет IsEnded=1,
+//! затем заново разрешает Sufferer для RemoveState. Payload остаётся живым
+//! до доставки visual. Огненные снаряды выбирают первый непустой слот ID13B,
+//! сохраняют typed-параметры, вызывают End и уничтожают свежий остаток слота.
+//! Несовпадение типа не отменяет End, а ended не исключает слот из поиска.
+//! Object Begin вызывает базу, создаёт visual и начинает loop1 без Update:
+//! повторный Begin не публикует пакет и не меняет число душ. SlotMap сохраняет
+//! независимость состояний и позиции с пропусками после удаления.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
-    begin_applied_state_visual, begin_base_applied_state,
-    resolve_state_move_shape, resolve_state_move_shape_mut,
+    begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at,
+    remove_applied_state_from, resolve_applied_state_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_visual_base,
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
@@ -27,6 +30,17 @@ use crate::nets::netserver::message::CMessage;
 
 pub(crate) const SOUL_COLLECT_STATE_ID: u32 = 0x13b;
 pub(crate) const SOUL_COLLECT_STATE_BYTES: usize = 12;
+
+pub(crate) fn consume_soul_collect_snapshot(game: &mut CGame, source: (i32, ShapeIdentity)) -> (i32, i32) {
+    let Some((position, key)) = resolve_state_move_shape(game, source.0, source.1)
+        .and_then(|shape| shape.find_state_position(|state| state.state_id() == SOUL_COLLECT_STATE_ID))
+    else { return (0, 0); };
+    let snapshot = resolve_state_move_shape(game, source.0, source.1)
+        .and_then(|shape| shape.applied_state::<SoulCollectState>(key))
+        .map_or((0, 0), |state| (state.souls(), state.variable_percent() as i32));
+    let _ = end_and_destroy_state_at(game, source.0, source.1, position);
+    snapshot
+}
 
 pub(crate) fn restart_soul_collect_state(
     game: &mut CGame,
@@ -56,20 +70,21 @@ pub(crate) fn end_soul_collect_state(
     {
         return false;
     }
-    let mut message = CMessage::new(0x000b_fe04);
-    message.add_long(holder.object_type);
-    message.add_long(holder.id);
-    message.add_long(SOUL_COLLECT_STATE_ID as i32);
-    let _ = game.send_move_shape_around(region_id, holder, &message);
-    let removed = resolve_state_move_shape_mut(game, region_id, holder).and_then(|shape| {
-        shape.applied_state::<SoulCollectState>(key)?;
-        let _ = shape.mark_applied_state_ended(key);
-        shape.remove_applied_state_record::<SoulCollectState>(key, SOUL_COLLECT_STATE_BYTES)
-    }).is_some();
-    if removed {
-        let _ = game.update_move_shape_properties(region_id, holder);
+    if resolve_state_move_shape(game, region_id, holder)
+        .and_then(|shape| shape.applied_state_visual_ended(key)) == Some(false)
+        && let Some((target_region, target)) = resolve_applied_state_sufferer(game, region_id, holder, key)
+    {
+        let mut message = CMessage::new(0x000b_fe04);
+        message.add_long(target.object_type);
+        message.add_long(target.id);
+        message.add_long(SOUL_COLLECT_STATE_ID as i32);
+        let _ = game.send_move_shape_around(target_region, target, &message);
     }
-    removed
+    update_applied_state_visual_base(game, region_id, holder, key);
+    if !resolve_state_move_shape_mut(game, region_id, holder)
+        .is_some_and(|shape| shape.mark_applied_state_ended(key)) { return false; }
+    let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key) else { return false; };
+    remove_applied_state_from(game, region_id, holder, key, target, SOUL_COLLECT_STATE_BYTES)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

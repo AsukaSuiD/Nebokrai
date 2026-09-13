@@ -1,5 +1,5 @@
 //! Реализованная часть `CMoveShape` исторического GameServer.
-//! Постоянные данные CArchery/CBaseMagic из gameserver.exe/PDB принадлежат экземпляру
+//! Постоянные данные CArchery/CBaseMagic/CFireBolt принадлежат экземпляру
 //! навыка: att_time обнуляется конструктором, но не Begin/End или удалением
 //! исполнения команды. Игрок и монстр используют одно и то же хранение.
 //! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
@@ -448,7 +448,8 @@ enum SkillRetainedData {
 impl SkillRetainedData {
     fn for_owner(owner: SkillOwner) -> Self {
         match owner {
-            SkillOwner::CArchery | SkillOwner::CBaseMagic => Self::BaseProjectile(Default::default()),
+            SkillOwner::CArchery | SkillOwner::CBaseMagic | SkillOwner::CFireBolt =>
+                Self::BaseProjectile(Default::default()),
             _ => Self::None,
         }
     }
