@@ -9,6 +9,8 @@
 //!
 //! Тип 1 истекает по строгому сроку, тип 2 — при выходе S из прямоугольника
 //! или смене региона; прочие типы завершаются сразу. Координаты в DB не входят.
+//! Непредставимая координата даёт исходный FISTP INT_MIN и участвует в
+//! проверке прямоугольника, а не сохраняет состояние ранним отказом.
 //! Load читает часы после типа, Save — после ID и типа, не меняя live-состояние.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
@@ -212,9 +214,8 @@ pub(crate) fn update_weak_state(
             else { return false; };
             let Some(target) = resolve_state_move_shape(game, target_region, target)
             else { return false; };
-            let (Ok(x), Ok(y)) = (target.shape().get_tile_x(), target.shape().get_tile_y()) else {
-                return false;
-            };
+            let x = target.shape().get_tile_x().unwrap_or(i32::MIN);
+            let y = target.shape().get_tile_y().unwrap_or(i32::MIN);
             if state.contains(x, y) {
                 return false;
             }

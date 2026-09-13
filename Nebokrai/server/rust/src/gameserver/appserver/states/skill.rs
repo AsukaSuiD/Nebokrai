@@ -409,10 +409,8 @@ impl CGame {
                     return;
                 }
             }
-            SkillVisualEffectKind::PoisonFog =>
-                crate::gameserver::appserver::skills::poisonfog::publish_poison_fog_visual(self, skill, mode),
-            SkillVisualEffectKind::Weak =>
-                crate::gameserver::appserver::skills::weak::publish_weak_visual(self, skill, mode),
+            SkillVisualEffectKind::ZonalCast =>
+                crate::gameserver::appserver::skills::zonalcast::publish_zonal_cast_visual(self, skill, mode),
             SkillVisualEffectKind::Blind =>
                 crate::gameserver::appserver::skills::blind::publish_blind_visual(self, skill, mode),
             SkillVisualEffectKind::Rush | SkillVisualEffectKind::Rush2 =>

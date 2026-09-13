@@ -32,8 +32,9 @@
 //! Зарегистрированные навыки ниже сохраняют getters диапазона при отсутствии
 //! свойств. Новый Begin идёт после диапазона либо Tracing и интервала ИИ;
 //! уже начатый навык получает AI без повторного допуска расписанием.
-//! Базовые снаряды, FireBolt, FireBall, GodPunishment и Heal используют зарегистрированный цикл
-//! игрока/монстра и minimum1/положительный maximum, в том числе при поиске цели.
+//! Базовые снаряды, FireBolt, FireBall, GodPunishment, Heal и зональные
+//! Weak/PoisonFog/SnowStorm используют зарегистрированный цикл игрока/монстра
+//! и minimum1/положительный maximum, в том числе при поиске цели.
 //! Default в выборе и OnChangeSkill берётся из зарегистрированных навыков
 //! CMoveShape (GetDefaultAttackSkillID, 0x004CE240), как при Stiffen.
 //! Таблица MonsterProperties задаёт взвешенный выбор, но не заменяет реестр
@@ -286,7 +287,10 @@ use super::cure::{CURE_SKILL_ID, execute_owned_monster_cure};
 use super::hearten::{HEARTEN_SKILL_ID, execute_owned_monster_hearten};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
 use super::snakebolt::{SNAKE_BOLT_SKILL_ID, execute_owned_snake_bolt};
-use super::snowstorm::{SNOW_STORM_SKILL_ID, execute_owned_monster_snow_storm};
+use super::snowstorm::SNOW_STORM_SKILL_ID;
+use super::poisonfog::POISON_FOG_SKILL_ID;
+use super::weak::WEAK_SKILL_ID;
+use super::zonalcast::{execute_owned_monster_zonal_cast, is_zonal_cast_skill};
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
@@ -535,7 +539,6 @@ fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) ->
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
-            | SNOW_STORM_SKILL_ID
     )
 }
 
@@ -830,6 +833,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
         if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
+            || is_zonal_cast_skill(skill_id)
             || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID)
         {
             return 1;
@@ -1094,6 +1098,9 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         GOD_PUNISHMENT_SKILL_ID => Some(execute_owned_monster_god_punishment),
         GOD_BLESS_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_SKILL_ID, Runtime>),
         GOD_BLESS_2_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_2_SKILL_ID, Runtime>),
+        WEAK_SKILL_ID => Some(execute_owned_monster_zonal_cast::<WEAK_SKILL_ID, Runtime>),
+        POISON_FOG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<POISON_FOG_SKILL_ID, Runtime>),
+        SNOW_STORM_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SNOW_STORM_SKILL_ID, Runtime>),
         HEAL_SKILL_ID => Some(execute_owned_monster_heal::<HEAL_SKILL_ID, Runtime>),
         HEAL_2_SKILL_ID => Some(execute_owned_monster_heal::<HEAL_2_SKILL_ID, Runtime>),
         SUPER_HEAL_SKILL_ID => Some(execute_owned_monster_heal::<SUPER_HEAL_SKILL_ID, Runtime>),
@@ -1121,7 +1128,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
     wide_arc_dispatch: &mut Option<WideArcAttackDispatch>,
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
-    snow_storm_entry: &mut Option<i32>,
 ) -> bool {
     let Some(region_owner) = owner.as_mut() else { return false; };
     let Some(active_ai) = region_owner.base().find_monster_by_id(monster_id).and_then(CMonster::active_ai) else {
@@ -1465,10 +1471,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
     let now_ms = runtime.now_milliseconds();
-    if skill_id == SNOW_STORM_SKILL_ID {
-        let skill_properties = skill_properties.clone();
-        return execute_owned_monster_snow_storm(game, region_owner.base_mut(), monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
-    }
     if matches!(skill_id, SKELETON_ARCHERY_SKILL_ID | CHUCK_STONE_SKILL_ID) {
         let skill_properties = skill_properties.clone();
         return prepare_owned_monster_projectile(

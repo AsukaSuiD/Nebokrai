@@ -347,6 +347,7 @@ pub(crate) mod appserver {
         pub(crate) mod soulcollectstate;
         pub(crate) mod soulmirror;
         pub(crate) mod weak;
+        pub(crate) mod zonalcast;
         pub(crate) mod weakphalanx;
         pub(crate) mod weakstate;
         pub(crate) mod godbless;

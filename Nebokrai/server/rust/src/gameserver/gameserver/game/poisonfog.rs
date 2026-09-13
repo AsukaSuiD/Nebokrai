@@ -5,6 +5,8 @@
 //! читаются при обработке каждой цели. PK предшествует End старого состояния;
 //! повторный поиск источника после End не откатывает уже выполненное удаление.
 //! Область остаётся в регионе во время callbacks и не заменяется копией.
+//! Источник разрешается через региональный GetObject без геометрического
+//! view; совпадающий ID из другого региона не подменяет объект клетки.
 
 use super::*;
 use crate::gameserver::appserver::skills::curestate::CURE_STATE_SKILL_ID;
@@ -12,7 +14,9 @@ use crate::gameserver::appserver::skills::poisonfogphalanx::{poison_fog_targets,
 use crate::gameserver::appserver::skills::poisonfogstate::{
     begin_primary_poison_fog_state, POISON_FOG_STATE_ID,
 };
-use crate::gameserver::appserver::states::state::{end_move_shape_state, resolve_state_move_shape};
+use crate::gameserver::appserver::states::state::{
+    end_move_shape_state, resolve_region_move_shape, resolve_state_move_shape,
+};
 
 impl CGame {
     pub(crate) fn add_poison_fog_phalanx<Runtime: GameMainLoopRuntime>(
@@ -79,8 +83,7 @@ impl CGame {
             id: master.master_id,
             ex_id: CGuid::GUID_INVALID,
         };
-        let found = self.find_shape_in_region(region_id, identity)?;
-        let source = resolve_state_move_shape(self, region_id, found.identity)?.shape();
+        let source = resolve_region_move_shape(self, region_id, identity)?.shape();
         Some((source.get_region_id(), ShapeIdentity {
             ex_id: CGuid::GUID_INVALID,
             ..source.identity()

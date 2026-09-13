@@ -1,143 +1,166 @@
-//! Периодическая область снежной бури `CSnowStormPhalanx`.
-//!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/snowstormphalanx.cpp`. Все три подтверждённые таблицы
-//! по адресам `0x006A5270/8C/A8` имеют размер 5×5 и целиком заполнены единицами.
-//! Владелец заранее расходует по два вызова legacy RNG на каждую цель каждого
-//! окна, хранит FIFO окон и формирует точный клиентский снимок. Поиск сущностей
-//! и применение атаки к независимым владельцам остаются у `CGame`.
-//! AI (0x005F94B0) требует региональный source для любого master type и
-//! вызывает IsAttackAble перед Attack; тот отдельно отвергает IsDied.
+//! Снежная буря: заранее выбранные клетки и элементальная атака.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/snowstormphalanx.cpp.
+//! Все уровни используют полную маску 5×5. Конструктор выделяет окна, а
+//! Initialize после SetTile расходует X/Y RNG для каждой цели каждого окна.
+//! AI сохраняет last-attack до обхода; счётчик окна увеличивает после callbacks.
+//! Клетки не дедуплицируются, нулевая пара завершает текущее окно. Пакет
+//! содержит skill/level/master type/id, срок, частоту и весь массив клеток.
+//! Нулевая частота, число целей >25 и невозможный размер массива отклоняются
+//! явно: исходные деление на ноль и выход за массив не воспроизводятся.
 
 use super::snowstorm::SNOW_STORM_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 
 const SCOPE_SIDE: i32 = 5;
-const SCOPE_AREA: u32 = 25;
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
+pub(crate) const SNOW_STORM_SCOPE_AREA: u32 = 25;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SnowStormPhalanxTick { Pending, Attack { sampled_at_ms: u32 }, Expired }
+pub(crate) enum SnowStormParametersError {
+    ZeroFrequency,
+    TooManyTargets,
+    CellArrayTooLarge,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SnowStormAttack {
+    master: MasterInfo,
+    skill_level: i32,
+    minimum_attack: i32,
+    maximum_attack: i32,
+    element_modifier: i32,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CSnowStormPhalanx {
     shape: CShape,
-    master: MasterInfo,
+    attack: SnowStormAttack,
     started_at_ms: u32,
     lifetime_ms: u32,
-    skill_level: i32,
     frequency_ms: u32,
-    minimum_attack: i32,
-    maximum_attack: i32,
-    element_modifier: i32,
     target_count: u32,
     last_attack_ms: u32,
     attack_count: u32,
     cells: Vec<(i32, i32)>,
 }
 
-
-pub(crate) fn calculate_owned_snow_storm_attack(
-    game: &mut CGame,
-    phalanx: &CSnowStormPhalanx,
-) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-    let master = phalanx.master();
-    let (combat, occupation, level) = game.find_player(master.master_id).map(|player| {
-        (
-            player.combat_properties(),
-            player.occupation(),
-            player.level(),
-        )
-    }).unwrap_or_default();
-    Some(phalanx.calculate_attack(combat, occupation, level, &mut |maximum| {
-        game.skill_random_below(maximum)
-    }))
-}
-
 impl CSnowStormPhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
-    pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, frequency_ms: u32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32, target_count: u32) -> Self {
+    #[allow(clippy::too_many_arguments, reason = "поля конструктора исходной области")]
+    pub(crate) fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
+        skill_level: i32, frequency_ms: u32, minimum_attack: i32,
+        maximum_attack: i32, element_modifier: i32, target_count: u32,
+    ) -> Result<Self, SnowStormParametersError> {
+        let windows = lifetime_ms.checked_div(frequency_ms)
+            .ok_or(SnowStormParametersError::ZeroFrequency)?;
+        if target_count > SNOW_STORM_SCOPE_AREA {
+            return Err(SnowStormParametersError::TooManyTargets);
+        }
+        let count = windows.checked_mul(SNOW_STORM_SCOPE_AREA)
+            .filter(|count| count.checked_mul(8).is_some())
+            .ok_or(SnowStormParametersError::CellArrayTooLarge)?;
+        let mut cells = Vec::new();
+        cells.try_reserve_exact(count as usize)
+            .map_err(|_| SnowStormParametersError::CellArrayTooLarge)?;
+        cells.resize(count as usize, (0, 0));
         let mut shape = CShape::with_constructor_defaults();
-        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
-        Self { shape, master, started_at_ms, lifetime_ms, skill_level, frequency_ms, minimum_attack, maximum_attack, element_modifier, target_count, last_attack_ms: 0, attack_count: 0, cells: Vec::new() }
+        shape.set_identity(ShapeIdentity {
+            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
+        });
+        Ok(Self {
+            shape,
+            attack: SnowStormAttack { master, skill_level, minimum_attack, maximum_attack, element_modifier },
+            started_at_ms, lifetime_ms, frequency_ms, target_count,
+            last_attack_ms: 0, attack_count: 0, cells,
+        })
     }
 
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
-    pub(crate) const fn master(&self) -> MasterInfo { self.master }
+    pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
+    pub(crate) const fn attack_snapshot(&self) -> SnowStormAttack { self.attack }
 
-    pub(crate) fn initialize(&mut self, tile_x: i32, tile_y: i32, random_below: &mut dyn FnMut(i32) -> i32) -> bool {
-        if self.frequency_ms == 0 { return false; }
-        let windows = self.lifetime_ms / self.frequency_ms;
-        self.cells = vec![(0, 0); windows.wrapping_mul(SCOPE_AREA) as usize];
-        let origin_x = tile_x.wrapping_sub(SCOPE_SIDE >> 1);
-        let origin_y = tile_y.wrapping_sub(SCOPE_SIDE >> 1);
-        for window in 0..windows {
-            for target in 0..self.target_count {
+    pub(crate) fn initialize(&mut self, random_below: &mut dyn FnMut(i32) -> i32) {
+        let origin_x = self.shape.get_tile_x().unwrap_or(i32::MIN).wrapping_sub(SCOPE_SIDE >> 1);
+        let origin_y = self.shape.get_tile_y().unwrap_or(i32::MIN).wrapping_sub(SCOPE_SIDE >> 1);
+        self.cells.fill((0, 0));
+        for window in self.cells.chunks_exact_mut(SNOW_STORM_SCOPE_AREA as usize) {
+            for cell in window.iter_mut().take(self.target_count as usize) {
                 let x = random_below(SCOPE_SIDE);
                 let y = random_below(SCOPE_SIDE);
-                let index = window.wrapping_mul(SCOPE_AREA).wrapping_add(target) as usize;
-                if let Some(cell) = self.cells.get_mut(index) {
-                    *cell = (origin_x.wrapping_add(x), origin_y.wrapping_add(y));
-                }
+                *cell = (origin_x.wrapping_add(x), origin_y.wrapping_add(y));
             }
         }
-        true
     }
 
-    pub(crate) fn tick(&mut self, lifetime_now_ms: u32, mut now_milliseconds: impl FnMut() -> u32) -> SnowStormPhalanxTick {
-        if self.started_at_ms.wrapping_add(self.lifetime_ms) < lifetime_now_ms {
-            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
-            return SnowStormPhalanxTick::Expired;
-        }
-        if self.frequency_ms.wrapping_add(self.last_attack_ms) < now_milliseconds() {
-            let sampled_at_ms = now_milliseconds();
-            self.last_attack_ms = sampled_at_ms;
-            self.attack_count = self.attack_count.wrapping_add(1);
-            return SnowStormPhalanxTick::Attack { sampled_at_ms };
-        }
-        SnowStormPhalanxTick::Pending
+    pub(crate) const fn expired_at(&self, now: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.lifetime_ms) < now
     }
 
-    pub(crate) fn current_cells(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let start = self.attack_count.wrapping_sub(1).wrapping_mul(SCOPE_AREA) as usize;
-        self.cells.get(start..start.saturating_add(SCOPE_AREA as usize)).unwrap_or_default().iter().copied().take_while(|cell| *cell != (0, 0))
+    pub(crate) const fn attack_due_at(&self, now: u32) -> bool {
+        self.frequency_ms.wrapping_add(self.last_attack_ms) < now
     }
 
-    pub(crate) fn encode_client_snapshot(&self, mut now_milliseconds: impl FnMut() -> u32) -> Option<Vec<u8>> {
-        let first_now = now_milliseconds();
-        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first_now { 0 } else { let second_now = now_milliseconds(); self.lifetime_ms.wrapping_sub(second_now).wrapping_add(self.started_at_ms) };
+    pub(crate) fn mark_attack_at(&mut self, now: u32) { self.last_attack_ms = now; }
+    pub(crate) fn advance_attack_window(&mut self) {
+        self.attack_count = self.attack_count.wrapping_add(1);
+    }
+
+    pub(crate) fn current_cell(&self, index: u32) -> Option<(i32, i32)> {
+        let index = self.attack_count.wrapping_mul(SNOW_STORM_SCOPE_AREA).wrapping_add(index);
+        // После исчерпания массива native читает за его концом. Не создаём
+        // лишние клетки и не подменяем такой выход успешной атакой.
+        self.cells.get(index as usize).copied().filter(|cell| *cell != (0, 0))
+    }
+
+    pub(crate) fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_i32(SNOW_STORM_SKILL_ID as i32);
-            writer.write_i32(self.skill_level);
-            writer.write_i32(self.shape.get_tile_x().ok()?);
-            writer.write_i32(self.shape.get_tile_y().ok()?);
-            writer.write_u32(remained);
-            writer.write_u32(self.lifetime_ms);
-            writer.write_u32(self.frequency_ms);
-            writer.write_u32(self.cells.len() as u32);
-            for &(x, y) in &self.cells { writer.write_i32(x); writer.write_i32(y); }
-        }
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u32(SNOW_STORM_SKILL_ID);
+        writer.write_i32(self.attack.skill_level);
+        writer.write_i32(self.attack.master.master_type);
+        writer.write_i32(self.attack.master.master_id);
+        writer.write_u32(timed_client_state_time(self.started_at_ms, self.lifetime_ms, now));
+        writer.write_u32(self.lifetime_ms);
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.cells.len() as u32);
+        for &(x, y) in &self.cells { writer.write_i32(x); writer.write_i32(y); }
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
+}
 
-    pub(crate) fn calculate_attack(&self, combat: PlayerCombatProperties, occupation: u8, attacker_level: u8, random_below: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-        (self.calculate_element_attack(random_below), combat, occupation, attacker_level)
+impl SnowStormAttack {
+    fn attack_master(self) -> MasterInfo {
+        if self.master.master_type == 400 { return self.master; }
+        MasterInfo {
+            master_type: self.master.master_type, master_id: self.master.master_id,
+            ..MasterInfo::default()
+        }
     }
+}
 
-    pub(crate) fn calculate_element_attack(&self, random_below: &mut dyn FnMut(i32) -> i32) -> AttackInformation {
-        let width = self.maximum_attack.wrapping_sub(self.minimum_attack).wrapping_abs().wrapping_add(1);
-        let damage = self.minimum_attack.wrapping_add(random_below(width)).wrapping_add(self.element_modifier).max(0);
-        AttackInformation { skill_id: SNOW_STORM_SKILL_ID, skill_level: self.skill_level as u8, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] }
-    }
+pub(crate) fn apply_snow_storm_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, snapshot: SnowStormAttack, region: i32,
+    target: ShapeIdentity, runtime: &mut Runtime,
+) {
+    if game.move_shape_health(region, target).is_none_or(|hp| hp == 0) { return; }
+    let master = snapshot.attack_master();
+    let mut attack = AttackInformation::for_master(master);
+    attack.skill_id = SNOW_STORM_SKILL_ID;
+    attack.skill_level = snapshot.skill_level as u8;
+    attack.damage_modifier = 0;
+    attack.damage_factor = 1.0;
+    attack.hit_modifier = 100;
+    let width = snapshot.maximum_attack.wrapping_sub(snapshot.minimum_attack)
+        .wrapping_abs().wrapping_add(1);
+    let damage = game.skill_random_below(width).wrapping_add(snapshot.minimum_attack)
+        .wrapping_add(snapshot.element_modifier).max(0);
+    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 });
+    game.apply_owned_skill_contact(master, target, region, attack, runtime);
 }

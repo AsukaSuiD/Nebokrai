@@ -38,12 +38,8 @@ pub(crate) struct CPoisonFogPhalanx {
 
 pub(crate) fn poison_fog_targets(game: &CGame, region_id: i32, phalanx: &CPoisonFogPhalanx) -> Vec<ShapeIdentity> {
     if !phalanx.cell_active { return Vec::new(); }
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
     let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
-    let (width, height) = game.area_dimensions();
-    let mut shapes = Vec::new();
-    if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new() }
-    shapes.into_iter().map(|shape| shape.identity).collect()
+    super::flash::cell_views(game, region_id, x, y).into_iter().map(|shape| shape.identity).collect()
 }
 
 impl CPoisonFogPhalanx {

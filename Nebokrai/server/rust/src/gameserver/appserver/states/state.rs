@@ -1,6 +1,6 @@
 //! Общие callbacks, доступ и клиентское представление состояний GameServer.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/states/state.h/.cpp
-//! и операции состояний appserver/moveshape.cpp.
+//! и операции состояний appserver/moveshape.cpp, GetObject appserver/serverregion.cpp.
 //!
 //! SlotMap сохраняет идентичность экземпляра, но не продлевает жизнь удалённого
 //! payload. После callback позиция разрешается заново; удаление не уплотняет
@@ -9,6 +9,8 @@
 //! остальные формы — через регион. Ключ нельзя применять к другой арене.
 //! Identity-поиск проверяет реестр и живой объект, а не пространственный view:
 //! координаты и таблица figure не определяют существование CMoveShape.
+//! Региональный GetObject областей, в отличие от CState::GetUser, требует
+//! присутствия в реестре региона также для игрока.
 //! В ещё не перенесённых первичных установках сохраняется прежняя привязка
 //! к держателю; общий restart не заменяет эти конкретные Begin.
 //!
@@ -1167,6 +1169,17 @@ pub(crate) fn resolve_state_move_shape(
         1_100 | 1_200 => Some(game.find_region(region_id)?.stationary_build(identity)?.move_shape()),
         _ => None,
     }
+}
+
+/// CServerRegion::GetObject с RTTI CMoveShape, без пространственного view.
+/// GUID этих типов не участвует в поиске; принадлежность региональному
+/// реестру проверяется до глобального разрешения объекта игрока.
+pub(crate) fn resolve_region_move_shape(
+    game: &CGame, region_id: i32, identity: ShapeIdentity,
+) -> Option<&CMoveShape> {
+    let identity = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..identity };
+    if !game.find_region(region_id)?.base().has_registered_shape(identity) { return None; }
+    resolve_state_move_shape(game, region_id, identity)
 }
 
 pub(crate) fn resolve_state_move_shape_mut(

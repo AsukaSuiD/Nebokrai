@@ -29,7 +29,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun, GodBless,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun, GodBless, ZonalCast,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -88,6 +88,7 @@ impl RegisteredPlayerCastOwner {
             id if super::heal::is_heal_skill(id) => Self::Heal,
             id if super::nonfun::is_non_fun_skill(id) => Self::NonFun,
             id if super::godbless::is_god_bless_skill(id) => Self::GodBless,
+            id if super::zonalcast::is_zonal_cast_skill(id) => Self::ZonalCast,
             _ => return None,
         })
     }
@@ -113,6 +114,7 @@ impl RegisteredPlayerCastOwner {
             Self::Heal => super::heal::execute_player_heal::<Runtime>,
             Self::NonFun => super::nonfun::execute_player_non_fun::<Runtime>,
             Self::GodBless => super::godbless::execute_player_god_bless::<Runtime>,
+            Self::ZonalCast => super::zonalcast::execute_player_zonal_cast::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,

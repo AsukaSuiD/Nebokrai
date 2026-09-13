@@ -6,12 +6,14 @@
 //! а User состояния — повторно в регионе области. Уже существующий Weak
 //! не заменяется. Перекрытие вызывает полный End старой области до AddShape;
 //! при истечении ему предшествует отдельный проход прямых End состояний.
+//! Клетки разрешаются в своём регионе; поиск User требует живой объект
+//! регионального реестра, но не координаты или таблицу геометрии монстра.
 
 use super::*;
 use crate::gameserver::appserver::skills::weakphalanx::{weak_cell_targets, CWeakPhalanx};
 use crate::gameserver::appserver::skills::weakstate::{begin_primary_weak_state, WEAK_STATE_ID};
 use crate::gameserver::appserver::states::state::{
-    end_and_destroy_state_at, end_move_shape_state, resolve_state_move_shape,
+    end_and_destroy_state_at, end_move_shape_state, resolve_region_move_shape, resolve_state_move_shape,
 };
 
 impl CGame {
@@ -24,14 +26,12 @@ impl CGame {
         started_at_ms: u32,
         runtime: &mut Runtime,
     ) -> Option<Result<i32, RegionMembershipBlock>> {
-        let region = self.find_region(region_id)?.base();
+        let owner = self.find_region(region_id)?;
         let mut shapes = Vec::new();
-        if let Err(block) = region.get_shapes(
-            tile_x, tile_y, self.area_width, self.area_height, self, &mut shapes,
-        ) {
-            let _ = self.publish_weak_phalanx_entry(&phalanx, runtime);
-            return Some(Err(block));
-        }
+        let _ = owner.base().get_shapes(
+            tile_x, tile_y, self.area_width, self.area_height,
+            &RegionShapeResolver { game: self, owner }, &mut shapes,
+        );
         for shape in shapes {
             if shape.identity.object_type != SUMMON_SHAPE_TYPE { continue; }
             let Some(old) = self.weak_phalanx(region_id, shape.identity.id) else { continue; };
@@ -91,12 +91,11 @@ impl CGame {
 
     fn weak_caster(&self, region_id: i32, id: i32) -> Option<(i32, ShapeIdentity)> {
         let master = self.weak_phalanx(region_id, id)?.master();
-        let found = self.find_shape_in_region(region_id, ShapeIdentity {
+        let source = resolve_region_move_shape(self, region_id, ShapeIdentity {
             object_type: master.master_type,
             id: master.master_id,
             ex_id: CGuid::GUID_INVALID,
-        })?;
-        let source = resolve_state_move_shape(self, region_id, found.identity)?.shape();
+        })?.shape();
         Some((source.get_region_id(), ShapeIdentity {
             ex_id: CGuid::GUID_INVALID,
             ..source.identity()

@@ -1078,10 +1078,7 @@ use crate::gameserver::appserver::skills::firewall::{
 use crate::gameserver::appserver::skills::firewallphalanx::{
     calculate_owned_fire_wall_attack, FireWallPhalanxTick,
 };
-use crate::gameserver::appserver::skills::poisonfog::{
-    cancel_player_poison_fog, complete_player_poison_fog, execute_player_poison_fog,
-    is_poison_fog_target, POISON_FOG_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::poisonfog::POISON_FOG_SKILL_ID;
 use crate::gameserver::appserver::skills::poisonfogphalanx::PoisonFogPhalanxTick;
 use crate::gameserver::appserver::skills::infernol::{
     cancel_player_infernol, execute_player_infernol, is_infernol_dispatch, INFERNOL_SKILL_ID,
@@ -1291,17 +1288,7 @@ use crate::gameserver::appserver::skills::knockout::is_knock_out_dispatch;
 use crate::gameserver::appserver::skills::knockoutstate::{
     finish_blind_states_on_defense, finish_player_blind_states_on_defense,
 };
-use crate::gameserver::appserver::skills::snowstorm::{
-    cancel_player_snow_storm, complete_player_snow_storm, execute_player_snow_storm,
-    is_snow_storm_target, SNOW_STORM_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::snowstormphalanx::{
-    calculate_owned_snow_storm_attack,
-    CSnowStormPhalanx, SnowStormPhalanxTick,
-};
-use crate::gameserver::appserver::skills::weak::{
-    cancel_player_weak, complete_player_weak, execute_player_weak, is_weak_target, WEAK_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::weak::WEAK_SKILL_ID;
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::yinyang::{
     cancel_player_yin_yang_family, complete_player_yin_yang_family,
@@ -38437,7 +38424,6 @@ impl CGame {
         let mut range_dispatch = None;
         let mut wide_arc_dispatch = None;
         let mut projectile_dispatch = None;
-        let mut snow_storm_entry = None;
         let mut owner = Some(owner);
         let handled = execute_owned_monster_base_attack(
             self,
@@ -38447,7 +38433,6 @@ impl CGame {
             &mut range_dispatch,
             &mut wide_arc_dispatch,
             &mut projectile_dispatch,
-            &mut snow_storm_entry,
         );
         let Some(mut owner) = owner else { return handled };
         let _ = synchronize_jiumai_target_loss(owner.base_mut(), monster_id);
@@ -38455,9 +38440,6 @@ impl CGame {
             monster.set_base_attack_owned_tick(handled);
         }
         self.restore_region_owner(owner);
-        if let Some(phalanx_id) = snow_storm_entry {
-            let _ = self.send_snow_storm_phalanx_entry(region_id, phalanx_id, runtime);
-        }
         if let Some(dispatch) = wide_arc_dispatch {
             'cells: for (tile_x, tile_y) in dispatch.cells.iter().copied() {
                 let Some(owner) = self.take_region_owner(region_id) else {
@@ -38958,24 +38940,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                POISON_FOG_SKILL_ID => Some(complete_player_poison_fog(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                SNOW_STORM_SKILL_ID => Some(complete_player_snow_storm(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
-                WEAK_SKILL_ID => Some(complete_player_weak(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 CURE_SKILL_ID => Some(complete_player_cure(
                     self,
                     player_id,
@@ -39226,13 +39190,6 @@ impl CGame {
             HEARTEN_SKILL_ID => {
                 cancel_player_hearten(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
             }
-            POISON_FOG_SKILL_ID => {
-                cancel_player_poison_fog(self, player_id, &mut player_ai, runtime)
-            }
-            SNOW_STORM_SKILL_ID => {
-                cancel_player_snow_storm(self, player_id, &mut player_ai, runtime)
-            }
-            WEAK_SKILL_ID => cancel_player_weak(self, player_id, &mut player_ai, runtime),
             CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime),
             PROMOTION_SKILL_ID => {
                 cancel_player_promotion(self, player_id, &mut player_ai, cause.uses_nonzero_end(), runtime)
@@ -39542,7 +39499,6 @@ impl CGame {
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
             _ if is_fire_wall_target(dispatch) => execute_player_fire_wall,
-            _ if is_poison_fog_target(dispatch) => execute_player_poison_fog,
             _ if is_infernol_dispatch(dispatch) => execute_player_infernol,
             _ if is_seven_shooting_star_dispatch(dispatch) => execute_player_seven_shooting_star,
             _ if is_player_little_star_dispatch(dispatch) => execute_player_little_star,
@@ -39587,8 +39543,6 @@ impl CGame {
                 }
             } => execute_player_monster_taming,
             _ if is_knock_out_dispatch(dispatch) => execute_player_knock_out,
-            _ if is_snow_storm_target(dispatch) => execute_player_snow_storm,
-            _ if is_weak_target(dispatch) => execute_player_weak,
             _ if is_yin_yang_target(dispatch) => execute_player_yin_yang,
             _ if is_yin_yang_2_target(dispatch) => execute_player_yin_yang_2,
             _ if is_god_thunder_dispatch(dispatch) => execute_player_god_thunder,
@@ -43176,9 +43130,7 @@ impl CGame {
                 calculate_owned_thunder_blow_attack(self, phalanx, target_level)
             }
             SummonedSkillShape::ThunderSlash(_) => None,
-            SummonedSkillShape::SnowStorm(phalanx) => {
-                calculate_owned_snow_storm_attack(self, phalanx)
-            }
+            SummonedSkillShape::SnowStorm(_) => None,
             SummonedSkillShape::Leiming2(phalanx) => calculate_owned_leiming2_attack(self, phalanx),
             SummonedSkillShape::Tianhuo(phalanx) => calculate_owned_tianhuo_attack(self, phalanx),
             SummonedSkillShape::SpiderMist(_) => None,
@@ -43407,6 +43359,12 @@ impl CGame {
         {
             return self.run_rain_arrow_phalanx(region_id, phalanx_id, runtime);
         }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::SnowStorm(_)))
+        {
+            return self.run_snow_storm_phalanx(region_id, phalanx_id, runtime);
+        }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -43476,14 +43434,7 @@ impl CGame {
                     ThunderBlowPhalanxTick::Expired => None,
                 },
                 SummonedSkillShape::ThunderSlash(_) => Some(None),
-                SummonedSkillShape::SnowStorm(phalanx) => match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
-                    SnowStormPhalanxTick::Pending => Some(None),
-                    SnowStormPhalanxTick::Attack { sampled_at_ms } => Some(Some((
-                        phalanx.shape().identity(),
-                        sampled_at_ms,
-                    ))),
-                    SnowStormPhalanxTick::Expired => None,
-                },
+                SummonedSkillShape::SnowStorm(_) => Some(None),
                 SummonedSkillShape::Leiming2(phalanx) => match phalanx.tick(lifetime_now_ms) {
                     Leiming2PhalanxTick::Pending => Some(None),
                     Leiming2PhalanxTick::AttackAndExpire { sampled_at_ms } => Some(Some((
@@ -43643,33 +43594,6 @@ impl CGame {
         if let (Some(Some(_)), SummonedSkillShape::ThunderBlow(thunder)) = (tick, &phalanx) {
             if let (Ok(x), Ok(y)) = (thunder.shape().get_tile_x(), thunder.shape().get_tile_y()) {
                 self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
-            }
-            return true;
-        }
-        if let (Some(Some(_)), SummonedSkillShape::SnowStorm(snow)) = (tick, &phalanx) {
-            // Региональный GetShape источника предшествует всем клеткам;
-            // глобальный поиск игрока не заменяет эту границу SnowStorm.
-            let source = ShapeIdentity {
-                object_type: snow.master().master_type,
-                id: snow.master().master_id,
-                ex_id: CGuid::GUID_INVALID,
-            };
-            let source_present = self.find_shape_in_region(region_id, source)
-                .is_some_and(|_| resolve_state_move_shape(self, region_id, source).is_some());
-            for (x, y) in snow.current_cells() {
-                let mut shapes = Vec::new();
-                if let Some(region) = self.find_region(region_id) {
-                    let _ = region.base().get_shapes(x, y, self.area_width, self.area_height, self, &mut shapes);
-                }
-                for shape in shapes {
-                    let target = shape.identity;
-                    if !source_present || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                        || (target.object_type == snow.master().master_type && target.id == snow.master().master_id)
-                    { continue; }
-                    if self.live_skill_target_attackable(region_id, source, target) {
-                        self.apply_summoned_skill_to_target(&phalanx, target, region_id, false, runtime);
-                    }
-                }
             }
             return true;
         }

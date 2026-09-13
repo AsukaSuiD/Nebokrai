@@ -26,6 +26,8 @@
 //! GS0297 для обоих отказов. Варианты не меняют порядок чтений экипировки/MP.
 //! FireBolt/GodPunishment используют тот же MP-допуск без финального Move0; FireBall
 //! сохраняет запрет движения после достаточного положительного MP.
+//! SnowStorm использует те же signed MP-проверки, но сообщает только visual7:
+//! повторного запроса цены для GS0288 у него нет.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::skill_is_restored;
@@ -73,10 +75,12 @@ pub(super) fn ranged_weapon_failure(
     game.send_skill_system_info(player, text);
 }
 
-fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player: i32, properties: &CSkillBaseProperties) {
+fn mana_failure(game: &mut CGame, instance: RegisteredSkill, player: i32, properties: &CSkillBaseProperties, with_text: bool) {
     game.update_registered_skill_visual(instance, 7);
-    let amount = properties.query_property(USER_MP_LOSE);
-    game.send_skill_system_info_with_unsigned(player, b"GS0288", amount);
+    if with_text {
+        let amount = properties.query_property(USER_MP_LOSE);
+        game.send_skill_system_info_with_unsigned(player, b"GS0288", amount);
+    }
 }
 
 fn check_weapon(game: &mut CGame, instance: RegisteredSkill, player: i32, weapon: RangedWeaponKind) -> bool {
@@ -192,26 +196,33 @@ pub(super) fn check_ranged_weapon_and_mana(
 ) -> bool {
     if source.1.object_type != PLAYER_TYPE { return true; }
     if !check_weapon(game, instance, source.1.id, weapon) { return false; }
-    check_cast_mana_with_rule(game, instance, source, properties, mana_rule, true)
+    check_cast_mana_with_rule(game, instance, source, properties, mana_rule, true, true)
 }
 
 pub(super) fn check_cast_mana(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     properties: &CSkillBaseProperties,
 ) -> bool {
-    check_cast_mana_with_rule(game, instance, source, properties, CastManaRule::RequireCost, true)
+    check_cast_mana_with_rule(game, instance, source, properties, CastManaRule::RequireCost, true, true)
 }
 
 pub(super) fn check_cast_mana_without_movement(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     properties: &CSkillBaseProperties,
 ) -> bool {
-    check_cast_mana_with_rule(game, instance, source, properties, CastManaRule::RequireCost, false)
+    check_cast_mana_with_rule(game, instance, source, properties, CastManaRule::RequireCost, false, true)
+}
+
+pub(super) fn check_cast_mana_without_text(
+    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    properties: &CSkillBaseProperties,
+) -> bool {
+    check_cast_mana_with_rule(game, instance, source, properties, CastManaRule::RequireCost, true, false)
 }
 
 fn check_cast_mana_with_rule(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    properties: &CSkillBaseProperties, rule: CastManaRule, lock_movement: bool,
+    properties: &CSkillBaseProperties, rule: CastManaRule, lock_movement: bool, with_text: bool,
 ) -> bool {
     if source.1.object_type != PLAYER_TYPE { return true; }
     let player = source.1.id;
@@ -220,7 +231,7 @@ fn check_cast_mana_with_rule(
     } else {
         let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
         if (mana.wrapping_sub(properties.query_property(USER_MP_LOSE)) as i32) < 0 {
-            mana_failure(game, instance, player, properties);
+            mana_failure(game, instance, player, properties, with_text);
             return false;
         }
     }
@@ -234,11 +245,24 @@ fn check_cast_mana_with_rule(
 pub(super) fn spend_cast_mana(
     game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, properties: &CSkillBaseProperties,
 ) -> bool {
+    spend_cast_mana_with_text(game, instance, player, properties, true)
+}
+
+pub(super) fn spend_cast_mana_without_text(
+    game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, properties: &CSkillBaseProperties,
+) -> bool {
+    spend_cast_mana_with_text(game, instance, player, properties, false)
+}
+
+fn spend_cast_mana_with_text(
+    game: &mut CGame, instance: RegisteredSkill, player: Option<i32>, properties: &CSkillBaseProperties,
+    with_text: bool,
+) -> bool {
     let Some(player) = player else { return true; };
     let Some(mana) = game.find_player(player).map(CPlayer::mana) else { return false; };
     let remaining = mana.wrapping_sub(properties.query_property(USER_MP_LOSE));
     if (remaining as i32) < 0 {
-        mana_failure(game, instance, player, properties);
+        mana_failure(game, instance, player, properties, with_text);
         return false;
     }
     let Some(user) = game.find_player_mut(player) else { return false; };

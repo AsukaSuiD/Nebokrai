@@ -31,11 +31,7 @@ pub(crate) struct CWeakPhalanx {
 }
 
 pub(crate) fn weak_cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> {
-    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
-    let (width, height) = game.area_dimensions();
-    let mut shapes = Vec::new();
-    if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new(); }
-    shapes.into_iter().map(|shape| shape.identity).collect()
+    super::flash::cell_views(game, region_id, x, y).into_iter().map(|shape| shape.identity).collect()
 }
 
 impl CWeakPhalanx {
