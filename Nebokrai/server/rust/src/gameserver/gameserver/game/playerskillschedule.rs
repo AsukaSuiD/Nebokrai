@@ -258,7 +258,6 @@ impl CGame {
             | SEAL_SKILL_ID
             | YIN_YANG_SKILL_ID
             | YIN_YANG_2_SKILL_ID
-            | GOD_PUNISHMENT_SKILL_ID
             | GOD_THUNDER_SKILL_ID
             | GOD_THUNDER_2_SKILL_ID
             | SOUL_COLLECT_SKILL_ID

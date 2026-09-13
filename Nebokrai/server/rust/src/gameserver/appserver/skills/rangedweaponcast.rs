@@ -3,7 +3,7 @@
 //! meteorarrowmass.cpp, rainarrow.cpp, lightingarrow.cpp, lightingarrow2.cpp,
 //! poisonmoth.cpp, bloodrose.cpp, explosivearrow{,2,3}.cpp, scorpion.cpp,
 //! boalock.cpp, strike.cpp, kerosene.cpp, ignition.cpp, heartlessarrow{,2,3}.cpp,
-//! firebolt.cpp и fireball.cpp.
+//! firebolt.cpp, fireball.cpp и godpunishment.cpp.
 //! Проверки пути и MP доступны также
 //! BoaLock/Strike без требования к оружию.
 //! Check удерживает исходного U, читает reuse и свежий путь по политике навыка.
@@ -24,7 +24,7 @@
 //! GS0293. У заряжаемого HeartLessArrow поздняя проверка лука различает
 //! отсутствие GS0297 и неверную категорию GS0292; первоначальная использует
 //! GS0297 для обоих отказов. Варианты не меняют порядок чтений экипировки/MP.
-//! FireBolt использует тот же MP-допуск без финального Move0; FireBall
+//! FireBolt/GodPunishment используют тот же MP-допуск без финального Move0; FireBall
 //! сохраняет запрет движения после достаточного положительного MP.
 
 use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};

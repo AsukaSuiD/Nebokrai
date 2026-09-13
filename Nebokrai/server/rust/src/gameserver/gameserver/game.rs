@@ -725,7 +725,6 @@ mod lightingarrow;
 mod summonshape;
 mod meteorarrow;
 mod rainarrow;
-mod heartlessarrow;
 mod baseprojectile;
 mod thunderblow;
 mod thunderslash;
@@ -1317,10 +1316,6 @@ use crate::gameserver::appserver::skills::yinyang2::{
 use crate::gameserver::appserver::skills::yinyangphalanx::{
     calculate_owned_yin_yang_attack, YinYangPhalanxTick,
 };
-use crate::gameserver::appserver::skills::godpunishment::{
-    cancel_player_god_punishment, complete_player_god_punishment,
-    execute_player_god_punishment, is_god_punishment_target, GOD_PUNISHMENT_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::godthunder::{
     cancel_player_god_thunder_family, complete_player_god_thunder_family,
     execute_player_god_thunder, is_god_thunder_dispatch, GOD_THUNDER_SKILL_ID,
@@ -1335,10 +1330,6 @@ use crate::gameserver::appserver::skills::soulcollect::{
 use crate::gameserver::appserver::skills::soulmirror::{
     cancel_player_soul_mirror, complete_player_soul_mirror,
     execute_player_soul_mirror, is_soul_mirror_skill, SOUL_MIRROR_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::godpunishmentphalanx::{
-    calculate_owned_god_punishment_attack,
-    GodPunishmentPhalanxTick,
 };
 use crate::gameserver::appserver::skills::godthunderphalanx::{
     calculate_owned_god_thunder_attack, GodThunderPhalanxTick,
@@ -39066,12 +39057,6 @@ impl CGame {
                     true,
                     runtime,
                 )),
-                GOD_PUNISHMENT_SKILL_ID => Some(complete_player_god_punishment(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 GOD_THUNDER_SKILL_ID => Some(complete_player_god_thunder_family(
                     self,
                     player_id,
@@ -39225,9 +39210,6 @@ impl CGame {
                 true,
                 runtime,
             ),
-            GOD_PUNISHMENT_SKILL_ID => {
-                cancel_player_god_punishment(self, player_id, &mut player_ai, runtime)
-            }
             GOD_THUNDER_SKILL_ID => cancel_player_god_thunder_family(
                 self,
                 player_id,
@@ -39609,7 +39591,6 @@ impl CGame {
             _ if is_weak_target(dispatch) => execute_player_weak,
             _ if is_yin_yang_target(dispatch) => execute_player_yin_yang,
             _ if is_yin_yang_2_target(dispatch) => execute_player_yin_yang_2,
-            _ if is_god_punishment_target(dispatch) => execute_player_god_punishment,
             _ if is_god_thunder_dispatch(dispatch) => execute_player_god_thunder,
             _ if is_god_thunder_2_dispatch(dispatch) => execute_player_god_thunder_2,
             _ if is_soul_collect_skill(dispatch) => execute_player_soul_collect,
@@ -43223,7 +43204,7 @@ impl CGame {
             SummonedSkillShape::YinYang(phalanx) => {
                 calculate_owned_yin_yang_attack(self, phalanx, target_level)
             }
-            SummonedSkillShape::GodPunishment(phalanx) => calculate_owned_god_punishment_attack(self, phalanx, target_level),
+            SummonedSkillShape::GodPunishment(_) => None,
             SummonedSkillShape::GodThunder(phalanx) => calculate_owned_god_thunder_attack(self, phalanx, target_level),
             SummonedSkillShape::GodThunder2(phalanx) => calculate_owned_god_thunder_2_attack(self, phalanx, target_level),
             SummonedSkillShape::HeartlessArrow(_) => None,
@@ -43327,7 +43308,7 @@ impl CGame {
         self.apply_summoned_skill_to_target(phalanx, target, region_id, war_soul_hit, runtime);
         if !war_soul_hit && deduplicate { attacked.push(target); }
         if matches!(phalanx, SummonedSkillShape::ThunderBlow(_)
-            | SummonedSkillShape::Tianhuo(_) | SummonedSkillShape::GodPunishment(_))
+            | SummonedSkillShape::Tianhuo(_))
         {
             self.end_damage_phalanx(region_id, phalanx.shape().identity().id);
         }
@@ -43416,6 +43397,12 @@ impl CGame {
         }
         if matches!(self.find_region(region_id)
             .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
+            Some(SummonedSkillShape::GodPunishment(_) | SummonedSkillShape::HeartlessArrow(_)))
+        {
+            return self.run_single_cell_phalanx(region_id, phalanx_id, runtime);
+        }
+        if matches!(self.find_region(region_id)
+            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
             Some(SummonedSkillShape::ThunderSlash(_)))
         {
             return self.run_thunder_slash_phalanx(region_id, phalanx_id, runtime);
@@ -43437,12 +43424,6 @@ impl CGame {
             Some(SummonedSkillShape::RainArrow(_)))
         {
             return self.run_rain_arrow_phalanx(region_id, phalanx_id, runtime);
-        }
-        if matches!(self.find_region(region_id)
-            .and_then(|owner| owner.base().find_skill_phalanx(phalanx_id)),
-            Some(SummonedSkillShape::HeartlessArrow(_)))
-        {
-            return self.run_heartless_arrow_phalanx(region_id, phalanx_id, runtime);
         }
         let lifetime_now_ms = runtime.now_milliseconds();
         let Some(mut owner) = self.take_region_owner(region_id) else {
@@ -43550,7 +43531,7 @@ impl CGame {
                     YinYangPhalanxTick::Pending => Some(None),
                     YinYangPhalanxTick::AttackAndExpire { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))),
                 },
-                SummonedSkillShape::GodPunishment(phalanx) => match phalanx.tick(lifetime_now_ms) { GodPunishmentPhalanxTick::Scan { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodPunishmentPhalanxTick::Expired => None },
+                SummonedSkillShape::GodPunishment(_) => Some(None),
                 SummonedSkillShape::GodThunder(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunderPhalanxTick::Pending => Some(None), GodThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunderPhalanxTick::Expired => None },
                 SummonedSkillShape::GodThunder2(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunder2PhalanxTick::Pending => Some(None), GodThunder2PhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunder2PhalanxTick::Expired => None },
                 SummonedSkillShape::HeartlessArrow(_) => Some(None),
@@ -43730,12 +43711,6 @@ impl CGame {
                 self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
             }
             self.end_damage_phalanx(region_id, phalanx_id);
-            return true;
-        }
-        if let (Some(Some(_)), SummonedSkillShape::GodPunishment(god)) = (tick, &phalanx) {
-            if let (Ok(x), Ok(y)) = (god.shape().get_tile_x(), god.shape().get_tile_y()) {
-                self.apply_summoned_skill_cell(&phalanx, region_id, x, y, &mut attacked_targets, runtime);
-            }
             return true;
         }
         if let (Some(Some(_)), SummonedSkillShape::GodThunder(god)) = (tick, &phalanx) {

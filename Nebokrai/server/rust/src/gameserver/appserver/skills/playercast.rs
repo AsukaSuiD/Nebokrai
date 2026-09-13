@@ -27,7 +27,7 @@ pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
     Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
-    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile,
+    PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment,
 }
 
 impl RegisteredPlayerCastOwner {
@@ -35,6 +35,7 @@ impl RegisteredPlayerCastOwner {
         Some(match id {
             super::archery::ARCHERY_SKILL_ID | super::basemagic::BASE_MAGIC_SKILL_ID
                 | super::firebolt::FIRE_BOLT_SKILL_ID | super::fireball::FIRE_BALL_SKILL_ID => Self::BaseProjectile,
+            super::godpunishment::GOD_PUNISHMENT_SKILL_ID => Self::GodPunishment,
             super::flash::FLASH_SKILL_ID => Self::Flash,
             super::littleflash::LITTLE_FLASH_SKILL_ID | super::littleflash2::LITTLE_FLASH_2_SKILL_ID => Self::LittleFlash,
             super::rush::RUSH_SKILL_ID => Self::Rush,
@@ -97,6 +98,7 @@ impl RegisteredPlayerCastOwner {
     ) -> QueuedSkillExecutionOutcome {
         let execute = match self {
             Self::BaseProjectile => super::baseprojectilecast::execute_player_base_projectile::<Runtime>,
+            Self::GodPunishment => super::godpunishment::execute_player_god_punishment::<Runtime>,
             Self::Flash => super::flash::execute_player_flash::<Runtime>,
             Self::LittleFlash => super::littleflash::execute_player_little_flash::<Runtime>,
             Self::Rush => super::rush::execute_player_rush::<Runtime>,

@@ -9,12 +9,75 @@
 //! фактической формы; повторный End не подавляется по флагу удаления.
 //! Archery, BaseMagic и FireBolt вызывают общий End: только отметка удаления,
 //! без немедленного BF504.
+//! Одноклеточные HeartLessArrow2/3 и GodPunishment используют один живой AI:
+//! абсолютный срок, снимок фактической клетки, свежий допуск и Attack→End
+//! для каждого target. End не прерывает снимок; формулы остаются у owners.
 
 use super::*;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
+    CHeartlessArrowPhalanx, apply_heartless_arrow_attack,
+};
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 
 impl CGame {
+    pub(super) fn heartless_arrow_phalanx(&self, region: i32, id: i32) -> Option<&CHeartlessArrowPhalanx> {
+        let SummonedSkillShape::HeartlessArrow(phalanx) =
+            self.find_region(region)?.base().find_skill_phalanx(id)?
+        else { return None; };
+        Some(phalanx)
+    }
+
+    pub(super) fn run_single_cell_phalanx<Runtime: GameMainLoopRuntime>(
+        &mut self, holder_region: i32, id: i32, runtime: &mut Runtime,
+    ) -> bool {
+        let now = runtime.now_milliseconds();
+        let Some(phalanx) = self.find_region(holder_region)
+            .and_then(|owner| owner.base().find_skill_phalanx(id))
+        else { return false; };
+        let expired = match phalanx {
+            SummonedSkillShape::HeartlessArrow(phalanx) => phalanx.expired_at(now),
+            SummonedSkillShape::GodPunishment(phalanx) => phalanx.expired_at(now),
+            _ => return false,
+        };
+        if expired {
+            self.end_summoned_shape(holder_region, id);
+            return true;
+        }
+        if !phalanx.shape().is_assigned_to_server_region() { return true; }
+        let region = phalanx.shape().get_region_id();
+        let Some(owner) = self.find_region(region) else { return true; };
+        let y = phalanx.shape().get_tile_y().unwrap_or(i32::MIN);
+        let x = phalanx.shape().get_tile_x().unwrap_or(i32::MIN);
+        let mut shapes = Vec::new();
+        let _ = owner.base().get_shapes(
+            x, y, self.area_width, self.area_height,
+            &RegionShapeResolver { game: self, owner }, &mut shapes,
+        );
+        for target in shapes.into_iter().map(|view| view.identity) {
+            let Some(phalanx) = self.find_region(holder_region)
+                .and_then(|owner| owner.base().find_skill_phalanx(id))
+            else { return false; };
+            let identity = phalanx.shape().identity();
+            if (target.object_type == identity.object_type && target.id == identity.id)
+                || !self.summoned_skill_scan_target_allowed(region, phalanx.master(), target)
+            { continue; }
+            match phalanx {
+                SummonedSkillShape::HeartlessArrow(phalanx) => {
+                    let snapshot = phalanx.attack_snapshot();
+                    apply_heartless_arrow_attack(self, snapshot, region, target, runtime);
+                }
+                SummonedSkillShape::GodPunishment(phalanx) => {
+                    let snapshot = phalanx.attack_snapshot();
+                    snapshot.apply(self, (region, target), false, runtime);
+                }
+                _ => return false,
+            }
+            self.end_summoned_shape(holder_region, id);
+        }
+        true
+    }
+
     /// Summon световой стрелы и дождя стрел сначала вызывает Begin прежних
     /// ThunderBlow из снимка лицевой клетки. Уровень в нём не используется:
     /// совпадение живых координат вызывает полный End, не просто delete-флаг.

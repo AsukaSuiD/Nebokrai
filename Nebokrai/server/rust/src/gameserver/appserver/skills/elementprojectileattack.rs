@@ -1,4 +1,4 @@
-//! Элементный контакт снарядов BaseMagic, FireBolt и FireBall.
+//! Элементный контакт BaseMagic, FireBolt, FireBall и GodPunishment.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые phalanx.cpp.
 //! MIN/MAX/ELEMENT и усиление душами принадлежат снимку конструктора.
 //! Calculate ищет игрока по attacker ID независимо от сохранённого типа;
