@@ -249,6 +249,7 @@ use super::fireball::{FIRE_BALL_SKILL_ID, execute_owned_monster_fire_ball};
 use super::godpunishment::{GOD_PUNISHMENT_SKILL_ID, execute_owned_monster_god_punishment};
 use super::godbless::{GOD_BLESS_SKILL_ID, execute_owned_monster_god_bless};
 use super::godbless2::GOD_BLESS_2_SKILL_ID;
+use super::soulcollect::{SOUL_COLLECT_SKILL_ID, execute_owned_monster_soul_collect};
 use super::heal::{HEAL_SKILL_ID, execute_owned_monster_heal, is_heal_skill};
 use super::nonfun::{execute_owned_monster_non_fun, is_non_fun_skill};
 use super::heal2::HEAL_2_SKILL_ID;
@@ -845,7 +846,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
         if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
             || is_zonal_cast_skill(skill_id)
-            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | LIGHTNING_SKILL_ID | CHAIN_LIGHTNING_SKILL_ID | INFERNOL_SKILL_ID | SEAL_SKILL_ID)
+            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | LIGHTNING_SKILL_ID | CHAIN_LIGHTNING_SKILL_ID | INFERNOL_SKILL_ID | SEAL_SKILL_ID | SOUL_COLLECT_SKILL_ID)
         {
             return 1;
         }
@@ -1109,6 +1110,7 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         GOD_PUNISHMENT_SKILL_ID => Some(execute_owned_monster_god_punishment),
         GOD_BLESS_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_SKILL_ID, Runtime>),
         GOD_BLESS_2_SKILL_ID => Some(execute_owned_monster_god_bless::<GOD_BLESS_2_SKILL_ID, Runtime>),
+        SOUL_COLLECT_SKILL_ID => Some(execute_owned_monster_soul_collect::<Runtime>),
         WEAK_SKILL_ID => Some(execute_owned_monster_zonal_cast::<WEAK_SKILL_ID, Runtime>),
         POISON_FOG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<POISON_FOG_SKILL_ID, Runtime>),
         SNOW_STORM_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SNOW_STORM_SKILL_ID, Runtime>),

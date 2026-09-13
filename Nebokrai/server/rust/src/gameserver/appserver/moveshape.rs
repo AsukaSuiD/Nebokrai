@@ -290,6 +290,7 @@ use crate::gameserver::appserver::skills::roarstate::{
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState,
 };
+use crate::gameserver::appserver::skills::soulcollectstate::SoulCollectState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
 use crate::gameserver::appserver::skills::manashieldstate::MANA_SHIELD_STATE_BYTES;
@@ -339,9 +340,6 @@ use crate::gameserver::appserver::skills::weakstate::WeakState;
 use crate::gameserver::appserver::skills::wuxingstate::WuXingState;
 use crate::gameserver::appserver::skills::godblessstate::{
     GodBlessState,
-};
-use crate::gameserver::appserver::skills::soulcollectstate::{
-    SOUL_COLLECT_STATE_BYTES, SoulCollectState,
 };
 use crate::gameserver::appserver::states::automaticrestore::{
     AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES,
@@ -2350,30 +2348,6 @@ impl CMoveShape {
     pub(crate) fn energy_holding_states(&self) -> impl Iterator<Item = &EnergyHoldingState> {
         self.state_entries.iter::<EnergyHoldingState>()
     }
-
-    pub(crate) fn soul_collect_state(&self) -> Option<SoulCollectState> {
-        self.state_entries.first::<SoulCollectState>().copied()
-    }
-
-    pub(crate) fn begin_soul_collect_state(&mut self, state: SoulCollectState) {
-        debug_assert!(self.state_entries.first::<SoulCollectState>().copied().is_none());
-        self.remove_serialized_state_record(state.skill_id(), SOUL_COLLECT_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        self.state_entries.append(state);
-    }
-
-
-
-    pub(crate) fn soul_collect_state_mut(&mut self) -> Option<&mut SoulCollectState> {
-        self.state_entries.first_mut::<SoulCollectState>()
-    }
-
-    pub(crate) fn take_soul_collect_state(&mut self) -> Option<SoulCollectState> {
-        let state = self.state_entries.take_first::<SoulCollectState>()?;
-        self.remove_serialized_state_record(state.skill_id(), SOUL_COLLECT_STATE_BYTES);
-        Some(state)
-    }
-
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
         let key = self.state_entries.first_key::<SpiderWebState>()?;

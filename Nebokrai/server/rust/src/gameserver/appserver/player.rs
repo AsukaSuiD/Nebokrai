@@ -5560,22 +5560,6 @@ impl CPlayer {
 
 
 
-    pub(crate) fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
-        self.move_shape.soul_collect_state()
-    }
-
-    pub(crate) fn soul_collect_state_mut(&mut self) -> Option<&mut super::skills::soulcollectstate::SoulCollectState> {
-        self.move_shape.soul_collect_state_mut()
-    }
-
-    pub(crate) fn begin_soul_collect_state(&mut self, state: super::skills::soulcollectstate::SoulCollectState) {
-        self.move_shape.begin_soul_collect_state(state);
-    }
-
-    pub(crate) fn take_soul_collect_state(&mut self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
-        self.move_shape.take_soul_collect_state()
-    }
-
     pub(crate) fn take_spider_web_state(
         &mut self,
     ) -> Option<super::skills::spiderwebstate::SpiderWebState> {

@@ -27,7 +27,7 @@ use crate::gameserver::gameserver::game::{
 #[derive(Clone, Copy)]
 pub(crate) enum RegisteredPlayerCastOwner {
     Flash, LittleFlash, Rush, Rush2, ArmyBreak, GhostCut, Mosou, ThunderBlow2,
-    Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, Pillar, Roar, ThunderSlash, Callosity,
+    Swallow, KnightCut, LeafCut, FrontCellSword, EnergyHolding, SoulCollect, Pillar, Roar, ThunderSlash, Callosity,
     SelfState, LightingArrow, LightingArrow2, MeteorArrowMass, MeteorArrow, RainArrow, FallingStar,
     PoisonMoth, ScopedArrow, Scorpion, BoaLock, TargetedProjectile, Combustion, HeartlessArrow, HeartlessArrowArea, BaseProjectile, GodPunishment, ImmediateState, Heal, NonFun, GodBless, ZonalCast, Lightning, ChainLightning, Infernol,
 }
@@ -57,6 +57,7 @@ impl RegisteredPlayerCastOwner {
                 | super::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID
                 | super::inversechopped::INVERSE_CHOPPED_SKILL_ID => Self::FrontCellSword,
             super::energyholding::ENERGY_HOLDING_SKILL_ID => Self::EnergyHolding,
+            super::soulcollect::SOUL_COLLECT_SKILL_ID => Self::SoulCollect,
             super::pillar::PILLAR_SKILL_ID => Self::Pillar,
             super::roar::ROAR_SKILL_ID => Self::Roar,
             super::thunderslash::THUNDER_SLASH_SKILL_ID => Self::ThunderSlash,
@@ -135,6 +136,7 @@ impl RegisteredPlayerCastOwner {
             Self::LeafCut => super::leafcut::execute_player_leaf_cut::<Runtime>,
             Self::FrontCellSword => super::frontcellswordcast::execute_player_front_cell_sword::<Runtime>,
             Self::EnergyHolding => super::energyholding::execute_player_energy_holding::<Runtime>,
+            Self::SoulCollect => super::soulcollect::execute_player_soul_collect::<Runtime>,
             Self::Pillar => super::pillar::execute_player_pillar::<Runtime>,
             Self::Roar => super::roar::execute_player_roar::<Runtime>,
             Self::ThunderSlash => super::thunderslash::execute_player_thunder_slash::<Runtime>,

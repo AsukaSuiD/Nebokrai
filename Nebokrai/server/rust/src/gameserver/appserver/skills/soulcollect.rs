@@ -1,208 +1,178 @@
 //! Сбор душ `CSoulCollect` (`0x13B`).
-//! Begin возвращает Begun после инициализации; повторные проверки и эффекты
-//! первого AI исполняются после постановки Attack в том же Run.
-//!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/soulcollect.cpp`. Здесь находятся проверка владельца-
-//! игрока, двухфазный расход MP, задержка повторного применения, обычная
-//! задержка, `SkillExecutionKernel` и точный порядок визуальных пакетов
-//! накопления. Состоянием владеет
-//! `CanonicalStateStorage`; `CGame` используется только для разрешения игрока,
-//! обновления общего fight-state и фактической around-доставки. Три исходные
-//! перегрузки `Begin` имели одинаковую семантику состояния владельца и сведены
-//! к одному типизированному `PlayerSkillDispatch` без параллельного пути.
-//! `End(1)` фиксирует применение и cooldown, а `End(0)` очищает отказ или
-//! смену команды без повторного применения состояния. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`; накопление остаётся elapsed.
+//! `appserver/skills/soulcollect.cpp`.
+//!
+//! Общий зарегистрированный Begin создаёт visual loop1 перед Check. Таблица и
+//! reuse проверяются для любого U; только Player проходит MP/Move0-ветку,
+//! причём нулевая цена молча отвергается. Первый AI разрешает U, затем S, не
+//! проверяет смерть, у Player повторно списывает MP и публикует состояния,
+//! задаёт CAN и visual0. После unsigned-срока `start + delay` visual1
+//! передаёт накопление `SoulCollectState`; helper сам сохраняет первый
+//! типизированный слот, Begin(U,U), AddSoul и state-visual. Его результат не
+//! меняет исходный End(1). Один owner обслуживает Player и Monster; factory
+//! USER_OR_SUFFERER_RESET_PHASE очищает фазу и возвращает движение свежему U
+//! либо S при общем End.
 
-use super::baseattack::time_reached;
-use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::soulcollectstate::{SoulCollectState, send_soul_collect_state_visual};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::states::summonskill::{finish_summon_skill};
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+use super::baseattack::SKILL_USAGE_DELAY_TIME;
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::playercast::execute_registered_player_cast;
+use super::rangedweaponcast::{check_cast_mana, spend_cast_mana, terminal};
+use super::soulcollectstate::{SoulCollectState, add_soul_collect};
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
+    execute_owned_state_skill,
 };
-use crate::nets::netserver::message::CMessage;
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolve_state_move_shape};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
+};
 
 pub(crate) const SOUL_COLLECT_SKILL_ID: u32 = 0x13b;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
-const USER_MP_LOSE: u32 = 2;
 const PARAMETER_PERCENT: u32 = 20_020;
-const DELAY_TIME: u32 = 10_001;
-const REUSE_DELAY_TIME: u32 = 10_005;
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
+fn resolved_user(game: &CGame, skill: &MoveShapeSkill) -> Option<(i32, ShapeIdentity)> {
+    let (region, identity) = skill.lifecycle().user();
+    let source = resolve_state_move_shape(game, region, identity)?.shape();
+    Some((source.get_region_id(), source.identity()))
 }
 
-const fn has_mana(mana: u32, loss: u32) -> bool {
-    mana.wrapping_sub(loss) as i32 >= 0
+fn resolved_source(game: &CGame, skill: &MoveShapeSkill) -> Option<(i32, ShapeIdentity)> {
+    let (region, identity) = skill.lifecycle().user();
+    resolve_state_move_shape(game, region, identity).or_else(|| {
+        let (region, identity) = resolve_skill_sufferer(game, skill.lifecycle())?;
+        resolve_state_move_shape(game, region, identity)
+    }).map(|source| (source.shape().get_region_id(), source.shape().identity()))
 }
 
-fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-    match code {
-        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        _ => {}
-    }
-}
-
-fn send_cast_visual(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let Some(shape) = player.shape_view() else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(if apply { 2 } else { 1 });
-    message.add_long(SOUL_COLLECT_SKILL_ID as i32);
-    message.base_mut().add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if apply {
-        message.add_long(PLAYER_TYPE);
-        message.add_long(player_id);
-        message.add_long(shape.tile_x);
-        message.add_long(shape.tile_y);
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn restore_player_movement(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-}
-
-fn finish_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) {
-    restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, SOUL_COLLECT_SKILL_ID, runtime);
-}
-
-fn abort_player_soul_collect(game: &mut CGame, player_id: i32) {
-    restore_player_movement(game, player_id);
-}
-
-pub(crate) fn complete_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    finish_player_soul_collect(game, player_id, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Completed)
-}
-
-pub(crate) fn cancel_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
-    abort_player_soul_collect(game, player_id);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
-
-fn add_soul(game: &mut CGame, player_id: i32, variable_percent: u32, level: i32) -> bool {
-    let Some((region_id, shape)) = game
-        .find_player(player_id)
-        .and_then(|player| Some((player.server_region_id()?, player.shape_view()?)))
-    else { return false };
-
-    if let Some(previous) = game.find_player(player_id).and_then(CPlayer::soul_collect_state) {
-        let changed = game
-            .find_player_mut(player_id)
-            .and_then(CPlayer::soul_collect_state_mut)
-            .is_some_and(SoulCollectState::add_soul);
-        if changed {
-            let current = game
-                .find_player(player_id)
-                .and_then(CPlayer::soul_collect_state)
-                .expect("состояние сбора душ изменено на месте");
-            send_soul_collect_state_visual(game, region_id, shape.identity, shape.tile_x, shape.tile_y, previous, false);
-            send_soul_collect_state_visual(game, region_id, shape.identity, shape.tile_x, shape.tile_y, current, true);
+fn check_soul_collect_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((region, identity)) = original_user else { return false; };
+    let Some(source) = resolve_state_move_shape(game, region, identity)
+        .map(|source| (source.shape().get_region_id(), source.shape().identity()))
+    else { return false; };
+    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return false;
+    };
+    if !skill_is_restored(
+        skill.last_used_ms(), properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+        runtime.now_milliseconds(),
+    ) {
+        if let Some(player) = player {
+            game.update_registered_skill_visual(instance, 13);
+            game.send_skill_system_info(player, b"GS0278");
         }
-        return true;
+        return false;
+    }
+    check_cast_mana(game, instance, source, &properties)
+}
+
+fn run_soul_collect_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(source) = resolved_source(game, skill) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let player = (source.1.object_type == PLAYER_TYPE).then_some(source.1.id);
+
+    if stage == SkillStage::Begin {
+        if !spend_cast_mana(game, instance, player, &properties) {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(skill) = game.registered_skill_mut(instance) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        skill.lifecycle_mut().set_available(properties.query_property(SKILL_USAGE_CAN_BE_BREAKED) != 0);
+        game.update_registered_skill_visual(instance, 0);
+        if let Some(skill) = game.registered_skill_mut(instance) {
+            let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check);
+        }
     }
 
-    let empty = SoulCollectState::new(level, variable_percent);
-    send_soul_collect_state_visual(game, region_id, shape.identity, shape.tile_x, shape.tile_y, empty, true);
-    let mut state = empty;
-    if state.add_soul() {
-        send_soul_collect_state_visual(game, region_id, shape.identity, shape.tile_x, shape.tile_y, empty, false);
-        send_soul_collect_state_visual(game, region_id, shape.identity, shape.tile_x, shape.tile_y, state, true);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() < started.wrapping_add(properties.query_property(SKILL_USAGE_DELAY_TIME)) {
+        return terminal(QueuedSkillExecutionState::Pending);
     }
-    let Some(player) = game.find_player_mut(player_id) else { return false };
-    player.begin_soul_collect_state(state);
-    true
+    game.update_registered_skill_visual(instance, 1);
+    let _ = add_soul_collect(game, source, |game| {
+        let level = game.registered_skill(instance)?.level();
+        Some(SoulCollectState::new(level, properties.query_property(PARAMETER_PERCENT)))
+    }, &mut || runtime.now_milliseconds());
+    terminal(QueuedSkillExecutionState::Completed)
 }
 
 pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if !is_soul_collect_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let level = player.learned_skill_level(SOUL_COLLECT_SKILL_ID, game.skill_factory());
-    let Some(properties) = game.skill_base_properties(SOUL_COLLECT_SKILL_ID, level) else {
-        if game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).is_some() { abort_player_soul_collect(game, player_id); }
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(USER_MP_LOSE);
-    let delay = properties.query_property(DELAY_TIME);
-    let cooldown = properties.query_property(REUSE_DELAY_TIME);
-    let variable_percent = properties.query_property(PARAMETER_PERCENT);
-
-    if game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).is_none() {
-        let started = runtime.now_milliseconds();
-        let cooldown_now = runtime.now_milliseconds();
-        if !skill_is_restored(game.player_skill_last_used_ms(player_id, SOUL_COLLECT_SKILL_ID), cooldown, cooldown_now) {
-            send_failure(game, player_id, 0x0d, mp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if mp_loss == 0 || !has_mana(player.mana(), mp_loss) {
-            if mp_loss != 0 { send_failure(game, player_id, 7, mp_loss); }
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(SOUL_COLLECT_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
+    if dispatch.skill_id() != SOUL_COLLECT_SKILL_ID {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-
-    if game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if !has_mana(mana, mp_loss) {
-            send_failure(game, player_id, 7, mp_loss);
-            abort_player_soul_collect(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        send_cast_visual(game, player_id, level, false);
-        if let Some(execution) = game.player_skill_execution_mut(player_id, SOUL_COLLECT_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
-    }
-
-    let started = game.player_skill_execution(player_id, SOUL_COLLECT_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение сбора душ создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending); }
-    send_cast_visual(game, player_id, level, true);
-    let applied = add_soul(game, player_id, variable_percent, level);
-    if let Some(execution) = game.player_skill_execution_mut(player_id, SOUL_COLLECT_SKILL_ID) {
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_soul_collect(game, player_id, runtime);
-    terminal(if applied { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::SelfCast,
+        |game, instance, _, runtime| check_soul_collect_cast(game, instance, original_user, runtime),
+        |dispatch, started| SkillExecutionKernel::begin(dispatch, started).into(), run_soul_collect_ai,
+    )
 }
 
-pub(crate) const fn is_soul_collect_skill(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch,
-        PlayerSkillDispatch::SelfTarget { skill_id: SOUL_COLLECT_SKILL_ID, .. }
-        | PlayerSkillDispatch::Point { skill_id: SOUL_COLLECT_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object { skill_id: SOUL_COLLECT_SKILL_ID, .. }
+struct SoulCollectSkill;
+
+impl RegisteredStateSkill for SoulCollectSkill {
+    const ID: u32 = SOUL_COLLECT_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::SelfCast;
+    const VISUAL_FAILURES: &'static [u32] = &[2, 7, 13];
+    const VISUAL_TARGET: StateSkillVisualTarget = StateSkillVisualTarget::User;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = None;
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, _begin_target: StateSkillBeginTarget,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let user = game.registered_skill(instance).and_then(|skill| resolved_user(game, skill));
+        check_soul_collect_cast(game, instance, user, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let outcome = run_soul_collect_ai(game, instance, runtime);
+        match outcome.state {
+            QueuedSkillExecutionState::Rejected => end_state_skill(game, instance, 0, runtime),
+            QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::RejectedAfterUse =>
+                end_state_skill(game, instance, 1, runtime),
+            _ => outcome,
+        }
+    }
+}
+
+pub(crate) fn execute_owned_monster_soul_collect<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<SoulCollectSkill, Runtime>(
+        game, owner, monster_id, target, skill_level, runtime,
     )
 }

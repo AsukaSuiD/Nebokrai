@@ -53,7 +53,7 @@ use super::monsterattack::{
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::soulcollectstate::send_soul_collect_state_visual;
+use super::soulcollectstate::consume_soul_collect_snapshot;
 use super::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
@@ -479,22 +479,14 @@ fn attack_player_projectile_scope<Runtime: GameMainLoopRuntime>(
                 }
                 let Some(owner) = game.find_player(player_id).map(master_info) else { return did_attack };
                 if !game.owned_player_skill_target_attackable(owner, target, region_id) { continue }
-                let soul = game.find_player_mut(player_id).and_then(CPlayer::take_soul_collect_state);
-                let souls = soul.map_or(0, |state| state.souls());
-                if let Some(state) = soul {
-                    let Some((tile_x, tile_y)) = game.find_player(player_id).and_then(|player| {
-                        Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
-                    }) else { return did_attack };
-                    send_soul_collect_state_visual(
-                        game,
-                        region_id,
-                        ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() },
-                        tile_x,
-                        tile_y,
-                        state,
-                        false,
-                    );
-                }
+                let (souls, _) = consume_soul_collect_snapshot(
+                    game,
+                    (region_id, ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: player_id,
+                        ex_id: Default::default(),
+                    }),
+                );
                 let Some((master, attack)) = calculate_player_projectile_attack(
                     game, player_id, region_id, target, spec, level, minimum, maximum,
                     element_modifier, hit_modifier, souls,

@@ -668,7 +668,7 @@ state_callbacks! {
         skills::soulcollectstate::end_soul_collect_state,
         skills::soulcollectstate::restart_soul_collect_state,
         |_, _, _, _, _| true
-    ),
+    ); destructor = skills::soulcollectstate::destroy_soul_collect_state_visual,
     StateData::Swordship(_) => (
         |_, _, _, _, _| {},
         skills::swordshipstate::end_swordship_state,

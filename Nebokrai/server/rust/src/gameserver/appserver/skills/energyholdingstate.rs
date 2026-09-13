@@ -14,18 +14,18 @@
 //! Владение и порядок слотов обеспечивает общая SlotMap-арена; локальный
 //! visual первичного Begin оставляет ей незавершённое loop1-состояние.
 
+use super::accumulatedstate::{
+    AccumulatedState, AccumulationParticipant, add_accumulated_state, update_accumulated_visual,
+};
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at,
-    remove_applied_state_from, resolve_applied_state_sufferer, resolve_applied_state_user,
-    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_visual_base,
+    remove_applied_state_from, resolve_applied_state_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
 };
-use crate::gameserver::appserver::states::visualeffect::CVisualEffect;
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
 
 pub(crate) const ENERGY_HOLDING_STATE_ID: u32 = 0x89;
 pub(crate) const ENERGY_HOLDING_STATE_BYTES: usize = 12;
@@ -83,30 +83,12 @@ pub(crate) fn typed_first_energy_holding(
     resolve_state_move_shape(game, source.0, source.1)?.applied_state(key)
 }
 
-fn publish_energy_visual(game: &mut CGame, target: (i32, ShapeIdentity), mode: u32) {
-    let Some(shape) = resolve_state_move_shape(game, target.0, target.1) else { return; };
-    let region = shape.shape().get_region_id();
-    let identity = shape.shape().identity();
-    let mut message = CMessage::new(if mode == 1 { 0x000b_fe03 } else { 0x000b_fe04 });
-    message.add_long(identity.object_type);
-    message.add_long(identity.id);
-    message.add_ulong(ENERGY_HOLDING_STATE_ID);
-    if mode == 1 {
-        message.add_ulong(0);
-        message.add_ulong(0);
-    }
-    let _ = game.send_move_shape_around(region, identity, &message);
-}
-
-fn update_energy_visual(game: &mut CGame, source: (i32, ShapeIdentity), key: StateKey, mode: u32) {
-    let Some(ended) = resolve_state_move_shape(game, source.0, source.1)
-        .and_then(|shape| shape.applied_state_visual_ended(key)) else { return; };
-    if !ended {
-        if let Some(target) = resolve_applied_state_sufferer(game, source.0, source.1, key) {
-            publish_energy_visual(game, target, mode);
-        }
-    }
-    update_applied_state_visual_base(game, source.0, source.1, key);
+impl AccumulatedState for EnergyHoldingState {
+    const ID: u32 = ENERGY_HOLDING_STATE_ID;
+    const PARTICIPANT: AccumulationParticipant = AccumulationParticipant::User;
+    fn increment(&mut self) -> bool { self.add_energy() }
+    fn record(self) -> [u8; ENERGY_HOLDING_STATE_BYTES] { self.encoded() }
+    fn client_fields(self) -> (u32, u32) { (0, 0) }
 }
 
 /// Параметры нового ctor запрашиваются только при отсутствии typed первого
@@ -115,43 +97,7 @@ pub(crate) fn add_energy_holding(
     game: &mut CGame, source: (i32, ShapeIdentity),
     create: impl FnOnce(&CGame) -> Option<EnergyHoldingState>, now: &mut dyn FnMut() -> u32,
 ) -> bool {
-    if let Some((_, key)) = first_energy_slot(game, source) {
-        if resolve_state_move_shape(game, source.0, source.1)
-            .and_then(|shape| shape.applied_state::<EnergyHoldingState>(key)).is_some() {
-            if resolve_applied_state_user(game, source.0, source.1, key).is_some() {
-                let added = resolve_state_move_shape_mut(game, source.0, source.1)
-                    .and_then(|shape| shape.applied_state_mut::<EnergyHoldingState>(key))
-                    .is_some_and(EnergyHoldingState::add_energy);
-                if added {
-                    update_energy_visual(game, source, key, 2);
-                    update_energy_visual(game, source, key, 1);
-                }
-            }
-            return true;
-        }
-    }
-    let Some(mut state) = create(game) else { return false; };
-    // CState::Begin с ненулевым user читает часы, хотя Energy не использует их.
-    let _ = now();
-    let Some(shape) = resolve_state_move_shape(game, source.0, source.1) else { return false; };
-    let participant = (shape.shape().get_region_id(), ShapeIdentity {
-        ex_id: CGuid::GUID_INVALID, ..shape.shape().identity()
-    });
-    let mut visual = CVisualEffect::new();
-    visual.begin_visual_effect(1);
-    if resolve_state_move_shape(game, participant.0, participant.1).is_some() && state.add_energy() {
-        publish_energy_visual(game, participant, 2);
-        visual.update_visual_effect();
-        publish_energy_visual(game, participant, 1);
-        visual.update_visual_effect();
-    }
-    let Some(shape) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
-    let record = state.encoded();
-    let key = shape.append_applied_state_record(state, &record);
-    shape.mark_applied_state_begun(key);
-    shape.set_applied_state_user(key, Some(participant));
-    shape.set_applied_state_sufferer(key, Some(participant));
-    true
+    add_accumulated_state(game, source, create, now)
 }
 
 pub(crate) fn consume_energy_holding_multiplier(game: &mut CGame, source: (i32, ShapeIdentity)) -> f64 {
@@ -183,7 +129,7 @@ pub(crate) fn end_energy_holding_state(
 ) -> bool {
     if resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<EnergyHoldingState>(key)).is_none() { return false; }
-    update_energy_visual(game, (region_id, holder), key, 2);
+    update_accumulated_visual::<EnergyHoldingState>(game, (region_id, holder), key, 2);
     if !resolve_state_move_shape_mut(game, region_id, holder)
         .is_some_and(|shape| shape.mark_applied_state_ended(key)) { return false; }
     let Some(target) = resolve_applied_state_sufferer(game, region_id, holder, key) else { return false; };

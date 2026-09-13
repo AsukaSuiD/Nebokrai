@@ -150,7 +150,7 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                 let skill = monster.move_shape().current_skill(game.skill_factory())?;
                 (matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash | SkillOwner::CSeal
                     | SkillOwner::CHeal | SkillOwner::CHeal2 | SkillOwner::CSuperHeal | SkillOwner::CSuperHeal2
-                    | SkillOwner::CGodBless | SkillOwner::CGodBless2
+                    | SkillOwner::CGodBless | SkillOwner::CGodBless2 | SkillOwner::CSoulCollect
                     | SkillOwner::CWeak | SkillOwner::CPoisonFog | SkillOwner::CSnowStorm
                     | SkillOwner::CYinYang | SkillOwner::CYinYang2
                     | SkillOwner::CGodThunder | SkillOwner::CGodThunder2

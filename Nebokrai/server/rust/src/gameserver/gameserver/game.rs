@@ -1261,10 +1261,7 @@ use crate::gameserver::appserver::skills::knockoutstate::{
 };
 use crate::gameserver::appserver::skills::weak::WEAK_SKILL_ID;
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
-use crate::gameserver::appserver::skills::soulcollect::{
-    cancel_player_soul_collect, complete_player_soul_collect,
-    execute_player_soul_collect, is_soul_collect_skill, SOUL_COLLECT_SKILL_ID,
-};
+use crate::gameserver::appserver::skills::soulcollect::SOUL_COLLECT_SKILL_ID;
 use crate::gameserver::appserver::skills::godbless::GOD_BLESS_SKILL_ID;
 use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
@@ -38923,12 +38920,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                SOUL_COLLECT_SKILL_ID => Some(complete_player_soul_collect(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 _ => None,
             }
         } else {
@@ -39019,9 +39010,6 @@ impl CGame {
             }
             MONSTER_RANGE_ATTACK_SKILL_ID => {
                 finish_player_monster_range_attack(self, player_id, &mut player_ai, runtime, false)
-            }
-            SOUL_COLLECT_SKILL_ID => {
-                cancel_player_soul_collect(self, player_id, &mut player_ai, runtime)
             }
             BLIND_SKILL_ID => {
                 cancel_player_blind(self, player_id, &mut player_ai, runtime)
@@ -39376,7 +39364,6 @@ impl CGame {
                 }
             } => execute_player_monster_taming,
             _ if is_knock_out_dispatch(dispatch) => execute_player_knock_out,
-            _ if is_soul_collect_skill(dispatch) => execute_player_soul_collect,
             _ if is_cure_target(dispatch) => execute_player_cure,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }

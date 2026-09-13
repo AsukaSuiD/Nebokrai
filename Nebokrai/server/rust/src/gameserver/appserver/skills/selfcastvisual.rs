@@ -1,4 +1,4 @@
-//! Общий visual навыков на себя: EnergyHolding, Pillar, Roar, Callosity1/2
+//! Общий visual навыков на себя: EnergyHolding, SoulCollect, Pillar, Roar, Callosity1/2
 //! и семейств Agility/Agility2/Natural/Rapture, DaubPoison, MeteorArrowMass,
 //! ManaShield и MachineShield.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые owners appserver/skills.
@@ -21,7 +21,7 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) fn publish_self_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
-    if !matches!(skill.owner(), SkillOwner::CEnergyHolding | SkillOwner::CPillar | SkillOwner::CRoar
+    if !matches!(skill.owner(), SkillOwner::CEnergyHolding | SkillOwner::CSoulCollect | SkillOwner::CPillar | SkillOwner::CRoar
         | SkillOwner::CCallosity | SkillOwner::CCallosity2 | SkillOwner::CAgility
         | SkillOwner::CAgility2 | SkillOwner::CNatural | SkillOwner::CRapture | SkillOwner::CDaubPoison
         | SkillOwner::CMeteorArrowMass | SkillOwner::CManaShield | SkillOwner::CMachineShield)
