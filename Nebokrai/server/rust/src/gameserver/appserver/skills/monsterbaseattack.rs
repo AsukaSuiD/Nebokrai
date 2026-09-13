@@ -17,8 +17,8 @@
 //! зарегистрированного навыка по ID собственного dispatch или concrete owner-а;
 //! состояние другого навыка не используется как запасное исполнение.
 //! OnFighting уже начатого immediate вызывает тот же owner до target/range
-//! расписания. TaiJi/Origin/Enlarge сохраняют цель общего Begin, а AI выбирает
-//! свежий U, при его отсутствии S. Активный и фоновый входы используют один
+//! расписания. Семейство постоянных свойств сохраняет цель общего Begin;
+//! выбор U/S и результата остаётся у его AI. Активный и фоновый входы используют один
 //! kernel, без visual, Move и reuse-допуска. Фоновый Begin не ставит Attack
 //! в очередь; завершение FIFO остаётся следующим active-проходом.
 //! MonsterThorn AI без свойств (0x005423E2), MachineryStomp (0x00532836)
@@ -258,8 +258,7 @@ use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
 use super::ragebreak::{RAGE_BREAK_SKILL_ID, execute_owned_monster_rage_break};
 use super::immediatestate::{
-    MonsterImmediateSkill, check_immediate_state_cast, execute_monster_immediate_state,
-    is_property_state_skill,
+    check_immediate_state_cast, execute_monster_immediate_state, is_immediate_state_skill,
 };
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
@@ -528,7 +527,7 @@ fn is_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(skill_id: u32) ->
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
             | SNOW_STORM_SKILL_ID
-    ) || MonsterImmediateSkill::from_skill_id(skill_id).is_some()
+    )
 }
 
 /// Точная встречная ветвь `CPet::OnStayingSchedule` и
@@ -821,7 +820,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
-        if is_property_state_skill(skill_id)
+        if is_immediate_state_skill(skill_id)
             || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID)
         {
             return 1;
@@ -1020,11 +1019,11 @@ type OwnedRegisteredCastExecutor<Runtime> = fn(
 /// Общий Begin немедленных свойств: активное расписание передаёт цель,
 /// AutoStart — самого монстра. После базы Check видит исходный U; отказ
 /// завершает тот же зарегистрированный экземпляр, не создавая visual.
-pub(crate) fn begin_owned_monster_property_state<Runtime: GameMainLoopRuntime>(
+pub(crate) fn begin_owned_monster_immediate_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
     target: ShapeIdentity, skill_id: u32, skill_level: u16, runtime: &mut Runtime,
 ) -> bool {
-    if !is_property_state_skill(skill_id) { return false; }
+    if !is_immediate_state_skill(skill_id) { return false; }
     let Some(region) = owner.as_ref().map(ServerRegionOwner::base) else { return false; };
     let Some(monster) = region.find_monster_by_id(monster_id) else { return false; };
     let original_user = (region.id, monster.move_shape().shape().identity());
@@ -1050,17 +1049,17 @@ pub(crate) fn begin_owned_monster_property_state<Runtime: GameMainLoopRuntime>(
     }).unwrap_or(false)
 }
 
-fn execute_owned_monster_property_state<Runtime: GameMainLoopRuntime>(
+fn execute_owned_monster_immediate_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
     target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
 ) -> bool {
     let Some(monster) = owner.as_ref().and_then(|region| region.base().find_monster_by_id(monster_id)) else { return false; };
     let Some(skill_id) = monster.move_shape().current_skill(game.skill_factory()).map(|skill| skill.id()) else { return false; };
-    if !is_property_state_skill(skill_id) { return false; }
+    if !is_immediate_state_skill(skill_id) { return false; }
     if monster.current_active_attack_cast(game.skill_factory()).is_some() {
         return execute_monster_immediate_state(game, owner, monster_id, skill_id, i32::from(skill_level), runtime);
     }
-    let begun = begin_owned_monster_property_state(game, owner, monster_id, target, skill_id, skill_level, runtime);
+    let begun = begin_owned_monster_immediate_state(game, owner, monster_id, target, skill_id, skill_level, runtime);
     let Some(region) = owner.as_mut().map(ServerRegionOwner::base_mut) else { return false; };
     if begun {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -1093,7 +1092,7 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         HEARTEN_SKILL_ID => Some(execute_owned_monster_hearten),
         FURY_SKILL_ID => Some(execute_owned_fury),
         RAGE_BREAK_SKILL_ID => Some(execute_owned_monster_rage_break),
-        _ if is_property_state_skill(skill_id) => Some(execute_owned_monster_property_state),
+        _ if is_immediate_state_skill(skill_id) => Some(execute_owned_monster_immediate_state),
         _ => None,
     }
 }
@@ -1115,21 +1114,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let carriage_ai = matches!(active_ai, ActiveMonsterAi::Carriage
         | ActiveMonsterAi::Primary(MonsterAiKind::Carriage));
     let pet_ai = matches!(active_ai, ActiveMonsterAi::Pet);
-    let immediate = region_owner.base().find_monster_by_id(monster_id).and_then(|monster| {
-        if !monster.active_ai_attack_pending() {
-            return None;
-        }
-        let skill = monster.move_shape().current_skill(game.skill_factory())?;
-        if is_property_state_skill(skill.id())
-            || !monster.move_shape().immediate_skill_started(skill.id(), game.skill_factory())
-        {
-            return None;
-        }
-        Some((MonsterImmediateSkill::from_skill_id(skill.id())?, skill.id(), skill.level()))
-    });
-    if let Some((immediate, skill_id, skill_level)) = immediate {
-        return immediate.execute(game, owner, monster_id, skill_id, skill_level, runtime);
-    }
     if let Some(cast) = region_owner.base().find_monster_by_id(monster_id)
         .and_then(|monster| monster.current_active_attack_cast(game.skill_factory()))
     {
@@ -1182,7 +1166,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     // OnSchedule повозки не начинает атаку; уже зарегистрированное
-    // active-исполнение остаётся у общего OnFighting, включая immediate выше.
+    // active-исполнение остаётся у общего OnFighting.
     if carriage_ai && cast.is_none() {
         return false;
     }
@@ -1465,47 +1449,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
     let now_ms = runtime.now_milliseconds();
-    if let Some(immediate) = MonsterImmediateSkill::from_skill_id(skill_id) {
-        if cast.is_none() {
-            let attack_interval = schedule_attack_interval(
-                property.ai,
-                pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
-            );
-            if attack_interval.is_some_and(|interval| {
-                region_owner.base_mut()
-                    .find_monster_by_id_mut(monster_id)
-                    .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
-            }) {
-                return true;
-            }
-            let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-            let last_used_ms = region_owner.base()
-                .find_monster_by_id(monster_id)
-                .map(|monster| monster.skill_last_used_ms(skill_id, game.skill_factory()))
-                .unwrap_or_default();
-            if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
-                return true;
-            }
-            let target_object = resolve_owned_skill_begin_object(game, region_owner.base_mut(), monster_shape.identity());
-            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-                monster.move_shape_mut().begin_immediate_skill(skill_id, game.skill_factory());
-                monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms, target_object, game.skill_factory());
-            }
-            return true;
-        }
-        if region_owner.base().find_monster_by_id(monster_id)
-            .is_some_and(|monster| monster.move_shape().immediate_skill_ended(skill_id, game.skill_factory()))
-        {
-            if let Some(monster) = region_owner.base_mut().find_monster_by_id_mut(monster_id) {
-                monster.finish_active_immediate_skill(game.skill_factory());
-            }
-            return true;
-        }
-        let executed = immediate.execute(
-            game, owner, monster_id, skill_id, i32::from(skill_level), runtime,
-        );
-        return executed;
-    }
     if skill_id == SNOW_STORM_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_monster_snow_storm(game, region_owner.base_mut(), monster_id, target, skill_level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);

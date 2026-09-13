@@ -1279,9 +1279,8 @@ use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::immediatestate::{
-    MonsterImmediateSkill, is_immediate_state_skill,
+    execute_monster_immediate_state, is_immediate_state_skill,
 };
-use crate::gameserver::appserver::skills::wuxing::{execute_player_wuxing, is_wuxing_skill};
 use crate::gameserver::appserver::skills::kernel::{
     BattleFairyExecution, PlayerSkillExecution, PlayerSkillState, SkillExecutionKernel, SkillLifecycle,
     SkillStage, SkillTermination,
@@ -1350,9 +1349,6 @@ use crate::gameserver::appserver::skills::cure::{
 };
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
-};
-use crate::gameserver::appserver::skills::swordship::{
-    execute_player_swordship, is_swordship_skill,
 };
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
@@ -36950,40 +36946,28 @@ impl CGame {
                 skill_id: *skill_id,
                 target: ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::default() },
             };
-            if crate::gameserver::appserver::skills::immediatestate::is_property_state_skill(*skill_id) {
-                let Some(instance) = self.registered_player_skill(player_id, *skill_id) else { continue; };
-                let original_user = self.find_player(player_id)
-                    .map(|player| (player.shape().get_region_id(), player.shape().identity()));
-                let started_at_ms = now_milliseconds();
-                let begun = self.begin_registered_player_skill_with_combat(
-                    instance, player_id, dispatch, started_at_ms,
-                );
-                let mut kernel = SkillExecutionKernel::begin(dispatch, started_at_ms);
-                kernel.clear_phase_for_end();
-                let installed = begun && self.registered_skill_mut(instance)
-                    .is_some_and(|skill| skill.install_player_execution(kernel.into()));
-                if installed && crate::gameserver::appserver::skills::immediatestate::check_immediate_state_cast(
-                    self, instance, original_user,
-                ) {
-                    if let Some(skill) = self.registered_skill_mut(instance) {
-                        let _ = skill.advance_execution(SkillStage::Idle, SkillStage::Begin);
-                    }
-                } else {
-                    let _ = self.end_registered_instance_without_after_use(instance, SkillTermination::Rejected);
-                    // ID остаётся в background-очереди; следующий обход увидит
-                    // завершённый экземпляр без payload, не повторяя Begin/End.
-                    self.finish_registered_player_execution(instance, dispatch, SkillTermination::Rejected);
-                }
-                continue;
-            }
+            let Some(instance) = self.registered_player_skill(player_id, *skill_id) else { continue; };
+            let original_user = self.find_player(player_id)
+                .map(|player| (player.shape().get_region_id(), player.shape().identity()));
             let started_at_ms = now_milliseconds();
-            // Автоматический Begin имеет собственные часы, не контекст
-            // выбранной в OnSchedule команды. База предшествует OnBeginSkill.
-            self.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-            if let Some(player) = self.players.get_mut(&player_id) {
-                player.move_shape_mut().install_player_execution(
-                    SkillExecutionKernel::begin(dispatch, started_at_ms).into(), &self.skill_factory,
-                );
+            let begun = self.begin_registered_player_skill_with_combat(
+                instance, player_id, dispatch, started_at_ms,
+            );
+            let mut kernel = SkillExecutionKernel::begin(dispatch, started_at_ms);
+            kernel.clear_phase_for_end();
+            let installed = begun && self.registered_skill_mut(instance)
+                .is_some_and(|skill| skill.install_player_execution(kernel.into()));
+            if installed && crate::gameserver::appserver::skills::immediatestate::check_immediate_state_cast(
+                self, instance, original_user,
+            ) {
+                if let Some(skill) = self.registered_skill_mut(instance) {
+                    let _ = skill.advance_execution(SkillStage::Idle, SkillStage::Begin);
+                }
+            } else {
+                let _ = self.end_registered_instance_without_after_use(instance, SkillTermination::Rejected);
+                // ID остаётся в background-очереди; следующий обход увидит
+                // завершённый экземпляр без payload, не повторяя Begin/End.
+                self.finish_registered_player_execution(instance, dispatch, SkillTermination::Rejected);
             }
         }
         skill_ids.len()
@@ -39476,22 +39460,21 @@ impl CGame {
         let pending = region.find_monster_by_id_mut(monster_id)
             .map(CMonster::begin_pending_back_stage_skill_ids).unwrap_or_default();
         for skill_id in pending {
-            if !crate::gameserver::appserver::skills::immediatestate::is_property_state_skill(skill_id) { continue; }
+            if !is_immediate_state_skill(skill_id) { continue; }
             let Some((source, level)) = region_owner.as_ref()
                 .and_then(|region| region.base().find_monster_by_id(monster_id))
                 .and_then(|monster| {
                     let skill = monster.move_shape().skill(skill_id, &self.skill_factory)?;
                     Some((monster.move_shape().shape().identity(), skill.level() as u16))
                 }) else { continue; };
-            let _ = crate::gameserver::appserver::skills::monsterbaseattack::begin_owned_monster_property_state(
+            let _ = crate::gameserver::appserver::skills::monsterbaseattack::begin_owned_monster_immediate_state(
                 self, region_owner, monster_id, source, skill_id, level, runtime,
             );
         }
     }
 
-    /// Фон TaiJi/Origin и Enlarge читает тот же lifecycle, что активный AI.
-    /// Отдельного Begin, публикации состояний или повторного End здесь нет;
-    /// legacy-dispatch Swordship/WuXing сохраняет свой прежний порядок.
+    /// Фон постоянных свойств читает тот же lifecycle, что активный AI.
+    /// Отдельного Begin, публикации состояний или повторного End здесь нет.
     fn execute_owned_monster_back_stage_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_owner: &mut Option<ServerRegionOwner>,
@@ -39510,12 +39493,8 @@ impl CGame {
                 .and_then(|monster| {
                     let shape = monster.move_shape();
                     let skill_id = monster.back_stage_skill_id(index)?;
-                    let ended = if crate::gameserver::appserver::skills::immediatestate::is_property_state_skill(skill_id) {
-                        shape.skill(skill_id, &self.skill_factory).is_none_or(|skill| skill.lifecycle().is_ended())
-                    } else {
-                        shape.immediate_skill_ended(skill_id, &self.skill_factory)
-                            || shape.skill(skill_id, &self.skill_factory).is_none()
-                    };
+                    let ended = shape.skill(skill_id, &self.skill_factory)
+                        .is_none_or(|skill| skill.lifecycle().is_ended());
                     Some((skill_id, shape.skill_level(skill_id, &self.skill_factory), ended))
                 })
             else {
@@ -39528,13 +39507,14 @@ impl CGame {
                 index += 1;
                 continue;
             }
-            let Some(owner) = MonsterImmediateSkill::from_skill_id(skill_id) else {
+            if !is_immediate_state_skill(skill_id) {
                 index += 1;
                 continue;
-            };
-            let has_effect = owner.has_effect();
-            let executed = owner.execute(self, region_owner, monster_id, skill_id, skill_level, runtime);
-            execution_count += usize::from(has_effect);
+            }
+            let executed = execute_monster_immediate_state(
+                self, region_owner, monster_id, skill_id, skill_level, runtime,
+            );
+            execution_count += usize::from(executed);
             tracing::trace!(
                 region_id,
                 monster_id,
@@ -39651,17 +39631,11 @@ impl CGame {
             _ if is_soul_mirror_skill(dispatch) => execute_player_soul_mirror,
             _ if is_god_bless_skill(dispatch) => execute_player_god_bless,
             _ if is_cure_target(dispatch) => execute_player_cure,
-            _ if is_wuxing_skill(dispatch.skill_id()) => execute_player_wuxing,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => is_non_fun_skill(skill_id),
             } => execute_player_non_fun,
-            _ if match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => is_swordship_skill(skill_id),
-            } => execute_player_swordship,
             _ if match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }

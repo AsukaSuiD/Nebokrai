@@ -4900,20 +4900,6 @@ impl CPlayer {
     }
 
 
-    pub(crate) fn replace_swordship_state(
-        &mut self,
-        state: super::skills::swordshipstate::SwordshipState,
-    ) -> Option<super::skills::swordshipstate::SwordshipState> {
-        self.move_shape.replace_swordship_state(state)
-    }
-
-    pub(crate) fn replace_wuxing_state(
-        &mut self,
-        state: super::skills::wuxingstate::WuXingState,
-    ) -> Option<super::skills::wuxingstate::WuXingState> {
-        self.move_shape.replace_wuxing_state(state)
-    }
-
 
 
     pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
@@ -6507,8 +6493,7 @@ impl CPlayer {
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self, factory: &CSkillFactory) -> Vec<u32> {
         self.player_ai.base_ai_mut().begin_pending_back_stage_skill_ids()
             .into_iter()
-            .filter(|skill_id| self.move_shape.skill(*skill_id, factory).is_some()
-                && !self.move_shape.immediate_skill_ended(*skill_id, factory))
+            .filter(|skill_id| self.move_shape.skill(*skill_id, factory).is_some())
             .collect()
     }
 

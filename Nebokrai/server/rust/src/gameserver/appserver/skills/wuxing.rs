@@ -1,182 +1,79 @@
-//! Исполнение пяти постоянных состояний `CWuXing*`.
-//!
-//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
-//! `wuxing{metal,wood,water,fire,earth}.cpp`. Навык всегда предпочитает
-//! собственного user-а sufferer-у, заменяет состояние того же ID в прежней
-//! позиции, затем вызывает полный `UpdateProperty` и `RestoreHpMp`; базовое
-//! завершение сохраняет отдельный reuse-clock конкретного элемента. Входной
-//! gate использует общий absolute DWORD deadline `CSkill::IsRestored`.
-//! Все пять `AI` до создания состояния требуют owner type `400`:
-//! Earth/Fire/Water/Wood/Metal, VA проверок
-//! `0x0050FECB/0x0051037B/0x00510828/0x00510F5B/0x00511418`.
-//! Для монстра это `End(0)` без состояния, восстановления HP/MP и reuse;
-//! его фоновая очередь снимает такие навыки без исполнения player-ветви.
-//! Обычный и автоматический player-входы используют один AI. Успешный
-//! End(1), например Earth 0x0050FFE4, проходит 0x005AFA40 → 0x005DFBD0:
-//! оружейный AfterUseSkill предшествует записи cooldown и в фоновом вызове.
-//! Begin возвращает Begun до применения; auto-start уже создал kernel,
-//! поэтому при фоновом исполнении Begin и reuse-gate не повторяются.
+//! Параметры и установка постоянных состояний CWuXingMetal/Wood/Water/Fire/Earth.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/wuxing*.cpp.
+//! Общий immediatestate отвечает за Begin/AI/End. WuXing собирает весь набор
+//! свойств до GetU/GetS и player-gate; Water сохраняет полный signed MAX_HP,
+//! остальные сужают его до short, только Metal читает MAX_MP.
+//! После player-gate новый объект получает первичный Begin до поиска первого
+//! старого ID. Общая установка сохраняет прежнюю позицию, исполняет End и
+//! destructor свежего остатка, затем UpdateProperty. RestoreHpMp следует
+//! отдельно и не зависит от результата UpdateProperty. Успешный AI вызывает
+//! End1 даже при отказе нового Begin; отсутствие U/S или иной тип даёт End0.
 
-use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
-use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
-use super::stateskill::finish_state_skill;
+use super::immediatestateinstallation::replace_immediate_state;
+use super::skillbaseproperties::CSkillBaseProperties;
 use super::wuxingearth::WUXING_EARTH_SKILL_ID;
 use super::wuxingfire::WUXING_FIRE_SKILL_ID;
 use super::wuxingmetal::WUXING_METAL_SKILL_ID;
 use super::wuxingstate::{kind_for_skill_id, WuXingKind, WuXingState, WuXingStateParameters};
 use super::wuxingwater::WUXING_WATER_SKILL_ID;
 use super::wuxingwood::WUXING_WOOD_SKILL_ID;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
-};
-
-const TARGET_STR_GAIN: u32 = 101;
-const TARGET_DEX_GAIN: u32 = 102;
-const TARGET_CON_GAIN: u32 = 103;
-const TARGET_INT_GAIN: u32 = 104;
-const TARGET_DEF_GAIN: u32 = 109;
-const TARGET_ELEMENT_RESISTANCE_GAIN: u32 = 112;
-const TARGET_ELEMENT_MODIFY_GAIN: u32 = 115;
-const TARGET_MIN_ATTACK_GAIN: u32 = 116;
-const TARGET_MAX_ATTACK_GAIN: u32 = 117;
-const MAX_HP_GAIN: u32 = 118;
-const MAX_MP_GAIN: u32 = 119;
-const BLAST_ATTACK_SCALE_FIX: u32 = 80_011;
-const BLAST_DEFENSE_SCALE_FIX: u32 = 80_012;
-const ELEMENT_BLAST_ATTACK_SCALE_FIX: u32 = 80_013;
-const ELEMENT_BLAST_DEFENSE_SCALE_FIX: u32 = 80_014;
-const FULL_MISS_SCALE_FIX: u32 = 80_015;
-const CRITICAL_RATE_FIX: u32 = 80_016;
-const RESUME_HP_PEACE_FIX: u32 = 80_017;
-const RESUME_MP_PEACE_FIX: u32 = 80_018;
-const RESUME_HP_FIGHT_FIX: u32 = 80_019;
-const RESUME_MP_FIGHT_FIX: u32 = 80_020;
-const RESTORED_HP_PEACE_FIX: u32 = 80_021;
-const RESTORED_MP_PEACE_FIX: u32 = 80_022;
-const RESTORED_HP_FIGHT_FIX: u32 = 80_023;
-const RESTORED_MP_FIGHT_FIX: u32 = 80_024;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) const fn is_wuxing_skill(skill_id: u32) -> bool {
-    matches!(
-        skill_id,
-        WUXING_METAL_SKILL_ID
-            | WUXING_WOOD_SKILL_ID
-            | WUXING_WATER_SKILL_ID
-            | WUXING_FIRE_SKILL_ID
-            | WUXING_EARTH_SKILL_ID
-    )
+    matches!(skill_id, WUXING_METAL_SKILL_ID | WUXING_WOOD_SKILL_ID
+        | WUXING_WATER_SKILL_ID | WUXING_FIRE_SKILL_ID | WUXING_EARTH_SKILL_ID)
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-fn state_from_properties(
-    skill_id: u32,
-    properties: &CSkillBaseProperties,
-) -> Option<WuXingState> {
+/// Набор параметров строится до разрешения участников; конструктор состояния
+/// и его первичный Begin остаются после проверки типа источника.
+pub(super) fn prepare_wuxing_parameters(
+    skill_id: u32, properties: &CSkillBaseProperties,
+) -> Option<WuXingStateParameters> {
     let kind = kind_for_skill_id(skill_id)?;
     let query = |usage| properties.query_property(usage);
-    let maximum_hp = if kind == WuXingKind::Water {
-        query(MAX_HP_GAIN) as i32
-    } else {
-        (query(MAX_HP_GAIN) as i16) as i32
-    };
-    Some(WuXingState::new(skill_id, kind, WuXingStateParameters {
-        element_modify: query(TARGET_ELEMENT_MODIFY_GAIN) as i16,
-        minimum_attack: query(TARGET_MIN_ATTACK_GAIN) as i16,
-        maximum_attack: query(TARGET_MAX_ATTACK_GAIN) as i16,
-        defense: query(TARGET_DEF_GAIN) as i16,
-        element_resistance: query(TARGET_ELEMENT_RESISTANCE_GAIN) as i16,
-        strength: query(TARGET_STR_GAIN) as i32,
-        dexterity: query(TARGET_DEX_GAIN) as i32,
-        constitution: query(TARGET_CON_GAIN) as i32,
-        intelligence: query(TARGET_INT_GAIN) as i32,
-        maximum_hp,
-        maximum_mp: (kind == WuXingKind::Metal).then(|| query(MAX_MP_GAIN)).unwrap_or(0),
-        blast_attack_scale_bits: (query(BLAST_ATTACK_SCALE_FIX) as i32 as f32).to_bits(),
-        blast_defense_scale_bits: (query(BLAST_DEFENSE_SCALE_FIX) as i32 as f32).to_bits(),
-        critical_rate_bits: (query(CRITICAL_RATE_FIX) as i32 as f32).to_bits(),
-        element_blast_attack_scale_bits: (query(ELEMENT_BLAST_ATTACK_SCALE_FIX) as i32 as f32).to_bits(),
-        element_blast_defense_scale_bits: (query(ELEMENT_BLAST_DEFENSE_SCALE_FIX) as i32 as f32).to_bits(),
-        full_miss_scale_bits: (query(FULL_MISS_SCALE_FIX) as i32 as f32).to_bits(),
-        resume_hp_peace: query(RESUME_HP_PEACE_FIX) as i32,
-        resume_mp_peace: query(RESUME_MP_PEACE_FIX) as i32,
-        resume_hp_fight: query(RESUME_HP_FIGHT_FIX) as i32,
-        resume_mp_fight: query(RESUME_MP_FIGHT_FIX) as i32,
-        restored_hp_peace: query(RESTORED_HP_PEACE_FIX) as i32,
-        restored_mp_peace: query(RESTORED_MP_PEACE_FIX) as i32,
-        restored_hp_fight: query(RESTORED_HP_FIGHT_FIX) as i32,
-        restored_mp_fight: query(RESTORED_MP_FIGHT_FIX) as i32,
-    }))
+    let element_modify = query(115) as i16;
+    let minimum_attack = query(116) as i16;
+    let maximum_attack = query(117) as i16;
+    let defense = query(109) as i16;
+    let element_resistance = query(112) as i16;
+    let strength = query(101) as i32;
+    let dexterity = query(102) as i32;
+    let constitution = query(103) as i32;
+    let intelligence = query(104) as i32;
+    let maximum_hp = query(118);
+    let maximum_hp = if kind == WuXingKind::Water { maximum_hp as i32 } else { i32::from(maximum_hp as i16) };
+    let maximum_mp = if kind == WuXingKind::Metal { query(119) } else { 0 };
+    Some(WuXingStateParameters {
+        element_modify, minimum_attack, maximum_attack, defense, element_resistance,
+        strength, dexterity, constitution, intelligence, maximum_hp, maximum_mp,
+        blast_attack_scale_bits: (query(80_011) as i32 as f32).to_bits(),
+        blast_defense_scale_bits: (query(80_012) as i32 as f32).to_bits(),
+        critical_rate_bits: (query(80_016) as i32 as f32).to_bits(),
+        element_blast_attack_scale_bits: (query(80_013) as i32 as f32).to_bits(),
+        element_blast_defense_scale_bits: (query(80_014) as i32 as f32).to_bits(),
+        full_miss_scale_bits: (query(80_015) as i32 as f32).to_bits(),
+        resume_hp_peace: query(80_017) as i32,
+        resume_mp_peace: query(80_018) as i32,
+        resume_hp_fight: query(80_019) as i32,
+        resume_mp_fight: query(80_020) as i32,
+        restored_hp_peace: query(80_021) as i32,
+        restored_mp_peace: query(80_022) as i32,
+        restored_hp_fight: query(80_023) as i32,
+        restored_mp_fight: query(80_024) as i32,
+    })
 }
 
-
-pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. }
-            if is_wuxing_skill(skill_id) => skill_id,
-        _ => return terminal(QueuedSkillExecutionState::Rejected),
-    };
-    let Some(_kind) = kind_for_skill_id(skill_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if game.find_player(player_id).is_none() {
-        return terminal(QueuedSkillExecutionState::Rejected);
+pub(super) fn apply_wuxing_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, source: (i32, ShapeIdentity), skill_id: u32,
+    parameters: WuXingStateParameters, runtime: &mut Runtime,
+) -> bool {
+    let Some(kind) = kind_for_skill_id(skill_id) else { return false; };
+    let state = WuXingState::new(skill_id, kind, parameters);
+    let record = state.encoded();
+    let installed = replace_immediate_state(game, source, skill_id, state, &record, runtime);
+    if installed && source.1.object_type == 400 && game.find_player(source.1.id).is_some() {
+        let _ = game.restore_player_hp_mp_states(source.1.id);
     }
-
-    let skill_level = game
-        .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id, game.skill_factory()));
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-
-    if game.player_skill_execution(player_id, skill_id).is_none() {
-        let cooldown_now_ms = runtime.now_milliseconds();
-        let last_used_ms = game.player_skill_last_used_ms(player_id, skill_id);
-        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
-            game.send_base_magic_failure(player_id, 0x0d);
-            game.send_skill_system_info(player_id, b"GS0278");
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let started_at_ms = runtime.now_milliseconds();
-        game.begin_player_skill_with_combat(player_id, dispatch, started_at_ms);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(Some(skill_id));
-        }
-        game.begin_player_skill_execution(player_id, SkillExecutionKernel::begin(dispatch, started_at_ms));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_execution(player_id, skill_id).is_none_or(|state| state.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-    let state = state_from_properties(skill_id, &properties)
-        .expect("WuXing ID проверен до чтения свойств");
-
-    if let Some(player) = game.find_player_mut(player_id) {
-        let _ = player.replace_wuxing_state(state);
-    }
-    if game.update_player_properties(player_id).is_some() {
-        let _ = game.restore_player_hp_mp_states(player_id);
-    }
-    if let Some(execution) = game.player_skill_execution_mut(player_id, skill_id) {
-        let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
-        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
-        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
-        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_state_skill(game, player_id, skill_id, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
+    installed
 }

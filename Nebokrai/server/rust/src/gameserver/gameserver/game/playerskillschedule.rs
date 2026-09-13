@@ -282,8 +282,7 @@ impl CGame {
             | ITEM_SKILL_2_ID
             | RAGE_SKILL_ID => Some(PlayerSkillBeginPolicy::Owner),
             _ if is_non_fun_skill(skill_id) => Some(PlayerSkillBeginPolicy::Inherited),
-            _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
-                || is_heal_skill(skill_id) =>
+            _ if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) =>
             {
                 Some(PlayerSkillBeginPolicy::Owner)
             }
@@ -316,7 +315,7 @@ impl CGame {
             | PILLAR_SKILL_ID | RAGE_SKILL_ID | RAGE_BREAK_SKILL_ID | ROAR_SKILL_ID
             | SOUL_COLLECT_SKILL_ID | MACHINE_SHIELD_SKILL_ID | MANA_SHIELD_SKILL_ID => TargetRule::Any,
             id if is_heal_skill(id) => TargetRule::Any,
-            id if is_swordship_skill(id) || is_immediate_state_skill(id) => TargetRule::Never,
+            id if is_immediate_state_skill(id) => TargetRule::Never,
             _ => TargetRule::Attackable,
         };
         let enter_combat = match dispatch.object_target() {

@@ -1,26 +1,16 @@
-//! Каноническое состояние семейства `CWuXing*State`.
-//! OnUpdateProperties (0x005E0080/0x005E08C0) читает живого GetSufferer и применяет
-//! подтверждённую player-only формулу без visual и часов; NULL даёт false.
-//!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий
-//! 0x5c-байтный набор параметров и одинаковый `OnUpdateProperties` для пяти
-//! элементов. Только Metal дополнительно применяет `MAX_MP_GAIN`. Порядок
-//! состояний сохраняет исходную позицию при замене того же skill ID. Шесть
-//! производных базовых характеристик усекаются FISTP к нулю до сложения.
-//! Каждая DB-запись состоит из ID и исходного 0x5c-байтного
-//! `tagWuXingState`; два байта выравнивания после пяти `short` сохраняются
-//! как часть подтверждённого legacy layout.
-
-//! End +0x1C таблицы 0x0065ED04/0x0065ED54/0x0065EE44/0x0065EDA4/0x0065EDF4 →0x005ECFC0→CState::End0x005DBCE0:
-//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin и возвращает 1.
-//! Restart Begin(NULL, holder) сохраняет user и timestamp, снимает IsEnded;
-//! собственных guards, visual, часов и сброса payload нет.
-//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
-//! не получает user=holder. Общий base End сохраняет эту привязку отдельно
-//! от payload и не заменяет отсутствующего user держателем состояния.
-//! Runtime Begin Earth/Fire/Metal/Water/Wood0x0050FF1A/0x005103CA/
-//! 0x00511467/0x00510877/0x00510FAA получает self,self.
+//! Постоянные состояния CWuXingMetal/Wood/Water/Fire/EarthState.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/wuxing*state.cpp.
+//! Свежий GetSufferer задаёт получателя свойств: NULL возвращает false,
+//! другой тип не меняется. Только Metal применяет дополнительный MAX_MP.
+//! Целые прибавки сохраняют wrapping и unsigned cap; производные параметры
+//! усекаются к нулю до сложения. Проценты используют f32-коэффициент 0.01,
+//! но произведение округляется до f32 только вместе с окончательной суммой.
+//! Сравнение с нижним пределом сохраняет NaN, как исходные setters.
+//! DB-запись — ID и 0x5c байт tagWuXingState, включая два непрозрачных байта
+//! выравнивания. CriticalRate идёт после FullMiss, не в порядке QueryProperty.
+//! Общий primary Begin сохраняет U/S после часов; перезапуск Begin(NULL,S)
+//! не подменяет U держателем и не читает часы. End сначала ставит ended,
+//! затем удаляет состояние через свежий U; visual и собственных таймеров нет.
 
 use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::moveshape::StateKey;
@@ -35,8 +25,7 @@ use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 
 pub(crate) const WUXING_STATE_BYTES: usize = 96;
 
-/// OnUpdateProperties 0x005E0080/0x005E08C0: GetSufferer, затем только player-формула.
-/// Visual, IsEnded-gate и чтения часов у этого override отсутствуют.
+/// Свойства применяются к свежему S без IsEnded-gate и чтения часов.
 pub(crate) fn update_wuxing_state_properties(
     game: &mut CGame, region_id: i32, holder: ShapeIdentity, key: StateKey,
     _now: &mut dyn FnMut() -> u32,
@@ -124,6 +113,7 @@ pub(crate) struct WuXingState {
     skill_id: u32,
     kind: WuXingKind,
     parameters: WuXingStateParameters,
+    alignment: u16,
 }
 
 impl WuXingState {
@@ -132,7 +122,7 @@ impl WuXingState {
         kind: WuXingKind,
         parameters: WuXingStateParameters,
     ) -> Self {
-        Self { skill_id, kind, parameters }
+        Self { skill_id, kind, parameters, alignment: 0 }
     }
 
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
@@ -150,7 +140,7 @@ impl WuXingState {
         let minimum_attack = reader.read_i16()?;
         let defense = reader.read_i16()?;
         let element_resistance = reader.read_i16()?;
-        let _alignment = reader.read_u16()?;
+        let alignment = reader.read_u16()?;
         let parameters = WuXingStateParameters {
             element_modify,
             maximum_attack,
@@ -165,10 +155,10 @@ impl WuXingState {
             maximum_mp: reader.read_u32()?,
             blast_attack_scale_bits: reader.read_u32()?,
             blast_defense_scale_bits: reader.read_u32()?,
-            critical_rate_bits: reader.read_u32()?,
             element_blast_attack_scale_bits: reader.read_u32()?,
             element_blast_defense_scale_bits: reader.read_u32()?,
             full_miss_scale_bits: reader.read_u32()?,
+            critical_rate_bits: reader.read_u32()?,
             resume_hp_peace: reader.read_i32()?,
             resume_mp_peace: reader.read_i32()?,
             resume_hp_fight: reader.read_i32()?,
@@ -178,7 +168,7 @@ impl WuXingState {
             restored_hp_fight: reader.read_i32()?,
             restored_mp_fight: reader.read_i32()?,
         };
-        Ok(Self::new(skill_id, kind, parameters))
+        Ok(Self { skill_id, kind, parameters, alignment })
     }
 
     pub(crate) fn encoded(self) -> [u8; WUXING_STATE_BYTES] {
@@ -191,7 +181,7 @@ impl WuXingState {
         writer.write_i16(parameters.minimum_attack);
         writer.write_i16(parameters.defense);
         writer.write_i16(parameters.element_resistance);
-        writer.write_u16(0);
+        writer.write_u16(self.alignment);
         for value in [
             parameters.strength,
             parameters.dexterity,
@@ -205,10 +195,10 @@ impl WuXingState {
         for value in [
             parameters.blast_attack_scale_bits,
             parameters.blast_defense_scale_bits,
-            parameters.critical_rate_bits,
             parameters.element_blast_attack_scale_bits,
             parameters.element_blast_defense_scale_bits,
             parameters.full_miss_scale_bits,
+            parameters.critical_rate_bits,
         ] {
             writer.write_u32(value);
         }
@@ -355,7 +345,8 @@ fn apply_scale(bits: &mut u32, percent_bits: u32, minimum: f32) {
     if percent == 0.0 {
         return;
     }
-    let value = f32::from_bits(*bits) + percent * 0.01;
+    let value = (f64::from(f32::from_bits(*bits))
+        + f64::from(percent) * f64::from(0.01_f32)) as f32;
     *bits = if value < minimum { minimum } else { value }.to_bits();
 }
 

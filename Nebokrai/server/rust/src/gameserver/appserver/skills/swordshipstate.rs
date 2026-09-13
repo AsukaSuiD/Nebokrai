@@ -1,32 +1,30 @@
-//! Каноническое состояние семейства `CSwordshipState`.
-//!
-//! PDB подтверждает одинаковый набор виртуальных операций у четырёх исходных
-//! классов. Отличается только ID `0x6f/0xe0/0xe8/0xe9`. Для игрока обе
+//! Состояние семейства CSwordshipState.
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/swordshipstate{,2,3,4}.cpp.
+//! У четырёх классов одинаковый набор виртуальных операций; отличается только
+//! ID 0x6f/0xe0/0xe8/0xe9. Для игрока обе
 //! прибавки сначала знаково усекаются до `i16`, затем складываются через
 //! `u32` и ограничиваются `i32::MAX`. Для монстра исходный владелец передаёт
 //! полные значения `i32` методам `SetMinAtk/SetMaxAtk`, то есть выполняет
 //! сложение с переполнением.
 //! Состояния не имеют собственного таймера и визуального сообщения. Все четыре
-//! vtable используют одну exact-пару `Serialize/Unserialize`
-//! `0x005ECE70/0x005F0010`: persisted-запись состоит из ID и двух знаковых
+//! класса используют общую пару Serialize/Unserialize: DB-запись состоит из ID и двух знаковых
 //! DWORD-прибавок. Установка навыка и player-login работают с той же записью
 //! `CanonicalStateStorage`, без отдельной raw-модели.
 
-//! End +0x1C таблицы 0x00660D4C/0x006602AC/0x0065FEB4/0x0065FE64 →0x005ECFC0→CState::End0x005DBCE0:
-//! ended=1, затем GetUser +0x14 и RemoveState при разрешённом user, без visual.
-//! Begin +0x08 0x00601290 передаёт оба аргумента в CState::Begin и возвращает 1.
+//! End устанавливает ended, затем разрешает U и удаляет собственную запись,
+//! без visual. Begin передаёт оба аргумента в CState::Begin и возвращает 1.
 //! Restart Begin(NULL, holder) сохраняет user и timestamp, снимает IsEnded;
 //! собственных guards, visual, часов и сброса payload нет.
-//! StartAllStates0x004CE050 вызывает Begin(0, holder): такой DB-экземпляр
+//! StartAllStates вызывает Begin(0, holder): такой DB-экземпляр
 //! не получает user=holder. Общий base End сохраняет эту привязку отдельно
 //! от payload и не заменяет отсутствующего user держателем состояния.
-//! Runtime Begin0x005808BE/0x005588AE/0x0054B99E/0x0054B71E получает self,self.
+//! Первичная установка вызывает Begin(self, self) до поиска старого ID;
+//! общий установщик сохраняет незарегистрированный новый экземпляр до замены.
 
-//! OnUpdateProperties (точный vtable +0x24 SwordshipState) сначала
+//! OnUpdateProperties сначала
 //! разрешает GetSufferer; NULL возвращает 0. Type600/400 и RTTI выбирают
 //! живые monster modifiers либо player tagProperty. Визуала, таймера,
 //! повторного пересчёта и чтения итогового monster getter в этом callback нет.
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/swordshipstate.cpp.
 
 
 use super::swordship::is_swordship_skill;

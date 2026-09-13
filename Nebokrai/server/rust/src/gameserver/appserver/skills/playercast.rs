@@ -84,15 +84,19 @@ impl RegisteredPlayerCastOwner {
             super::heartlessarrow::HEARTLESS_ARROW_SKILL_ID => Self::HeartlessArrow,
             super::heartlessarrow2::HEARTLESS_ARROW_2_SKILL_ID
                 | super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID => Self::HeartlessArrowArea,
-            id if super::immediatestate::is_property_state_skill(id) => Self::ImmediateState,
+            id if super::immediatestate::is_immediate_state_skill(id) => Self::ImmediateState,
             _ => return None,
         })
     }
 
-    fn completion_end_argument(self) -> i32 {
-        // Выпуск RainArrow передаёт End(0); внешний End(1) по-прежнему
-        // выполняет AfterUse. Это не политика смены региона из фабрики.
-        if matches!(self, Self::RainArrow) { 0 } else { 1 }
+    fn completion_end_argument(self, skill_id: u32) -> i32 {
+        // Выпуск RainArrow и AI Swordship передают End(0); внешний End(1)
+        // по-прежнему выполняет AfterUse. Это не политика смены региона.
+        match self {
+            Self::RainArrow => 0,
+            Self::ImmediateState => super::immediatestate::immediate_completion_end_argument(skill_id),
+            _ => 1,
+        }
     }
 
     pub(crate) fn execute<Runtime: GameMainLoopRuntime>(
@@ -148,9 +152,10 @@ fn finish_outcome<Runtime: GameMainLoopRuntime>(
         QueuedSkillExecutionState::Rejected => Some((0, SkillTermination::Rejected)),
         QueuedSkillExecutionState::RejectedAfterUse => Some((1, SkillTermination::Completed)),
         QueuedSkillExecutionState::Completed => {
-            let argument = game.registered_skill(instance)
-                .and_then(|skill| RegisteredPlayerCastOwner::from_skill_id(skill.id()))
-                .map_or(1, RegisteredPlayerCastOwner::completion_end_argument);
+            let argument = game.registered_skill(instance).map_or(1, |skill| {
+                RegisteredPlayerCastOwner::from_skill_id(skill.id())
+                    .map_or(1, |owner| owner.completion_end_argument(skill.id()))
+            });
             Some((argument, SkillTermination::Completed))
         }
         QueuedSkillExecutionState::Begun | QueuedSkillExecutionState::Pending => None,

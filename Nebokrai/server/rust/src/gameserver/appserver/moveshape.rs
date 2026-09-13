@@ -270,19 +270,7 @@ use super::shape::{
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
 };
 use crate::gameserver::appserver::skills::agilitystate::PersistentAgilityFamilyState;
-use crate::gameserver::appserver::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
-use crate::gameserver::appserver::skills::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
-use crate::gameserver::appserver::skills::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
-use crate::gameserver::appserver::skills::origin::ORIGIN_SKILL_ID;
-use crate::gameserver::appserver::skills::swordship::{
-    SWORDSHIP_2_SKILL_ID, SWORDSHIP_3_SKILL_ID, SWORDSHIP_4_SKILL_ID, SWORDSHIP_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::taiji::TAIJI_SKILL_ID;
-use crate::gameserver::appserver::skills::wuxingearth::WUXING_EARTH_SKILL_ID;
-use crate::gameserver::appserver::skills::wuxingfire::WUXING_FIRE_SKILL_ID;
-use crate::gameserver::appserver::skills::wuxingmetal::WUXING_METAL_SKILL_ID;
-use crate::gameserver::appserver::skills::wuxingwater::WUXING_WATER_SKILL_ID;
-use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
+use crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill;
 use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES};
@@ -327,9 +315,7 @@ use crate::gameserver::appserver::skills::spiderwebstate::{
 use crate::gameserver::appserver::skills::sealstate::{
     SEAL_STATE_BYTES, SealState,
 };
-use crate::gameserver::appserver::skills::swordshipstate::{
-    SWORDSHIP_STATE_BYTES, SwordshipState,
-};
+use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::strikestate::StrikeState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::kerosenestate::KeroseneState;
@@ -354,7 +340,7 @@ use crate::gameserver::appserver::skills::wangshengstate::{
     WangshengState,
 };
 use crate::gameserver::appserver::skills::weakstate::WeakState;
-use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
+use crate::gameserver::appserver::skills::wuxingstate::WuXingState;
 use crate::gameserver::appserver::skills::godblessstate::{
     GodBlessState,
 };
@@ -377,33 +363,6 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const UNDEAD_STATE_ID: u32 = 0x38;
 const UNDEAD_STATE_PARAMETER_BYTES: usize = 72;
-
-const fn is_auto_start_state_skill(skill_id: u32) -> bool {
-    matches!(
-        skill_id,
-        ENLARGE_FULL_MISS_SKILL_ID
-            | ENLARGE_MAX_HP_SKILL_ID
-            | ENLARGE_MAX_MP_SKILL_ID
-            | ORIGIN_SKILL_ID
-            | SWORDSHIP_SKILL_ID
-            | SWORDSHIP_2_SKILL_ID
-            | SWORDSHIP_3_SKILL_ID
-            | SWORDSHIP_4_SKILL_ID
-            | TAIJI_SKILL_ID
-            | WUXING_METAL_SKILL_ID
-            | WUXING_WOOD_SKILL_ID
-            | WUXING_WATER_SKILL_ID
-            | WUXING_FIRE_SKILL_ID
-            | WUXING_EARTH_SKILL_ID
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ImmediateSkillLifecycle {
-    Unbegun,
-    Begun,
-    Ended,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RegisteredSkillExecution {
@@ -464,7 +423,6 @@ pub(crate) struct MoveShapeSkill {
     level: i32,
     owner: SkillOwner,
     item_position: i32,
-    immediate_lifecycle: ImmediateSkillLifecycle,
     execution: RegisteredSkillExecution,
     retained_data: SkillRetainedData,
     current_visual_effect: Option<SkillVisualEffect>,
@@ -976,9 +934,6 @@ impl MoveShapeSkill {
             RegisteredSkillExecution::Monster(execution) => execution.prepare_derived_end(),
             RegisteredSkillExecution::Inactive(_) | RegisteredSkillExecution::BattleFairy(_) => {}
         }
-        if is_auto_start_state_skill(self.id) {
-            self.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
-        }
         true
     }
 
@@ -1487,38 +1442,16 @@ impl CMoveShape {
     /// Self-target `Begin(this, this)` в Rust задаётся самим владельцем.
     pub(crate) fn auto_start_passive_skills(&mut self, ai: &mut CBaseAI) -> usize {
         let mut count = 0;
-        let state_skills = &mut self.skills[SkillCategory::State as usize];
+        let state_skills = &self.skills[SkillCategory::State as usize];
         for entity in &state_skills.order {
-            let skill = state_skills.instances.get_mut(*entity)
+            let skill = state_skills.instances.get(*entity)
                 .expect("порядок state-категории содержит живые экземпляры навыков");
-            if is_auto_start_state_skill(skill.id) {
-                skill.immediate_lifecycle = ImmediateSkillLifecycle::Begun;
+            if is_immediate_state_skill(skill.id) {
                 ai.add_pending_back_stage_skill(skill.id);
                 count += 1;
             }
         }
         count
-    }
-
-    pub(crate) fn immediate_skill_ended(&self, skill_id: u32, factory: &CSkillFactory) -> bool {
-        self.skill(skill_id, factory).is_some_and(|skill| skill.immediate_lifecycle != ImmediateSkillLifecycle::Begun)
-    }
-
-    pub(crate) fn begin_immediate_skill(&mut self, skill_id: u32, factory: &CSkillFactory) {
-        if let Some(skill) = self.skill_mut(skill_id, factory) {
-            skill.immediate_lifecycle = ImmediateSkillLifecycle::Begun;
-        }
-    }
-
-    pub(crate) fn immediate_skill_started(&self, skill_id: u32, factory: &CSkillFactory) -> bool {
-        self.skill(skill_id, factory).is_some_and(|skill| skill.immediate_lifecycle == ImmediateSkillLifecycle::Begun)
-    }
-
-    pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32, factory: &CSkillFactory) {
-        if let Some(skill) = self.skill_mut(skill_id, factory) {
-            skill.immediate_lifecycle = ImmediateSkillLifecycle::Ended;
-            skill.finish_base(SkillTermination::Completed);
-        }
     }
 
     pub(crate) fn undead_states(&self) -> impl Iterator<Item = &UndeadState> {
@@ -1901,59 +1834,6 @@ impl CMoveShape {
 
     pub(crate) fn swordship_states(&self) -> impl Iterator<Item = &SwordshipState> {
         self.state_entries.iter::<SwordshipState>()
-    }
-
-    /// Заменяет состояние в прежней позиции семейного списка, а новый ID
-    /// добавляет в конец. Так сохраняется относительный порядок этих прибавок.
-    pub(crate) fn replace_swordship_state(
-        &mut self,
-        state: SwordshipState,
-    ) -> Option<SwordshipState> {
-        self.remove_serialized_state_record(state.skill_id(), SWORDSHIP_STATE_BYTES);
-        self.append_serialized_state_record(&state.encoded());
-        let previous = self.state_entries.keys::<SwordshipState>().into_iter().find(|key| {
-            self.state_entries.get(*key).and_then(SwordshipState::as_data_ref)
-                .is_some_and(|current| current.skill_id() == state.skill_id())
-        });
-        if let Some(position) = previous.and_then(|key| self.state_entries.index_of(key)) {
-            return self.state_entries.replace_at(position, state).and_then(SwordshipState::from_data);
-        }
-        self.state_entries.append(state);
-        None
-    }
-
-    /// Замена сохраняет прежнюю позицию среди пяти стихийных состояний;
-    /// новый skill ID добавляется в хвост, как в исходном `m_vStates`.
-    pub(crate) fn replace_wuxing_state(
-        &mut self,
-        state: WuXingState,
-    ) -> Option<WuXingState> {
-        let serialized_offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state.skill_id()));
-        if let Some(offset) = serialized_offset {
-            let end = offset.saturating_add(WUXING_STATE_BYTES);
-            if let Some(destination) = self.ex_states.get_mut(offset..end) {
-                destination.copy_from_slice(&state.encoded());
-            }
-        } else {
-            if self.ex_states.len() < 4 {
-                self.ex_states.clear();
-                LegacyWriter::new(&mut self.ex_states).write_u32(0);
-            }
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-            self.ex_states.extend_from_slice(&state.encoded());
-        }
-        let previous = self.state_entries.keys::<WuXingState>().into_iter().find(|key| {
-            self.state_entries.get(*key).and_then(WuXingState::as_data_ref)
-                .is_some_and(|current| current.skill_id() == state.skill_id())
-        });
-        if let Some(position) = previous.and_then(|key| self.state_entries.index_of(key)) {
-            return self.state_entries.replace_at(position, state).and_then(WuXingState::from_data);
-        }
-        self.state_entries.append(state);
-        None
     }
 
     pub(crate) fn wuxing_states(&self) -> impl Iterator<Item = &WuXingState> {
@@ -2919,7 +2799,6 @@ impl CMoveShape {
             level: 1,
             owner,
             item_position: -1,
-            immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
             retained_data: SkillRetainedData::for_owner(owner),
             current_visual_effect: None,
@@ -3014,7 +2893,6 @@ impl CMoveShape {
             level,
             owner,
             item_position: -1,
-            immediate_lifecycle: ImmediateSkillLifecycle::Unbegun,
             execution: RegisteredSkillExecution::Inactive(SkillLifecycle::default()),
             retained_data: SkillRetainedData::for_owner(owner),
             current_visual_effect: None,

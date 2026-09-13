@@ -850,7 +850,6 @@ impl CMonster {
     }
 
     /// Отложенный AutoStart передаёт Begin тому же экземпляру навыка до AI.
-    /// Прежние Swordship/WuXing уже подготовлены на границе входа в область.
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
         self.selected_base_ai_mut().map(CBaseAI::begin_pending_back_stage_skill_ids)
             .unwrap_or_default()
@@ -1644,13 +1643,11 @@ impl CMonster {
         let mut ended_skill = None;
         if release_target {
             let skill_id = current_skill.expect("разрешённый текущий навык Stiffen");
-            let immediate = super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some();
             if matches!(skill_id,
                 super::skills::baseattack::BASE_ATTACK_SKILL_ID
                 | super::skills::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID)
                 || Self::attack_end_restores_movement(skill_id)
                 || skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID
-                || immediate
             {
                 self.clear_skill_progress(skill_id, factory);
                 if skill_id == super::skills::littlestar::LITTLE_STAR_SKILL_ID {
@@ -1673,11 +1670,7 @@ impl CMonster {
     pub(crate) fn finish_stiffen_attack(&mut self, ended_skill: Option<u32>, factory: &CSkillFactory, now: impl FnOnce() -> u32) {
         if self.selected_base_ai().is_none() { return; }
         if let Some(skill_id) = ended_skill {
-            if super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some() {
-                self.mark_immediate_skill_used(skill_id, now(), factory);
-            } else {
-                self.move_shape.mark_skill_used(skill_id, now(), factory);
-            }
+            self.move_shape.mark_skill_used(skill_id, now(), factory);
         }
         if let Some(ai) = self.selected_base_ai_mut() {
             ai.finish_stiffen_attack(false);
@@ -1843,10 +1836,6 @@ impl CMonster {
             return false;
         }
         self.current_active_attack_cast(factory).is_some()
-            || self.move_shape.current_skill(factory).is_some_and(|skill| {
-                super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill.id()).is_some()
-                    && self.move_shape.immediate_skill_started(skill.id(), factory)
-            })
     }
 
     pub(crate) fn finish_active_ai_attack(&mut self, factory: &CSkillFactory, mut now: impl FnMut() -> u32) -> bool {
@@ -1855,14 +1844,6 @@ impl CMonster {
         let skill_ended = self.active_ai_attack_ended(factory);
         if has_skill && !skill_ended {
             return false;
-        }
-        if skill_ended
-            && self.current_active_attack_cast(factory).is_some_and(|cast| {
-                !super::skills::immediatestate::is_property_state_skill(cast.dispatch().skill_id)
-                    && super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(cast.dispatch().skill_id).is_some()
-            })
-        {
-            self.move_shape.shape_mut().set_action(1);
         }
         let completion_ai_type = self.active_primary_ai_type().unwrap_or(0);
         let alive = !CMoveShape::is_died(self.hit_points);
@@ -2112,22 +2093,6 @@ impl CMonster {
         self.base_attack_cast(skill_id, factory)
     }
 
-    /// Фиксирует End немедленного self-state навыка независимо от active-cast.
-    /// `CSkill::End(1)` фиксирует reuse независимо от активной/фоновой очереди.
-    pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32, factory: &CSkillFactory) {
-        self.move_shape.finish_immediate_skill(skill_id, factory);
-        self.move_shape.mark_skill_used(skill_id, now_ms, factory);
-    }
-
-    /// Активный `OnFighting` завершает и `End(0)`: очередь меняет навык,
-    /// но отметка восстановления остаётся прежней. Фоновый вызов сюда не идёт.
-    pub(crate) fn finish_active_immediate_skill(&mut self, factory: &CSkillFactory) {
-        if self.selected_base_ai().is_none() { return; }
-        let Some(skill_id) = self.move_shape.current_skill(factory).map(|skill| skill.id()) else { return; };
-        self.move_shape.shape_mut().set_action(1);
-        let _ = self.finish_base_attack_cast_without_reuse(skill_id, factory);
-    }
-
     pub(crate) fn advance_base_attack_cast(
         &mut self,
         skill_id: u32,
@@ -2165,11 +2130,6 @@ impl CMonster {
             .map(|execution| execution.kernel.termination()) else { return; };
         if termination.is_none() {
             self.finish_attack_skill_resources(skill_id);
-        }
-        if !super::skills::immediatestate::is_property_state_skill(skill_id)
-            && super::skills::immediatestate::MonsterImmediateSkill::from_skill_id(skill_id).is_some()
-        {
-            self.move_shape.finish_immediate_skill(skill_id, factory);
         }
         self.move_shape.set_current_skill_id(None);
         self.move_shape.finish_skill_base(skill_id, factory, termination.unwrap_or(SkillTermination::Cancelled));
