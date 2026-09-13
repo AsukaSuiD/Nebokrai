@@ -300,7 +300,6 @@ use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, KillingAttackIdentity, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
-use super::skills::energybolt::PathProjectileProgress;
 use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
@@ -392,7 +391,6 @@ monster_skill_progress! {
     Lightning(LightningProgress)
         prepare(|state: &mut LightningProgress| *state = LightningProgress::default()),
     ChainLightning(ChainLightningProgress) paths(clear_end_paths),
-    PathProjectile(PathProjectileProgress) paths(clear_end_paths),
     BossFiendPenetrate(BossFiendPenetrateProgress) paths(clear_end_paths),
     LittleStar(LittleStarProgress) paths(clear_end_paths),
     SpiderWeb(SpiderWebProgress)

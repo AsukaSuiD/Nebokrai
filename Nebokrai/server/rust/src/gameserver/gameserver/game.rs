@@ -1080,10 +1080,6 @@ use crate::gameserver::appserver::skills::littlestar::{
     cancel_player_little_star, complete_player_little_star, execute_player_little_star, is_player_little_star_dispatch,
     LITTLE_STAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::energybolt::{
-    cancel_player_path_projectile, execute_player_energy_bolt,
-    is_player_path_projectile_dispatch, ENERGY_BOLT_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::directprojectile::{
     cancel_player_direct_projectile, is_player_direct_projectile_dispatch,
 };
@@ -1133,12 +1129,6 @@ use crate::gameserver::appserver::skills::bossfiendpenetrate::{
     BOSS_FIEND_PENETRATE_SKILL_ID, cancel_player_boss_fiend_penetrate,
     complete_player_boss_fiend_penetrate, execute_player_boss_fiend_penetrate,
     is_player_boss_fiend_penetrate_dispatch,
-};
-use crate::gameserver::appserver::skills::snakebolt::{
-    SNAKE_BOLT_SKILL_ID, execute_player_snake_bolt,
-};
-use crate::gameserver::appserver::skills::zombieclaw::{
-    ZOMBIE_CLAW_SKILL_ID, execute_player_zombie_claw,
 };
 use crate::gameserver::appserver::skills::spriteburn::{
     cancel_player_sprite_burn, execute_player_sprite_burn, is_sprite_burn_dispatch,
@@ -38960,9 +38950,6 @@ impl CGame {
             LITTLE_STAR_SKILL_ID => {
                 cancel_player_little_star(self, player_id, &mut player_ai, runtime)
             }
-            ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
-                cancel_player_path_projectile(self, player_id, skill_id, &mut player_ai, runtime)
-            }
             CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
                 cancel_player_direct_projectile(self, player_id, skill_id, &mut player_ai, runtime)
             }
@@ -39326,9 +39313,6 @@ impl CGame {
             _ if is_fury_dispatch(dispatch) => execute_player_fury,
             _ if is_seven_shooting_star_dispatch(dispatch) => execute_player_seven_shooting_star,
             _ if is_player_little_star_dispatch(dispatch) => execute_player_little_star,
-            _ if is_player_path_projectile_dispatch(dispatch) && dispatch.skill_id() == ENERGY_BOLT_SKILL_ID => execute_player_energy_bolt,
-            _ if is_player_path_projectile_dispatch(dispatch) && dispatch.skill_id() == ZOMBIE_CLAW_SKILL_ID => execute_player_zombie_claw,
-            _ if is_player_path_projectile_dispatch(dispatch) && dispatch.skill_id() == SNAKE_BOLT_SKILL_ID => execute_player_snake_bolt,
             _ if is_player_direct_projectile_dispatch(dispatch) && dispatch.skill_id() == CHUCK_STONE_SKILL_ID => execute_player_chuck_stone,
             _ if is_player_direct_projectile_dispatch(dispatch) && dispatch.skill_id() == SKELETON_ARCHERY_SKILL_ID => execute_player_skeleton_archery,
             _ if is_player_yunsheng_lightning_dispatch(dispatch) => execute_player_yunsheng_lightning,

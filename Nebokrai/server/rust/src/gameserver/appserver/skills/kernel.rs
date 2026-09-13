@@ -88,7 +88,6 @@ use super::bossbluequake::PlayerBossBlueQuakeExecutionState;
 use super::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
 use super::chainlightning::ChainLightningExecutionState;
 use super::directprojectile::PlayerDirectProjectileExecutionState;
-use super::energybolt::PlayerPathProjectileExecutionState;
 use super::fatalblow::FatalBlowExecutionState;
 use super::flash::FlashExecutionState;
 use super::ghostcut::GhostCutExecutionState;
@@ -208,7 +207,6 @@ player_skill_states! {
     ThunderBlow2(ThunderBlow2Execution) prepare(prepare_derived_end),
     ArmyBreak(ArmyBreakExecutionState) prepare(prepare_derived_end),
     LittleFlash(LittleFlashExecutionState) paths(clear_end_paths),
-    PathProjectile(PlayerPathProjectileExecutionState) paths(clear_end_paths),
     DirectProjectile(PlayerDirectProjectileExecutionState),
     SummonCreature(PlayerSummonCreatureExecutionState),
     LordFastAttack(LordFastAttackExecutionState),

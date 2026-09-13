@@ -25,7 +25,7 @@ use super::accumulatedstate::{
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
-    begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at,
+    begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at, end_move_shape_state,
     remove_applied_state_from, resolve_applied_state_sufferer,
     resolve_state_move_shape, resolve_state_move_shape_mut,
 };
@@ -43,13 +43,30 @@ pub(crate) fn add_soul_collect(
 }
 
 pub(crate) fn consume_soul_collect_snapshot(game: &mut CGame, source: (i32, ShapeIdentity)) -> (i32, i32) {
+    consume_soul_collect(game, source, SoulCollectRemoval::EndAndDestroyRemainder)
+}
+
+/// EnergyBolt/SnakeBolt/ZombieClaw вызывают только virtual End. Если он не
+/// удалил запись, caller не уничтожает ни её, ни новый объект той же позиции.
+pub(super) fn consume_soul_collect_for_attack(game: &mut CGame, source: (i32, ShapeIdentity)) -> i32 {
+    consume_soul_collect(game, source, SoulCollectRemoval::EndOnly).0
+}
+
+enum SoulCollectRemoval { EndOnly, EndAndDestroyRemainder }
+
+fn consume_soul_collect(
+    game: &mut CGame, source: (i32, ShapeIdentity), removal: SoulCollectRemoval,
+) -> (i32, i32) {
     let Some((position, key)) = resolve_state_move_shape(game, source.0, source.1)
         .and_then(|shape| shape.find_state_position(|state| state.state_id() == SOUL_COLLECT_STATE_ID))
     else { return (0, 0); };
     let snapshot = resolve_state_move_shape(game, source.0, source.1)
         .and_then(|shape| shape.applied_state::<SoulCollectState>(key))
         .map_or((0, 0), |state| (state.souls(), state.variable_percent() as i32));
-    let _ = end_and_destroy_state_at(game, source.0, source.1, position);
+    match removal {
+        SoulCollectRemoval::EndOnly => { end_move_shape_state(game, source.0, source.1, key); }
+        SoulCollectRemoval::EndAndDestroyRemainder => { end_and_destroy_state_at(game, source.0, source.1, position); }
+    }
     snapshot
 }
 

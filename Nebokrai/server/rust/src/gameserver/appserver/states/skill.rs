@@ -423,6 +423,8 @@ impl CGame {
                 crate::gameserver::appserver::skills::rush::publish_rush_visual(self, skill, mode),
             SkillVisualEffectKind::TargetedProjectile =>
                 crate::gameserver::appserver::skills::targetedprojectile::publish_targeted_projectile_visual(self, skill, mode),
+            SkillVisualEffectKind::PathProjectile =>
+                crate::gameserver::appserver::skills::pathprojectilevisual::publish_path_projectile_visual(self, skill, mode),
             SkillVisualEffectKind::KnockOut =>
                 crate::gameserver::appserver::skills::knockoutruntime::publish_knock_out_visual(self, skill, mode),
             SkillVisualEffectKind::SpiderWeb =>

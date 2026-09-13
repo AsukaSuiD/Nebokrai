@@ -1,9 +1,10 @@
-//! Прямое элементальное попадание Lightning, ChainLightning, Infernol, Seal и SoulMirror.
+//! Прямое элементальное попадание молний, печатей и пошаговых снарядов.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/lightning.cpp,
-//! chainlightning.cpp, infernol.cpp, seal.cpp и soulmirror.cpp.
+//! chainlightning.cpp, infernol.cpp, seal.cpp, soulmirror.cpp,
+//! energybolt.cpp, snakebolt.cpp и zombieclaw.cpp.
 //! Допуск, смерть цели и список повторных попаданий принадлежат AI/Attack
 //! владельца. Здесь сохраняются PK источника, свежая таблица Calculate и сырой
-//! OnBeenAttacked; отсутствие таблицы оставляет исходный UNKNOWN/1 и пустой урон.
+//! OnBeenAttacked; отсутствие таблицы оставляет исходный ID и пустой урон.
 //! ChainLightning, Infernol и SoulMirror читают уровень цели и оружейный множитель;
 //! только ChainLightning после контакта начисляет RP источнику. Lightning и Seal
 //! сохраняют единичный множитель без этих чтений. Infernol и SoulMirror не читают
@@ -13,6 +14,11 @@
 //! Seal и SoulMirror завершают расчёт после AddElement: без CCH и второго RNG.
 //! Расширенное вычисление EM и критического множителя
 //! усекается к нулю; промежуточного округления EM к f32 нет. Vec владеет уроном.
+//! Пошаговые снаряды после снимка PK расходуют души до Calculate; Energy/Snake
+//! читают оружейный множитель Player после EM, но до таблицы; при её отсутствии
+//! этот множитель всё равно сохраняется. Zombie его не читает.
+//! Их единственный RNG предшествует усилению `(souls * 0.7_f32 + 1)`;
+//! результат усекается к младшему DWORD от i64 без критического хвоста и RP.
 
 use super::chainlightning::CHAIN_LIGHTNING_SKILL_ID;
 use super::fightdefense::truncate_original;
@@ -20,6 +26,8 @@ use super::infernol::INFERNOL_SKILL_ID;
 use super::lightning::LIGHTNING_SKILL_ID;
 use super::seal::SEAL_SKILL_ID;
 use super::soulmirror::SOUL_MIRROR_SKILL_ID;
+use super::soulcollectstate::consume_soul_collect_for_attack;
+use super::thunder::truncate_original_i64_low;
 use super::weaponattack::{SourceProperty, apply_weapon_critical, source_master, source_property};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
@@ -34,6 +42,8 @@ enum DirectElementProfile {
     Infernol,
     Seal,
     SoulMirror,
+    PathWeapon,
+    PathUnarmed,
 }
 
 impl DirectElementProfile {
@@ -44,6 +54,8 @@ impl DirectElementProfile {
             INFERNOL_SKILL_ID => Some(Self::Infernol),
             SEAL_SKILL_ID => Some(Self::Seal),
             SOUL_MIRROR_SKILL_ID => Some(Self::SoulMirror),
+            super::energybolt::ENERGY_BOLT_SKILL_ID | super::snakebolt::SNAKE_BOLT_SKILL_ID => Some(Self::PathWeapon),
+            super::zombieclaw::ZOMBIE_CLAW_SKILL_ID => Some(Self::PathUnarmed),
             _ => None,
         }
     }
@@ -53,7 +65,7 @@ impl DirectElementProfile {
     }
 
     const fn reads_damage_modifier(self) -> bool {
-        !matches!(self, Self::Infernol | Self::SoulMirror)
+        !matches!(self, Self::Infernol | Self::SoulMirror | Self::PathWeapon | Self::PathUnarmed)
     }
 
     const fn increases_player_rp(self) -> bool {
@@ -61,20 +73,31 @@ impl DirectElementProfile {
     }
 
     const fn uses_critical(self) -> bool {
-        !matches!(self, Self::Seal | Self::SoulMirror)
+        !matches!(self, Self::Seal | Self::SoulMirror | Self::PathWeapon | Self::PathUnarmed)
+    }
+
+    const fn consumes_souls(self) -> bool {
+        matches!(self, Self::PathWeapon | Self::PathUnarmed)
     }
 }
 
 fn calculate(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
-    target: (i32, ShapeIdentity), attack: &mut AttackInformation,
+    target: (i32, ShapeIdentity), souls: Option<i32>, attack: &mut AttackInformation,
 ) {
+    let Some(profile) = game.registered_skill(instance)
+        .and_then(|skill| DirectElementProfile::from_skill_id(skill.id())) else { return; };
     let element_modify = if source.1.object_type == 400 {
         let Some(player) = game.find_player(source.1.id) else { return; };
         player.combat_properties().element_modify
     } else { 0 };
+    if profile == DirectElementProfile::PathWeapon && source.1.object_type == 400 {
+        let Some(player) = game.find_player(source.1.id) else { return; };
+        let Some(level) = game.move_shape_level(target.0, target.1) else { return; };
+        let (divisor, minimum) = game.globe_setup().weapon_damage_factors();
+        attack.damage_factor = player.weapon_modifier(game.goods_factory(), i32::from(level), divisor, minimum);
+    }
     let Some(skill) = game.registered_skill(instance) else { return; };
-    let Some(profile) = DirectElementProfile::from_skill_id(skill.id()) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
     attack.skill_id = skill.id();
     attack.skill_level = skill.level() as u8;
@@ -98,7 +121,10 @@ fn calculate(
     let random = game.skill_random_below(width);
     let minimum = properties.query_property(20_008) as i32;
     let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
-    let damage = (element as i32).wrapping_add(random).wrapping_add(minimum).wrapping_add(bonus).max(0);
+    let damage = (element as i32).wrapping_add(random).wrapping_add(minimum).wrapping_add(bonus);
+    let damage = souls.map_or(damage, |souls| truncate_original_i64_low(
+        f64::from(damage) * (f64::from(souls) * f64::from(0.7_f32) + f64::from(1.0_f32)),
+    )).max(0);
     attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 });
     if profile.uses_critical() {
         let Some(chance) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
@@ -117,7 +143,9 @@ pub(super) fn apply_direct_element_attack<Runtime: GameMainLoopRuntime>(
     let profile = game.registered_skill(instance)
         .and_then(|skill| DirectElementProfile::from_skill_id(skill.id()));
     let mut attack = AttackInformation::for_master(master);
-    calculate(game, instance, source, target, &mut attack);
+    let souls = profile.filter(|profile| profile.consumes_souls())
+        .map(|_| consume_soul_collect_for_attack(game, source));
+    calculate(game, instance, source, target, souls, &mut attack);
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
     if profile.is_some_and(DirectElementProfile::increases_player_rp)
         && source.1.object_type == 400

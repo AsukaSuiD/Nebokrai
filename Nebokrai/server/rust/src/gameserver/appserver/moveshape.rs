@@ -2,6 +2,8 @@
 //! Постоянные данные CArchery/CBaseMagic/CFireBolt принадлежат экземпляру
 //! навыка: att_time обнуляется конструктором, но не Begin/End или удалением
 //! исполнения команды. Игрок и монстр используют одно и то же хранение.
+//! EnergyBolt/SnakeBolt/ZombieClaw сохраняют там область первого успешного
+//! Begin; End очищает путь и параметры полёта, не заменяя эту область.
 //! UpdateProperty (0x004CFB60, moveshape.cpp:93) реализован общим живым
 //! dispatcher-ом states/state.rs. Здесь хранится одна PDB-структура
 //! tagProperties (+0x84, 25 signed LONG); её читают native monster getters.
@@ -396,6 +398,7 @@ impl RegisteredSkillExecution {
 enum SkillRetainedData {
     None,
     BaseProjectile(super::skills::baseprojectilecast::BaseProjectileProgress),
+    PathProjectile(super::skills::energybolt::PathProjectileProgress),
 }
 
 impl SkillRetainedData {
@@ -403,6 +406,8 @@ impl SkillRetainedData {
         match owner {
             SkillOwner::CArchery | SkillOwner::CBaseMagic | SkillOwner::CFireBolt =>
                 Self::BaseProjectile(Default::default()),
+            SkillOwner::CEnergyBolt | SkillOwner::CSnakeBolt | SkillOwner::CZombieClaw =>
+                Self::PathProjectile(Default::default()),
             _ => Self::None,
         }
     }
@@ -773,6 +778,20 @@ impl MoveShapeSkill {
         }
     }
 
+    pub(crate) fn path_projectile_progress(&self) -> Option<&super::skills::energybolt::PathProjectileProgress> {
+        match &self.retained_data {
+            SkillRetainedData::PathProjectile(progress) => Some(progress),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn path_projectile_progress_mut(&mut self) -> Option<&mut super::skills::energybolt::PathProjectileProgress> {
+        match &mut self.retained_data {
+            SkillRetainedData::PathProjectile(progress) => Some(progress),
+            _ => None,
+        }
+    }
+
     pub(crate) fn lightning_progress(&self) -> Option<&super::skills::lightning::LightningProgress> {
         match &self.execution {
             RegisteredSkillExecution::Player(PlayerSkillExecution::Lightning(state)) => Some(state.progress()),
@@ -829,14 +848,14 @@ impl MoveShapeSkill {
     pub(crate) fn base_projectile_progress(&self) -> Option<&super::skills::baseprojectilecast::BaseProjectileProgress> {
         match &self.retained_data {
             SkillRetainedData::BaseProjectile(progress) => Some(progress),
-            SkillRetainedData::None => None,
+            _ => None,
         }
     }
 
     pub(crate) fn base_projectile_progress_mut(&mut self) -> Option<&mut super::skills::baseprojectilecast::BaseProjectileProgress> {
         match &mut self.retained_data {
             SkillRetainedData::BaseProjectile(progress) => Some(progress),
-            SkillRetainedData::None => None,
+            _ => None,
         }
     }
 
@@ -976,6 +995,9 @@ impl MoveShapeSkill {
     }
 
     pub(crate) fn clear_end_paths(&mut self) {
+        if let SkillRetainedData::PathProjectile(progress) = &mut self.retained_data {
+            progress.clear_end_paths();
+        }
         match &mut self.execution {
             RegisteredSkillExecution::Player(execution) => execution.clear_end_paths(),
             RegisteredSkillExecution::Monster(execution) => execution.clear_end_paths(),

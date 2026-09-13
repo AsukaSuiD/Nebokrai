@@ -151,6 +151,7 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                 (matches!(skill.owner(), SkillOwner::CStrike | SkillOwner::CYakshaSlash | SkillOwner::CSeal
                     | SkillOwner::CHeal | SkillOwner::CHeal2 | SkillOwner::CSuperHeal | SkillOwner::CSuperHeal2
                     | SkillOwner::CGodBless | SkillOwner::CGodBless2 | SkillOwner::CSoulCollect
+                    | SkillOwner::CEnergyBolt | SkillOwner::CSnakeBolt | SkillOwner::CZombieClaw
                     | SkillOwner::CWeak | SkillOwner::CPoisonFog | SkillOwner::CSnowStorm
                     | SkillOwner::CYinYang | SkillOwner::CYinYang2
                     | SkillOwner::CGodThunder | SkillOwner::CGodThunder2
