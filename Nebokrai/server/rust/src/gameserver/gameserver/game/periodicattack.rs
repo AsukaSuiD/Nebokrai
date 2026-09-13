@@ -501,7 +501,7 @@ impl CGame {
         // Отказ цели и Clear внутри Defense не отменяют caller-хвост.
         if matches!(skill_id,
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID | BOSS_BLUE_QUAKE_SKILL_ID
-            | CHAIN_LIGHTNING_SKILL_ID | FLASH_SKILL_ID | JU_CUT_SKILL_ID
+            | FLASH_SKILL_ID | JU_CUT_SKILL_ID
             | LITTLE_FLASH_SKILL_ID | LIGHTNING_SWORD_SKILL_ID | MOSOU_SKILL_ID
             | LITTLE_FLASH_2_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID

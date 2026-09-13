@@ -39,6 +39,8 @@ pub(crate) enum SkillVisualEffectKind {
     Heal,
     GodBless,
     ZonalCast,
+    Lightning,
+    ChainLightning,
     Blind,
     Rush,
     Rush2,

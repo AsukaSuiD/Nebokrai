@@ -154,7 +154,8 @@ pub(crate) fn process_owned_monster_stiffen<Runtime: GameMainLoopRuntime>(
                     | SkillOwner::CWeak | SkillOwner::CPoisonFog | SkillOwner::CSnowStorm
                     | SkillOwner::CYinYang | SkillOwner::CYinYang2
                     | SkillOwner::CGodThunder | SkillOwner::CGodThunder2
-                    | SkillOwner::CFireWall | SkillOwner::CChaosSphere)
+                    | SkillOwner::CFireWall | SkillOwner::CChaosSphere
+                    | SkillOwner::CLightning | SkillOwner::CChainLightning)
                     || crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill(skill.id())
                     || crate::gameserver::appserver::skills::nonfun::is_non_fun_skill(skill.id()))
                     .then_some((region.region_id(), monster.move_shape().shape().identity(), skill.id()))

@@ -1164,10 +1164,6 @@ use crate::gameserver::appserver::skills::monsterfastattack::MONSTER_FAST_ATTACK
 use crate::gameserver::appserver::skills::monsterrangeattack::{
     MONSTER_RANGE_ATTACK_SKILL_ID, execute_player_monster_range_attack, finish_player_monster_range_attack,
 };
-use crate::gameserver::appserver::skills::chainlightning::{
-    cancel_player_chain_lightning, execute_player_chain_lightning, is_chain_lightning_dispatch,
-    CHAIN_LIGHTNING_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::playercast::RegisteredPlayerCastOwner;
 use crate::gameserver::appserver::skills::mosou::MOSOU_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut::GHOST_CUT_SKILL_ID;
@@ -1191,10 +1187,6 @@ use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKI
 use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash::LITTLE_FLASH_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
-use crate::gameserver::appserver::skills::lightning::{
-    cancel_player_lightning, complete_player_lightning, execute_player_lightning,
-    is_lightning_target, LIGHTNING_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::seal::{
     cancel_player_seal, complete_player_seal, execute_player_seal, is_seal_target,
     SEAL_SKILL_ID,
@@ -38942,12 +38934,6 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
-                LIGHTNING_SKILL_ID => Some(complete_player_lightning(
-                    self,
-                    player_id,
-                    &mut player_ai,
-                    runtime,
-                )),
                 SEAL_SKILL_ID => Some(complete_player_seal(
                     self,
                     player_id,
@@ -38992,9 +38978,6 @@ impl CGame {
                 cause.uses_nonzero_end(),
                 runtime,
             ),
-            CHAIN_LIGHTNING_SKILL_ID => {
-                cancel_player_chain_lightning(self, player_id, &mut player_ai, runtime)
-            }
             THUNDER_BLOW_SKILL_ID => {
                 cancel_player_thunder_blow(self, player_id, &mut player_ai, runtime)
             }
@@ -39062,9 +39045,6 @@ impl CGame {
             }
             MONSTER_RANGE_ATTACK_SKILL_ID => {
                 finish_player_monster_range_attack(self, player_id, &mut player_ai, runtime, false)
-            }
-            LIGHTNING_SKILL_ID => {
-                cancel_player_lightning(self, player_id, &mut player_ai, runtime)
             }
             SEAL_SKILL_ID => cancel_player_seal(self, player_id, &mut player_ai, runtime),
             SOUL_COLLECT_SKILL_ID => {
@@ -39382,7 +39362,6 @@ impl CGame {
             } => baseattackruntime::execute_player_base_attack,
             _ if is_blind_dispatch(dispatch) => execute_player_blind,
             _ if is_item_skill_2_dispatch(dispatch) => execute_player_item_skill_2,
-            _ if is_chain_lightning_dispatch(dispatch) => execute_player_chain_lightning,
             _ if is_thunder_blow_dispatch(dispatch) => execute_player_thunder_blow,
             _ if is_rage_dispatch(dispatch) => execute_player_rage,
             _ if is_rage_break_dispatch(dispatch) => execute_player_rage_break,
@@ -39411,7 +39390,6 @@ impl CGame {
             _ if is_lord_fast_attack_dispatch(dispatch) => execute_player_lord_fast_attack,
             _ if is_player_monster_base_attack(dispatch) => execute_player_monster_base_attack,
             _ if dispatch.skill_id() == MONSTER_RANGE_ATTACK_SKILL_ID => execute_player_monster_range_attack,
-            _ if is_lightning_target(dispatch) => execute_player_lightning,
             _ if is_seal_target(dispatch) => execute_player_seal,
             _ if dispatch.skill_id() == HEARTEN_SKILL_ID => execute_player_hearten,
             _ if dispatch.skill_id() == PROMOTION_SKILL_ID => execute_player_promotion,

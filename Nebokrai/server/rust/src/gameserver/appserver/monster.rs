@@ -306,6 +306,8 @@ use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
 use super::skills::targetedprojectile::TargetedProjectileProgress;
+use super::skills::lightning::LightningProgress;
+use super::skills::chainlightning::ChainLightningProgress;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
 use super::skills::yunshenglightning::YunShengLightningProgress;
@@ -387,6 +389,9 @@ monster_skill_progress! {
         prepare(MonsterProjectileProgress::prepare_derived_end),
     TargetedProjectile(TargetedProjectileProgress)
         prepare(|state: &mut TargetedProjectileProgress| *state = TargetedProjectileProgress::default()),
+    Lightning(LightningProgress)
+        prepare(|state: &mut LightningProgress| *state = LightningProgress::default()),
+    ChainLightning(ChainLightningProgress) paths(clear_end_paths),
     PathProjectile(PathProjectileProgress) paths(clear_end_paths),
     BossFiendPenetrate(BossFiendPenetrateProgress) paths(clear_end_paths),
     LittleStar(LittleStarProgress) paths(clear_end_paths),

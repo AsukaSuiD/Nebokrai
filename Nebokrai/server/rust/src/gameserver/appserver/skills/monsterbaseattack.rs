@@ -293,6 +293,8 @@ use super::weak::WEAK_SKILL_ID;
 use super::zonalcast::{execute_owned_monster_zonal_cast, is_zonal_cast_skill};
 use super::firewall::FIRE_WALL_SKILL_ID;
 use super::chaossphere::CHAOS_SPHERE_SKILL_ID;
+use super::lightning::{LIGHTNING_SKILL_ID, execute_owned_monster_lightning};
+use super::chainlightning::{CHAIN_LIGHTNING_SKILL_ID, execute_owned_monster_chain_lightning};
 use super::yinyang::YIN_YANG_SKILL_ID;
 use super::yinyang2::YIN_YANG_2_SKILL_ID;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
@@ -840,7 +842,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     let minimum_skill_distance = skill.map(|(skill_id, skill_level)| {
         if is_immediate_state_skill(skill_id) || is_heal_skill(skill_id) || is_non_fun_skill(skill_id)
             || is_zonal_cast_skill(skill_id)
-            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID)
+            || matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID | GOD_PUNISHMENT_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID | LIGHTNING_SKILL_ID | CHAIN_LIGHTNING_SKILL_ID)
         {
             return 1;
         }
@@ -1109,6 +1111,8 @@ fn owned_registered_cast_executor<Runtime: GameMainLoopRuntime>(
         SNOW_STORM_SKILL_ID => Some(execute_owned_monster_zonal_cast::<SNOW_STORM_SKILL_ID, Runtime>),
         FIRE_WALL_SKILL_ID => Some(execute_owned_monster_zonal_cast::<FIRE_WALL_SKILL_ID, Runtime>),
         CHAOS_SPHERE_SKILL_ID => Some(execute_owned_monster_zonal_cast::<CHAOS_SPHERE_SKILL_ID, Runtime>),
+        LIGHTNING_SKILL_ID => Some(execute_owned_monster_lightning),
+        CHAIN_LIGHTNING_SKILL_ID => Some(execute_owned_monster_chain_lightning),
         YIN_YANG_SKILL_ID => Some(execute_owned_monster_zonal_cast::<YIN_YANG_SKILL_ID, Runtime>),
         YIN_YANG_2_SKILL_ID => Some(execute_owned_monster_zonal_cast::<YIN_YANG_2_SKILL_ID, Runtime>),
         GOD_THUNDER_SKILL_ID => Some(execute_owned_monster_zonal_cast::<GOD_THUNDER_SKILL_ID, Runtime>),

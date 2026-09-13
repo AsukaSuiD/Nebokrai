@@ -411,6 +411,10 @@ impl CGame {
             }
             SkillVisualEffectKind::ZonalCast =>
                 crate::gameserver::appserver::skills::zonalcast::publish_zonal_cast_visual(self, skill, mode),
+            SkillVisualEffectKind::Lightning =>
+                crate::gameserver::appserver::skills::lightning::publish_lightning_visual(self, skill, mode),
+            SkillVisualEffectKind::ChainLightning =>
+                crate::gameserver::appserver::skills::chainlightning::publish_chain_lightning_visual(self, skill, mode),
             SkillVisualEffectKind::Blind =>
                 crate::gameserver::appserver::skills::blind::publish_blind_visual(self, skill, mode),
             SkillVisualEffectKind::Rush | SkillVisualEffectKind::Rush2 =>

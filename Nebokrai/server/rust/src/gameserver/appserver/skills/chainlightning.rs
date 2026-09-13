@@ -1,374 +1,344 @@
-//! Цепная молния `CChainLightning` (`0x13E`).
-//! На время применения удара настоящий AI источника опубликован в CPlayer;
-//! изменения синхронных callback возвращаются в тот же проход навыка.
-//! Успешный Begin возвращает Begun до первого AI. Повторная проверка,
-//! расход ресурсов и эффекты AI выполняются после постановки Attack в том
-//! же Run; исходный отсчёт Begin сохраняется общим kernel.
+//! Цепная молния CChainLightning (0x13E).
+//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/chainlightning.cpp.
+//! Player и Monster исполняют один зарегистрированный навык. Vec заменяет
+//! два исходных STL-вектора, сохраняя их жизнь внутри callbacks и очистку End.
+//! Begin создаёт visual перед Check; Check требует только U, таблицу и reuse,
+//! затем запрещает движение. MP, путь и контакт принадлежат первому AI.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/chainlightning.cpp`. Первый такт поворачивает владельца,
-//! строит и ограничивает путь, списывает MP, публикует начало и последовательно
-//! атакует уникальные фигуры до первого блока `2`. Навык завершается только
-//! после строгой границы `SKILL_USAGE_ACTION_INTERVAL`; формула сохраняет два
-//! вызова генератора MSVCRT на каждую рассчитанную атаку. `CGame` разрешает
-//! независимых владельцев и применяет уже рассчитанные результаты. Собственный
-//! `End` очищает накопленный путь, возвращает движение, выполняет общий
-//! оружейный `AfterUseSkill` и фиксирует время
-//! восстановления; тот же ненулевой хвост используется при отказе после
-//! `Begin` и клиентской отмене.
-//! Reuse использует exact `CSkill::IsRestored`; action interval — elapsed.
-//! Element modifier вычисляется в расширенной точности x87 из целых свойств и
-//! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
-//! перед `int`.
-//! End (0x00598EE0) возвращает движение до AfterUseSkill (0x0053CF30).
-//! Общий callback игрока +0x158 пуст и не пересчитывает свойства.
+//! AI захватывает U и таблицу, превращает свежую S в точку, поворачивает U,
+//! строит forced-MAX путь, удаляет начальную клетку U и ограничивает длину.
+//! Пустой путь даёт End0; MP→OnChangeStates предшествуют visual0/1.
+//! Следующая клетка читается из живого пути; перед BLOCK2 обход прекращается.
+//! Список целей текущей клетки дочитывается даже после вложенного End.
+//! FullMove/admission предшествуют dedup, без отдельного IsDied. Attack исключает
+//! самоцель и добавляет указатель до Calculate/receipt/RP; AI добавляет его ещё
+//! раз после возврата, в том числе после вложенного End. Идентичность игрока
+//! глобальна, остальных объектов — региональная. Формула общая с Lightning.
+//!
+//! Завершение ждёт строгий unsigned start+interval < now, возвращает движение,
+//! публикует visual3 и вызывает End1. End сбрасывает флаги, путь и dedup до
+//! двух свежих GetU и Move1; базовый Attack End получает исходный аргумент.
+//! Здесь нет CAN, prepared, самостоятельного снаряда или снимка всего боя.
+//! Visual1 передаёт последнюю клетку обрезанного пути, не исходную точку.
 
-use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER};
-use super::basemagic::{
-    SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
-    SKILL_USAGE_REUSE_DELAY_TIME,
+use super::basemagic::{SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
+use super::directelementattack::apply_direct_element_attack;
+use super::flash::cell_views;
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
+use super::lightingarrowphalanx::ArrowTargetIdentity;
+use super::playercast::execute_registered_player_cast;
+use super::rangedweaponcast::{spend_cast_mana, terminal};
+use super::skillfactory::SkillOwner;
+use super::stateskill::{
+    RegisteredStateSkill, StateSkillBeginTarget, end_state_skill, execute_owned_state_skill,
 };
-use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::skill::RegisteredSkill;
+use crate::gameserver::appserver::states::state::{
+    resolve_skill_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
+};
+use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
-    QueuedSkillExecutionState,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 pub(crate) const CHAIN_LIGHTNING_SKILL_ID: u32 = 0x13e;
-const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
-const USER_MP_LOSE: u32 = 2;
 const ACTION_INTERVAL: u32 = 10_009;
-const TARGET_FINAL_DAMAGE_MODIFIER: u32 = 20_002;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ChainLightningExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    fallback_x: i32,
-    fallback_y: i32,
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ChainLightningProgress {
+    path: Vec<(i32, i32, u8)>,
+    attacked_targets: Vec<ArrowTargetIdentity>,
     attacked: bool,
 }
 
+impl ChainLightningProgress {
+    pub(crate) fn clear_end_paths(&mut self) {
+        self.attacked = false;
+        self.path.clear();
+        self.attacked_targets.clear();
+    }
+
+    fn has_attacked(&self, target: (i32, ShapeIdentity)) -> bool {
+        self.attacked_targets.contains(&ArrowTargetIdentity::new(target.0, target.1))
+    }
+
+    fn append_target(&mut self, target: (i32, ShapeIdentity)) {
+        self.attacked_targets.push(ArrowTargetIdentity::new(target.0, target.1));
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ChainLightningExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    progress: ChainLightningProgress,
+}
+
 impl ChainLightningExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32, x: i32, y: i32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-            fallback_x: x,
-            fallback_y: y,
-            attacked: false,
-        }
+    fn begin(dispatch: PlayerSkillDispatch, started: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, started), progress: ChainLightningProgress::default() }
     }
 
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
-    pub(crate) const fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+    pub(crate) const fn progress(&self) -> &ChainLightningProgress { &self.progress }
+    pub(crate) fn progress_mut(&mut self) -> &mut ChainLightningProgress { &mut self.progress }
+    pub(crate) fn clear_end_paths(&mut self) { self.progress.clear_end_paths(); }
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
-    QueuedSkillExecutionOutcome { state, first_contact: false }
-}
-
-fn finish_player_chain_lightning<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    _player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) {
-    super::baseattack::finish_delayed_base_attack(game, player_id, CHAIN_LIGHTNING_SKILL_ID, runtime);
-}
-
-pub(crate) fn cancel_player_chain_lightning<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+fn check_cast<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill,
+    original_user: Option<(i32, ShapeIdentity)>, runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied()
-        .map(|state| state.kernel().dispatch())
-    else {
+    let Some(source) = original_user else { return false; };
+    if resolve_state_move_shape(game, source.0, source.1).is_none() { return false; }
+    let Some(skill) = game.registered_skill(instance) else { return false; };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return false; };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if !skill_is_restored(skill.last_used_ms(), reuse, runtime.now_milliseconds()) {
+        game.update_registered_skill_visual(instance, 13);
+        if source.1.object_type == 400 { game.send_skill_system_info(source.1.id, b"GS0278"); }
         return false;
+    }
+    let Some(source) = resolve_state_move_shape_mut(game, source.0, source.1) else { return false; };
+    source.set_moveable(false);
+    if let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::chain_lightning_progress_mut) {
+        progress.clear_end_paths();
+    }
+    true
+}
+
+fn check_attack_path(game: &mut CGame, instance: RegisteredSkill, maximum: u32) {
+    let Some(skill) = game.registered_skill(instance) else { return; };
+    let Some(first) = skill.chain_lightning_progress().and_then(|progress| progress.path.first()).copied() else { return; };
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity) else {
+        if let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::chain_lightning_progress_mut) {
+            progress.path.clear();
+        }
+        return;
     };
-    finish_player_chain_lightning(game, player_id, player_ai, runtime);
-    game.finish_player_skill(player_id, player_ai, dispatch, SkillTermination::Cancelled)
-}
-
-fn master_info(player: &CPlayer) -> MasterInfo {
-    let permissions = player.pk_permissions();
-    MasterInfo {
-        master_type: PLAYER_TYPE,
-        master_id: player.player_id(),
-        master_guild_id: player.faction_id(),
-        master_team_id: player.team_id(),
-        master_union_id: player.union_id(),
-        master_country_id: i32::from(player.country()),
-        permitted_to_kill_player: i32::from(permissions.player),
-        permitted_to_kill_teammate: i32::from(permissions.teammate),
-        permitted_to_kill_guild_member: i32::from(permissions.guild_member),
-        permitted_to_kill_criminal: i32::from(permissions.criminal),
+    let remove_first = first.0 == source.shape().get_tile_x().unwrap_or(i32::MIN)
+        && first.1 == source.shape().get_tile_y().unwrap_or(i32::MIN);
+    if let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::chain_lightning_progress_mut) {
+        if remove_first { progress.path.remove(0); }
+        progress.path.truncate(maximum as usize);
     }
 }
 
-fn dispatch_destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
-    match dispatch {
-        PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)),
-        PlayerSkillDispatch::Object { target, .. }
-            if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => {
-                let view = game.base_magic_target_view(region_id, target)?;
-                Some((view.tile_x, view.tile_y))
-            }
-        _ => None,
-    }
-}
-
-fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
-    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
-    match code {
-        2 => game.send_skill_system_info(player_id, b"GS0298"),
-        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
-        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
-        _ => {}
-    }
-}
-
-fn send_visual(
-    game: &mut CGame,
-    player_id: i32,
-    level: i32,
-    action: u8,
-    path_end: Option<(i32, i32)>,
+fn attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill,
+    source: (i32, ShapeIdentity), target: (i32, ShapeIdentity), runtime: &mut Runtime,
 ) {
-    let Some(player) = game.find_player(player_id) else { return };
-    let mut message = CMessage::new(EFFECT_MESSAGE);
+    let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };
+    let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return; };
+    if std::ptr::eq(user, sufferer) { return; }
+    let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::chain_lightning_progress_mut) else { return; };
+    if progress.has_attacked(target) { return; }
+    progress.append_target(target);
+    apply_direct_element_attack(game, instance, source, target, runtime);
+}
+
+fn attack_path<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill,
+    source: (i32, ShapeIdentity), region: i32, runtime: &mut Runtime,
+) {
+    let mut index = 0;
+    loop {
+        let cell = game.registered_skill(instance).and_then(MoveShapeSkill::chain_lightning_progress)
+            .and_then(|progress| progress.path.get(index)).copied();
+        let Some((x, y, block)) = cell else { break; };
+        if block == 2 { break; }
+        for view in cell_views(game, region, x, y) {
+            let Some(target) = resolve_state_move_shape(game, region, view.identity) else { continue; };
+            let target = (target.shape().get_region_id(), target.shape().identity());
+            if !game.live_skill_target_attackable_between(source, target) { continue; }
+            let Some(progress) = game.registered_skill(instance).and_then(MoveShapeSkill::chain_lightning_progress) else { return; };
+            if progress.has_attacked(target) { continue; }
+            attack(game, instance, source, target, runtime);
+            // Это второй native push_back, не лишний элемент set: callbacks
+            // между двумя записями могут очистить список через End.
+            if let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::chain_lightning_progress_mut) {
+                progress.append_target(target);
+            }
+        }
+        index += 1;
+    }
+    if let Some(progress) = game.registered_skill_mut(instance).and_then(MoveShapeSkill::chain_lightning_progress_mut) {
+        progress.attacked = true;
+    }
+}
+
+fn run_ai<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(stage) = skill.execution_stage().filter(|stage| *stage != SkillStage::Idle) else {
+        return terminal(QueuedSkillExecutionState::Pending);
+    };
+    let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity) else { return terminal(QueuedSkillExecutionState::Rejected); };
+    let source = (source.shape().get_region_id(), source.shape().identity());
+    if stage == SkillStage::Begin {
+        let player = (source.1.object_type == 400).then_some(source.1.id);
+        let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let target = resolve_skill_sufferer(game, skill.lifecycle())
+            .and_then(|target| resolve_state_move_shape(game, target.0, target.1))
+            .map(|target| (target.shape().get_tile_x().unwrap_or(i32::MIN),
+                target.shape().get_tile_y().unwrap_or(i32::MIN)));
+        let destination = target.unwrap_or_else(|| skill.lifecycle().destination());
+        if target.is_some()
+            && let Some(skill) = game.registered_skill_mut(instance)
+        {
+            let previous = skill.lifecycle().destination();
+            skill.lifecycle_mut().set_point_target(previous);
+        }
+        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let y = user.shape().get_tile_y().unwrap_or(i32::MIN);
+        let x = user.shape().get_tile_x().unwrap_or(i32::MIN);
+        let direction = get_line_direction(x, y, destination.0, destination.1);
+        if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.shape_mut().set_direction(direction); }
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        skill.lifecycle_mut().set_destination(destination);
+        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        let Some(skill) = game.registered_skill(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let path = game.skill_target_path_with_length(skill.lifecycle(), maximum);
+        let Some(skill) = game.registered_skill_mut(instance) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        let Some(progress) = skill.chain_lightning_progress_mut() else { return terminal(QueuedSkillExecutionState::Rejected); };
+        progress.path = path;
+        let destination = skill.lifecycle().destination();
+        skill.lifecycle_mut().set_point_target(destination);
+        check_attack_path(game, instance, maximum);
+        if game.registered_skill(instance).and_then(MoveShapeSkill::chain_lightning_progress)
+            .is_none_or(|progress| progress.path.is_empty())
+        {
+            game.update_registered_skill_visual(instance, 2);
+            if let Some(player) = player { game.send_skill_system_info(player, b"GS0298"); }
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if !spend_cast_mana(game, instance, player, &properties) { return terminal(QueuedSkillExecutionState::Rejected); }
+        game.update_registered_skill_visual(instance, 0);
+        game.update_registered_skill_visual(instance, 1);
+        if let Some(skill) = game.registered_skill_mut(instance) { let _ = skill.advance_execution(SkillStage::Begin, SkillStage::Check); }
+    }
+    if game.registered_skill(instance).and_then(MoveShapeSkill::chain_lightning_progress)
+        .is_some_and(|progress| !progress.attacked)
+    {
+        let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return terminal(QueuedSkillExecutionState::Rejected); };
+        if !user.shape().is_assigned_to_server_region() { return terminal(QueuedSkillExecutionState::Rejected); }
+        let region = user.shape().get_region_id();
+        if game.find_region(region).is_none() { return terminal(QueuedSkillExecutionState::Rejected); }
+        attack_path(game, instance, source, region, runtime);
+    }
+    if game.registered_skill(instance).and_then(MoveShapeSkill::chain_lightning_progress)
+        .is_none_or(|progress| !progress.attacked)
+    { return terminal(QueuedSkillExecutionState::Pending); }
+    let interval = properties.query_property(ACTION_INTERVAL);
+    let Some(started) = game.registered_skill(instance).map(|skill| skill.lifecycle().started_at_ms()) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if runtime.now_milliseconds() <= started.wrapping_add(interval) { return terminal(QueuedSkillExecutionState::Pending); }
+    if let Some(user) = resolve_state_move_shape_mut(game, source.0, source.1) { user.set_moveable(true); }
+    game.update_registered_skill_visual(instance, 3);
+    terminal(QueuedSkillExecutionState::Completed)
+}
+
+pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, instance: RegisteredSkill,
+    dispatch: PlayerSkillDispatch, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let original_user = game.find_player(player_id)
+        .map(|player| (player.shape().get_region_id(), player.shape().identity()));
+    execute_registered_player_cast(
+        game, player_id, instance, dispatch, runtime, SkillVisualEffectKind::ChainLightning,
+        |game, instance, _, runtime| check_cast(game, instance, original_user, runtime),
+        |dispatch, started| ChainLightningExecutionState::begin(dispatch, started).into(), run_ai,
+    )
+}
+
+struct ChainLightningSkill;
+impl RegisteredStateSkill for ChainLightningSkill {
+    const ID: u32 = CHAIN_LIGHTNING_SKILL_ID;
+    const VISUAL: SkillVisualEffectKind = SkillVisualEffectKind::ChainLightning;
+    const BEGIN_FAILURE_VISUAL: Option<u32> = None;
+
+    fn prepare_monster(skill: &mut MoveShapeSkill) {
+        skill.set_monster_progress(ChainLightningProgress::default());
+    }
+
+    fn check_cast<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, _target: StateSkillBeginTarget, runtime: &mut Runtime,
+    ) -> bool {
+        let Some(skill) = game.registered_skill(instance) else { return false; };
+        let (region, identity) = skill.lifecycle().user();
+        let user = resolve_state_move_shape(game, region, identity)
+            .map(|user| (user.shape().get_region_id(), user.shape().identity()));
+        check_cast(game, instance, user, runtime)
+    }
+
+    fn run_ai<Runtime: GameMainLoopRuntime>(
+        game: &mut CGame, instance: RegisteredSkill, runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let outcome = run_ai(game, instance, runtime);
+        match outcome.state {
+            QueuedSkillExecutionState::Rejected => end_state_skill(game, instance, 0, runtime),
+            QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::RejectedAfterUse =>
+                end_state_skill(game, instance, 1, runtime),
+            _ => outcome,
+        }
+    }
+}
+
+pub(crate) fn execute_owned_monster_chain_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,
+    target: ShapeIdentity, skill_level: u16, runtime: &mut Runtime,
+) -> bool {
+    execute_owned_state_skill::<ChainLightningSkill, Runtime>(
+        game, owner, monster_id, target, skill_level, runtime,
+    )
+}
+
+pub(crate) fn publish_chain_lightning_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
+    if skill.owner() != SkillOwner::CChainLightning
+        || skill.visual_effect().is_none_or(|effect|
+            effect.kind() != SkillVisualEffectKind::ChainLightning || effect.is_ended())
+    { return; }
+    let (region, identity) = skill.lifecycle().user();
+    let Some(source) = resolve_state_move_shape(game, region, identity).map(|source| source.shape()) else { return; };
+    let mut message = CMessage::new(0x000b_fe01);
+    if matches!(mode, 2 | 4 | 7 | 8 | 10 | 11 | 13 | 14 | 15) {
+        if source.identity().object_type == 400 {
+            message.add_byte(0);
+            message.add_byte(mode as u8);
+            let _ = message.send_to_player(game.net_server(), source.identity().id);
+        }
+        return;
+    }
+    let action = match mode { 0 => 1, 1 => 2, 3 => 3, _ => return };
     message.add_byte(action);
-    message.add_long(CHAIN_LIGHTNING_SKILL_ID as i32);
-    message.base_mut().add_short(level as i16);
-    message.add_long(PLAYER_TYPE);
-    message.add_long(player_id);
-    if action == 2 {
-        let (x, y) = path_end.unwrap_or_default();
+    message.add_long(skill.id() as i32);
+    message.add_short(skill.level() as i16);
+    message.add_long(source.identity().object_type);
+    message.add_long(source.identity().id);
+    if mode == 1 {
+        // При пустом пути native читает память перед vector.end(); этот
+        // недостижимый в штатном AI случай не превращается в фиктивную точку.
+        let Some(&(x, y, _)) = skill.chain_lightning_progress().and_then(|progress| progress.path.last()) else { return; };
         message.add_long(0);
         message.add_long(0);
         message.add_long(x);
         message.add_long(y);
-    } else {
-        message.add_long(player.shape().get_direction());
-    }
-    let _ = game.send_player_shape_around(player_id, None, &message);
-}
-
-fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).map(CPlayer::level),
-        MONSTER_TYPE => game.find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target.id))
-            .and_then(|monster| monster.base_property_key())
-            .and_then(|key| game.find_monster_property_by_origin_name(key))
-            .map(|property| property.level as u8),
-        _ => None,
-    }
-}
-
-#[allow(clippy::too_many_arguments, reason = "аргументы соответствуют полям исходной формулы")]
-fn calculate_attack(
-    game: &mut CGame,
-    player_id: i32,
-    region_id: i32,
-    target: ShapeIdentity,
-    level: i32,
-    minimum: i32,
-    maximum: i32,
-    element_modifier: u32,
-    hit_modifier: i32,
-    damage_modifier: i32,
-) -> Option<(MasterInfo, AttackInformation)> {
-    let target_level = target_level(game, region_id, target)?;
-    let player = game.find_player(player_id)?;
-    let combat = player.combat_properties();
-    let master = master_info(player);
-    let (divisor, floor) = game.globe_setup().weapon_damage_factors();
-    let damage_factor = player.weapon_modifier(
-        game.goods_factory(),
-        i32::from(target_level),
-        divisor,
-        floor,
-    );
-    let width_delta = maximum.wrapping_sub(minimum);
-    let width = if width_delta < 0 { width_delta.wrapping_neg() } else { width_delta }.wrapping_add(1);
-    let element_bonus = truncate_original(
-        f64::from(element_modifier)
-            * f64::from(0.01_f32)
-            * f64::from(combat.element_modify),
-    );
-    let damage = element_bonus
-        .wrapping_add(combat.add_element_attack as i32)
-        .wrapping_add(game.skill_random_below(width))
-        .wrapping_add(minimum);
-    let mut attack = AttackInformation {
-        skill_id: CHAIN_LIGHTNING_SKILL_ID,
-        skill_level: level as u8,
-        attacker_type: PLAYER_TYPE,
-        attacker_id: player_id,
-        attacker_team_id: master.master_team_id,
-        attacker_faction_id: master.master_guild_id,
-        attacker_union_id: master.master_union_id,
-        hit_modifier,
-        damage_factor,
-        damage_modifier,
-        critical: false,
-        blast_attack: false,
-        full_miss: 0,
-        damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage.max(0), mp_damage: 0 }],
-    };
-    if game.skill_random_below(100) < i32::from(combat.cch) {
-        attack.critical = true;
-        let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages {
-            power.hp_damage =
-                truncate_original(f64::from(power.hp_damage) * f64::from(rate));
-        }
-    }
-    Some((master, attack))
-}
-
-pub(crate) const fn is_chain_lightning_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch,
-        PlayerSkillDispatch::Point { skill_id: CHAIN_LIGHTNING_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object {
-            skill_id: CHAIN_LIGHTNING_SKILL_ID,
-            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
-        }
-    )
-}
-
-pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    if !is_chain_lightning_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((
-        player.server_region_id()?, player.learned_skill_level(CHAIN_LIGHTNING_SKILL_ID, game.skill_factory()),
-        player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
-    ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(CHAIN_LIGHTNING_SKILL_ID, level) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let mp_loss = properties.query_property(USER_MP_LOSE);
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
-    let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-    let action_interval_ms = properties.query_property(ACTION_INTERVAL);
-    let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
-    let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
-    let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
-    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let damage_modifier = properties.query_property(TARGET_FINAL_DAMAGE_MODIFIER) as i32;
-
-    if game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied().is_none() {
-        if !skill_is_restored(
-            game.player_skill_last_used_ms(player_id, CHAIN_LIGHTNING_SKILL_ID),
-            cooldown_ms,
-            runtime.now_milliseconds(),
-        ) {
-            send_failure(game, player_id, 0x0d, mp_loss);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let Some((x, y)) = dispatch_destination(game, region_id, dispatch) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let started_at_ms = runtime.now_milliseconds();
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(CHAIN_LIGHTNING_SKILL_ID));
-        }
-        game.begin_player_skill_execution(player_id, ChainLightningExecutionState::begin(dispatch, started_at_ms, x, y));
-        return terminal(QueuedSkillExecutionState::Begun);
-    } else if game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied().is_none_or(|state| state.kernel().dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
-        let state = game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied().expect("выполнение цепной молнии создано");
-        let (target_x, target_y) = dispatch_destination(game, region_id, dispatch)
-            .unwrap_or((state.fallback_x, state.fallback_y));
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y));
-        }
-        let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None);
-        if path.first().is_some_and(|cell| cell.0 == source_x && cell.1 == source_y) { path.remove(0); }
-        while maximum_distance < path.len() as u32 { path.pop(); }
-        if path.is_empty() {
-            send_failure(game, player_id, 2, mp_loss);
-            finish_player_chain_lightning(game, player_id, player_ai, runtime);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_failure(game, player_id, 7, mp_loss);
-            finish_player_chain_lightning(game, player_id, player_ai, runtime);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-        send_visual(game, player_id, level, 1, None);
-        send_visual(game, player_id, level, 2, path.last().map(|cell| (cell.0, cell.1)));
-
-        let master = game.find_player(player_id).map(master_info).unwrap_or_default();
-        let (area_width, area_height) = game.area_dimensions();
-        let mut attacked = Vec::new();
-        for (x, y, block) in path {
-            if block == 2 { break; }
-            let identities = game.find_region(region_id).map(|owner| {
-                let mut shapes = Vec::new();
-                let _ = owner.base().get_shapes(x, y, area_width, area_height, game, &mut shapes);
-                shapes.into_iter().map(|shape| shape.identity).collect::<Vec<_>>()
-            }).unwrap_or_default();
-            for target in identities {
-                if target == (ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() })
-                    || attacked.contains(&target)
-                    || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                    || !game.owned_player_skill_target_attackable(master, target, region_id)
-                { continue; }
-                let Some((master, attack)) = calculate_attack(
-                    game, player_id, region_id, target, level, minimum, maximum,
-                    element_modifier, hit_modifier, damage_modifier,
-                ) else { continue };
-                match target.object_type {
-                    PLAYER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime)),
-                    MONSTER_TYPE => game.with_published_player_ai(player_id, player_ai, |game| game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime)),
-                    _ => {}
-                }
-                attacked.push(target);
-            }
-        }
-        if let Some(state) = game.player_skill_state_mut::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID) {
-            state.attacked = true;
-            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
-            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
-        }
-    }
-
-    let state = game.player_skill_state::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID).copied().expect("выполнение цепной молнии сохраняется до интервала");
-    if !state.attacked
-        || runtime.now_milliseconds().wrapping_sub(state.kernel().started_at_ms()) <= action_interval_ms
+    } else { message.add_long(source.get_direction()); }
+    if source.is_assigned_to_server_region()
+        && let Some(region) = game.find_region(source.get_region_id())
     {
-        return terminal(QueuedSkillExecutionState::Pending);
+        let _ = game.send_game_shape_around(region.base(), source, None, &message);
     }
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    send_visual(game, player_id, level, 3, None);
-    if let Some(state) = game.player_skill_state_mut::<ChainLightningExecutionState>(player_id, CHAIN_LIGHTNING_SKILL_ID) {
-        let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
-    }
-    finish_player_chain_lightning(game, player_id, player_ai, runtime);
-    terminal(QueuedSkillExecutionState::Completed)
 }

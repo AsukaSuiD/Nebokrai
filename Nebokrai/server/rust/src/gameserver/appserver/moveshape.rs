@@ -777,6 +777,50 @@ impl MoveShapeSkill {
         }
     }
 
+    pub(crate) fn lightning_progress(&self) -> Option<&super::skills::lightning::LightningProgress> {
+        match &self.execution {
+            RegisteredSkillExecution::Player(PlayerSkillExecution::Lightning(state)) => Some(state.progress()),
+            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_ref()? {
+                super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn lightning_progress_mut(&mut self) -> Option<&mut super::skills::lightning::LightningProgress> {
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(PlayerSkillExecution::Lightning(state)) => Some(state.progress_mut()),
+            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_mut()? {
+                super::monster::MonsterSkillProgress::Lightning(state) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn chain_lightning_progress(&self) -> Option<&super::skills::chainlightning::ChainLightningProgress> {
+        match &self.execution {
+            RegisteredSkillExecution::Player(PlayerSkillExecution::ChainLightning(state)) => Some(state.progress()),
+            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_ref()? {
+                super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn chain_lightning_progress_mut(&mut self) -> Option<&mut super::skills::chainlightning::ChainLightningProgress> {
+        match &mut self.execution {
+            RegisteredSkillExecution::Player(PlayerSkillExecution::ChainLightning(state)) => Some(state.progress_mut()),
+            RegisteredSkillExecution::Monster(execution) => match execution.progress.as_mut()? {
+                super::monster::MonsterSkillProgress::ChainLightning(state) => Some(state),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub(crate) fn execution_stage(&self) -> Option<super::skills::kernel::SkillStage> {
         match &self.execution {
             RegisteredSkillExecution::Player(execution) => Some(execution.kernel().stage()),

@@ -222,7 +222,7 @@ player_skill_states! {
     Scorpion(ScorpionExecutionState) prepare(prepare_derived_end),
     BoaLock(BoaLockExecutionState) prepare(prepare_derived_end),
     TargetedProjectile(TargetedProjectileExecutionState) prepare(prepare_derived_end),
-    ChainLightning(ChainLightningExecutionState),
+    ChainLightning(ChainLightningExecutionState) paths(clear_end_paths),
     KnightCut(KnightCutExecutionState),
     Rage(RageExecutionState),
     Flash(FlashExecutionState) paths(clear_end_paths),
@@ -237,7 +237,7 @@ player_skill_states! {
     BossBlueQuake(PlayerBossBlueQuakeExecutionState),
     BossFiendPenetrate(PlayerBossFiendPenetrateExecutionState) paths(clear_end_paths),
     SpriteBurn(SpriteBurnExecutionState),
-    Lightning(LightningExecutionState),
+    Lightning(LightningExecutionState) prepare(prepare_derived_end),
     Seal(SealExecutionState),
 }
 
