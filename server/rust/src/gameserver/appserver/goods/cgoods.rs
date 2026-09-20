@@ -320,10 +320,9 @@ impl CGoods {
         let da_kong_count = self
             .addon_properties
             .iter()
-            .filter(|property| {
-                base.get_addon_property_values(property.property_type)
-                    .is_empty()
-            })
+            // QueryNoInSelfPropertyType (VA 0x004CB7C0) проверяет наличие
+            // типа в каталоге, даже если у него пустой список значений.
+            .filter(|property| !base.has_addon_property(property.property_type))
             .count();
         let normal_count = self.addon_properties.len().saturating_sub(da_kong_count);
         let mut writer = LegacyWriter::new(destination);

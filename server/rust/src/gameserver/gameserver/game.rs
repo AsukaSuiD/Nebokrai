@@ -282,6 +282,10 @@
 //! `0xEF201`, обходит все подтверждённые goods containers и выполняет
 //! equipment-state `2→3` с `0xBF928`. Save/faction/region/release callers
 //! используют один обратный codec с live companion snapshot.
+//! Хвост BF401: оригинальный GameServer `OnLogMessage` VA `0x0049FBB8–0x0049FE0E`
+//! копирует исходные байты имени, затем передаёт ResourceID и биты expScale.
+//! Совпадающий EXE/PDB задаёт `m_lResourceID` по `region+0x64`, `m_fExpScale`
+//! по `+0x68`; размеры находятся по `+0x6C/+0x70` и в этот хвост не входят.
 //! Pending login теперь начинается реальным client `0x8F702` caller-ом и
 //! хранит validate/sequence owners в `CGame`: exact `0xBF402/0xBF403` идут до
 //! decode, reject/OnLost/Kick очищают state, а Release закрывает остатки.
@@ -17883,15 +17887,15 @@ impl CGame {
             let mut changed = CMessage::new(0x000b_f505);
             changed.add_long(400);
             changed.add_long(player_id);
+            changed.add_long(use_goods);
             changed.add_long(target_region_id);
-            changed.add_long(target.region.region_type());
             changed.add_long(tile_x);
             changed.add_long(tile_y);
             changed.add_long(direction);
-            add_legacy_c_string(changed.base_mut(), target.region.file_name());
-            changed.add_long(target.region.resource_id());
+            add_legacy_c_string(changed.base_mut(), target.region.get_name());
+            changed.add_long(target.region.region_type());
             changed.add_long(target.war_region_type);
-            changed.add_byte(target.country);
+            changed.add_long(target.region.resource_id());
             changed.add_ulong(target.region.exp_scale_bits());
             let region_delivery = Some(send_around(
                 self,
@@ -29890,7 +29894,8 @@ impl CGame {
         let mut sequence_position = None;
         let mut sequence_elements = 0usize;
         let mut sequence_delivery = None;
-        if !self.sequence_registry.is_empty() {
+        // OnLogMessage VA 0x49F6CC..0x49F6F9 проверяет настройку и реестр.
+        if self.setup.sequence_count != 0 && !self.sequence_registry.is_empty() {
             if self.login_sequences.remove(&player_id).is_some() {
                 return Err(GamePlayerLoginPreludeError::DuplicateSequenceOwner { player_id });
             }
@@ -30559,6 +30564,7 @@ impl CGame {
                     goods_factory,
                     skill_factory,
                     quest_system,
+                    self.globe_setup.da_kong_key(),
                     level_experience,
                     country_identity,
                     team_member_count,
@@ -30575,11 +30581,11 @@ impl CGame {
             .expect("login уже проверил region owner")
             .base();
         let region_snapshot = (
-            region.name.as_bytes().to_vec(),
+            region.region.get_name().to_vec(),
             region.region.region_type(),
             region.war_region_type,
-            region.region.width(),
-            region.region.height(),
+            region.region.resource_id(),
+            region.region.exp_scale_bits() as i32,
         );
         let mut initial = CMessage::new(0x000b_f401);
         initial.add_long(expected_player_id);
@@ -45875,8 +45881,8 @@ impl CGame {
             trace_message_dispatch("skill", message_type, &result);
         } else if let Some(result) = dispatch_game_team_message(message, self) {
             trace_message_dispatch("team", message_type, &result);
-        } else if dispatch_game_region_message(message, self, runtime).is_some() {
-            trace_message_dispatch_success("region", message_type);
+        } else if let Some(result) = dispatch_game_region_message(message, self, runtime) {
+            trace_message_dispatch("region", message_type, &result);
         } else if let Some(result) = dispatch_game_shape_message(message, self, runtime) {
             trace_message_dispatch("shape", message_type, &result);
         } else if let Some(result) = dispatch_game_other_message(message, self, runtime) {

@@ -12,7 +12,13 @@
 //! `CPlayer::ChangeRegion` с игровыми, пространственными и локальными/World
 //! wire-эффектами. Диагностический исход публикуется через `tracing` после
 //! синхронного выполнения эффектов.
+//! Локальный клиент `Miracle game.exe` дополнительно пишет перед аргументом
+//! `8F801` C-строку: VA `0x414CD0/0x414CDD`, вызов после `BF401` в
+//! `0x54A9E0`. Её смысл UNKNOWN; принимается только строка с NUL и ровно
+//! четырьмя байтами аргумента после неё. Оригинальный Game читает один long
+//! в VA `0x5BB37B`; этот четырёхбайтовый вариант также сохраняется.
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::shape::SHAPE_CHANGE_REGION;
 use crate::gameserver::gameserver::game::CGame;
@@ -26,7 +32,35 @@ const CHANGE_CONNECTED_REGION: u32 = 0x0008_f805;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameRegionMessageError {
     InvalidPayloadSize { expected: usize, actual: usize },
+    MissingEntryStringTerminator,
     MissingArgument,
+}
+
+fn read_region_argument(
+    message: &mut CMessage,
+    message_type: u32,
+) -> Result<i32, GameRegionMessageError> {
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let mut reader = LegacyReader::at(source, *cursor)
+        .map_err(|_| GameRegionMessageError::MissingArgument)?;
+    let actual = reader.remaining();
+    if message_type == ENTER_CHANGED_REGION && actual > 4 {
+        // Не ищем NUL внутри завершающего i32: это отдельное поле.
+        reader
+            .read_c_string(actual - 4)
+            .map_err(|_| GameRegionMessageError::MissingEntryStringTerminator)?;
+    }
+    if reader.remaining() != 4 {
+        return Err(GameRegionMessageError::InvalidPayloadSize {
+            expected: 4,
+            actual: reader.remaining(),
+        });
+    }
+    let argument = reader
+        .read_i32()
+        .map_err(|_| GameRegionMessageError::MissingArgument)?;
+    *cursor = reader.position();
+    Ok(argument)
 }
 
 pub(crate) fn dispatch_game_region_message<Context>(
@@ -41,23 +75,13 @@ where
     if !matches!(message_type, ENTER_CHANGED_REGION | CHANGE_CONNECTED_REGION) {
         return None;
     }
-    let actual = message
-        .base_mut()
-        .as_wire_bytes()
-        .len()
-        .saturating_sub(message.base_mut().cursor());
-    if actual != 4 {
-        return Some(Err(GameRegionMessageError::InvalidPayloadSize {
-            expected: 4,
-            actual,
-        }));
-    }
+    let argument = match read_region_argument(message, message_type) {
+        Ok(argument) => argument,
+        Err(error) => return Some(Err(error)),
+    };
     message.resolve_player_context(game);
     let player_id = message.player_id();
     let region_id = message.region_id();
-    let Some(argument) = message.base_mut().get_long() else {
-        return Some(Err(GameRegionMessageError::MissingArgument));
-    };
     if message_type == ENTER_CHANGED_REGION {
         let applied = match (player_id, region_id) {
             (Some(player_id), Some(region_id)) => game.enter_changed_player_region(

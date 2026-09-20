@@ -1,22 +1,27 @@
 //! Конфигурация CiQing Miracle.
 //!
-//! `CCiQingSetup::ReadSetupFile/AddByteToArray` подтверждены точными
-//! World/Game EXE/PDB, а `DeByteFromArray` —
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner:
-//! `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`. Exact compose lookup и
-//! `RandChoise` используют insertion order и отдельный `random(0x2711)`;
-//! применение к player остаётся у GameServer owner-а.
+//! Источник: `original/server/Miracle_server/`, WorldServer
+//! `Nworldserver.exe + WorldServer.pdb`: `CCiQingSetup::ReadSetupFile`
+//! VA `0x4877F0`, `AddByteToArray` VA `0x486080`; GameServer
+//! `gameserver.exe + GameServer.pdb`: `AddByteToArray` VA `0x4E4740`,
+//! `DeByteFromArray` VA `0x4E6110`. ImageBase обоих EXE — `0x400000`.
+//! Исходный owner: `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`.
+//! Поиск рецепта сохраняет порядок записей, а `RandChoise` использует
+//! отдельный `random(0x2711)`; применение к игроку остаётся у GameServer.
 //!
-//! Wire содержит три insertion-order секции: make records по шесть `u32`,
-//! compose records и improve records по три `u32`; все counts signed `i32`.
-//! Compose точно передаёт `source_a` дважды, затем `source_b, money,
-//! probability, crystal, result_count` и пары `probability/result`. Это не
-//! исправлено как опечатка: оригинал World serializer и Game decoder совместно
-//! подтверждают наблюдаемый positional quirk. Rust хранит named поля и `Vec`,
-//! но пишет доказанный порядок явно little-endian. Declared result count
-//! остаётся частью owner-state, тогда как wire, как оригинал, берёт реальный
-//! размер result-vector. Невозможный signed count блокирует append до изменения
-//! destination.
+//! Общий формат World → Game → клиент описан в
+//! `docs/protocol/opcode-catalog.md`, раздел конфигурации CiQing. Game writer
+//! VA `0x4E4800..0x4E4852` пишет шесть отдельных полей `stComposeNode`
+//! по смещениям `0, 4, 8, 0x10, 0x0C, 0x14`, затем размер result-vector.
+//! GameServer.pdb, тип `CCiQingSetup::stComposeNode` (`0xD48C`), подтверждает
+//! отдельные source A/B и `dwResultNum` по `+0x14`: дубля source A нет.
+//! Клиент `Miracle game.exe` (SHA-256
+//! `5b41ebfcea8c40ab8756e3fb676c8e03ec1f45fba527f33bc163b084cf520971`),
+//! decoder VA `0x4684A0`, читает ту же часть в `0x468603..0x468662`.
+//! Объявленное число результатов сохраняется как самостоятельный `u32`;
+//! число читаемых пар задаёт следующий счётчик. Rust ограничивает длины
+//! списков диапазоном `i32`; непредставимая длина блокирует append до
+//! изменения destination.
 //!
 //! Text-loader открывает точный `/data/ciqing.ini`: при отсутствующем ресурсе
 //! прежнее состояние сохраняется, а после успешного open сначала очищаются все
@@ -29,9 +34,8 @@
 //! не переносить конфигурационный DoS/OOM как часть поведения Miracle.
 //! Game decoder очищает три vector-а, сохраняет только полные records и
 //! безопасно трактует отрицательные counts как пустые секции вместо legacy
-//! unbounded-read. Второй `source_a` wire scalar читается и намеренно
-//! отбрасывается: парный serializer всегда дублирует первый, а named owner не
-//! назначает несовместимому payload придуманную игровую семантику.
+//! unbounded-read. Все скалярные поля compose сохраняются отдельно; ни source B,
+//! ни объявленное число результатов не восстанавливаются из соседнего поля.
 
 use std::error::Error;
 use std::fmt;
@@ -253,11 +257,11 @@ impl CCiQingSetup {
                 &mut payload,
                 &[
                     node.source_a_base_index,
-                    node.source_a_base_index,
                     node.source_b_base_index,
-                    node.money,
                     node.compose_probability,
                     node.crystal_count,
+                    node.money,
+                    node.declared_result_count,
                 ],
             );
             write_ciqing_count(
@@ -312,12 +316,12 @@ impl CCiQingSetup {
         let compose_count = read_wire_i32(source, cursor, "compose count")?;
         for _ in 0..compose_count.max(0) {
             let source_a_base_index = read_wire_u32(source, cursor, "compose source A base index")?;
-            let _duplicated_source_a =
-                read_wire_u32(source, cursor, "compose duplicated source A")?;
             let source_b_base_index = read_wire_u32(source, cursor, "compose source B base index")?;
-            let money = read_wire_u32(source, cursor, "compose money")?;
             let compose_probability = read_wire_u32(source, cursor, "compose probability")?;
             let crystal_count = read_wire_u32(source, cursor, "compose crystal count")?;
+            let money = read_wire_u32(source, cursor, "compose money")?;
+            let declared_result_count =
+                read_wire_u32(source, cursor, "compose declared result count")?;
             let result_count = read_wire_i32(source, cursor, "compose result count")?;
             let mut results = Vec::new();
             for _ in 0..result_count.max(0) {
@@ -332,7 +336,7 @@ impl CCiQingSetup {
                 compose_probability,
                 money,
                 crystal_count,
-                declared_result_count: result_count.max(0) as u32,
+                declared_result_count,
                 results,
             });
         }

@@ -3774,6 +3774,7 @@ impl CPlayer {
         goods_factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
         quest_system: &CQuestSystem,
+        da_kong_enabled: bool,
         level_experience: u32,
         country_identity: u8,
         team_member_count: usize,
@@ -3832,7 +3833,7 @@ impl CPlayer {
             writer.write_u8(u8::from(base.goods_type() == GOODS_TYPE_EQUIPMENT));
             writer.write_u16(goods.amount() as u16);
             writer.write_u8(0);
-            goods.serialize_for_old_client(&mut payload, goods_factory, true).then_some(())?;
+            goods.serialize_for_old_client(&mut payload, goods_factory, da_kong_enabled).then_some(())?;
         } else {
             payload.push(0);
         }
@@ -3840,13 +3841,13 @@ impl CPlayer {
         let equipment = self.equipment.traversing_goods();
         LegacyWriter::new(&mut payload).write_i32(i32::try_from(equipment.len()).ok()?);
         for (column, goods) in equipment {
-            goods.serialize_for_old_client(&mut payload, goods_factory, true).then_some(())?;
+            goods.serialize_for_old_client(&mut payload, goods_factory, da_kong_enabled).then_some(())?;
             LegacyWriter::new(&mut payload).write_u32(column.position());
         }
-        append_old_client_volume(&mut payload, &self.auction_goods, goods_factory)?;
-        append_old_client_volume(&mut payload, &self.packet, goods_factory)?;
-        append_old_client_volume(&mut payload, &self.auction_listing, goods_factory)?;
-        append_old_client_volume(&mut payload, self.fairy_container.base(), goods_factory)?;
+        append_old_client_volume(&mut payload, &self.auction_goods, goods_factory, da_kong_enabled)?;
+        append_old_client_volume(&mut payload, &self.packet, goods_factory, da_kong_enabled)?;
+        append_old_client_volume(&mut payload, &self.auction_listing, goods_factory, da_kong_enabled)?;
+        append_old_client_volume(&mut payload, self.fairy_container.base(), goods_factory, da_kong_enabled)?;
 
         for (amount, goods) in [
             (self.wallet.currency_amount(), self.wallet.goods()),
@@ -3885,9 +3886,10 @@ impl CPlayer {
             &mut payload,
             self.battle_fairy_container.base(),
             goods_factory,
+            da_kong_enabled,
         )?;
-        append_old_client_volume(&mut payload, &self.ci_qing_compose, goods_factory)?;
-        append_old_client_volume(&mut payload, &self.ci_qing, goods_factory)?;
+        append_old_client_volume(&mut payload, &self.ci_qing_compose, goods_factory, da_kong_enabled)?;
+        append_old_client_volume(&mut payload, &self.ci_qing, goods_factory, da_kong_enabled)?;
         {
             let quest_state = self.quest_states.get(&(ci_qing_quest_id as u16)).copied();
             if quest_state == Some(1) {
@@ -14127,14 +14129,23 @@ fn append_old_client_volume(
     destination: &mut Vec<u8>,
     container: &CVolumeLimitGoodsContainer,
     goods_factory: &CGoodsFactory,
+    da_kong_enabled: bool,
 ) -> Option<()> {
-    let goods: Vec<_> = (0..container.size())
-        .filter_map(|position| container.get_goods(position))
-        .collect();
+    // CPacketListener::OnTraversingContainer, VA 0x0042D35A–0x0042D3BF:
+    // префикс содержит признак экипировки, количество и младший байт
+    // позиции QueryGoodsPosition. Все семь контейнеров используют его;
+    // клиент аукциона пропускает первые три байта, но читает четвёртый.
+    let goods: Vec<_> = container.base().traversing_goods().collect();
     LegacyWriter::new(destination).write_i32(i32::try_from(goods.len()).ok()?);
     for goods in goods {
+        let position = container.query_goods_position(goods.identity().ex_id)?;
+        let base = goods_factory.query_goods_base_properties(goods.base_properties_index())?;
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_u8(u8::from(base.goods_type() == GOODS_TYPE_EQUIPMENT));
+        writer.write_u16(goods.amount() as u16);
+        writer.write_u8(position as u8);
         goods
-            .serialize_for_old_client(destination, goods_factory, true)
+            .serialize_for_old_client(destination, goods_factory, da_kong_enabled)
             .then_some(())?;
     }
     Some(())
