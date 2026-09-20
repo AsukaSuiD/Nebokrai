@@ -42,6 +42,12 @@
 //! `TalkBoxSmall` сохраняет экземпляр до ответа клиента, а `random` расходует
 //! общий поток MSVCRT. Сброс боевой феи не создаёт отдельное теневое состояние
 //! виртуальной машины.
+//!
+//! Присваивание общей переменной использует `CGame::set_script_general_variable_*`:
+//! после локального `SetVarValue` найденное имя отправляется World в `0x5FA05`.
+//! Это `DispatchCommand` RVA `0x00025200` и обе `UpdateToWorldServer`
+//! RVA `0x000250E0` / `0x00025170` из точной пары GameServer EXE/PDB ниже.
+//! Echo `0x7F805` применяет только локальный setter и не создаёт новую отправку.
 
 use std::collections::BTreeMap;
 
@@ -1211,7 +1217,7 @@ impl<'a> CScript<'a> {
                     return Some(true);
                 }
             }
-            game.set_general_variable_integer(name, value);
+            game.set_script_general_variable_integer(name, value);
             return Some(true);
         }
         if name.starts_with(b"#") {
@@ -1236,7 +1242,7 @@ impl<'a> CScript<'a> {
                     return Some(true);
                 }
             }
-            game.set_general_variable_string(name, &value);
+            game.set_script_general_variable_string(name, &value);
             return Some(true);
         }
         None

@@ -7,6 +7,7 @@
 | [server/rust/](../../server/rust/) | Основной Rust-сервер; пакет и шесть бинарников объявлены в [Cargo.toml](../../server/rust/Cargo.toml). |
 | [server/cpp/](../../server/cpp/) | Отдельная C++-реализация с [CMake](../../server/cpp/CMakeLists.txt) и [vcpkg](../../server/cpp/vcpkg.json). В Rust-пакет и гибридный стенд не входит. |
 | [deploy/hybrid/](../../deploy/hybrid/) | Образы, Compose и подготовка локального стенда. |
+| [deploy/check-rust.ps1](../../deploy/check-rust.ps1) | Проверка типов и библиотечные тесты Rust в локальном Docker Desktop с отдельным ограничиваемым кэшем. |
 | [docs/](../README.md) | Руководство разработчика и справочные страницы. |
 | `runtime/` | Локальные настройки служб, игровые ресурсы, backup БД и GameServer для стенда. |
 | `original/server/` | Оригинальный Windows-комплект сервера. Для сборки основного кода не требуется. |

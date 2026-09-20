@@ -20,6 +20,9 @@
 //! обязательный codec старого клиента для создания валютных товаров. Порядок
 //! эффектов сохраняется внутри owner-а, а диагностическая история публикуется
 //! через `tracing` вместо возвращаемого дерева.
+//! Общий отказ `0xFF003` содержит только buyer/seller/result (12 байтов),
+//! как формирует `CBillingPlayerManager::run`. Балансы и trade_type читаются
+//! только при result == 0; короткий отказ не меняет кошельки и сеансы.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
@@ -68,6 +71,45 @@ pub(crate) enum IncrementShopBillingMessageError {
     AuctionNodeSerialize(crate::public::auctionnode::GoodsNodeSerializeError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BillingTradeResponsePrefix {
+    Rejected {
+        buyer_id: i32,
+        seller_id: i32,
+        result: i32,
+    },
+    Success {
+        trade_type: i32,
+    },
+}
+
+// Предварительное чтение не сдвигает курсор CMessage: успешный ответ целиком
+// разбирает прежний обработчик, сохраняя порядок его прикладных эффектов.
+fn read_billing_trade_response_prefix(
+    source: &[u8],
+) -> Result<BillingTradeResponsePrefix, IncrementShopBillingMessageError> {
+    let mut reader = LegacyReader::new(source);
+    let mut read_long = |field| {
+        reader
+            .read_i32()
+            .map_err(|_| IncrementShopBillingMessageError::MissingField(field))
+    };
+    let buyer_id = read_long("billing trade buyer id")?;
+    let seller_id = read_long("billing trade seller id")?;
+    let result = read_long("billing trade result")?;
+    if result != 0 {
+        return Ok(BillingTradeResponsePrefix::Rejected {
+            buyer_id,
+            seller_id,
+            result,
+        });
+    }
+    let _buyer_yuan_bao = read_long("billing trade buyer yuan bao")?;
+    let _seller_yuan_bao = read_long("billing trade seller yuan bao")?;
+    let trade_type = read_long("billing trade type")?;
+    Ok(BillingTradeResponsePrefix::Success { trade_type })
+}
+
 pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
@@ -80,15 +122,18 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
         return Some(dispatch_billing_refresh(message, game));
     }
     if message.message_type() == BILLING_TRADE_RESPONSE {
-        let unread = message.unread_bytes();
-        if unread.len() < 24 {
-            return Some(Err(IncrementShopBillingMessageError::MissingField(
-                "auction billing prefix",
-            )));
-        }
-        let trade_type = LegacyReader::at(unread, 20)
-            .and_then(|mut reader| reader.read_i32())
-            .expect("проверенный Billing trade prefix");
+        let trade_type = match read_billing_trade_response_prefix(message.unread_bytes()) {
+            Ok(BillingTradeResponsePrefix::Rejected {
+                buyer_id,
+                seller_id,
+                result,
+            }) => {
+                warn!(buyer_id, seller_id, result, "Billing отклонил сделку");
+                return Some(Ok(()));
+            }
+            Ok(BillingTradeResponsePrefix::Success { trade_type }) => trade_type,
+            Err(error) => return Some(Err(error)),
+        };
         if trade_type == 2 {
             return Some(dispatch_player_billing_trade(message, game, context));
         }
@@ -501,4 +546,55 @@ fn log_billing_failure(socket_id: i32, operation: &str, result: i32) {
     let line = format!("{socket_id} : Receive {operation} : (RES){result}...");
     eprintln!("{line}");
     put_string_to_file("Bill", line.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BillingTradeResponsePrefix, IncrementShopBillingMessageError,
+        read_billing_trade_response_prefix,
+    };
+
+    #[test]
+    fn short_failure_needs_only_buyer_seller_and_result() {
+        for result in [-1_i32, 1, 6] {
+            // Точный отказ CBillingPlayerManager: без балансов и trade_type.
+            let payload: Vec<u8> = [101_i32, 202, result]
+                .into_iter()
+                .flat_map(i32::to_le_bytes)
+                .collect();
+            assert_eq!(payload.len(), 12);
+            assert_eq!(
+                read_billing_trade_response_prefix(&payload),
+                Ok(BillingTradeResponsePrefix::Rejected {
+                    buyer_id: 101,
+                    seller_id: 202,
+                    result,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_success_requires_both_balances_and_trade_type() {
+        for trade_type in [1_i32, 2, 3] {
+            let payload: Vec<u8> = [101_i32, 202, 0, 700, 900, trade_type]
+                .into_iter()
+                .flat_map(i32::to_le_bytes)
+                .collect();
+            for length in 0..payload.len() {
+                assert!(
+                    matches!(
+                        read_billing_trade_response_prefix(&payload[..length]),
+                        Err(IncrementShopBillingMessageError::MissingField(_))
+                    ),
+                    "неполный успешный префикс принят: type={trade_type}, bytes={length}"
+                );
+            }
+            assert_eq!(
+                read_billing_trade_response_prefix(&payload),
+                Ok(BillingTradeResponsePrefix::Success { trade_type })
+            );
+        }
+    }
 }

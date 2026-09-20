@@ -29,6 +29,8 @@ Login принимает клиента и выбирает путь входа;
 
 Совпадения названия недостаточно: сравните формат, порядок действий, ошибки, время жизни и частичные эффекты. Если требования совпадают, используйте существующее решение. Если расходятся, укажите конкретную причину отдельного пути. Этот принцип принят в [ADR-0007](decisions/0007-reuse-existing-mechanisms.md); он не объявляет каждое текущее дублирование образцом для нового кода.
 
+При переносе поля или формулы между подсистемами проверьте [значения и совместимость](architecture/values-and-compatibility.md): один `i32` может быть ID, сроком или кодом отказа, а одинаковое слово «строка» не определяет кодировку. Там же описаны существующие часы и общий игровой поток случайных чисел.
+
 ## От задачи к коду
 
 | Задача | Начальная точка | Что проследить дальше |
@@ -37,8 +39,10 @@ Login принимает клиента и выбирает путь входа;
 | Разобрать ошибку авторизации | [Login logmessage](../server/rust/src/loginserver/applogin/message/logmessage.rs) | Очередь Login → Auth/GAS → ответ; [описание входа](server/auth-login-and-services.md). |
 | Добавить или исправить сообщение Game | [CGame::run_incoming_message](../server/rust/src/gameserver/gameserver/game.rs) | Обработчик в `appserver/message/`, отправитель, получатель и [каталог opcode](protocol/opcode-catalog.md). |
 | Исправить движение | [shapemessage](../server/rust/src/gameserver/appserver/message/shapemessage.rs) | `CPlayerAI` → игровой AI-проход → `CMoveShape` → регион; [правила движения](gameplay/movement.md). |
+| Изменить видимость или переход игрока | [regionmessage](../server/rust/src/gameserver/appserver/message/regionmessage.rs), [CServerRegion](../server/rust/src/gameserver/appserver/serverregion.rs) | Индекс областей, адресаты, отложенный вход и удалённый маршрут; [регионы и видимость](gameplay/regions-and-visibility.md). |
 | Восстановить навык | [skillmessage](../server/rust/src/gameserver/appserver/message/skillmessage.rs) | Экземпляр навыка, фабрика, Begin/AI/End, конкретные эффекты; [модель навыков](gameplay/skills.md). |
 | Изменить характеристику или наложенный эффект | [states/state.rs](../server/rust/src/gameserver/appserver/states/state.rs), [player.rs](../server/rust/src/gameserver/appserver/player.rs) | Полный пересчёт, время жизни экземпляра и снятие; [атрибуты и состояния](gameplay/attributes-and-states.md). |
+| Изменить награду, повышение уровня или возрождение | [Game CGame](../server/rust/src/gameserver/gameserver/game.rs), [CPlayer](../server/rust/src/gameserver/appserver/player.rs) | Событие смерти, выбор получателя, начисление, сценарий и публикация; [смерть и развитие](gameplay/death-and-progression.md). |
 | Добавить сценарную команду или прогресс задания | [script/function.rs](../server/rust/src/gameserver/appserver/script/function.rs), [Game CGame](../server/rust/src/gameserver/gameserver/game.rs) | Реестр → аргументы → исполнение → ожидание/результат → сохранение; [сценарии](gameplay/scripting.md), [задания](gameplay/quests.md). |
 | Изменить предмет или перенос | [goodsmessage](../server/rust/src/gameserver/appserver/message/goodsmessage.rs), [containermessage](../server/rust/src/gameserver/appserver/message/containermessage.rs) | Владелец предмета, контейнер, блокировки, события и сохранение; [предметы](gameplay/items.md). |
 | Изменить загрузку или сохранение | [World player](../server/rust/src/worldserver/appworld/player.rs), [savedb](../server/rust/src/worldserver/worldserver/savedb.rs) | Снимок, очередь, конкретный модуль `dbaccess/worlddb/`; [жизненный цикл персонажа](gameplay/player-lifecycle.md). |

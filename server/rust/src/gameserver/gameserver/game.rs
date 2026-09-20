@@ -15088,7 +15088,9 @@ impl CGame {
         message.add_long(self.login_server_id);
         message.add_long(self.world_server_id);
         message.base_mut().add_guid(CGuid::GUID_INVALID);
-        message.send(self, false)
+        // GameServer EXE/PDB: вызов RVA 0x001BB036 для 0xEF203/type 2
+        // ведёт к CMessage::SendToBS (RVA 0x00013BE0), а не Send/World.
+        message.send_to_bs(self, false)
     }
 
     fn send_trade_notice(&self, session_id: i32, string_id: &[u8]) -> Vec<i32> {
@@ -16953,7 +16955,12 @@ impl CGame {
         &self.general_variables
     }
 
-    pub(crate) fn set_general_variable_integer(&mut self, name: &[u8], value: i32) {
+    /// Применяет значение к локальной копии, в том числе при echo `0x7F805`.
+    pub(crate) fn set_general_variable_integer(
+        &mut self,
+        name: &[u8],
+        value: i32,
+    ) -> GameVariableMutationOutcome {
         let outcome = self.general_variables.set_integer(name, 0, value);
         tracing::trace!(
             name_bytes = name.len(),
@@ -16961,15 +16968,69 @@ impl CGame {
             ?outcome,
             "целая общая переменная изменена"
         );
+        outcome
     }
 
-    pub(crate) fn set_general_variable_string(&mut self, name: &[u8], value: &[u8]) {
+    /// Применяет строку без обратной отправки полученного World-обновления.
+    pub(crate) fn set_general_variable_string(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+    ) -> GameVariableMutationOutcome {
         let outcome = self.general_variables.set_string(name, value);
         tracing::trace!(
             name_bytes = name.len(),
             value_bytes = value.len(),
             ?outcome,
             "строковая общая переменная изменена"
+        );
+        outcome
+    }
+
+    /// `CScript::DispatchCommand` сначала меняет локальную общую переменную,
+    /// затем вызывает `UpdateToWorldServer(name, int)` для найденного имени.
+    /// GameServer EXE/PDB, `script.cpp`: RVA `0x00025200` и `0x000250E0`;
+    /// точные тела сохранены в `appserver/script/script.rs`.
+    /// Отсутствие World не откатывает локальное присваивание. `TypeMismatch`
+    /// остаётся найденным именем, как и в ветвях локальных/персональных переменных.
+    pub(crate) fn set_script_general_variable_integer(&mut self, name: &[u8], value: i32) {
+        if matches!(
+            self.set_general_variable_integer(name, value),
+            GameVariableMutationOutcome::NameNotFound
+        ) {
+            return;
+        }
+        let mut message = CMessage::new(0x0005_FA05);
+        message.add_long(1);
+        add_legacy_c_string(message.base_mut(), name);
+        message.add_long(value);
+        let delivery = message.send(self, false);
+        tracing::trace!(
+            name_bytes = name.len(),
+            ?delivery,
+            "результат отправки целого сценарного присваивания World"
+        );
+    }
+
+    /// Строковая перегрузка `CScript::UpdateToWorldServer`, GameServer
+    /// EXE/PDB, `script.cpp`, RVA `0x00025170`. Tag `3`, имя и значение —
+    /// C-строки; применяется тот же общий World send-путь без приоритета.
+    pub(crate) fn set_script_general_variable_string(&mut self, name: &[u8], value: &[u8]) {
+        if matches!(
+            self.set_general_variable_string(name, value),
+            GameVariableMutationOutcome::NameNotFound
+        ) {
+            return;
+        }
+        let mut message = CMessage::new(0x0005_FA05);
+        message.add_long(3);
+        add_legacy_c_string(message.base_mut(), name);
+        add_legacy_c_string(message.base_mut(), value);
+        let delivery = message.send(self, false);
+        tracing::trace!(
+            name_bytes = name.len(),
+            ?delivery,
+            "результат отправки строкового сценарного присваивания World"
         );
     }
 
@@ -17604,6 +17665,24 @@ impl CGame {
         carriage_distance: i32,
         context: &mut Context,
     ) -> PlayerRegionChangeOutcome {
+        // Игрок и исходный регион извлечены из карт на время перехода.
+        // Передаём их напрямую, сохраняя общий выбор соседей и участников команды.
+        let send_around = |game: &CGame,
+                           region: &CServerRegion,
+                           player: &CPlayer,
+                           message: &CMessage|
+         -> Result<i32, ShapeCoordinateBlock> {
+            let Some(runtime) = GameServerAroundRuntime::new(
+                game,
+                &game.session_factory,
+                game.globe_setup.area_width(),
+                game.globe_setup.area_height(),
+            ) else {
+                return Ok(0);
+            };
+            message.send_to_around(Some(region), player.shape(), None, &runtime.with_player(player))
+        };
+
         let mut position_delivery = None;
         let mut direction_delivery = None;
         let mut faction_delivery = None;
@@ -17712,10 +17791,10 @@ impl CGame {
                 movement.add_long(tile_x);
                 movement.add_long(tile_y);
                 movement.add_long(use_goods);
-                position_delivery = Some(self.send_game_shape_around(
+                position_delivery = Some(send_around(
+                    self,
                     source_owner.base(),
-                    player.shape(),
-                    None,
+                    &player,
                     &movement,
                 ));
                 let facts = player.movement_position_facts(
@@ -17735,10 +17814,10 @@ impl CGame {
                 changed.add_byte(direction as u8);
                 changed.add_long(400);
                 changed.add_long(player_id);
-                direction_delivery = Some(self.send_game_shape_around(
+                direction_delivery = Some(send_around(
+                    self,
                     source_owner.base(),
-                    player.shape(),
-                    None,
+                    &player,
                     &changed,
                 ));
             }
@@ -17811,10 +17890,10 @@ impl CGame {
             changed.add_long(target.war_region_type);
             changed.add_byte(target.country);
             changed.add_ulong(target.region.exp_scale_bits());
-            let region_delivery = Some(self.send_game_shape_around(
+            let region_delivery = Some(send_around(
+                self,
                 source_owner.base(),
-                player.shape(),
-                None,
+                &player,
                 &changed,
             ));
 
@@ -47287,3 +47366,52 @@ fn shape_view(
 //
 
 // COMPONENT_VARIANT_END: GameServer
+
+#[cfg(test)]
+mod general_variable_tests {
+    use super::{CGame, CMyNetClient};
+
+    #[test]
+    fn script_updates_publish_but_world_echo_does_not() {
+        let mut game = CGame::new();
+        game.world_client = Some(CMyNetClient::new());
+        game.general_variables.add_integer(b"$counter", 0);
+        game.general_variables.add_string(b"#message", b"before");
+
+        game.set_script_general_variable_integer(b"$counter", 7);
+        game.set_script_general_variable_string(b"#message", b"after");
+        assert_eq!(game.general_variables.integer(b"$counter", 0), Some(7));
+        assert_eq!(game.general_variables.string(b"#message"), Some(&b"after"[..]));
+        assert_eq!(game.world_client().unwrap().send_queue().pending(), 2);
+
+        // Именно локальные setters вызывает приёмник World `0x7F805`.
+        game.set_general_variable_integer(b"$counter", 9);
+        game.set_general_variable_string(b"#message", b"echo");
+        assert_eq!(game.general_variables.integer(b"$counter", 0), Some(9));
+        assert_eq!(game.general_variables.string(b"#message"), Some(&b"echo"[..]));
+        assert_eq!(game.world_client().unwrap().send_queue().pending(), 2);
+
+        game.set_script_general_variable_integer(b"$unknown", 1);
+        game.set_script_general_variable_string(b"#unknown", b"value");
+        assert_eq!(game.world_client().unwrap().send_queue().pending(), 2);
+
+        // Совпавшее имя с другим типом не является NameNotFound.
+        game.set_script_general_variable_integer(b"#message", 10);
+        assert_eq!(game.general_variables.string(b"#message"), Some(&b"echo"[..]));
+        assert_eq!(game.world_client().unwrap().send_queue().pending(), 3);
+    }
+
+    #[test]
+    fn absent_world_does_not_rollback_local_script_assignment() {
+        let mut game = CGame::new();
+        game.general_variables.add_integer(b"$counter", 0);
+        game.general_variables.add_string(b"#message", b"before");
+
+        game.set_script_general_variable_integer(b"$counter", -5);
+        game.set_script_general_variable_string(b"#message", b"after");
+
+        assert!(game.world_client().is_none());
+        assert_eq!(game.general_variables.integer(b"$counter", 0), Some(-5));
+        assert_eq!(game.general_variables.string(b"#message"), Some(&b"after"[..]));
+    }
+}

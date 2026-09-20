@@ -22,7 +22,7 @@ GameServer связывает сетевой запрос, состояние и
 
 Планировщик выбирает зарегистрированный экземпляр навыка и его конкретный исполнитель. Сам экземпляр хранит состояние каста и повторного применения; AI хранит команду выбора. Поэтому добавление ID в [фабрику](../../server/rust/src/gameserver/appserver/skills/skillfactory.rs) не заменяет Begin/AI/End.
 
-Базовая атака проходит через [baseattackruntime](../../server/rust/src/gameserver/appserver/skills/baseattackruntime.rs): цель, дальность, задержка, `AttackInformation`, приём попадания и завершение. Урон далее обрабатывают защита и владелец цели. Подробности — [навыки](skills.md) и [бой](combat.md).
+Базовая атака проходит через [baseattackruntime](../../server/rust/src/gameserver/appserver/skills/baseattackruntime.rs): цель, дальность, задержка, `AttackInformation`, приём попадания и завершение. Урон далее обрабатывают защита и владелец цели. Подробности — [навыки](skills.md) и [бой](combat.md). Нулевой HP запускает отдельный путь [смерти, награды и развития](death-and-progression.md); публикация смертельного удара ещё не завершает его.
 
 ## Монстры и NPC
 

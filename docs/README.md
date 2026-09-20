@@ -9,6 +9,7 @@
 | Где что лежит и что входит в основной сервер? | [Карта проекта](architecture/workspace.md) |
 | Кто отвечает за игрока, мир и данные? | [Владение состоянием](architecture/state-ownership.md) |
 | Какое готовое решение использовать и где границы его применения? | [Общие механизмы](architecture/shared-mechanisms.md) |
+| Какие типы, кодировки, часы и случайные числа использовать? | [Значения и совместимость](architecture/values-and-compatibility.md) |
 | Как запускается процесс и где его менять? | [Запуск и жизненный цикл](server/process-model.md) |
 | Как устроены вход, оплата и аукцион? | [Auth, Login, Billing и Misc](server/auth-login-and-services.md) |
 | Как взаимодействуют World и Game? | [Игровой и мировой серверы](server/world-and-game.md) |
@@ -33,7 +34,9 @@
 
 - [Движение](gameplay/movement.md), [бой](gameplay/combat.md), [навыки](gameplay/skills.md), [ИИ монстров и NPC](gameplay/npc-ai.md).
 - [Живые объекты и время жизни](gameplay/objects-and-lifetimes.md), [атрибуты и состояния](gameplay/attributes-and-states.md).
+- [Регионы, видимость и переходы Game](gameplay/regions-and-visibility.md), [смерть, награды и развитие](gameplay/death-and-progression.md).
 - [Предметы и контейнеры](gameplay/items.md), [торговля](gameplay/trade.md), [задания](gameplay/quests.md).
+- [Аукцион и применение платежей](gameplay/auction-and-payments.md).
 - [Сценарии и их исполнение](gameplay/scripting.md).
 - [Жизненный цикл персонажа](gameplay/player-lifecycle.md).
 - [Регионы и организации](gameplay/regions-and-organizations.md), [сессии и рейтинги](gameplay/world-sessions-and-rankings.md), [войны](gameplay/world-wars.md).
