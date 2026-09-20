@@ -11,6 +11,17 @@
 | Внутри LoginServer | `Run` сначала проверяет диапазон Auth `0xCF301..0xDF1FE`, затем семейство `MsgType & 0xFFFFFF00`: GM `0x20000`, GMA `0x20100`, Log `0x1FF00/0x2FD00/0x10000`, Server `0xFF00/0x1FE00` | [Login message](../../server/rust/src/nets/netlogin/message.rs), точная Login EXE/PDB. Неизвестный тип — no-op с возвратом `1`; это не доказательство успеха доменной операции. |
 | Внутри GameServer | `Run` разрешает игрока по числовому map ID, его регион, затем выбирает обработчик по `MsgType & 0xFFFFFF00`; некоторые семейства требуют оба объекта | [Game message](../../server/rust/src/nets/netserver/message.rs), RVA `0x000149D0`. Семейства перечислены в owner-е; их маршрутизация `VERIFIED`, полнота вложенных handlers `PARTIAL`. |
 
+Дополнительные маршруты действующего Rust-кода:
+
+| Процесс | Выбор обработчика | Где продолжать |
+| --- | --- | --- |
+| Auth | Точный opcode через `AuthMessageKind::from_opcode`, включая проверку `0xCF501/0xCF502`, регистрацию и GM. Неизвестный тип не вызывает handler. | [netauth/message.rs](../../server/rust/src/nets/netauth/message.rs) → `AuthMessageHandlers::handle`. |
+| Billing | Семейства `0xFF000/0xEF200` → billing; `0xEF100/0x10EF00` → server; затем точный тип в handler. | [netbilling/message.rs](../../server/rust/src/nets/netbilling/message.rs) → `BillingMessageHandler` / `ServerMessageHandler`. |
+| Misc | `0x14ED00` → аукцион; `0x16EA00` → служебная функция; `0x14EC00` — no-op; остальные → `on_other_msg`. | [netmisc/message.rs](../../server/rust/src/nets/netmisc/message.rs) → `CGame::process_message`. |
+| World, сообщения Misc | `0x15EB00` → `on_misc_auction`, затем `on_msg_m2w_auction`. Это общий принятый server-путь World. | [networld/message.rs](../../server/rust/src/nets/networld/message.rs) → [аукционный обработчик](../../server/rust/src/worldserver/appworld/message/onmsg_m2w_auction.rs). |
+
+Выбор семейства не означает успех операции. Чтобы добавить тип, нужно проследить фильтр входа, диспетчер и точную ветвь handler; порядок работы приведён в [сетевом runtime](../server/network-runtime.md).
+
 ## Вход клиента и обслуживание роли через Login и World
 
 Первичный источник для клиентских значений и клиентских ответов — [Login `OnLogMessage`](../../server/rust/src/loginserver/applogin/message/logmessage.rs); для межсерверных запросов и ответов — [Login `CGame`](../../server/rust/src/loginserver/loginserver/game.rs) и [World `OnLogMessage`](../../server/rust/src/worldserver/appworld/message/logmessage.rs). Статус таблицы — `VERIFIED` для выбора ветви и указанного направления; payload каждого типа требует отдельного анализа и остаётся `PARTIAL`, если нет специальной страницы.
@@ -38,11 +49,24 @@
 | `0x5FB01` | Game → World | Запрос состояния/деталей игрока; [World dispatcher](../../server/rust/src/worldserver/appworld/message/logmessage.rs) выбирает live map, frozen save map, затем DB и может поставить player-load FIFO. `VERIFIED` для порядка ветвей, payload `PARTIAL`. |
 | `0x7F901` | World → Game | Результат загрузки игрока. [Game dispatcher](../../server/rust/src/gameserver/appserver/message/logmessage.rs) трактует положительный status как ID игрока, `0`/`-1` как отказ, `-2` как служебный игнорируемый результат; затем декодирует GameSave и формирует клиентский снимок. `VERIFIED` для достигнутой ветви; полная byte parity GameSave `PARTIAL`. |
 | `0xBF401` | Game → клиент | Полный начальный snapshot либо короткий отказ `long(0)`. Точный внешний порядок и доказанный однобайтовый `country_identity` приведены в [спецификации сообщения](game-login.md). Общий layout `PARTIAL`. |
-| `0xEF201` | Game → Billing | Отдельное уведомление после успешной отправки начального клиентского snapshot согласно [Game owner](../../server/rust/src/gameserver/gameserver/game.rs). Точный payload и обработка Billing в этой странице `UNKNOWN`. |
+| `0xEF201` | Game → Billing | Запрос баланса: C-строка account, затем `long player_id`. Game ставит его после вызова отправки начального snapshot, **без проверки её результата**. Приём — `BillingMessageHandler::on_account_request`; ответ — `0xFF001`, см. таблицу ниже. |
 | `0x7F903`, `0x7F904`, `0x7F905` | World → Game | Исключение игрока и изменение присутствия друзей; [Game dispatcher](../../server/rust/src/gameserver/appserver/message/logmessage.rs) для friend notices переписывает тип на клиентские `0xBF404`/`0xBF405` и отправляет адресно. `VERIFIED` для достигнутых преобразований. |
 | `0x6FA01` | локально внутри Game | Событие потери клиентского соединения с map ID и пустой C-строкой, создаётся компонентным `OnClose`; **не считать сетевым пакетом** без отдельного доказательства. [Game receive](../../server/rust/src/nets/netserver/myserverclient.rs). |
 
 Клиентское `0x8F701` — нижняя граница допустимого диапазона, **не доказанный здесь смысл сообщения**. Семейство `0xBFxxx` — не гарантия одинакового payload; например `0xBF401` имеет две формы. Список типов выше не следует использовать как повод генерировать ответ для неописанного opcode.
+
+## Проверка account и расчёты Billing
+
+Пары ниже прослежены по текущим отправителям и получателям. Они не дополняют неизвестные layouts предположениями.
+
+| Запрос → ответ | Действие | Где записан контракт |
+| --- | --- | --- |
+| `0xCF501` → `0xCF601` | Login → Auth → Login: обычная проверка account с данными корреляции конечного клиента. | [Поля и локальный timeout](login-auth.md); ожидание и дубликаты — [служебные процессы](../server/auth-login-and-services.md). |
+| `0xEF201` → `0xFF001` | Game → Billing → Game: баланс. Запрос описан выше; ответ: `long player_id`, `long result`, только при `result == 0` — `long point`. Пустой account в запросе даёт no-op до чтения ID. | [BillingMessageHandler](../../server/rust/src/billingserver/appbilling/billingmessage.rs), [CBillingPlayerManager::run](../../server/rust/src/billingserver/appbilling/billingplayermanager.rs). |
+| `0xEF202` → `0xFF002` | Покупка в магазине; асинхронный запрос передаёт цену, товар, количество и session-контекст. | Те же обработчик и работник; игровой смысл и поля результата — [торговля](../gameplay/trade.md). Полный входной layout этой таблицей не устанавливается. |
+| `0xEF203` → `0xFF003` | Расчёт сделки между игроками, включая идентификаторы участников, session/plugin и GUID товара. | Те же обработчик и работник; [торговля](../gameplay/trade.md). Полный входной layout этой таблицей не устанавливается. |
+
+Локальные события accept/close проходят через те же типы сообщений, но не становятся от этого wire-запросами. В частности, Auth `0xCF401/0xCF402` создаются сетевым компонентом, а Login timeout создаёт `0xCF601` внутри процесса. Тип события и его источник нужно учитывать вместе.
 
 ## Игровые действия
 

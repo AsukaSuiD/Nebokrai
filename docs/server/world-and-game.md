@@ -1,39 +1,44 @@
-# WorldServer и GameServer
+# World и Game
 
-Этот документ описывает устройство активной Rust-реконструкции по исходному коду. Названия `CGame`, `appworld` и `appserver` сохранены по исходным владельцам: они обозначают разные процессы и разные обязанности, а не два экземпляра одного игрового объекта. Наличие исполняемого пути в коде само по себе не подтверждает работу с исходным клиентом. Семантическое [владение состоянием](../architecture/state-ownership.md) и значимый [порядок циклов](runtime-ordering.md) описаны отдельно; это не сводится к размещению файлов.
+World ведёт мировые данные и сохранение; Game исполняет события региона. [Архитектурная граница](../architecture/state-ownership.md) объясняет причину разделения. Эта страница помогает проследить исполнение в коде.
 
-## Процессы и владельцы
+## Организация кода
 
-| Участок | Владелец | Что делает |
+| Часть | Game | World |
 | --- | --- | --- |
-| Запуск | [GameServer](../../server/rust/src/process/gameserver.rs), [WorldServer](../../server/rust/src/process/worldserver.rs), [общая оболочка](../../server/rust/src/process/mod.rs) | Создаёт Tokio runtime, берёт каталог ресурсов из текущего рабочего каталога, обрабатывает SIGINT/SIGTERM и возвращает код процесса. Отдельные `src/bin` только вызывают эти функции. |
-| Игровой процесс | [GameServer `CGame`](../../server/rust/src/gameserver/gameserver/game.rs), [процессный runtime](../../server/rust/src/gameserver/gameserver/runtime.rs) | Владеет подключениями игроков, регионами, игровыми объектами, фабриками, сообщениями, ИИ, скриптами и ходом симуляции. Runtime обслуживает сеть и сигнал завершения; игровые реестры остаются внутри `CGame`. |
-| Мировой процесс | [WorldServer `CGame`](../../server/rust/src/worldserver/worldserver/game.rs), [процессный runtime](../../server/rust/src/worldserver/worldserver/runtime.rs) | Владеет глобальным состоянием: игроками вне игрового региона, организациями, странами, рейтингами, таймерами, загрузкой и сохранением. Runtime соединяет его с сетью, ресурсами, БД и фоновыми работниками. |
-| Доменное поведение | [Game `appserver`](../../server/rust/src/gameserver/mod.rs), [World `appworld`](../../server/rust/src/worldserver/mod.rs) | Содержит исходные owner-ы объектов, сообщений, навыков, регионов, сессий и организаций. Общие типы не делают два процесса взаимозаменяемыми. |
-| Данные | [World DB owner-ы](../../server/rust/src/dbaccess/worlddb/), [сохранение](../../server/rust/src/worldserver/worldserver/savedb.rs) | Обращается к подтверждённой модели MSSQL и хранимым процедурам через Tiberius; сохраняет персонажей, организации, регионы и другие мировые данные. GameServer не владеет прямым TDS-подключением в своём `CGame`. |
+| Состояние процесса и основной цикл | [gameserver/game.rs](../../server/rust/src/gameserver/gameserver/game.rs) | [worldserver/game.rs](../../server/rust/src/worldserver/worldserver/game.rs) |
+| Сеть, ресурсы и фоновые задачи | [Game runtime](../../server/rust/src/gameserver/gameserver/runtime.rs) | [World runtime](../../server/rust/src/worldserver/worldserver/runtime.rs) |
+| Игровые подсистемы | `gameserver/appserver/` | `worldserver/appworld/` |
+| Загрузка и сохранение | Обмен состоянием с World | [playerloadworker](../../server/rust/src/worldserver/worldserver/playerloadworker.rs), [savedb](../../server/rust/src/worldserver/worldserver/savedb.rs), [worlddb](../../server/rust/src/dbaccess/worlddb/) |
 
-## Как проходит действие игрока
+Названия `CGame` и `CPlayer` сохранены у обоих процессов, но их обязанности различаются. Game хранит фигуру и активное поведение; World — мировую проекцию и связь с БД.
 
-1. GameServer принимает клиентское соединение через [сетевой runtime](../../server/rust/src/gameserver/gameserver/runtime.rs) и `nets/netserver`. Сетевой проход передаёт готовые события единственному игровому `CGame`.
-2. [Диспетчер GameServer](../../server/rust/src/gameserver/gameserver/game.rs) читает сообщения очереди и направляет их в owner-ы `appserver/message`: [игрок](../../server/rust/src/gameserver/appserver/message/playermessage.rs), предметы, навыки, регион, команда, торговля и другие семейства. Изменение игрового состояния происходит синхронно в соответствующем owner-е; результат отправляется клиенту или WorldServer по сохранённому wire-протоколу.
-3. Игровой ход [GameServer `CGame::main_loop`](../../server/rust/src/gameserver/gameserver/game.rs) обслуживает очереди, скрипты, ИИ игроков и монстров, регионы и планирование навыков. Реестр [фабрики навыков](../../server/rust/src/gameserver/appserver/skills/skillfactory.rs) хранит подтверждённое соответствие ID и классов; фактический Begin/AI/End требует отдельного исполняемого владельца.
-4. WorldServer принимает сообщения игровых серверов через [свой сетевой runtime](../../server/rust/src/worldserver/worldserver/runtime.rs) и `nets/networld`. [Мировой диспетчер](../../server/rust/src/worldserver/worldserver/game.rs) обрабатывает серверную очередь, затем очередь текущего LoginServer-клиента. Он разрешает запросы глобального состояния и возвращает ответы по тому же протоколу.
-5. Загрузка персонажа проходит через [мирового player-owner-а](../../server/rust/src/worldserver/appworld/player.rs), [работника загрузки](../../server/rust/src/worldserver/worldserver/playerloadworker.rs) и [Tiberius-адаптер игрока](../../server/rust/src/dbaccess/worlddb/rsplayer.rs). Сохранение инициируется мировым lifecycle и проходит через [упорядоченные фазы сохранения](../architecture/database.md). Общей транзакции поверх всех фаз нет; запись в БД находится на стороне WorldServer.
+## Путь команды в Game
 
-Разделение удерживает один источник истины для изменяемого состояния: GameServer ведёт живую симуляцию региона, WorldServer ведёт глобальное состояние и БД. Взаимодействие между ними проходит сообщениями, поэтому изменение формата сообщения или сохраняемой структуры требует согласованного изменения обоих получателей.
+Сетевой runtime и `nets/netserver` помещают принятые сообщения в очередь. `CGame::process_messages` передаёт их в `run_incoming_message`, который выбирает обработчик из `appserver/message/`: движение, навыки, предметы, торговля и другие семейства.
 
-## Порядок запуска и остановки
+Обработчик меняет состояние своего владельца либо ставит команду в очередь исполнения. Например, шаг передаётся `CPlayerAI` и применяется в игровом AI-проходе. Общая схема — в [симуляции](../gameplay/simulation.md), точный порядок AI и сообщений — в [серверном цикле](runtime-ordering.md).
 
-GameServer создаёт `CGame`, читает обязательный `setup.ini` и необязательный `setupex.ini`, подключается к WorldServer, инициализирует внутренние реестры и запускает сетевой и игровой проходы. [Его `init_through_billing`](../../server/rust/src/gameserver/gameserver/game.rs) останавливается при недоступном WorldServer; ошибка подключения к BillingServer регистрируется и не обрывает инициализацию. При выходе вызывается `Release`.
+Для навыка недостаточно добавить ID в фабрику. Нужны конкретные пути Begin, AI, End и поддерживаемая форма цели; [модель навыков](../gameplay/skills.md) показывает их связь.
 
-WorldServer сначала читает ресурсы и настройки, создаёт БД, игровые реестры, таймеры и сетевые владельцы, затем запускает основной цикл. [Его `game_thread_func`](../../server/rust/src/worldserver/worldserver/game.rs) различает штатную ошибку инициализации, аварийную ветку и явно заблокированную границу. Только завершённый lifecycle идёт через `Release` и `DeleteGame`; остановка на неизвестном контракте возвращает диагностический результат с живым владельцем. Это существенная часть поведения, а не обещание, что любая конфигурация дойдёт до игрового цикла.
+## Путь данных в World
 
-## Что уже является кодом, а что остаётся материалом
+World получает сообщения Game через `nets/networld`. Мировой диспетчер обрабатывает серверную очередь, затем очередь соединения с Login.
 
-Реализованные process-входы, сетевые проходы, большие части GameServer `CGame`, WorldServer `CGame`, мировое TDS-хранилище и многие `appserver`/`appworld` owner-ы входят в [активный module graph](../../server/rust/src/lib.rs). Наличие файла по историческому пути само по себе не означает реализованный runtime: [GameServer `gameserver.rs`](../../server/rust/src/gameserver/gameserver/gameserver.rs) и [Billing client](../../server/rust/src/gameserver/gameserver/billclient.rs) состоят из RAW-псевдокода. В то же время [nation region](../../server/rust/src/gameserver/appserver/servernationregion.rs) содержит и подключённые Rust-владельцы, и оставшийся RAW. Статус надо проверять по вызываемому коду, а RAW использовать как источник для дальнейшей реконструкции.
+Загрузка персонажа проходит через мирового [CPlayer](../../server/rust/src/worldserver/appworld/player.rs), worker загрузки и [rsplayer](../../server/rust/src/dbaccess/worlddb/rsplayer.rs). При сохранении World формирует снимки, передаёт их очередям и выполняет [SQL-фазы](../architecture/database.md). Живое состояние Game и DB-снимок имеют разный жизненный цикл.
 
-Фабрика знает 209 исходных соответствий навыков, но это не означает полное исполнение 209 навыков: [игровой dispatch](../../server/rust/src/gameserver/gameserver/game.rs) отвергает ID или форму вызова без concrete owner-а. Небольшие файлы отдельных навыков могут содержать только ID, поскольку реализация семейства расположена в общем owner-е; размер файла сам по себе не доказывает заглушку.
+При изменении персонажа проверяйте обе стороны сериализации и обратную загрузку. Правила online/offline, возврат из Game и потеря игрового сервера описаны в [жизненном цикле персонажа](../gameplay/player-lifecycle.md).
 
-WorldServer явно блокирует проход при неизвестных значениях, которые оригинал читал из неинициализированного состояния. Например, [Largess gate](../../server/rust/src/worldserver/worldserver/game.rs) требует назначенных `dwLoadLargessTime` и `dwNumber`; оба поля по умолчанию отсутствуют, пока их не прочитали из настроек. В мировом основном цикле также есть типизированные остановки для отсутствующих владельцев, ошибок загрузки, сохранения и сообщений. Эти исходы нельзя приравнивать к успешной работе сервера.
+## Инициализация и диагностика
 
-[ServerUpdate](../../server/rust/src/updatesys/serverupdate/serverupdate.rs) и [его диалог](../../server/rust/src/updatesys/serverupdate/serverupdatedlg.rs) пока являются только RAW-псевдокодом и не подключены к [активному module graph](../../server/rust/src/lib.rs). Это отдельный компонент; его наличие в дереве не подтверждает работающую систему обновления.
+Game читает обязательный `setup.ini` и необязательный `setupex.ini`. `init_through_billing` прекращает инициализацию при недоступном World; ошибка подключения Billing регистрируется и не обрывает эту стадию. Завершение проходит через `Release`.
+
+World последовательно создаёт настройки, ресурсы, DB-модули, игровые реестры, таймеры и сеть. Его `game_thread_func` различает штатный результат, аварийную ветвь и остановку на неизвестном контракте. Последняя может вернуть диагностический результат с ещё живым владельцем; поэтому её нельзя обрабатывать как обычное завершение.
+
+Пример такой границы — Largess: `dwLoadLargessTime` и `dwNumber` должны быть прочитаны из настроек. Отсутствующие значения представлены явно; при диагностике сначала проверяйте конфигурацию и указанную в результате фазу.
+
+## Как читать оставшийся RAW-код
+
+Некоторые исторические файлы содержат только псевдокод, другие объединяют его с Rust-реализацией. Например, старые Game `gameserver.rs` и `billclient.rs` сами по себе не являются рабочими входами, а `servernationregion.rs` содержит обе части. Проверяйте подключение модуля и конкретный вызов.
+
+`updatesys/` не подключён в [lib.rs](../../server/rust/src/lib.rs). Состояние ServerUpdate и остальных подсистем собрано в [аудите](../status/audit.md).

@@ -23,6 +23,23 @@
 
 Marker `6` и версия настроек проверяются после сборки digest. Отказ посылает `0xAF50A` с `long(6)` и двумя пустыми C-строками. При успехе в CD-key FIFO ставится вариант `1`, нулевые client code и encryption key и сохранённый world server. [Ветвь и ответ](../../server/rust/src/loginserver/applogin/message/logmessage.rs). `VERIFIED` для достигнутого кода; смысл каждого необработанного хвостового байта `UNKNOWN`.
 
+## Проверка Login → Auth → Login
+
+После клиентского разбора Login выбирает маршрут в `CLoginQueue::on_quest_cdkey`; Auth используется не во всех ветвях. Выбор GAS, локального пароля и прямого World, а также жизнь pending-записи описаны в [служебных процессах](../server/auth-login-and-services.md).
+
+Для обычной Auth-проверки текущие writer и reader совпадают в таком порядке полей после общего заголовка:
+
+| Тип и направление | Payload |
+| --- | --- |
+| `0xCF501`, Login → Auth | C-строка account; C-строка password с текстовым hex-digest; `u32 client_ip`; `i32 client_socket_id`. |
+| `0xCF601`, Auth → Login | `i32 result`; C-строка account; `u32 client_ip`; `i32 client_socket_id`. |
+
+Источники: Login [`send_quest_message` / `AuthManager::on_response_auth`](../../server/rust/src/loginserver/loginserver/authmanager.rs), Auth [`AuthMessageHandlers::on_auth_account`](../../server/rust/src/authserver/appauth/message/message_func.rs) и [`send_auth_result`](../../server/rust/src/authserver/src/cgame.rs). Это межсерверный [CRC-кадр без RLE](transport.md). В задании Auth `return_socket_id` хранится отдельно и берётся из принятого Login-соединения; `client_socket_id` в payload относится к конечному клиенту внутри Login.
+
+Локальный timeout Login создаёт такую же форму `0xCF601` с результатом `4` и публикует её в очередь Auth events без отправки в сеть. Корреляция текущего `AuthManager` использует account; переданные IP/socket читаются из ответа. Поэтому эти поля не следует описывать как уникальный request ID.
+
+Auth также реализует `0xCF502` → `0xCF602` с условными дополнительными данными. Это не автоматическое продолжение клиентского `0x2FD0B`: текущий `AuthManager::add_quest` строит `0xCF501`, а Login `AsMessageHandlers` отдельно обрабатывает `0xCF601`; `0xCF602` попадает в `Unknown`. Связь расширенной Auth-пары с конкретным внешним сценарием остаётся `UNKNOWN`.
+
 ## Ошибки, транспорт и предел знания
 
 Login принимает эти типы только после внешних проверок длины/CRC/RLE и фильтра диапазона `0x2FD01..=0x3FBFF` ([receive owner](../../server/rust/src/nets/netlogin/mynetserverclient_client.rs)). Неверный CRC, слишком длинный кадр и opcode вне диапазона приводят к diagnostic → forbid IP → `QUIT`; доменные ошибки account/password/version выше имеют **другую** реакцию. Не следует переносить сетевую политику запрета IP на обычный отказ логина. Текстовая кодировка account/world за пределами описанной ASCII-обработки и назначение `encryption key` после CD-key очереди пока `UNKNOWN`. Никакого криптографического алгоритма для этих полей эта страница не утверждает.
