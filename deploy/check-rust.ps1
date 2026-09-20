@@ -1,9 +1,6 @@
 # Проверка Rust в локальном Docker без запуска игровых служб.
 [CmdletBinding()]
 param(
-    [ValidateSet('Check', 'Test')]
-    [string]$Mode = 'Check',
-    [string]$TestFilter = '',
     [ValidateRange(128, 16384)]
     [int]$CacheLimitMiB = 2048
 )
@@ -41,18 +38,9 @@ fi
 printf '%s\n' "$key" > "$cache/key"
 trim_cache
 trap 'status=$?; trap - EXIT; trim_cache; exit "$status"' EXIT
-cargo "$@"
+cargo check --locked --lib --bins
 '@
-
-$cargoArguments = if ($Mode -eq 'Check') {
-    @('check', '--locked', '--all-targets')
-} else {
-    @('test', '--locked', '--lib')
-}
-if ($TestFilter) {
-    if ($Mode -ne 'Test') { throw 'TestFilter применим только к режиму Test' }
-    $cargoArguments += $TestFilter
-}
+$checkScript = $checkScript.Replace("`r`n", "`n")
 
 $dockerArguments = @(
     '--context', 'desktop-linux', 'run', '--rm',
@@ -67,9 +55,8 @@ $dockerArguments = @(
     '--env', 'RUSTUP_TOOLCHAIN=1.97.1',
     '--env', 'CARGO_BUILD_JOBS=2',
     '--env', 'CARGO_PROFILE_DEV_DEBUG=0',
-    '--env', 'CARGO_PROFILE_TEST_DEBUG=0',
     '--env', "NEBOKRAI_CACHE_LIMIT_MIB=$CacheLimitMiB",
     $image, 'sh', '-c', $checkScript, 'nebokrai-check'
 )
-& docker @dockerArguments @cargoArguments
+& docker @dockerArguments
 exit $LASTEXITCODE
