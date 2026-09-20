@@ -1,9 +1,13 @@
 # Локальные оригиналы и рабочие данные
-/archive/
+/server/references/
+/related/
 /.local/
 /#SyncVersion/
-/Nebokrai/.exe/
-/Nebokrai/reports/
+/.exe/
+/ghidra/
+/runtime/
+/reports/
+/.codex_tmp/
 
 # Окружения, сборка и кэши
 **/.venv/

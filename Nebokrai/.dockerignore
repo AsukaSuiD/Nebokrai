@@ -1,9 +1,0 @@
-.git
-runtime
-server/rust/target
-reports
-ghidra
-.exe
-**/*.pdb
-**/*.exe
-**/log

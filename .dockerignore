@@ -1,0 +1,15 @@
+.git
+server/references
+related
+.local
+target
+runtime
+server/rust/target
+reports
+ghidra
+.exe
+.stfolder-*
+**/#SyncVersion
+**/*.pdb
+**/*.exe
+**/log

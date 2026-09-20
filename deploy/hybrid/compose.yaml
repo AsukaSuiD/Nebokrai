@@ -1,0 +1,144 @@
+name: nebokrai-hybrid
+
+x-rust-service: &rust-service
+  image: nebokrai-rust-services:local
+  build:
+    context: ../..
+    dockerfile: deploy/hybrid/Dockerfile.rust
+  restart: unless-stopped
+  networks:
+    - nebokrai
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+    volumes:
+      - mssql-data:/var/opt/mssql
+      - ../../runtime/Database:/backup:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - nebokrai
+
+  database_init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      NEBOKRAI_DB_PASSWORD: ${NEBOKRAI_DB_PASSWORD}
+    volumes:
+      - ../../runtime/Database:/backup:ro
+      - ./database-init.sh:/database-init.sh:ro
+    entrypoint: ["/bin/bash", "/database-init.sh"]
+    networks:
+      - nebokrai
+
+  nebokrai_auth:
+    <<: *rust-service
+    command: ["/opt/nebokrai/authserver"]
+    depends_on:
+      database_init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../runtime/AuthServer:/runtime
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':1BBC ' /proc/net/tcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  nebokrai_login:
+    <<: *rust-service
+    command: ["/opt/nebokrai/loginserver"]
+    depends_on:
+      database_init:
+        condition: service_completed_successfully
+      nebokrai_auth:
+        condition: service_healthy
+    volumes:
+      - ../../runtime/LoginServer:/runtime
+    ports:
+      - "2346:2346"
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':0929 ' /proc/net/tcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  nebokrai_billing:
+    <<: *rust-service
+    command: ["/opt/nebokrai/billingserver"]
+    depends_on:
+      database_init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../runtime/BillingServer:/runtime
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':1FFC ' /proc/net/tcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  nebokrai_world:
+    <<: *rust-service
+    command: ["/opt/nebokrai/worldserver"]
+    depends_on:
+      database_init:
+        condition: service_completed_successfully
+      nebokrai_login:
+        condition: service_healthy
+    volumes:
+      - ../../runtime/WorldServer:/runtime
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':06D3 ' /proc/net/tcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+
+  nebokrai_misc:
+    <<: *rust-service
+    command: ["/opt/nebokrai/miscserver"]
+    depends_on:
+      nebokrai_world:
+        condition: service_healthy
+    volumes:
+      - ../../runtime/MiscServer:/runtime
+
+  nebokrai_game:
+    image: nebokrai-wine-gameserver:local
+    build:
+      context: .
+      dockerfile: Dockerfile.game
+    depends_on:
+      nebokrai_world:
+        condition: service_healthy
+      nebokrai_billing:
+        condition: service_healthy
+    volumes:
+      - ../../runtime/GameServer:/runtime
+      - wine-prefix:/wine
+    ports:
+      - "2347:2347"
+    restart: unless-stopped
+    networks:
+      - nebokrai
+
+volumes:
+  mssql-data:
+  wine-prefix:
+
+networks:
+  nebokrai:
+    driver: bridge
