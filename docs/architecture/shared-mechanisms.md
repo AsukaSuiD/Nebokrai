@@ -8,6 +8,7 @@
 
 | Требование | Существующий механизм | Граница применения |
 | --- | --- | --- |
+| Прочитать SQL-поле с разным регистром ASCII и целочисленным типом | [dbaccess::row](../../server/rust/src/dbaccess/row.rs): `get_value`, `get_integer` | Примеры — `rsplayer`, предметы, JJC. Отсутствие столбца, NULL и ошибка типа остаются явными; [границы преобразования](database.md#чтение-имён-и-чисел-через-tiberius). |
 | TCP под Linux с совместимым bind и частичной записью | [transport](../../server/rust/src/transport/mod.rs): `bind_tcp_ipv4`, `write_once_tcp`, чтение фрагментов, `shutdown_tcp` | Даёт операции над сокетом. Framing, timeout, reconnect и реакция на частичную отправку остаются у направления/службы. |
 | Ответить в принятое соединение из обработчика или DB-работника | [ServerCommandHandle](../../server/rust/src/nets/servers.rs), [CSocketCommands](../../server/rust/src/nets/socketcommands.rs) | Команда попадает в следующий доступный сетевой снимок. Постановка не подтверждает отправку; исходящие `CMyNetClient` имеют другой путь. См. [сетевой runtime](../server/network-runtime.md). |
 | Сформировать сообщение существующего направления | Общий [CBaseMessage](../../server/rust/src/nets/basemessage.rs) и `CMessage` соответствующего модуля [nets](../../server/rust/src/nets/) | Базовый буфер и курсор общие; метаданные, dispatch и обрамление зависят от направления. В Game `send` выбирает World, `send_to_bs` — Billing; opcode не выбирает адресата. `set_message_type` не очищает прочитанный payload. Детали — в [сериализации сообщений](../protocol/message-header.md). |

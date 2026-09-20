@@ -23,6 +23,7 @@ use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
 use tiberius::{Query, Row};
 
+use crate::dbaccess::row::{get_integer as read_ado_integer, get_value};
 use crate::dbaccess::worlddb::dbgoods::{
     DbGoodsOwner, GoodsFiledSaveOutcome, GoodsLoadBlock, GoodsLoadFailure, GoodsLoadOutcome,
     PlayerGoodsFiledSnapshot,
@@ -641,26 +642,6 @@ pub(crate) enum PlayerRanksStatOutcome {
     BlockedMissingFact(PlayerRanksStatBlock),
 }
 
-fn read_ado_integer(
-    row: &Row,
-    column: &'static str,
-) -> Result<Option<i64>, tiberius::error::Error> {
-    let first_error = match row.try_get::<i32, _>(column) {
-        Ok(value) => return Ok(value.map(i64::from)),
-        Err(error) => error,
-    };
-    if let Ok(value) = row.try_get::<u8, _>(column) {
-        return Ok(value.map(i64::from));
-    }
-    if let Ok(value) = row.try_get::<i16, _>(column) {
-        return Ok(value.map(i64::from));
-    }
-    if let Ok(value) = row.try_get::<i64, _>(column) {
-        return Ok(value);
-    }
-    Err(first_error)
-}
-
 pub(crate) trait RsPlayerOwner {
     async fn get_player_count_in_db_by_cdkey(
         &mut self,
@@ -913,8 +894,43 @@ where
             .await
         {
             PlayerLoadOutcome::ReturnedTrue => Ok(true),
-            PlayerLoadOutcome::ReturnedFalse(_) => Ok(false),
+            PlayerLoadOutcome::ReturnedFalse(source) => {
+                // Ошибки Tiberius могут содержать значение поля. В журнал выводим
+                // этап, а исходный результат сохраняем в bool-контракте LoadData.
+                let stage = match &source {
+                    PlayerLoadFailure::Connection(_) => "connection",
+                    PlayerLoadFailure::Ability(_) => "ability-query",
+                    PlayerLoadFailure::Quest(_) => "quest",
+                    PlayerLoadFailure::Goods(_) => "goods",
+                    PlayerLoadFailure::Jjc(_) => "jjc",
+                };
+                tracing::warn!(player_id = player.get_id(), stage, "World: загрузка персонажа из БД отклонена");
+                Ok(false)
+            }
             PlayerLoadOutcome::BlockedMissingFact(source) => {
+                match &source {
+                    PlayerLoadBlock::Ability(error) => match error {
+                        PlayerAbilityRowLoadFailure::Database { column, .. }
+                        | PlayerAbilityRowLoadFailure::MissingRequiredValue { column }
+                        | PlayerAbilityRowLoadFailure::NumericOutsideLegacyRange { column, .. } => {
+                            let reason = match error {
+                                PlayerAbilityRowLoadFailure::Database { .. } => "column-or-type",
+                                PlayerAbilityRowLoadFailure::MissingRequiredValue { .. } => "null",
+                                _ => "numeric-range",
+                            };
+                            tracing::warn!(player_id = player.get_id(), stage = "ability-scalar", column, reason, "World: не прочитано поле персонажа");
+                        }
+                        PlayerAbilityRowLoadFailure::Blob { field, source } => {
+                            tracing::warn!(player_id = player.get_id(), stage = "ability-blob", ?field, error = ?source, "World: не разобрано составное поле персонажа");
+                        }
+                        PlayerAbilityRowLoadFailure::HonorTime(source) => {
+                            tracing::warn!(player_id = player.get_id(), stage = "honor-time", error = ?source, "World: ошибка времени персонажа");
+                        }
+                    },
+                    PlayerLoadBlock::Goods(source) => {
+                        tracing::warn!(player_id = player.get_id(), stage = "goods", error = ?source, "World: не загружены предметы персонажа");
+                    }
+                }
                 Err(TiberiusPlayerLoadDataBlock::Reconstruction(source))
             }
         }
@@ -1888,7 +1904,7 @@ fn required_ability_bool(
     row: &Row,
     column: &'static str,
 ) -> Result<bool, PlayerAbilityRowLoadFailure> {
-    let first_error = match row.try_get::<bool, _>(column) {
+    let first_error = match get_value::<bool>(row, column) {
         Ok(Some(value)) => return Ok(value),
         Ok(None) => return Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
         Err(source) => source,
@@ -1907,7 +1923,12 @@ fn required_ability_float(
     row: &Row,
     column: &'static str,
 ) -> Result<f32, PlayerAbilityRowLoadFailure> {
-    match row.try_get::<f32, _>(column) {
+    // SQL float(53) хранит f64; игровая координата и wire-поле — f32.
+    // SQL real уже хранит f32. Tiberius не выполняет это сужение сам.
+    let value = get_value::<f64>(row, column)
+        .map(|value| value.map(|value| value as f32))
+        .or_else(|_| get_value::<f32>(row, column));
+    match value {
         Ok(Some(value)) => Ok(value),
         Ok(None) => Err(PlayerAbilityRowLoadFailure::MissingRequiredValue { column }),
         Err(source) => Err(PlayerAbilityRowLoadFailure::Database { column, source }),
@@ -1918,7 +1939,7 @@ fn required_ability_ansi(
     row: &Row,
     column: &'static str,
 ) -> Result<Vec<u8>, PlayerAbilityRowLoadFailure> {
-    match row.try_get::<&str, _>(column) {
+    match get_value::<&str>(row, column) {
         Ok(Some(value)) => {
             let (encoded, _, _) = WINDOWS_1251.encode(value);
             Ok(encoded.into_owned())
@@ -1933,7 +1954,7 @@ fn ability_blob(
     field: PlayerAbilityBinaryField,
 ) -> Result<Vec<u8>, PlayerAbilityRowLoadFailure> {
     let column = field.column_name();
-    match row.try_get::<&[u8], _>(column) {
+    match get_value::<&[u8]>(row, column) {
         Ok(Some(value)) => Ok(value.to_vec()),
         Ok(None) => Ok(Vec::new()),
         Err(source) => Err(PlayerAbilityRowLoadFailure::Database { column, source }),
@@ -2228,7 +2249,7 @@ impl TiberiusRsPlayer {
 
         let mut updated_rows = 0;
         for row in rows {
-            let player_id = match row.try_get::<i32, _>("ID") {
+            let player_id = match get_value::<i32>(&row, "ID") {
                 Ok(Some(value)) => value,
                 Ok(None) => {
                     return LeiTingDatabaseResetOutcome::ReturnedFalse(
@@ -2242,7 +2263,7 @@ impl TiberiusRsPlayer {
                 }
             };
             let base_bl_fy_energy = if request.update_kind == 1 {
-                match row.try_get::<i32, _>("baseblfyenergy") {
+                match get_value::<i32>(&row, "baseblfyenergy") {
                     Ok(Some(value)) => value as u32,
                     Ok(None) => {
                         return LeiTingDatabaseResetOutcome::ReturnedFalse(
@@ -2362,7 +2383,7 @@ impl TiberiusRsPlayer {
                 PlayerAbilityRowLoadFailure::MissingRequiredValue { column: "SaveTime" },
             );
         }
-        let save_time = match row.try_get::<NaiveDateTime, _>("SaveTime") {
+        let save_time = match get_value::<NaiveDateTime>(&row, "SaveTime") {
             Ok(Some(value)) => TagTime::from_fields([
                 value.year() as u16,
                 value.month() as u16,
@@ -2421,7 +2442,7 @@ impl TiberiusRsPlayer {
         let Some(row) = row else {
             return PlayerQuestQueryLoadOutcome::ReturnedTrue { quest_count: 0 };
         };
-        let blob = match row.try_get::<&[u8], _>("QuestData") {
+        let blob = match get_value::<&[u8]>(&row, "QuestData") {
             Ok(Some(blob)) => blob,
             Ok(None) => &[],
             Err(source) => {
@@ -2675,7 +2696,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             };
 
             let id = required!(narrow_u32("ID"));
-            let name = match row.try_get::<&str, _>("Name") {
+            let name = match get_value::<&str>(&row, "Name") {
                 Ok(Some(name)) => {
                     let (name, _, _) = WINDOWS_1251.encode(name);
                     visible_c_string(name.as_ref()).to_vec()
@@ -2779,7 +2800,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         let Some(row) = row else {
             return 0;
         };
-        let deletion_date = match row.try_get::<NaiveDateTime, _>("DelDate") {
+        let deletion_date = match get_value::<NaiveDateTime>(&row, "DelDate") {
             Ok(value) => value,
             Err(error) => {
                 self.notices.push_back(RsPlayerNotice {
@@ -2887,7 +2908,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         let Some(row) = row else {
             return Vec::new();
         };
-        match row.try_get::<&str, _>("Name") {
+        match get_value::<&str>(&row, "Name") {
             Ok(Some(name)) => {
                 let (name, _, _) = WINDOWS_1251.encode(name);
                 name.into_owned()
@@ -3092,7 +3113,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         let Some(account_row) = account_row else {
             return Vec::new();
         };
-        match account_row.try_get::<&str, _>("Account") {
+        match get_value::<&str>(&account_row, "Account") {
             Ok(Some(account)) => {
                 let (account, _, _) = WINDOWS_1251.encode(account);
                 visible_c_string(account.as_ref()).to_vec()
@@ -3173,7 +3194,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
 
             macro_rules! required {
                 ($type:ty, $column:literal) => {
-                    match row.try_get::<$type, _>($column) {
+                    match get_value::<$type>(&row, $column) {
                         Ok(Some(value)) => value,
                         Ok(None) => {
                             return stat_failed!(
@@ -3687,7 +3708,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
 
             sink.clear_honor_ranks_period(period);
             for rank_type in HonorRanksType::ALL {
-                let blob = match row.try_get::<&[u8], _>(rank_type.column_name()) {
+                let blob = match get_value::<&[u8]>(&row, rank_type.column_name()) {
                     Ok(blob) => blob,
                     Err(error) => {
                         self.notices.push_back(RsPlayerNotice {

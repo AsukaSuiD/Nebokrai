@@ -1,3 +1,4 @@
+#Requires -Version 7.3
 # Проверка Rust в локальном Docker без запуска игровых служб.
 [CmdletBinding()]
 param(

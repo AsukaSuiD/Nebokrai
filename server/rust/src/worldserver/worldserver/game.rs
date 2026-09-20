@@ -2347,17 +2347,52 @@ where
         player: &'a mut CPlayer,
     ) -> impl Future<Output = bool> + 'a {
         async move {
-            matches!(
-                player
-                    .load_data(
-                        self.loader,
-                        self.player_list,
-                        self.globe_setup,
-                        self.coefficients,
-                    )
-                    .await,
-                PlayerLoadDataOutcome::Loaded(_)
-            )
+            let player_id = player.get_id();
+            let outcome = player
+                .load_data(
+                    self.loader,
+                    self.player_list,
+                    self.globe_setup,
+                    self.coefficients,
+                )
+                .await;
+            match outcome {
+                PlayerLoadDataOutcome::Loaded(_) => {
+                    tracing::debug!(
+                        player_id,
+                        region_id = player.get_region_id(),
+                        "World завершил загрузку персонажа"
+                    );
+                    true
+                }
+                PlayerLoadDataOutcome::ReturnedFalse => {
+                    tracing::error!(
+                        player_id,
+                        stage = "database",
+                        outcome = "returned_false",
+                        "World не загрузил персонажа"
+                    );
+                    false
+                }
+                PlayerLoadDataOutcome::BlockedDatabase(_) => {
+                    tracing::error!(
+                        player_id,
+                        stage = "database",
+                        outcome = "blocked",
+                        "World не загрузил персонажа"
+                    );
+                    false
+                }
+                PlayerLoadDataOutcome::BlockedProperty(source) => {
+                    tracing::error!(
+                        player_id,
+                        stage = "post_load_property",
+                        error = %source,
+                        "World не рассчитал характеристики загруженного персонажа"
+                    );
+                    false
+                }
+            }
         }
     }
 }

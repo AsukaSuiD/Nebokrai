@@ -16,6 +16,7 @@ use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use super::rssetup::{WorldDatabaseSettings, WorldTdsClient};
+use crate::dbaccess::row::get_integer;
 use crate::worldserver::appworld::player::CPlayer;
 
 const SAVE_JJC_DATA_SQL: &str = "EXEC sp_JJccUpdatePlayer @id=@P1, @jjcLevel=@P2, @jjcScore=@P3, @weekJoin=@P4, @weekWin=@P5, @weekLose=@P6, @weekTie=@P7, @seasonJoin=@P8, @seasonWin=@P9, @seasonLose=@P10, @seasonTie=@P11";
@@ -208,21 +209,11 @@ fn read_jjc_integer(
     row: &Row,
     column: &'static str,
 ) -> Result<i64, PlayerJjcLoadFailure> {
-    let first_error = match row.try_get::<i32, _>(column) {
-        Ok(Some(value)) => return Ok(i64::from(value)),
-        Ok(None) => return Err(PlayerJjcLoadFailure::MissingRequiredValue { column }),
-        Err(source) => source,
-    };
-    if let Ok(Some(value)) = row.try_get::<u8, _>(column) {
-        return Ok(i64::from(value));
+    match get_integer(row, column) {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(PlayerJjcLoadFailure::MissingRequiredValue { column }),
+        Err(source) => Err(PlayerJjcLoadFailure::Database(source)),
     }
-    if let Ok(Some(value)) = row.try_get::<i16, _>(column) {
-        return Ok(i64::from(value));
-    }
-    if let Ok(Some(value)) = row.try_get::<i64, _>(column) {
-        return Ok(value);
-    }
-    Err(PlayerJjcLoadFailure::Database(first_error))
 }
 
 impl RsJjcSysOwner for TiberiusRsJjcSys {

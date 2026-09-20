@@ -15,6 +15,7 @@ use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
 use tiberius::Query;
 
+use crate::dbaccess::row::{get_integer, get_value};
 use crate::dbaccess::worlddb::goodslistener::{
     GoodsContainerTraversalSnapshot, GoodsListener, GoodsTraversalBlock,
 };
@@ -141,6 +142,10 @@ pub(crate) enum GoodsLoadFailure {
         source: tiberius::error::Error,
     },
     MissingRequiredValue {
+        row_index: usize,
+        column: &'static str,
+    },
+    NumericOutsideLegacyRange {
         row_index: usize,
         column: &'static str,
     },
@@ -367,8 +372,25 @@ impl DbGoodsOwner for TiberiusDbGoods {
             };
 
             macro_rules! required {
+                (i32, $column:literal) => {{
+                    let value = required!(@read, get_integer(&row, $column), $column);
+                    match i32::try_from(value) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return GoodsLoadOutcome::ReturnedFalse(
+                                GoodsLoadFailure::NumericOutsideLegacyRange {
+                                    row_index,
+                                    column: $column,
+                                },
+                            );
+                        }
+                    }
+                }};
                 ($type:ty, $column:literal) => {
-                    match row.try_get::<$type, _>($column) {
+                    required!(@read, get_value::<$type>(&row, $column), $column)
+                };
+                (@read, $value:expr, $column:literal) => {
+                    match $value {
                         Ok(Some(value)) => value,
                         Ok(None) => {
                             return GoodsLoadOutcome::ReturnedFalse(
@@ -411,7 +433,7 @@ impl DbGoodsOwner for TiberiusDbGoods {
             let amount = required!(i32, "amount") as u32;
             let place = required!(i32, "place");
             let position = required!(i32, "position") as u32;
-            let addon_type = match row.try_get::<i32, _>("type") {
+            let addon_type = match get_value::<i32>(&row, "type") {
                 Ok(value) => value,
                 Err(source) => {
                     return GoodsLoadOutcome::ReturnedFalse(GoodsLoadFailure::Database {
