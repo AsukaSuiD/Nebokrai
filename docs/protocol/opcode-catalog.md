@@ -55,6 +55,33 @@
 
 Клиентское `0x8F701` — нижняя граница допустимого диапазона, **не доказанный здесь смысл сообщения**. Семейство `0xBFxxx` — не гарантия одинакового payload; например `0xBF401` имеет две формы. Список типов выше не следует использовать как повод генерировать ответ для неописанного opcode.
 
+## Уведомления свойств игрока
+
+Game → клиент: результат CiQing отправляет `CGame::send_ci_qing_property_result`, полные свойства — `send_player_properties_changed` в [game.rs](../../server/rust/src/gameserver/gameserver/game.rs). Пересчёт сохраняет порядок `0xC010E → 0xBF721 → DoneTaoZhuang`; последняя операция зависит от modify-режима. Жизненный цикл пересчёта описан в [свойствах и состояниях](../gameplay/attributes-and-states.md).
+
+`VERIFIED` для opcode, порядка и ширины полей: оригинальный Game `CPlayer::SendResultToClient` VA `0x44B390` и `OnChangeProperties` VA `0x42C620`, сопоставленные с [идентифицированным клиентским EXE](../status/audit.md#сдвиг-пакета-входа-перед-заданиями). Серверный артефакт — `original/server/Miracle_server/GameServer/gameserver.exe`, SHA-256 `4f5c98e0fdf6147d8aecf55f7937aaf6e2cf5e4f5a2c44491a6359228762c80e`; SHA совпадает с исследованной локальной копией `.exe/gameserver.exe`. Оба EXE имеют ImageBase `0x400000`, RVA получается вычитанием этой базы из VA. Здесь установлены форматы, а не формулы вычисления значений или причина падения клиента.
+
+| Opcode | Payload и свидетельство получателя |
+| --- | --- |
+| `0xC010E` | `i32 object_type`, `i32 player_id`, затем значения объединённой CiQing/TaoZhuang map в порядке ключей, без ключей и счётчика. Для игрока `object_type = 400`. Клиентская ветвь VA `0x53990E` читает пару и ищет объект по `(type, id)`; после успешного поиска VA `0x53993B..0x539ACE` читает 15 четырёхбайтовых значений. Сервер выбирает opcode в VA `0x44B4FA`, пишет type/id в `0x44B515/0x44B522`, затем значения map в `0x44B539`. |
+| `0xC0110` | Отдельное уведомление TaoZhuang: один `i32` с ID комплекта либо `0`. Клиентская ветвь VA `0x539B9A` читает только это число в `0x539B9C`; серверный `ComputerAddValue` VA `0x4585D0` формирует его без пары type/id. |
+| `0xBF721` | Фиксированный payload ниже: 108 байт, с внутренним заголовком — 124. Клиентская ветвь VA `0x55245D` читает type/id и ищет объект по паре в `0x55247B`, затем читает свойства. |
+
+Смещения BF721 отсчитываются от payload, после [внутреннего заголовка](message-header.md). Многобайтовые поля little-endian; внутри строк таблицы поля идут подряд в указанном порядке.
+
+| Смещение | Поля Rust | Размер каждого поля |
+| --- | --- | --- |
+| `0x00` | `object_type`, `player_id` | 4 байта |
+| `0x08` | `strength`, `dexterity`, `constitution`, `intelligence`, `minimum_attack`, `maximum_attack`, `add_element_attack`, `element_modify` | 4 байта |
+| `0x28` | `attack_speed`, `cch` | 2 байта |
+| `0x2C` | `defense`, `element_resistance` | 4 байта |
+| `0x34` | `burden` | 2 байта |
+| `0x36` | `maximum_hp`, `health`, `maximum_mp`, `mana` | 4 байта |
+| `0x46` | `maximum_rp`, `rp`, `reank` | 2 байта |
+| `0x4C` | `maximum_vigour`, `vigour`, `credit`, `mode`, `war_soul_state == 1`, `battle_fairy_recall`, `battle_fairy_died`, `exalt` | 4 байта |
+
+Три ранее расширенных Rust-поля подтверждены независимо с обеих сторон: Game вызывает двухбайтовый writer VA `0x4131D0` в `0x42C753` (`burden`), `0x42C7AC` (`maximum_rp`), `0x42C7BD` (`rp`); клиент вызывает двухбайтовый reader VA `0x43B410` в `0x552545`, `0x552592`, `0x5525A1`. Этот reader сдвигает курсор на 2; четырёхбайтовый reader — VA `0x43B440`. Исправление возвращает длину BF721 с 130 к 124 байтам и заменяет ошибочную пару `(id, id)` на `(type, id)`.
+
 ## Проверка account и расчёты Billing
 
 Пары ниже прослежены по текущим отправителям и получателям. Они не дополняют неизвестные layouts предположениями.

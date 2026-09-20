@@ -459,9 +459,12 @@
 //! обязательного runtime-а полные combat snapshots до/после универсальных
 //! equipment/addon формул, а `CPlayer` сам вычисляет и сохраняет CiQing delta.
 //! Общий result-owner объединяет TaoZhuang values и всегда шлёт values-only
-//! `0xC0110` до последующего `0xBF721`, как native `MountAllEquip`. Общая
+//! `0xC010E` до последующего `0xBF721`, как native `MountAllEquip`. Общая
 //! публикация полного `UpdateProperty` затем вызывает `DoneTaoZhuang` только
 //! при `bTaoZhuangModify`; при обратном режиме pending закрывает AI-tail.
+//! Форматы CiQing/BF721 сверены по Game VA 0x44B390/0x42C620 и клиентским
+//! ветвям VA 0x53990E/0x55245D; точные артефакты и поля — в
+//! `docs/protocol/opcode-catalog.md`, раздел уведомлений свойств игрока.
 //! Обычный skill request `0x90001` проходит через owned learned skills и
 //! emotion state: optional `GS0090`, concrete around `0xBF611`, self/point/
 //! object resolution и `0xBFE01` сохраняют native order до owned очереди
@@ -5925,7 +5928,7 @@ impl CGame {
         self.commit_player_property_recompute(player_id, recompute)
     }
 
-    /// Публикует полный native tail в порядке `C0110 → BF721 → DoneTaoZhuang`.
+    /// Публикует полный native tail в порядке `C010E → BF721 → DoneTaoZhuang`.
     /// Последний шаг выполняется здесь только в modify-режиме; инвертированный
     /// startup gate оставляет тот же pending-флаг для достигнутого AI-tail.
     fn publish_player_property_update(
@@ -5964,8 +5967,8 @@ impl CGame {
         player_id: i32,
         result_values: &BTreeMap<u32, u32>,
     ) -> i32 {
-        let mut message = CMessage::new(0x0c_0110);
-        message.add_long(player_id);
+        let mut message = CMessage::new(0x0c_010e);
+        message.add_long(PLAYER_TYPE);
         message.add_long(player_id);
         for value in result_values.values() {
             message.add_ulong(*value);
@@ -42720,7 +42723,7 @@ impl CGame {
         let combat = player.combat_properties();
         let base = player.base_properties();
         let mut message = CMessage::new(0xbf721);
-        message.add_long(player.player_id());
+        message.add_long(player.shape().identity().object_type);
         message.add_long(player.player_id());
         message.add_ulong(combat.strength);
         message.add_ulong(combat.dexterity);
@@ -42734,13 +42737,13 @@ impl CGame {
         message.base_mut().add_short(combat.cch as i16);
         message.add_ulong(combat.defense);
         message.add_ulong(combat.element_resistance);
-        message.add_ulong(u32::from(combat.burden));
+        message.base_mut().add_short(combat.burden as i16);
         message.add_ulong(combat.maximum_hp);
         message.add_ulong(base.health);
         message.add_ulong(combat.maximum_mp);
         message.add_ulong(base.mana);
-        message.add_ulong(u32::from(base.maximum_rp));
-        message.add_ulong(u32::from(base.rp));
+        message.base_mut().add_short(base.maximum_rp as i16);
+        message.base_mut().add_short(base.rp as i16);
         message.base_mut().add_short(combat.reank as i16);
         message.add_ulong(base.maximum_vigour);
         message.add_ulong(base.vigour);

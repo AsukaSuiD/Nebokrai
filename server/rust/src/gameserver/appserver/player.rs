@@ -3869,7 +3869,9 @@ impl CPlayer {
         {
             let mut writer = LegacyWriter::new(&mut payload);
             writer.write_u8(u8::from(self.contend_state));
-            writer.write_i32(i32::from(self.city_war_died_state));
+            // Оригинал: VA 0x0044A980–0x0044A988; клиент читает byte
+            // в 0x0045197C–0x00451989. Ширина не следует из имени m_l*.
+            writer.write_u8(u8::from(self.city_war_died_state));
         }
         self.append_client_quest_snapshot(&mut payload, quest_system)?;
         {
