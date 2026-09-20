@@ -1,6 +1,6 @@
 # Локальный гибридный стенд
 
-Стенд нужен для работы над Rust-службами и их обменом с доступным оригинальным игровым процессом. Auth, Login, Billing, World и Misc запускаются из Rust-образа, Game — из локального Windows `gameserver.exe` через Wine. Этот состав принят в [ADR-0006](../decisions/0006-hybrid-runtime.md) и задан в [Compose](../../deploy/hybrid/compose.yaml). Сборка Rust GameServer описана [отдельно](build.md): в данном стенде он не исполняется.
+Стенд нужен для работы над Rust-службами и их обменом с доступным оригинальным игровым процессом. Auth, Login, Billing, World и Misc запускаются из Rust-образа, Game — из локального Windows `gameserver.exe` через Wine. Этот состав принят в [ADR-0006](../decisions/0006-hybrid-runtime.md) и задан в [Compose](../../deploy/hybrid/compose.yaml). Для запуска Rust Game вместе с остальными службами используется [Compose-дополнение](rust-runtime.md); базовый файл сам по себе выбирает Wine.
 
 ## Источники данных и требования
 

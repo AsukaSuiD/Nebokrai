@@ -10,6 +10,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use tokio::net::TcpStream;
+use parking_lot::Mutex;
 
 use crate::nets::msgqueue::CMsgQueue;
 use crate::nets::serverclient::CServerClient;
@@ -51,9 +52,12 @@ impl WorldServerEventSender {
     }
 }
 
-/// Владелец общего `CServer` и FIFO событий принятых GameServer.
+/// Общий `CServer` и FIFO событий принятых GameServer.
+/// Клон для сетевой задачи разделяет состояние; доменный цикл снимает FIFO.
+/// Короткий lock защищает транспортное состояние и не удерживается через await.
+#[derive(Clone)]
 pub(crate) struct CMyNetServer {
-    base: CServer,
+    base: Arc<Mutex<CServer>>,
     event_sender: WorldServerEventSender,
 }
 
@@ -66,7 +70,7 @@ impl CMyNetServer {
             WORLD_DEFAULT_PERMITTED_SEND_BYTES,
         );
         Self {
-            base,
+            base: Arc::new(Mutex::new(base)),
             event_sender: WorldServerEventSender {
                 events: Arc::new(CMsgQueue::new()),
             },
@@ -81,22 +85,22 @@ impl CMyNetServer {
         socket_type: i32,
         legacy_flag: bool,
     ) -> Result<(), ServerHostError> {
-        self.base.host(port, address, socket_type, legacy_flag)
+        self.base.lock().host(port, address, socket_type, legacy_flag)
     }
 
     /// Сохраняет две исходные local-address записи после успешного `Host`.
     pub(crate) fn set_local_identity(&mut self, ip: &[u8], ipv4_word: u32) {
-        self.base.set_local_identity(ip, ipv4_word);
+        self.base.lock().set_local_identity(ip, ipv4_word);
     }
 
     /// Возвращает текущий dotted IPv4 унаследованного socket-state.
-    pub(crate) fn local_ip(&self) -> &[u8] {
-        self.base.local_ip()
+    pub(crate) fn local_ip(&self) -> Vec<u8> {
+        self.base.lock().local_ip().to_vec()
     }
 
     /// Возвращает текущий IPv4 как исходный x86 `unsigned long`.
-    pub(crate) const fn local_ipv4_word(&self) -> u32 {
-        self.base.local_ipv4_word()
+    pub(crate) fn local_ipv4_word(&self) -> u32 {
+        self.base.lock().local_ipv4_word()
     }
 
     /// Применяет восемь setup-записей в точном порядке World `InitNetServer`.
@@ -115,7 +119,7 @@ impl CMyNetServer {
         maximum_message_length: u32,
         permitted_send_bytes: i32,
     ) {
-        self.base.configure_transport_after_host(
+        self.base.lock().configure_transport_after_host(
             check_receive_rate,
             max_in_flight_sends,
             maximum_bytes_per_second,
@@ -129,7 +133,7 @@ impl CMyNetServer {
 
     /// Начинает одну общую accept-operation либо сообщает причину ожидания.
     pub(crate) fn begin_accept(&self) -> AcceptStart {
-        self.base.begin_accept()
+        self.base.lock().begin_accept()
     }
 
     /// Выполняет admission через World virtual-фабрику и ставит общий `ADD`.
@@ -139,7 +143,7 @@ impl CMyNetServer {
         peer: SocketAddrV4,
         now_ms: u32,
     ) -> AdmissionOutcome {
-        self.base
+        self.base.lock()
             .queue_accepted_with(stream, peer, now_ms, CMyServerClient::new_state)
     }
 
@@ -151,12 +155,12 @@ impl CMyNetServer {
         let mut callbacks = WorldNetworkCallbacks {
             events: self.event_sender.events.as_ref(),
         };
-        self.base.process_command_snapshot(&mut callbacks, now_ms)
+        self.base.lock().process_command_snapshot(&mut callbacks, now_ms)
     }
 
     /// Возвращает producer handle доказанных World server-команд.
     pub(crate) fn command_handle(&self) -> ServerCommandHandle {
-        self.base.command_handle()
+        self.base.lock().command_handle()
     }
 
     /// Возвращает число событий, ожидающих доменного snapshot-прохода.
@@ -186,12 +190,12 @@ impl CMyNetServer {
 
     /// Сообщает, остались ли записи в исходном `m_Clients` map.
     pub(crate) fn has_clients(&self) -> bool {
-        self.base.has_clients()
+        self.base.lock().has_clients()
     }
 
     /// Возвращает exact signed `CServer::m_lClientNum` для World info-owner-а.
-    pub(crate) const fn client_count(&self) -> i32 {
-        self.base.client_count()
+    pub(crate) fn client_count(&self) -> i32 {
+        self.base.lock().client_count()
     }
 }
 

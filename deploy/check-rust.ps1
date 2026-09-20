@@ -1,6 +1,8 @@
 # Проверка Rust в локальном Docker без запуска игровых служб.
 [CmdletBinding()]
 param(
+    [ValidateSet('Check', 'Build')]
+    [string]$Mode = 'Check',
     [ValidateRange(128, 16384)]
     [int]$CacheLimitMiB = 2048
 )
@@ -38,9 +40,25 @@ fi
 printf '%s\n' "$key" > "$cache/key"
 trim_cache
 trap 'status=$?; trap - EXIT; trim_cache; exit "$status"' EXIT
-cargo check --locked --lib --bins
+cargo "$@"
+if [ "$1" = build ]; then
+    for binary in authserver loginserver worldserver gameserver billingserver miscserver; do
+        install "$cache/target/debug/$binary" "/artifacts/.$binary.new"
+        mv -f "/artifacts/.$binary.new" "/artifacts/$binary"
+    done
+fi
 '@
 $checkScript = $checkScript.Replace("`r`n", "`n")
+
+$cargoArguments = @('check', '--locked', '--lib', '--bins')
+$artifactMount = @()
+if ($Mode -eq 'Build') {
+    $artifactDirectory = Join-Path $PSScriptRoot '../.local/rust-bin'
+    New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
+    $artifactDirectory = (Resolve-Path -LiteralPath $artifactDirectory).Path
+    $artifactMount = @('--mount', "type=bind,source=$artifactDirectory,target=/artifacts")
+    $cargoArguments = @('build', '--locked', '--bins')
+}
 
 $dockerArguments = @(
     '--context', 'desktop-linux', 'run', '--rm',
@@ -56,7 +74,8 @@ $dockerArguments = @(
     '--env', 'CARGO_BUILD_JOBS=2',
     '--env', 'CARGO_PROFILE_DEV_DEBUG=0',
     '--env', "NEBOKRAI_CACHE_LIMIT_MIB=$CacheLimitMiB",
+    $artifactMount
     $image, 'sh', '-c', $checkScript, 'nebokrai-check'
 )
-& docker @dockerArguments
+& docker @dockerArguments @cargoArguments
 exit $LASTEXITCODE

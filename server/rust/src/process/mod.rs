@@ -1,4 +1,7 @@
 //! Process-level владельцы точек запуска серверных бинарников.
+//!
+//! Общая оболочка Rust: единый tracing subscriber устанавливается до создания
+//! Tokio runtime, чтобы события всех потоков попадали в stderr без ANSI.
 
 use std::error::Error;
 use std::future::Future;
@@ -6,6 +9,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use tokio::signal::unix::{SignalKind, signal};
+use tracing_subscriber::EnvFilter;
 
 mod authserver;
 mod billingserver;
@@ -27,6 +31,27 @@ where
     RunFuture: Future<Output = Result<bool, Box<dyn Error>>>,
 {
     let result = (|| -> Result<bool, Box<dyn Error>> {
+        let filter = match std::env::var("RUST_LOG") {
+            Ok(value) => EnvFilter::builder()
+                .with_default_directive(tracing::Level::WARN.into())
+                .parse(value)
+                .ok(),
+            Err(std::env::VarError::NotPresent) => Some(EnvFilter::new("warn")),
+            Err(std::env::VarError::NotUnicode(_)) => None,
+        }
+        .unwrap_or_else(|| {
+            eprintln!(
+                "{service}: предупреждение: некорректный RUST_LOG; используется фильтр warn"
+            );
+            EnvFilter::new("warn")
+        });
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)?;
+
         let runtime_directory = std::env::current_dir()?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

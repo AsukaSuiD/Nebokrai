@@ -1,0 +1,53 @@
+# Локальный запуск шести Rust-служб из .local/rust-bin.
+# Сначала: ./deploy/check-rust.ps1 -Mode Build
+# Запуск: docker --context desktop-linux compose -f deploy/hybrid/compose.yaml -f deploy/hybrid/compose.rust.yaml up -d --no-build
+x-local-rust: &local-rust
+  image: rust:1.97.1-bookworm
+  build: !reset null
+  working_dir: /runtime
+  restart: "no"
+  environment:
+    RUST_LOG: ${RUST_LOG:-warn}
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "2"
+
+services:
+  nebokrai_auth:
+    <<: *local-rust
+    volumes:
+      - ../../.local/rust-bin:/opt/nebokrai:ro
+  nebokrai_login:
+    <<: *local-rust
+    volumes:
+      - ../../.local/rust-bin:/opt/nebokrai:ro
+    ports: !override
+      - "127.0.0.1:2346:2346"
+  nebokrai_billing:
+    <<: *local-rust
+    volumes:
+      - ../../.local/rust-bin:/opt/nebokrai:ro
+  nebokrai_world:
+    <<: *local-rust
+    volumes:
+      - ../../.local/rust-bin:/opt/nebokrai:ro
+  nebokrai_misc:
+    <<: *local-rust
+    volumes:
+      - ../../.local/rust-bin:/opt/nebokrai:ro
+  nebokrai_game:
+    <<: *local-rust
+    command: ["/opt/nebokrai/gameserver"]
+    volumes: !override
+      - ../../runtime/GameServer:/runtime
+      - ../../.local/rust-bin:/opt/nebokrai:ro
+    ports: !override
+      - "127.0.0.1:2347:2347"
+    healthcheck:
+      test: ["CMD-SHELL", "awk '$$2 ~ /:092B$$/ && $$4 == \"0A\" { ready=1 } END { exit !ready }' /proc/net/tcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 20s

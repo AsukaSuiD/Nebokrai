@@ -2,7 +2,7 @@
 //! `nets/serverclient.cpp` и `.h`.
 //!
 //! Статус владельца: `IMPLEMENTED` для connection metadata, накопления
-//! receive/send bytes, серверного send-limit, одного transport-write на batch,
+//! receive/send bytes, серверного send-limit, полной transport-записи batch,
 //! числа незавершённых send-операций, двухступенчатого close flag и per-client
 //! receive-rate. Разбор
 //! 12-байтового envelope до конкретного `CMessage` остаётся владельцам
@@ -61,16 +61,16 @@
 //! Auth `0x0000DE60`, Billing `0x00007D00`, Login `0x000669D0`, Game
 //! `0x00015290`, World `0x000244B0`) показал: если completion передавал меньше
 //! bytes, код только логировал отличие, освобождал весь buffer и публиковал
-//! `SENDEND`; остаток не отправлялся повторно. Поэтому Rust batch делает один
-//! успешный transport-write и явно сообщает размер потерянного хвоста, вместо
-//! семантически неверного `write_all`.
+//! `SENDEND`; остаток не отправлялся повторно. Это факт об IOCP completion,
+//! а не о частичном Linux `write`. Rust дописывает batch до завершения операции:
+//! readiness и один syscall не означают принятие транспортом всей заявки.
 //!
 //! WinSock IOCP, `PER_IO_OPERATION_DATA`, ручные allocation/free и отдельная
 //! `SENDEND`-команда заменены владеющим `ServerSendBatch` и явным завершением
 //! операции. Close flag отдельно от одноразового начала shutdown сохраняет
 //! старую границу `QUIT -> closesocket -> worker DELETE -> OnClose/Drop`.
-//! Ожидание writable может повторяться при ложной readiness, но после
-//! первого успешного системного write payload не повторяется. Нулевой write для
+//! Ожидание writable может повторяться при ложной readiness; после частичной
+//! записи передаётся только оставшийся хвост. Нулевой write для
 //! непустого batch соответствует исходному disconnect-пути, а не partial send.
 //!
 //! Receive-path накапливал TCP-фрагменты, начиная с capacity `0x100000`;
@@ -151,18 +151,19 @@ impl ServerSendBatch {
         self.buffer.len()
     }
 
-    /// Выполняет не более одного успешного системного write всего batch.
-    ///
-    /// Ложная readiness может привести к повторному ожиданию, но частичный
-    /// успешный write завершает batch: исходный completion-path остаток терял.
-    pub(crate) async fn write_once(self, stream: &TcpStream) -> io::Result<ServerSendCompletion> {
+    /// Дописывает batch последовательно; один syscall не равен IOCP completion.
+    pub(crate) async fn write_complete(self, stream: &TcpStream) -> io::Result<ServerSendCompletion> {
         let requested = self.buffer.len();
-        let transferred = write_once_tcp(stream, &self.buffer).await?;
-        if transferred == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "TCP-соединение закрылось во время отправки server-client batch",
-            ));
+        let mut transferred = 0;
+        while transferred < requested {
+            let written = write_once_tcp(stream, &self.buffer[transferred..]).await?;
+            if written == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "TCP-соединение закрылось во время отправки server-client batch",
+                ));
+            }
+            transferred += written;
         }
         Ok(ServerSendCompletion {
             requested,

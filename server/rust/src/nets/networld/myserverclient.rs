@@ -157,6 +157,12 @@ impl CMyServerClient {
 
             let mut message = message;
             message.apply_client_context(client.message_context());
+            tracing::debug!(
+                socket_id = message.socket_id(),
+                message_type = message.message_type(),
+                frame_length,
+                "World принял серверное сообщение"
+            );
             messages.publish_message(message);
             produced = produced.wrapping_add(1);
             let consumed = client.consume_receive_prefix(frame_length);

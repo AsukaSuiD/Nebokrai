@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ClientAddress
+    [string]$ClientAddress,
+    [switch]$RustOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +45,12 @@ Update-Value $login "BillingDatabaseIP" "mssql"
 $misc = Join-Path $runtime "MiscServer\setup.ini"
 Update-Value $misc "WorldIP" "nebokrai_world"
 Update-Value $misc "LocalIP" "nebokrai_misc"
+if ($RustOnly) {
+    # World сопоставляет объявленные адрес/порт с registry, затем читает IPv4.
+    # Docker DNS остаётся адресом подключения; здесь задаётся identity Misc.
+    Update-Value $misc "LocalIP" "127.0.0.1"
+    Update-Value $billing "PlayerFillCheckSrvSwitch" "0"
+}
 
 $world = Join-Path $runtime "WorldServer\setup.ini"
 Update-Value $world "LoginIP" "nebokrai_login"
@@ -67,6 +74,17 @@ $serverText = [regex]::Replace(
     "#`t1`t$ClientAddress`t2347"
 )
 [System.IO.File]::WriteAllText($serverSetup, $serverText, $encoding)
+if ($RustOnly) {
+    $miscRow = '(?m)^#\s*5\s+\S+\s+\d+\s*$'
+    if ([regex]::IsMatch($serverText, $miscRow)) {
+        $serverText = [regex]::Replace($serverText, $miscRow, "#`t5`t127.0.0.1`t2382")
+    } else {
+        $serverText = $serverText.TrimEnd() + "`r`n#`t5`t127.0.0.1`t2382`r`n"
+    }
+    $recordCount = [regex]::Matches($serverText, '(?m)^#\s*\d+\s+\S+\s+\d+\s*$').Count
+    $serverText = [regex]::Replace($serverText, '(?m)^GameServerNum\s+\d+', "GameServerNum`t$recordCount")
+    [System.IO.File]::WriteAllText($serverSetup, $serverText, $encoding)
+}
 
 $billingSetup = Join-Path $runtime "BillingServer\gsinfosetup.ini"
 $billingText = [System.IO.File]::ReadAllText($billingSetup, $encoding)

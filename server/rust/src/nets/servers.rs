@@ -66,11 +66,12 @@
 //! owned команду и немедленно перевыставлял один read; после send completion
 //! публиковал `SENDEND`, даже если системный completion был частичным. Один
 //! `ServerIoAction::Receive` сохраняет последовательный outstanding read, а
-//! owned send-action — уже доказанное отбрасывание partial-хвоста. Tokio
-//! readiness заменяет IOCP, а `socket2::SockRef::shutdown` — `closesocket` на
+//! owned send-action дописывает batch целиком. Частичный Linux write не равен
+//! IOCP completion. На соединении исполняется один send-action, чтобы сохранить
+//! порядок байтов. `socket2::SockRef::shutdown` заменяет `closesocket` на
 //! стадии close flag, не забирая владение socket у read-задачи.
 //! Если новый send и close встречаются в одном snapshot, действие выполняет
-//! один write до shutdown: это сохраняет исходный порядок `WSASend -> close`.
+//! полную запись до shutdown; ранее начатая запись завершается до новой.
 //! Точная timing-семантика pending Windows send против Linux readiness локально
 //! отмечена `BLOCKED_MISSING_FACT` и не выдаётся за полное совпадение.
 //!
@@ -521,7 +522,7 @@ pub(crate) enum ServerIoCompletion {
     SendEnded {
         /// Socket ID завершившейся операции.
         socket_id: i32,
-        /// Completion с потерянным partial-хвостом либо transport-ошибка.
+        /// Полная запись batch либо terminal transport-ошибка.
         result: io::Result<ServerSendCompletion>,
     },
 }
@@ -557,14 +558,14 @@ impl ServerIoAction {
                 batch,
                 shutdown_after,
             } => {
-                let result = batch.write_once(&stream).await;
+                let result = batch.write_complete(&stream).await;
                 if shutdown_after {
                     let _ = shutdown_tcp(&stream);
                 }
                 if result.is_ok() {
                     commands.publish_send_end(socket_id);
                 } else {
-                    // BLOCKED_MISSING_FACT: Linux write_once объединяет два
+                    // BLOCKED_MISSING_FACT: Linux write объединяет два
                     // Windows-пути: немедленный отказ WSASend удалял client
                     // прямо в send-проходе, а ошибка уже pending IOCP шла через
                     // worker delete-command. Точку отказа после readiness
@@ -939,7 +940,11 @@ impl CServer {
                 let Some(client) = self.clients.get_mut(&socket_id) else {
                     continue;
                 };
-                if client.state().io_operations() >= self.max_in_flight_sends {
+                // Один batch на соединение сохраняет порядок байтов,
+                // включая дописывание хвоста после частичного Linux write.
+                if client.state().io_operations() != 0
+                    || client.state().io_operations() >= self.max_in_flight_sends
+                {
                     None
                 } else {
                     let closing = client.state().is_closing();
@@ -968,6 +973,13 @@ impl CServer {
         self.expire_new_accepts(now_ms);
 
         for (&socket_id, client) in &mut self.clients {
+            // QUIT во время предыдущей записи не должен обрезать её или
+            // принятый до QUIT следующий batch. Дожидаемся SENDEND.
+            if client.state().io_operations() != 0
+                && !shutdown_after_send.contains(&socket_id)
+            {
+                continue;
+            }
             if client.state_mut().begin_close() {
                 if shutdown_after_send.contains(&socket_id) {
                     // BLOCKED_MISSING_FACT: Windows WSASend уже был submitted
@@ -1086,14 +1098,23 @@ impl CServer {
                 .add_send_data(buffer, self.permitted_send_bytes)
         };
         match outcome {
-            Ok(AddSendDataOutcome::LimitExceeded) => match removal {
-                SendOverflowRemoval::DelOneClient => {
-                    self.remove_client_with_callback(socket_id, callbacks);
+            Ok(AddSendDataOutcome::LimitExceeded) => {
+                tracing::warn!(
+                    socket_id,
+                    incoming_bytes = buffer.len(),
+                    pending_bytes = self.clients.get(&socket_id).map(|client| client.state().pending_send_bytes()),
+                    permitted_bytes = self.permitted_send_bytes,
+                    "соединение закрывается: превышен лимит очереди отправки"
+                );
+                match removal {
+                    SendOverflowRemoval::DelOneClient => {
+                        self.remove_client_with_callback(socket_id, callbacks);
+                    }
+                    SendOverflowRemoval::Broadcast => {
+                        self.remove_broadcast_overflow_client(socket_id, callbacks);
+                    }
                 }
-                SendOverflowRemoval::Broadcast => {
-                    self.remove_broadcast_overflow_client(socket_id, callbacks);
-                }
-            },
+            }
             Ok(AddSendDataOutcome::Buffered | AddSendDataOutcome::IgnoredWhileClosing) => {}
             Err(error) => errors.push(ServerSnapshotError::ClientSize { socket_id, error }),
         }

@@ -5,6 +5,10 @@
 //! процессное состояние: runtime-каталог, сигнал завершения и сеть. Игровые
 //! реестры, игроки, регионы, фабрики и legacy RNG остаются у `CGame`;
 //! их нельзя дублировать здесь ради формального `GameThreadRuntime`.
+//!
+//! Локальный сетевой ход опрашивает готовые операции World/Billing до Pending
+//! в пределах отдельных бюджетов. Сообщения остаются в FIFO своих клиентов;
+//! их диспетчеризация выполняется только на прежней стадии `CGame::main_loop`.
 
 use std::error::Error;
 use std::fmt;
@@ -31,6 +35,11 @@ use super::game::{
     CGame, GameExitRuntime, GameNetworkRuntime, GameReleaseRuntime, GameRuntimePathOwner,
     GameRuntimePaths, GameThreadRuntime, game_tick_milliseconds,
 };
+
+// Бюджет ограничивает число I/O-шагов, включая чтения неполного кадра и записи,
+// а не число сообщений или время разбора одного шага.
+const WORLD_IO_STEP_BUDGET: usize = 128;
+const BILLING_IO_STEP_BUDGET: usize = 16;
 
 #[derive(Clone)]
 pub(crate) struct GameProcessControl {
@@ -101,8 +110,9 @@ pub(crate) struct GameProcessNetworkTurn {
     pub(crate) accept_errors: Vec<io::Error>,
     pub(crate) io_completions: Vec<ServerIoCompletion>,
     pub(crate) server_errors: Vec<String>,
-    pub(crate) world: Option<Result<GameClientIoStep, GameClientIoError>>,
-    pub(crate) billing: Option<Result<GameClientIoStep, GameClientIoError>>,
+    // Все готовые результаты в порядке выполнения, включая завершающий Closed/Err.
+    pub(crate) world: Vec<Result<GameClientIoStep, GameClientIoError>>,
+    pub(crate) billing: Vec<Result<GameClientIoStep, GameClientIoError>>,
 }
 
 #[derive(Debug)]
@@ -161,10 +171,28 @@ impl GameProcessNetworkRuntime {
         }
 
         if game.world_client().is_some() {
-            turn.world = poll_once(game.run_world_io_once()).await;
+            for _ in 0..WORLD_IO_STEP_BUDGET {
+                let Some(result) = poll_once(game.run_world_io_once()).await else {
+                    break;
+                };
+                let stopped = matches!(&result, Ok(GameClientIoStep::Closed) | Err(_));
+                turn.world.push(result);
+                if stopped {
+                    break;
+                }
+            }
         }
         if game.billing_client().is_some() {
-            turn.billing = poll_once(game.run_billing_io_once()).await;
+            for _ in 0..BILLING_IO_STEP_BUDGET {
+                let Some(result) = poll_once(game.run_billing_io_once()).await else {
+                    break;
+                };
+                let stopped = matches!(&result, Ok(GameClientIoStep::Closed) | Err(_));
+                turn.billing.push(result);
+                if stopped {
+                    break;
+                }
+            }
         }
         Ok(turn)
     }
@@ -320,17 +348,23 @@ impl GameNetworkRuntime for GameProcessRuntime {
                     for error in &turn.server_errors {
                         tracing::warn!(error, "сетевой сеанс GameServer завершил операцию с ошибкой");
                     }
-                    if let Some(Err(error)) = &turn.world {
-                        tracing::warn!(?error, "сетевой ход World-клиента GameServer не завершён");
+                    for result in &turn.world {
+                        if let Err(error) = result {
+                            tracing::warn!(?error, "сетевой ход World-клиента GameServer не завершён");
+                        }
                     }
-                    if let Some(Err(error)) = &turn.billing {
-                        tracing::warn!(?error, "сетевой ход Billing-клиента GameServer не завершён");
+                    for result in &turn.billing {
+                        if let Err(error) = result {
+                            tracing::warn!(?error, "сетевой ход Billing-клиента GameServer не завершён");
+                        }
                     }
                     tracing::trace!(
                         admissions = turn.admissions.len(),
                         io_completions = turn.io_completions.len(),
-                        world_polled = turn.world.is_some(),
-                        billing_polled = turn.billing.is_some(),
+                        world_steps = turn.world.len(),
+                        billing_steps = turn.billing.len(),
+                        world = ?turn.world,
+                        billing = ?turn.billing,
                         "завершён неблокирующий сетевой ход GameServer"
                     );
                 }

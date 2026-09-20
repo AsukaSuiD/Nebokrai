@@ -18670,8 +18670,22 @@ where
                                 }
                             }
                         };
+                        tracing::debug!(
+                            socket_id,
+                            messages = configuration.deliveries.len(),
+                            payload_bytes = configuration.deliveries.iter().map(|delivery| delivery.payload_length).sum::<usize>(),
+                            "World поставил начальную конфигурацию в очередь отправки"
+                        );
                         report.initial_configuration = Some(configuration);
                     }
+                    tracing::debug!(
+                        socket_id = report.socket_id,
+                        ip = %String::from_utf8_lossy(&report.ip),
+                        port = report.port,
+                        game_server_index = ?report.game_server_index,
+                        continuation = ?report.continuation,
+                        "World обработал регистрацию GameServer"
+                    );
                 }
                 return ProcessedWorldEvent::ServerMessage {
                     source,
