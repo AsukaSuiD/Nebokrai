@@ -34,6 +34,8 @@
 //! четвёрку setup, тогда как `PutCashLog` использует отдельные поля
 //! LogServer/LogDB. Поэтому owner хранит две TDS-конфигурации; смешивать
 //! cash-log с Billing DB нельзя.
+//! Преобразования входов выполняются в локальных SQL-переменных до EXEC:
+//! аргумент процедуры в T-SQL не допускает выражение CONVERT непосредственно.
 //!
 //! После успешного `buyItemCode` исходная функция при включённом LogServer
 //! снимала local time и ставила `tagIncLogNode` в общую очередь. Глобальный
@@ -283,9 +285,10 @@ impl TiberiusRsPlayerAccount {
         let mut client = Self::connect(config).await?;
         let row = client
             .query(
-                "DECLARE @Point int, @Result int; \
+                "DECLARE @Point int, @Result int, \
+                 @UserID varchar(200) = CONVERT(varchar(200), @P1); \
                  EXEC [GetUserPoint] \
-                 @UserID = CONVERT(varchar(200), @P1), \
+                 @UserID = @UserID, \
                  @Point = @Point OUTPUT, @Result = @Result OUTPUT; \
                  SELECT @Result, @Point;",
                 &[&user_id],
@@ -313,11 +316,12 @@ impl TiberiusRsPlayerAccount {
             let amount = i64::from(entry.yuanbao);
             client
                 .execute(
-                    "EXEC [PutCashLog] \
+                    "DECLARE @UserAcc varchar(200) = CONVERT(varchar(200), @P2), \
+                     @UserIp varchar(200) = CONVERT(varchar(200), @P3), \
+                     @Money int = CONVERT(int, @P4); \
+                     EXEC [PutCashLog] \
                      @LogTime = @P1, \
-                     @UserAcc = CONVERT(varchar(200), @P2), \
-                     @UserIp = CONVERT(varchar(200), @P3), \
-                     @Money = CONVERT(int, @P4), \
+                     @UserAcc = @UserAcc, @UserIp = @UserIp, @Money = @Money, \
                      @ItemIdx = @P5, @itemNum = @P6, @ls = @P7, @ws = @P8;",
                     &[
                         &log_time,
@@ -350,16 +354,19 @@ impl TiberiusRsPlayerAccount {
         let row = client
             .query(
                 "DECLARE @Result int, @TranCode varchar(500), \
-                 @UIDfromLastPoint int, @UIDtoLastPoint int; \
+                 @UIDfromLastPoint int, @UIDtoLastPoint int, \
+                 @UIDfrom varchar(200) = CONVERT(varchar(200), @P1), \
+                 @Ipfrom varchar(200) = CONVERT(varchar(200), @P2), \
+                 @Cnamefrom varchar(200) = CONVERT(varchar(200), @P3), \
+                 @UIDto varchar(200) = CONVERT(varchar(200), @P4), \
+                 @Ipto varchar(200) = CONVERT(varchar(200), @P5), \
+                 @Cnameto varchar(200) = CONVERT(varchar(200), @P6), \
+                 @Amount int = CONVERT(int, @P10); \
                  EXEC [buyPlayerItem] \
-                 @UIDfrom = CONVERT(varchar(200), @P1), \
-                 @Ipfrom = CONVERT(varchar(200), @P2), \
-                 @Cnamefrom = CONVERT(varchar(200), @P3), \
-                 @UIDto = CONVERT(varchar(200), @P4), \
-                 @Ipto = CONVERT(varchar(200), @P5), \
-                 @Cnameto = CONVERT(varchar(200), @P6), \
+                 @UIDfrom = @UIDfrom, @Ipfrom = @Ipfrom, @Cnamefrom = @Cnamefrom, \
+                 @UIDto = @UIDto, @Ipto = @Ipto, @Cnameto = @Cnameto, \
                  @WorldId = @P7, @ItemIdx = @P8, @ItemNum = @P9, \
-                 @Amount = CONVERT(int, @P10), \
+                 @Amount = @Amount, \
                  @Result = @Result OUTPUT, @TranCode = @TranCode OUTPUT, \
                  @UIDfromLastPoint = @UIDfromLastPoint OUTPUT, \
                  @UIDtoLastPoint = @UIDtoLastPoint OUTPUT; \
@@ -402,14 +409,17 @@ impl TiberiusRsPlayerAccount {
         let amount = i64::from(trade.yuanbao);
         let row = client
             .query(
-                "DECLARE @Result int, @TranCode varchar(500), @LastPoint int; \
+                "DECLARE @Result int, @TranCode varchar(500), @LastPoint int, \
+                 @UserID varchar(32) = CONVERT(varchar(32), @P1), \
+                 @Amount int = CONVERT(int, @P4), \
+                 @IP varchar(200) = CONVERT(varchar(200), @P5), \
+                 @World varchar(200) = CONVERT(varchar(200), @P6), \
+                 @Character_Name varchar(200) = CONVERT(varchar(200), @P7); \
                  EXEC [buyItemCode] \
-                 @UserID = CONVERT(varchar(32), @P1), \
+                 @UserID = @UserID, \
                  @ItemIndex = @P2, @Qty = @P3, \
-                 @Amount = CONVERT(int, @P4), \
-                 @IP = CONVERT(varchar(200), @P5), \
-                 @World = CONVERT(varchar(200), @P6), \
-                 @Character_Name = CONVERT(varchar(200), @P7), \
+                 @Amount = @Amount, @IP = @IP, @World = @World, \
+                 @Character_Name = @Character_Name, \
                  @Result = @Result OUTPUT, @TranCode = @TranCode OUTPUT, \
                  @LastPoint = @LastPoint OUTPUT; \
                  SELECT @Result, CONVERT(varbinary(500), @TranCode), @LastPoint;",

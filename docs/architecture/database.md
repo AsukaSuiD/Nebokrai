@@ -41,6 +41,10 @@ Game меняет живое состояние региона. World прини
 
 Для удаления персонажа `GetPlayerDeletionDate` различает `0` и результат catch `-1`; вызывающий код может трактовать `-1` как ненулевое время. Для Billing очередь пополнений [rsplayerfillmgr](../../server/rust/src/dbaccess/dbbilling/rsplayerfillmgr.rs) читает `TBL_NeedUpdate` по `ID` максимум по 50 записей и затем удаляет обработанный набор. Атомарность полного пути «изменение счёта → уведомление клиента» остаётся отдельным вопросом; её не доказывает успех одного запроса.
 
+## Параметры вызовов процедур Billing
+
+`GetUserPoint`, `PutCashLog`, `buyPlayerItem` и `buyItemCode` вызываются параметризованными SQL-пакетами в [rsplayeraccount.rs](../../server/rust/src/dbaccess/dbbilling/rsplayeraccount.rs). Нужное преобразование в `varchar` или signed `int` выполняется при объявлении локальной SQL-переменной; в `EXEC` передаётся уже переменная. Выражение `CONVERT(...)` непосредственно на месте аргумента процедуры запрещено [синтаксисом T-SQL](https://learn.microsoft.com/en-us/sql/relational-databases/stored-procedures/specify-parameters). Это правило построения вызова, а не изменение процедур: размеры строк, проверка переполнения суммы, output-параметры, отдельные соединения и частичные эффекты сохраняются.
+
 ## Схема и локальный стенд
 
 Точный DDL исходной `userinfo` остаётся `UNKNOWN`: найденные резервные копии LoginDB и Account её не содержат. [database-init.sh](../../deploy/hybrid/database-init.sh) создаёт для локального стенда представление с Login-проекцией поверх BillingDB. Это техническая подстановка, а не восстановленная исходная таблица; ограничения указаны также в `rscdkey.rs`.
