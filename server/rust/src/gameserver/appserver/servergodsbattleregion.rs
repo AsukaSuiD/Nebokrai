@@ -5,10 +5,13 @@
 //! Сырой C++ ниже после typed owner-а является комментарием, а не
 //! Rust-реализацией.
 //!
-//! Startup snapshot сохраняет exact wire, section-local clear, намеренное
-//! append-поведение faction rules и обе внутренние audit-записи. Region-set
-//! хранит ordered unique ID, а concrete startup region делегирует
-//! подтверждённому `CServerWarRegion` wire-owner-у.
+//! Startup manager snapshot сохраняет подтверждённый wire, section-local clear,
+//! намеренное append-поведение faction rules и обе внутренние audit-записи.
+//! Region-set хранит ordered unique ID. Для selector `0x0E` concrete region
+//! читает только парный `CServerRegion` prefix: World создаёт RT_GODSBATTLE как
+//! обычный `CWorldRegion`, тогда как унаследованный Game decoder пытается читать
+//! отсутствующий war-tail из свободной capacity `CMessage`. Эта исходная
+//! несовместимость отдельно зафиксирована в ADR-0008.
 //! Безразмерный pointer и 256-байтный временный C-string buffer заменены
 //! bounded slice/cursor и owned bytes; обрыв возвращает typed error после уже
 //! завершённого prefix-а вместо неназначаемого legacy UB. Top-ten SZL exchange
@@ -358,6 +361,46 @@ pub(crate) struct GodsBattleContendAdvance {
 }
 
 impl CServerGodsBattleRegion {
+    /// Декодирует доказанный World -> Game startup prefix для RT_GODSBATTLE.
+    ///
+    /// Оригинальный `CWorldRegion::AddToByteArray` заканчивает logical payload
+    /// после base snapshot. Поэтому вызов inherited `CServerWarRegion` здесь
+    /// воспроизвёл бы чтение за `_Mylast`, а не формат сообщения.
+    pub(crate) fn decord_initial_world_base_snapshot_with_npc_entry<
+        Context: WarRegionDecodeContext,
+    >(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        area_width: i32,
+        area_height: i32,
+        monster_registry: &MonsterRegistry,
+        skill_factory: &CSkillFactory,
+        context: &mut Context,
+        mut after_npc_entry: impl FnMut(
+            &mut CServerRegion,
+            &mut [BTreeSet<i32>; 3],
+            i32,
+            &mut Context,
+        ),
+    ) -> Result<bool, ServerRegionDecodeError> {
+        let faction_npcs = &mut self.faction_npcs;
+        self.war.base.decord_from_byte_array_with_npc_entry(
+            source,
+            cursor,
+            include_child,
+            area_width,
+            area_height,
+            monster_registry,
+            skill_factory,
+            context,
+            |region, npc_id, context| {
+                after_npc_entry(region, faction_npcs, npc_id, context);
+            },
+        )
+    }
+
     pub(crate) fn decord_from_byte_array_with_npc_entry<Context: WarRegionDecodeContext>(
         &mut self,
         source: &[u8],

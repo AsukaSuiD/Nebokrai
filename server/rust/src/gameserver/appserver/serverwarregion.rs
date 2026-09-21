@@ -23,14 +23,20 @@
 //! `OnPlayerDamage` сохраняет исходную f32/x87 цепочку
 //! `max_time * (damage / max_hp * fDecTimeParam)`, signed clamp и публикацию
 //! процента. NaN/inf/out-of-range `fistp` остаются явным локальным блоком.
-//! Конструктор `0x001D3740` создаёт base-region, пустые ordered contender/map
-//! и нулевые counters; `Default`, `Vec` и `BTreeMap` выражают это буквально.
+//! Конструктор `0x001D3740` создаёт base-region, пустые ordered contender/map и
+//! явно обнуляет `m_lSymbolTotalNum` и `m_lWinVicSymbolNum`. Записи в
+//! `m_lVicSymbolNum` в конструкторе нет; его исходное значение до первого
+//! доказанного присваивания остаётся `UNKNOWN`. Safe Rust хранит для него zero
+//! в `Default`, но это не утверждение о содержимом неинициализированной памяти
+//! оригинала.
 //! Деструктор `0x001D3060` освобождает map и base-object, что безопасно и без
 //! дополнительной семантики выполняют автоматические `Drop` полей.
 //! Decoder сначала делегирует сырому `CServerRegion` через узкий context, затем
 //! читает три signed little-endian DWORD и обновляет только keys `0..total`:
 //! старые map-keys за новым total оригинал не очищает. Безразмерный legacy read
-//! за payload остаётся typed `BLOCKED_MISSING_FACT`.
+//! за payload остаётся typed `BLOCKED_MISSING_FACT`. Конкретная исходная
+//! несовместимость startup RT_NATION/RT_GODSBATTLE не превращает этот tail в
+//! wire-данные и обрабатывается у selector `0x0E`, см. ADR-0008.
 
 use std::collections::BTreeMap;
 

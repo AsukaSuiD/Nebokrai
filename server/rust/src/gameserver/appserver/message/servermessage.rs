@@ -2714,7 +2714,14 @@ where
             let mut base_context = InheritedBaseGuardContext {
                 context: &mut startup_context,
             };
-            if let Err(error) = region.decord_from_byte_array(
+            // World создаёт RT_NATION как CWorldRegion и его selector 0x0E
+            // snapshot заканчивается на CWorldRegion::AddToByteArray. В
+            // исходном Game ServerNationRegion наследует CServerWarRegion и
+            // формально читает ещё три long уже за логическим концом CMessage.
+            // Эти байты принадлежат незаполненной capacity std::vector и не
+            // являются wire-контрактом, поэтому здесь читается доказанный
+            // парный CServerRegion prefix без синтетического war-tail.
+            if let Err(error) = region.war.base.decord_from_byte_array(
                 source,
                 cursor,
                 true,
@@ -2724,7 +2731,7 @@ where
                 game.skill_factory(),
                 &mut base_context,
             ) {
-                return Some(Err(InitialRegionStartupError::War(error)));
+                return Some(Err(InitialRegionStartupError::Base(error)));
             }
             ServerRegionOwner::Nation(region)
         }
@@ -2742,7 +2749,7 @@ where
                     &mut base_context,
                 )
             {
-                return Some(Err(InitialRegionStartupError::War(error)));
+                return Some(Err(InitialRegionStartupError::Base(error)));
             }
             ServerRegionOwner::GodsBattle(region)
         }

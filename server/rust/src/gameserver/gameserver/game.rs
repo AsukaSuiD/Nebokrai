@@ -1010,8 +1010,7 @@ use crate::gameserver::appserver::serverregion::{
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
-    WarRegionClearContext, WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError,
-    WarRegionOwnership,
+    WarRegionClearContext, WarRegionContext, WarRegionDecodeContext, WarRegionOwnership,
 };
 use crate::gameserver::appserver::teamstate::team_state_update_message;
 use crate::gameserver::appserver::session::cequipmentcompose::{
@@ -24486,14 +24485,14 @@ impl CGame {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>>
+    ) -> Result<bool, ServerRegionDecodeError>
     where
         Context: WarRegionDecodeContext + GodsBattleNpcSpawnContext,
     {
         let (area_width, area_height) = self.area_dimensions();
         let monster_registry = self.monster_registry.clone();
         let skill_factory = self.skill_factory.clone();
-        region.decord_from_byte_array_with_npc_entry(
+        region.decord_initial_world_base_snapshot_with_npc_entry(
             source,
             cursor,
             include_child,

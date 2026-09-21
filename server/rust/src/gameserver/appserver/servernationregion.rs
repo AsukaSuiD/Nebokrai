@@ -4,7 +4,11 @@
 //!
 //! Startup inheritance подтверждён constructor-ом: `ServerNationRegion`
 //! начинается с `CServerWarRegion` и не имеет собственного wire decoder-а.
-//! Поэтому typed startup owner делегирует exact War -> ServerRegion chain.
+//! Его inherited decoder действительно идёт через War -> ServerRegion, но
+//! selector `0x0E` получает RT_NATION от обычного `CWorldRegion` без war-tail.
+//! Исходный Game читает tail за logical end своего `CMessage`; startup dispatcher
+//! Rust поэтому использует только доказанный `CServerRegion` prefix. Граница
+//! и причина описаны в ADR-0008.
 //! FourNation startup дополнительно материализует подтверждённый
 //! `GetReliveRect`, а timing-chain владеет exact 16-byte
 //! `_tagPlayerWarTime`, wrapping `timeGetTime` arithmetic и x87-truncated
