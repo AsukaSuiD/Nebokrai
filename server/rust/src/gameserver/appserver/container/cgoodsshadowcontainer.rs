@@ -12,7 +12,7 @@
 //! и typed reports для listener/message dispatcher-а материализованы. Реальная
 //! packet/equipment межконтейнерная move-транзакция и packet assembly замкнуты
 //! player/container-message owner-ами; wallet/yuanbao и прочие общие routes
-//! ниже остаются RAW.
+//! ещё требуют реконструкции; полный декомпилят хранится локально.
 
 use std::collections::BTreeMap;
 

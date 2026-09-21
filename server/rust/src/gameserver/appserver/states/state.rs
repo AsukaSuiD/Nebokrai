@@ -22,7 +22,7 @@
 //! Destructor — отдельный переход, а не повтор End: его visual вызывается
 //! перед освобождением того же ключа. Прямой расход не меняет ended и не
 //! вызывает UpdateProperty; RemoveState добавляет этот callback после удаления.
-//! Неперенесённые контракты сохранены адресно в RAW ниже.
+//! Неперенесённые контракты сохранены адресно в локальном исследовательском корпусе.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::{AppliedState, CMoveShape, StateData, StateKey};

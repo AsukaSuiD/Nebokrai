@@ -5,7 +5,7 @@
 //! операций совпадают с `CWallet`, но допустимый catalog index берётся из
 //! `YUANBAO`. Общий storage/lifecycle и достигнутый persisted codec реализованы
 //! в `cwallet` marker-адаптером; собственная `CS2CContainerObjectMove` граница
-//! ниже остаётся RAW.
+//! ещё требует реконструкции; полный декомпилят хранится локально.
 
 use super::cwallet::{CSingleCurrencyContainer, CurrencyKind};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;

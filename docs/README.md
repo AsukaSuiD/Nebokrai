@@ -1,6 +1,21 @@
-# Документация разработчика
+# Nebokrai: documentation / документация
 
-[Руководство разработчика](development.md) объясняет устройство сервера, причины основных решений и путь от задачи к нужному коду. Остальные страницы открывайте по мере работы.
+Nebokrai восстанавливает серверное поведение «Поднебесья» (Miracle) в современной Rust/Linux-реализации. Здесь можно изучать устройство MMO, legacy interoperability и метод проверки реконструированных контрактов, даже не зная исходную игру.
+
+**New to Nebokrai?** Read the [project overview](../README.md), then follow the guides below. The history, architecture, player journey, status, and reconstruction overviews have short English summaries. Detailed documentation is currently available primarily in Russian; Russian remains the working language.
+
+| Путь / Reading path | С чего начать |
+| --- | --- |
+| New to Nebokrai | [История проекта / Project history](overview/history.md) → [архитектура / Architecture](overview/architecture.md) → [путь игрока / Player journey](overview/player-journey.md) → [текущий статус / Current status](overview/status.md). |
+| Current status | [Краткий статус](overview/status.md), затем подробный [аудит](status/audit.md) конкретного сценария. |
+| Development | [Руководство разработчика](development.md) → [сборка](operations/build.md) → [contribution workflow](../CONTRIBUTING.md). |
+| Reconstruction | [Обзор метода](reconstruction/overview.md) → [реальный case study](reconstruction/case-study-region-entry.md) → [правила evidence](reconstruction/evidence-and-contracts.md). |
+| Protocol | [Карта протокола](protocol/README.md) → каталог opcode и конкретное направление обмена. |
+| Gameplay systems | [Симуляция](gameplay/simulation.md), затем нужная подсистема ниже. |
+| Reference | [Карта исходников](architecture/workspace.md), [общие механизмы](architecture/shared-mechanisms.md), [ADR](decisions/README.md), [материалы анализа](reconstruction/sources.md). |
+| Next steps | [Направления дальнейшей работы](overview/roadmap.md): проверяемые результаты без искусственных релизов и сроков. |
+
+Подробные страницы ниже — основные места хранения контрактов. Обзоры объясняют маршрут чтения и не создают второй набор формул или спецификаций.
 
 ## Архитектура и код
 
@@ -55,6 +70,7 @@
 
 Документацию меняют вместе с поведением. На странице объясняют назначение, устройство и причину решения; точные поля и формулы оставляют там, где ими пользуются. Принятые правила отделяют от текущей реализации и её расхождений. Подход закреплён в [ADR-0001](decisions/0001-system-specification.md) и [ADR-0007](decisions/0007-reuse-existing-mechanisms.md).
 
-## Участие и публикация
 
-[Правила участия](../CONTRIBUTING.md), [сообщения о безопасности](../SECURITY.md), готовность к публикации (локальный материал владельца) и выбор лицензии (локальный материал владельца). Лицензия пока не принята; эти документы не заменяют решения о правах на материалы.
+## Участие
+
+[CONTRIBUTING](../CONTRIBUTING.md) и [SECURITY](../SECURITY.md). Собственный код и документация проекта распространяются по [AGPL-3.0-only](../LICENSE); условия внешнего вклада описаны в CONTRIBUTING.

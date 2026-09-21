@@ -12224,7 +12224,8 @@ impl CGame {
         snapshot.base_mut().add_ulong(declared_online_players);
         for &player_id in &self.online_players {
  // World owner выполнял
- // При отсутствии узла используется ноль; иначе node->second, затем чтение со смещением 0x744.
+ // чтение поля по смещению +0x744 через найденный объект; при отсутствии
+ // записи указатель оставался нулевым.
  // Достижимость/реакция null-dereference не определена; safe Rust не
  // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
             let player = self

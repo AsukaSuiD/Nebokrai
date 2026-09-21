@@ -84,6 +84,7 @@ void ConfigReader::Reset()
     m_UpdateServerInfoTimeMs = 30'000U;
     m_WriteServerInfoTimeMs = 30'000U;
     m_EnableUpdateServerInfo = false;
+    // Параметры доступа задаются только локальной конфигурацией.
     m_DbIp.clear();
     m_AuthDatabaseName = "DB_gCFY";
     m_DbUser.clear();

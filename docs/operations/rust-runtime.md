@@ -4,7 +4,7 @@ Auth, Login, World, Game, Billing и Misc запускаются через [com
 
 ## Сборка и запуск
 
-Из корня репозитория в PowerShell, при подготовленном `runtime/` и разрешённом запуске:
+Из корня репозитория в PowerShell, при подготовленном `runtime/`:
 
 ```powershell
 ./deploy/hybrid/prepare-runtime.ps1 -ClientAddress 127.0.0.1 -RustOnly

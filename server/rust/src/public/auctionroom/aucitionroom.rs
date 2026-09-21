@@ -333,7 +333,7 @@ impl CAuctionRoom<CGoodsNode> {
         let Some(goods_type) = goods_type else {
             // typed boundary: MiscServer читал
             // `m_btGoodsType`, который constructor и `Clear` не задавали:
-            // Тип товара берётся из m_btGoodsType и передаётся в PushItemToTypeList.
+            // Прочитанный тип затем определял список, в который добавлялся предмет.
             // Какой byte наблюдался для такого не-UnSerialize узла, неизвестно.
             return Err(AddAuctionItemMissingGoodsType { guid });
         };

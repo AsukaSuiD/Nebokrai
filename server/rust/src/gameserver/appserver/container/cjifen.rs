@@ -7,7 +7,7 @@
 //! `CGoods` без проверки catalog id, а после заполнения разрешает stack только
 //! для `JIFEN`. Этот legacy quirk выражен marker-policy общего core, а не
 //! исправлен молча. Persisted codec исполняет достигнутый generic owner из
-//! `cwallet`; собственная message-граница ниже остаётся RAW.
+//! `cwallet`; собственная message-граница ещё требует реконструкции; полный декомпилят хранится локально.
 
 use super::cwallet::{CSingleCurrencyContainer, CurrencyKind};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;

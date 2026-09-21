@@ -30,7 +30,7 @@
 //! Vec и региональная арена заменяют указатели; ключи дедупликации различают
 //! региональных владельцев одинакового ID, но не привязывают CPlayer к региону.
 //! Региональный runtime сохраняет публикацию формы во всех callbacks и общий
-//! ForceMove/End. Неиспользуемый server decode ниже остаётся адресным RAW.
+//! ForceMove/End. Неиспользуемый server decode ещё требует реконструкции; ниже сохранены адресные метаданные.
 
 use super::heartlessarrow::apply_daub_poison;
 use super::lightingarrow::LIGHTING_ARROW_SKILL_ID;

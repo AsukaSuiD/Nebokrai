@@ -16,7 +16,7 @@
 //! сохраняет отдельную overflow-семантику. Подтверждённая x87-арифметика
 //! выражена через f64 и общие truncate helpers без промежуточного f32.
 //! Payload один в общей арене; независимый seed содержит лишь входы формулы.
-//! Неустановленные координатные/typed Begin callers остаются RAW ниже.
+//! Неустановленные координатные/typed Begin callers остаются только в локальном исследовательском корпусе.
 
 use super::bloodloss::BLOOD_LOSS_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyWriter};

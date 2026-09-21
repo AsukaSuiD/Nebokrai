@@ -7,6 +7,7 @@ name = "nebokrai-server"
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.97.1"
+license = "AGPL-3.0-only"
 publish = false
 
 [[bin]]

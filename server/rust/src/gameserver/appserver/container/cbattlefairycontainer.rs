@@ -30,7 +30,7 @@
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
 //! логичную ячейку из позднего C++-донора. Остальные ещё не подключённые
-//! player-integrated методы ниже остаются RAW.
+//! player-integrated методы ещё требуют реконструкции; полный декомпилят хранится локально.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,

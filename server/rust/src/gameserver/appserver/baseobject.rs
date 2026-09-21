@@ -17,7 +17,7 @@
 //! `Vec<u8>` заменяет `std::string` без навязывания UTF-8, а safe decoder
 //! останавливает отсутствие NUL/выход за старый 256-байтовый буфер локальным
 //! `BLOCKED_MISSING_FACT`; уже прочитанные scalar-поля и cursor сохраняются.
-//! Child-list/father ownership и полный destructor остаются RAW ниже: helper
+//! Child-list/father ownership и полный destructor остаются только в локальном исследовательском корпусе: helper
 //! конструктора материализует только достигнутую region-chain часть и не
 //! объявляет Rust layout копией старого ABI.
 //! Identity helpers `GetHashValue/CalculateType/CalculateID` RVA

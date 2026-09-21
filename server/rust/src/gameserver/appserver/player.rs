@@ -16817,3 +16817,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // COMPONENT_VARIANT_END: GameServer
+
+// Граница реконструкции аукциона: AutoAddAuctionGoods остаётся отдельным
+// неперенесённым producer; listing-completion уже выполняется owner-ом 0x90A02.

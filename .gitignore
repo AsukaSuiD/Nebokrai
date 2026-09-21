@@ -63,6 +63,10 @@ credentials.yml
 *.[pP]12
 *.[pP][fF][xX]
 *.[jJ][kK][sS]
+*.[cC][rR][tT]
+*.[cC][eE][rR]
+*.[dD][eE][rR]
+*.[pP]7[bB]
 id_rsa
 id_ed25519
 *.[bB][uU][nN][dD][lL][eE]

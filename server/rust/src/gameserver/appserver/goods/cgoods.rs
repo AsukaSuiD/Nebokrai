@@ -27,7 +27,7 @@
 //! после записи, без отката, вместо исходного чтения через NULL.
 //! Script durability getter/setter теперь сохраняют exact base-value storage,
 //! включая запись `-1` без client update. Constructor/release, остальные
-//! time-поля, обратный codec и прочая gameplay mutation ниже остаются RAW:
+//! time-поля, обратный codec и прочая gameplay mutation ещё требуют реконструкции; полный декомпилят хранится локально:
 //! достигнутый core не выдаётся за весь 0xCC-byte legacy object.
 
 use super::cbattlefairyproperty::{

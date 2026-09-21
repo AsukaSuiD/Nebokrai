@@ -8,7 +8,7 @@
 //! incoming pointer-а после stack merge.
 //!
 //! `BTreeMap` и resolver mechanics принадлежат base owner-у. Clone target и
-//! packet assembly ниже остаются RAW до их concrete caller-ов.
+//! packet assembly ещё требуют реконструкции; полный декомпилят хранится локально до их concrete caller-ов.
 
 use super::ccontainer::PreviousContainer;
 use super::cgoodsshadowcontainer::{

@@ -47137,7 +47137,7 @@ fn shape_view(
 //
 
 // IMPLEMENTED: достигнутый `Release` teardown материализован выше. Широкий
-// RAW-блок и split funclets ниже сохранены как доказательство ещё не
+// Метаданные и локальный анализ split funclets относятся к ещё не
 // материализованных full reconnect player serializer-а, validate-time map и
 // exception-specific debug paths; он не считается полностью заменённым.
 

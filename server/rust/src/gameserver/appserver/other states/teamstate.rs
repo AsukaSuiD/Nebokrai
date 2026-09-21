@@ -20,7 +20,7 @@
 //! Unserialize0x005BFF20: ID и две C-строки, без часов;
 //! bounded decode допускает до255 байт на строку. Неинициализированный native
 //! default-ctor stamp безопасно равен0 до Begin; отказ allocator не эмулируется.
-//! Координатные Begin0x005BF800/0x005BF8D0 остаются RAW ниже.
+//! Координатные Begin0x005BF800/0x005BF8D0 остаются только в локальном исследовательском корпусе.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;

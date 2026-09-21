@@ -18,7 +18,7 @@
 //! additional=DWORD; Serialize0x005E23D0/Unserialize0x00601350 сохраняют
 //! ID/additional (8 байт), без часов, включая additional=0 при загрузке.
 //! Drop освобождает ресурс без End/пакетов; отказ native allocator не эмулируется.
-//! Координатный/typed-target Begin0x004F9540/0x004F9610 остаются RAW ниже.
+//! Координатный/typed-target Begin0x004F9540/0x004F9610 остаются только в локальном исследовательском корпусе.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;

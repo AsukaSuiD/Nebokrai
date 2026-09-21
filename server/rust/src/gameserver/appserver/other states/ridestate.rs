@@ -42,7 +42,7 @@
 //! Он не использует goods-список AI и не вызывает visual/часы.
 //! CPlayer::apply_ride_state_properties заимствует state и goods, затем
 //! выполняет общий MountEquipRide(true) → MountEquipRide(false)0x0043C5E0.
-//! Недостигнутые coordinate/typed-target перегрузки Begin сохранены ниже в RAW.
+//! Недостигнутые coordinate/typed-target перегрузки Begin сохранены только в локальном исследовательском корпусе.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;

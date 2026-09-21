@@ -2,74 +2,67 @@
 
 # Nebokrai
 
-**An independent reconstruction of a legacy MMORPG server platform, implemented in Rust for Linux.**
+**An independent Rust/Linux reconstruction of a closed-source MMORPG server platform.**
 
-Nebokrai studies and rebuilds the server-side behavior of *Поднебесье* (Miracle). Its purpose is software preservation and interoperability with the legacy client: recovering message formats, gameplay rules, persistence semantics, and the order of observable effects in a maintainable implementation.
+Nebokrai rebuilds the server-side behavior of *Поднебесье* (Miracle), with compatibility with its legacy client as the goal. It is a new implementation, not the original server source code.
 
-The project combines server engineering with documented reconstruction. Historical symbols and binary evidence help identify behavior; uncertainty is recorded explicitly rather than filled with plausible substitutes. This is an independent modern implementation effort, not a release of the original server source code or a claim of complete compatibility.
+Preservation means documenting how the game worked: its messages, gameplay rules, persistence, and observable behavior. Interoperability means making the replacement services communicate correctly with the existing client and with each other. Both require evidence; plausible behavior is not enough.
+
+The available Git history begins on **18 August 2026**. The [project history](docs/overview/history.md) follows the recorded work from binary research to six Rust services. Beyond this game, Nebokrai offers concrete material for studying MMO backends, protocol reconstruction, state ownership, and Rust server development.
 
 ## Architecture
 
-The primary implementation is one Rust package with six server executables:
+One Rust package builds six executables:
 
 | Service | Responsibility |
 | --- | --- |
-| **Auth** | Account verification for the supported authentication route. |
+| **Auth** | Account verification on the authentication route that uses Auth. |
 | **Login** | Client entry, authentication routing, and world selection. |
 | **World** | Character loading and persistence, world state, and routing to Game. |
-| **Game** | Regional simulation, movement, combat, items, NPCs, and client gameplay messages. |
+| **Game** | Live regional simulation: movement, combat, items, NPCs, and gameplay messages. |
 | **Billing** | Account balances and purchase/exchange operations. |
-| **Misc** | Auction processing and its connection to World. |
+| **Misc** | Auctions and their interaction with World. |
 
-Game owns live regional state; World owns character persistence. The services exchange legacy TCP messages. Tokio provides networking and task execution, while Tiberius connects to the existing Microsoft SQL Server data model. Replacing the infrastructure does not make message ordering, integer behavior, timing, or partial database effects interchangeable.
-
-See the [state ownership guide](docs/architecture/state-ownership.md), [protocol documentation](docs/protocol/README.md), and [architecture decisions](docs/decisions/README.md).
+Game owns live regional state; World handles character persistence. Tokio provides networking and task execution, and Tiberius connects to Microsoft SQL Server. Modern infrastructure must still preserve significant message ordering, timing, and database effects. See the illustrated [architecture tour](docs/overview/architecture.md) and [player login journey](docs/overview/player-journey.md).
 
 ## Current status
 
-Nebokrai is a reconstruction in progress, not a production-ready game server. The [project status](docs/status/audit.md) is the authoritative record of builds, runtime observations, and client checks, including the commits and limitations of each observation.
+As documented on **21 September 2026**:
 
-As recorded there on 21 September 2026:
+- All six Rust services compiled and ran together in a local Linux development setup.
+- The legacy client reached the character list; a later attempt loaded a character and registered a player in Game.
+- **A stable, playable session has not been demonstrated.** Later protocol and movement fixes still need a repeat client scenario.
+- Full persistence across sessions, region transitions, billing, auctions, and sustained performance remain unproven.
 
-- The six Rust executables passed Linux compilation and were run together in a local development setup.
-- The original client reached the character list; a subsequent selection loaded a character and registered a player in Game.
-- A stable, playable session has **not** been demonstrated. Later protocol and movement fixes still require the relevant client scenarios to be repeated.
-- Persistence across gameplay sessions, region transitions, auction and billing operations, complete SQL behavior, and sustained performance are not established by that startup check.
+The immediate next step is to repeat entry through to a controllable character and movement on the corrected build. The [status overview](docs/overview/status.md) separates implementation from observed behavior and links to the detailed evidence.
 
-Individual contracts carry `VERIFIED`, `INFERRED`, `PARTIAL`, or `UNKNOWN` evidence labels. A verified original behavior does not imply that its implementation has passed a client scenario. The [evidence rules](docs/reconstruction/evidence-and-contracts.md) explain that distinction.
+## Reconstruction methodology
+
+Research starts with an identified executable and matching PDB symbols. Ghidra helps locate candidate behavior; machine instructions, the peer implementation, and reproducible runtime observations establish what can actually be claimed. Decompiler output alone is not proof.
+
+Contracts distinguish `VERIFIED`, `PARTIAL`, `INFERRED`, and `UNKNOWN`. Confirming original behavior does not prove that the new implementation works with the client. Read the [methodology](docs/reconstruction/overview.md) and [region-entry case study](docs/reconstruction/case-study-region-entry.md).
 
 ## Getting started
 
-Start with the [developer guide](docs/development.md) and [workspace map](docs/architecture/workspace.md). Extended technical documentation is currently **primarily in Russian**; it is intentionally preserved rather than replaced with an incomplete translation.
+The [documentation portal](docs/README.md) connects history, architecture, status, and subsystem guides. Start development with the [developer guide](docs/development.md) and [workspace map](docs/architecture/workspace.md). Detailed documentation is primarily in Russian; key overviews have English summaries. Russian remains the working language, including commit messages.
 
-For a source check on Linux, install the toolchain specified by [rust-toolchain.toml](server/rust/rust-toolchain.toml), then run from the repository root:
+On Linux, install the toolchain in [rust-toolchain.toml](server/rust/rust-toolchain.toml), then run from the repository root:
 
 ```sh
 cd server/rust
 cargo check --locked --lib --bins
 ```
 
-The [build guide](docs/operations/build.md) covers native requirements, binary builds, and the PowerShell/Docker Desktop workflow. The primary server targets Linux; native Windows compilation is not supported by the current process layer. Reading or editing documentation does not require builds or server launches.
+The [build guide](docs/operations/build.md) covers dependencies and the PowerShell/Docker workflow. Native Windows compilation is not currently supported. Running the services requires separately supplied local configuration, compatible resources, and database data: a clone is not a runnable game distribution.
 
-Running the services additionally requires locally supplied configuration, compatible game resources, and database data that are not part of the source checkout. Each process reads from its working directory. A clone alone is **not a runnable game distribution**. See the [all-Rust local setup](docs/operations/rust-runtime.md); the separate [hybrid setup](docs/operations/hybrid-runtime.md) uses an original GameServer under Wine as a local reference.
+Source layout: [Rust implementation](server/rust/), [separate C++ reconstruction](server/cpp/), [deployment tools](deploy/), and [documentation](docs/README.md).
 
-## Repository layout
+## Materials, contributions, and licensing
 
-| Path | Contents |
-| --- | --- |
-| [`server/rust/`](server/rust/) | Primary Rust implementation and six binary entry points. |
-| [`server/cpp/`](server/cpp/) | Separate C++ reconstruction pass; not part of the Rust build. |
-| [`deploy/`](deploy/) | Build and local deployment tooling. |
-| [`docs/`](docs/README.md) | Architecture, protocols, gameplay, evidence, operations, and status. |
+Original EXE/DLL/PDB files, the client, game assets, database backups, private captures, and full decompiler output are outside the intended source distribution. Public documentation contains authored findings and provenance metadata; references to local evidence do not provide downloads or redistribution rights.
 
-`runtime/`, `original/`, `related/`, and local analysis directories are excluded from Git. Original EXE/DLL/PDB files, the game client, proprietary game assets, database backups, and private research captures are outside the intended source distribution. References to those files identify local evidence; they are not download links or redistribution permission.
+[CONTRIBUTING.md](CONTRIBUTING.md) explains the fork/branch → pull request → review → main workflow. Do not attach proprietary materials, credentials, or user data to issues or PRs. See [SECURITY.md](SECURITY.md) for the current reporting policy.
 
-Publication review has also identified residual RAW decompiler material in tracked source files. Its disposition and historical content must be resolved before publication; see publication readiness (локальный материал владельца). Do not interpret the intended distribution boundary as a certification of the entire Git history.
+Nebokrai's own source code and documentation are licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). Dependencies retain their respective licenses. This license does not cover the original game materials or private research corpus, and does not certify third-party rights.
 
-## Contributing and licensing
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for issue and pull request guidance, evidence requirements, and the policy against adding automated tests. Security reporting is described in [SECURITY.md](SECURITY.md). Please do not upload original binaries, game assets, live credentials, account data, or private captures to issues or pull requests.
-
-**A project license has not yet been selected.** This preparation does not grant an open-source license or establish permission to redistribute third-party material. Licensing options (локальный материал владельца) records the decision still required from the owner, including future commercial licensing and contributions.
-
-Nebokrai is not affiliated with, endorsed by, or supported by the original game's developers or publishers. Game names and other trademarks belong to their respective owners.
+Nebokrai is not affiliated with or endorsed by the original game's developers or publishers. Game names and trademarks belong to their respective owners.

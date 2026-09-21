@@ -16,7 +16,7 @@
 //! скрыты от public find/get. `GCM_TEST` не уничтожает отделённые goods: Rust
 //! возвращает их вызывающему, сохраняя ownership без legacy raw pointers.
 //! Полный persisted codec достигнут общим player GameSave-проходом; listener
-//! messages и player AI tree ниже остаются RAW до замыкания соседних owners.
+//! messages и player AI tree ещё требуют реконструкции; полный декомпилят хранится локально до замыкания соседних owners.
 
 use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode, GoodsStackMergeOutcome};
