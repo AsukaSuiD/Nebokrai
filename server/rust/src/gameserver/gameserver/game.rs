@@ -116,9 +116,12 @@
 //! семейство атрибутов проверяется первым; PoisonArrow/BloodLoss сохраняют
 //! player/monster object-guard, базовая магия — только прежний Object-вход.
 //! Выбор функции не объединяет обычный и WarSoul lifecycle или хранилища.
-//! После false из HasTarget OnSchedule переходит к назначению движения
-//! (0x005099D3..0x00509A2F). Сохранённая команда без цели и pending FIFO
-//! сами по себе этот переход не блокируют: проверяется только текущая цель.
+//! `OnSchedule` (0x005098D0) различает две ветви после общего допуска. Если
+//! `m_qTarget` непуст, сначала извлекается новая skill-команда и затем идёт
+//! `HasTarget`. Если `m_qTarget` пуст, `m_qDestination` проверяется раньше
+//! `HasTarget`: имеющееся назначение движения исполняется и снимается, даже
+//! если от предыдущей команды ещё сохранена текущая цель. Только при пустой
+//! очереди движения планировщик переходит к `HasTarget`.
 //! OnStiffen (0x004C8770) после подтверждённого IsEnded снимает Attack,
 //! вызывает виртуальный OnLoseTarget, назначает default и лишь затем
 //! продолжает удаление служебного префикса. Хвост FIFO виден callback-у.
@@ -130,12 +133,13 @@
 //! затем завершает событие: точка перехода видит текущий Move/Stand, а часы
 //! читаются после её обработки. Начатое действие занимает этот проход даже
 //! при удалении его очереди вложенным callback; второй dispatch не добавляется.
-//! Шаг назначения следует CPlayerAI::MoveTo (0x00508F10): ход проверяет
-//! одну клетку, бег две, а бег с riding-state 0x186A4 три (0x00508FB8).
-//! Каждая клетка проходит GetNextWalkPos (0x00509360) до единственного Move;
-//! препятствие отменяет весь шаг с OnCannotMove (0x00509111), без частичного
-//! перемещения. Длительность остаётся исходной функцией направления и скорости,
-//! а не умножается на число клеток. Это координатор над региональным block API.
+//! Шаг назначения следует CPlayerAI::MoveTo (0x00508F10): ход выполняет один
+//! `CBaseAI::Slip` (0x004C7FF0), бег два, а бег с riding-state 0x186A4 три.
+//! Каждый Slip повторно начинает с исходного направления и пробует восемь
+//! кандидатов по `_slip_order` с figure-specific move-check клетками; отказ
+//! любого требуемого Slip отменяет весь шаг с OnCannotMove (0x00509111), без
+//! частичного перемещения. Длительность использует направление от исходной до
+//! конечной клетки и не умножается на число клеток.
 //! На границах End, первого контакта, смерти и OnStandOnSwitchPoint
 //! временно извлечённый AI возвращается в CPlayer до callback. После вызова
 //! извлекается изменённый владелец, чтобы вложенный End/ChangeRegion видел
@@ -39438,7 +39442,8 @@ impl CGame {
         {
             return 0;
         }
-        if !player_ai.player_skills().is_empty()
+        let has_pending_player_skill = !player_ai.player_skills().is_empty();
+        if has_pending_player_skill
             && self.find_player(player_id).is_some_and(CPlayer::is_rider)
         {
             let _ = self.send_base_attack_failure(player_id, 2);
@@ -39448,11 +39453,18 @@ impl CGame {
             let _ = player_ai.take_pending_player_skill();
             return 1;
         }
-        if let Some(dispatch) = player_ai.take_pending_player_skill() {
+        if has_pending_player_skill {
+            let Some(dispatch) = player_ai.take_pending_player_skill() else {
+                return 0;
+            };
             if let Some(player) = self.find_player_mut(player_id) {
                 player.set_current_skill_id(Some(dispatch.skill_id()));
             }
             player_ai.select_player_skill(dispatch);
+        } else if self.run_player_ai_destination(player_id, player_ai, runtime) {
+            // 0x005099D3..0x00509A2F: при пустом m_qTarget движение имеет
+            // приоритет над HasTarget и завершает OnSchedule этого такта.
+            return 0;
         }
         let mut execution_count: usize = 0;
         if let Some(dispatch) = player_ai.current_player_skill().filter(|dispatch| dispatch.has_target()) {
@@ -39527,9 +39539,6 @@ impl CGame {
             }
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
-        }
-        if execution_count == 0 {
-            let _ = self.run_player_ai_destination(player_id, player_ai, runtime);
         }
         execution_count
     }
@@ -39775,9 +39784,6 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> bool {
-        if player_ai.current_player_skill().is_some_and(|dispatch| dispatch.has_target()) {
-            return false;
-        }
         let Some(destination) = player_ai.next_destination() else {
             return false;
         };
@@ -39800,47 +39806,60 @@ impl CGame {
                 player.is_rider(),
             ))
         });
-        let _ = player_ai.finish_destination(destination);
         let Some((region_id, origin, moveable, speed, is_rider)) = snapshot else {
             player_ai.stop_destination_move();
+            let _ = player_ai.finish_destination(destination);
             return true;
         };
         if !moveable {
             let _ = crate::gameserver::appserver::message::shapemessage::send_player_cannot_move(self, player_id);
             player_ai.stop_destination_move();
+            let _ = player_ai.finish_destination(destination);
             return true;
         }
         let Some(mut owner) = self.take_region_owner(region_id) else {
             player_ai.stop_destination_move();
+            let _ = player_ai.finish_destination(destination);
             return true;
         };
+        // CPlayerAI::MoveTo 0x00508F10 повторяет общий CBaseAI::Slip
+        // 0x004C7FF0 один/два/три раза. Для каждого повтора используется
+        // исходное направление команды. Slot +0x8C CPlayer на этом пути
+        // попадает в 0x004856A0 (`xor al, al; ret 4`), поэтому figure = 0.
         let steps = if !destination.is_run { 1 } else if is_rider { 3 } else { 2 };
         let mut target = origin;
         for _ in 0..steps {
-            let next = CShape::get_direction_position(destination.direction, target)
-                .ok()
-                .filter(|next| owner.base().block_at(next.x, next.y) == Some(0));
-            let Some(next) = next else {
+            let Some((_, next)) =
+                crate::gameserver::appserver::ai::baseai::find_slip_step_in_direction(
+                    self.move_check_cells(),
+                    owner.base(),
+                    target,
+                    destination.direction,
+                    0,
+                )
+            else {
                 self.restore_region_owner(owner);
                 let _ = crate::gameserver::appserver::message::shapemessage::send_player_cannot_move(self, player_id);
                 player_ai.stop_destination_move();
+                let _ = player_ai.finish_destination(destination);
                 return true;
             };
             target = next;
         }
         let Some(mut player) = self.players.remove(&player_id) else {
             self.restore_region_owner(owner);
+            let _ = player_ai.finish_destination(destination);
             return true;
         };
         let (area_width, area_height) = self.area_dimensions();
-        let moved = GameServerAroundRuntime::new(
+        let movement_result = GameServerAroundRuntime::new(
             self,
             &self.session_factory,
             area_width,
             area_height,
         )
-        .is_some_and(|around| {
-            player
+        .and_then(|around| {
+            Some(player
                 .move_step(
                     owner.base_mut(),
                     target.x,
@@ -39852,15 +39871,19 @@ impl CGame {
                 )
                 .inspect_err(|error| {
                     tracing::warn!(player_id, region_id, ?destination, ?error, "Шаг назначения игрока выполнен не полностью");
-                })
-                .is_ok()
+                }))
         });
         self.players.insert(player_id, player);
         self.restore_region_owner(owner);
-        if moved {
+        // CMoveShape::OnMove 0x004CD490 имеет void-контракт: после BF605 он
+        // без проверки результата вызывает virtual SetTileXY. Вернувшийся
+        // CPlayerAI::MoveTo 0x005090FB всегда ставит ASA_MOVE. Поэтому ошибка
+        // уже начатой spatial-мутации не отменяет исходное ожидание AI.
+        if matches!(movement_result, Some(Ok(())) | Some(Err(MoveShapeCommandBlock::Position(_)))) {
+            let movement_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
             player_ai.begin_destination_move(
                 crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms(
-                    destination.direction,
+                    movement_direction,
                     speed,
                     0,
                 ),
@@ -39869,6 +39892,9 @@ impl CGame {
         } else {
             player_ai.stop_destination_move();
         }
+        // OnSchedule 0x00509A25 снимает front только после возврата MoveTo,
+        // независимо от успеха движения/OnCannotMove.
+        let _ = player_ai.finish_destination(destination);
         true
     }
 

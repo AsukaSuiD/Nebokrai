@@ -79,7 +79,9 @@
 //! timestamp CMonsterAI читаются раздельно перед Begin.
 
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
-use crate::gameserver::appserver::ai::baseai::{PassiveStiffenAction, one_step_move_delay_ms};
+use crate::gameserver::appserver::ai::baseai::{
+    PassiveStiffenAction, find_slip_step_in_direction, one_step_move_delay_ms,
+};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
@@ -91,17 +93,6 @@ use crate::gameserver::appserver::skills::skillfactory::SkillOwner;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
-
-const SLIP_ORDER: [[usize; 8]; 8] = [
-    [0, 7, 1, 6, 2, 5, 3, 4],
-    [1, 0, 2, 7, 3, 6, 4, 5],
-    [2, 1, 3, 0, 4, 7, 5, 6],
-    [3, 2, 4, 1, 5, 0, 6, 7],
-    [4, 3, 5, 2, 6, 1, 7, 0],
-    [5, 4, 6, 3, 7, 2, 0, 1],
-    [6, 5, 7, 4, 0, 3, 1, 2],
-    [7, 6, 0, 5, 1, 4, 2, 3],
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MonsterSkillCallOutcome {
@@ -228,37 +219,6 @@ pub(crate) fn release_owned_monster_target<Runtime: GameMainLoopRuntime>(
     }
 }
 
-/// Точный одноклеточный `Slip` общего `CBaseAI::MoveTo`: желаемое
-/// направление и семь обходных направлений проверяются в legacy-порядке
-/// против figure-specific move-check клеток региона.
-fn find_slip_step_in_direction(
-    game: &CGame,
-    region: &CServerRegion,
-    origin: ShapeAreaCoordinates,
-    desired_direction: i32,
-    figure: crate::gameserver::appserver::shape::ShapeFigure,
-) -> Option<(i32, ShapeAreaCoordinates)> {
-    let figure_index = usize::from(figure.get(0).min(2));
-    SLIP_ORDER[desired_direction as usize]
-        .into_iter()
-        .find_map(|direction| {
-            let destination = CShape::get_direction_position(direction as i32, origin).ok()?;
-            let cells = game.move_check_cells().get(figure_index, direction)?;
-            cells
-                .iter()
-                .all(|cell| {
-                    region
-                        .region
-                        .get_block(
-                            origin.x.wrapping_add(cell.x),
-                            origin.y.wrapping_add(cell.y),
-                        )
-                        .is_ok_and(|block| block == 0)
-                })
-                .then_some((direction as i32, destination))
-        })
-}
-
 /// MoveTo (0x004C9020): один Slip для ходьбы, два для ненулевого run,
 /// затем Move и FIFO. Второй Slip сохраняет исходное желаемое направление;
 /// его отказ не публикует даже первый шаг. Задержка зависит от направления
@@ -285,13 +245,14 @@ pub(crate) fn move_owned_monster_to(
         })
     else { return; };
     let desired_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
+    let figure_index = usize::from(figure.get(0).min(2));
     let Some((_, mut destination)) = find_slip_step_in_direction(
-        game, region, origin, desired_direction, figure,
+        game.move_check_cells(), region, origin, desired_direction, figure_index,
     )
     else { return; };
     if run != 0 {
         let Some((_, second)) = find_slip_step_in_direction(
-            game, region, destination, desired_direction, figure,
+            game.move_check_cells(), region, destination, desired_direction, figure_index,
         ) else { return; };
         destination = second;
     }

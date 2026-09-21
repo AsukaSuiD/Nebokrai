@@ -98,7 +98,52 @@
 
 use std::collections::VecDeque;
 
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{
+    CShape, MoveCheckCellRegistry, ShapeAreaCoordinates, ShapeIdentity,
+};
+
+const SLIP_ORDER: [[usize; 8]; 8] = [
+    [0, 7, 1, 6, 2, 5, 3, 4],
+    [1, 0, 2, 7, 3, 6, 4, 5],
+    [2, 1, 3, 0, 4, 7, 5, 6],
+    [3, 2, 4, 1, 5, 0, 6, 7],
+    [4, 3, 5, 2, 6, 1, 7, 0],
+    [5, 4, 6, 3, 7, 2, 0, 1],
+    [6, 5, 7, 4, 0, 3, 1, 2],
+    [7, 6, 0, 5, 1, 4, 2, 3],
+];
+
+/// Один одноклеточный `Slip` из `CBaseAI::MoveTo` (0x004C7FF0).
+/// Точная пара `gameserver.exe`/`GameServer.pdb` задаёт порядок `_slip_order`,
+/// проверку всех `s_listMoveCheckCell[figure][direction]` и выбор первого
+/// свободного направления. `CRegion::get_block` уже возвращает исходные
+/// младшие три бита клетки (`& 7`).
+pub(crate) fn find_slip_step_in_direction(
+    move_check_cells: &MoveCheckCellRegistry,
+    region: &CServerRegion,
+    origin: ShapeAreaCoordinates,
+    desired_direction: i32,
+    figure_index: usize,
+) -> Option<(i32, ShapeAreaCoordinates)> {
+    let slip_order = SLIP_ORDER.get(usize::try_from(desired_direction).ok()?)?;
+    slip_order.iter().copied().find_map(|direction| {
+        let destination = CShape::get_direction_position(direction as i32, origin).ok()?;
+        let cells = move_check_cells.get(figure_index, direction)?;
+        cells
+            .iter()
+            .all(|cell| {
+                region
+                    .region
+                    .get_block(
+                        origin.x.wrapping_add(cell.x),
+                        origin.y.wrapping_add(cell.y),
+                    )
+                    .is_ok_and(|block| block == 0)
+            })
+            .then_some((direction as i32, destination))
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AiPhaseState {
