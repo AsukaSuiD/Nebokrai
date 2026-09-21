@@ -124,6 +124,8 @@ const WORLD_PLAYER_DATA_REQUEST: i32 = 0x0007_F808;
 const RUNTIME_SPAWN_RESPONSE: i32 = 0x0007_F80A;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
+const PROVEN_NOOP_MESSAGE_7F80C: i32 = 0x0007_F80C;
+const PROVEN_NOOP_MESSAGE_7F80D: i32 = 0x0007_F80D;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
 const PLAYER_COUNT_RESPONSE: i32 = 0x0005_FA0C;
 const WORLD_PLAYER_DATA_RESPONSE: i32 = 0x0005_FA09;
@@ -1094,6 +1096,15 @@ where
         return Some(Ok(()));
     }
     if dispatch_player_count_message(message.message_type(), game).is_some() {
+        return Some(Ok(()));
+    }
+    if matches!(
+        message.message_type(),
+        PROVEN_NOOP_MESSAGE_7F80C | PROVEN_NOOP_MESSAGE_7F80D
+    ) {
+        // `OnServerMessage @ 0x0049D300` в совпадающем оригинальном Game
+        // отправляет обе ячейки jump-table прямо в общий default-return
+        // `0x0049EFD0`. Payload не читается и side effect отсутствует.
         return Some(Ok(()));
     }
     if message.message_type() == GODS_BATTLE_XYD_RESPONSE {

@@ -85,11 +85,11 @@ fn report_misc_turn(turn: &MiscGameThreadTurn) {
     for message in &turn.messages.messages {
         match &message.handler {
             MiscComponentHandlerOutcome::GuidFamilyNoOp => {}
+            MiscComponentHandlerOutcome::Other(OtherMessageOutcome::NoOp) => {}
             MiscComponentHandlerOutcome::WorldAuction(outcome) => {
                 report_world_auction(message.message_type, outcome)
             }
-            MiscComponentHandlerOutcome::MiscFunction(MiscFunctionOutcome::Unhandled)
-            | MiscComponentHandlerOutcome::Other(OtherMessageOutcome::Unhandled) => eprintln!(
+            MiscComponentHandlerOutcome::MiscFunction(MiscFunctionOutcome::Unhandled) => eprintln!(
                 "MiscServer: неподдерживаемый opcode {:#x}",
                 message.message_type
             ),

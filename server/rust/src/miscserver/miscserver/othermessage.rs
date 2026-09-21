@@ -15,7 +15,7 @@ const WORLD_SYNC_RESPONSE: i32 = 0x0005_FA0C;
 
 #[derive(Debug)]
 pub(crate) enum OtherMessageOutcome {
-    Unhandled,
+    NoOp,
     MissingClient,
     Response {
         message_type: i32,
@@ -31,7 +31,9 @@ pub(crate) fn on_other_msg(
         WORLD_STATUS_REQUEST if sender.is_none() => return OtherMessageOutcome::MissingClient,
         WORLD_STATUS_REQUEST => WORLD_STATUS_RESPONSE,
         WORLD_SYNC_REQUEST => WORLD_SYNC_RESPONSE,
-        _ => return OtherMessageOutcome::Unhandled,
+        // `OnOtherMsg @ 0x00403CC0` в совпадающем оригинальном MiscServer
+        // просто возвращается для любого типа, кроме 0x7F809/0x7F80B.
+        _ => return OtherMessageOutcome::NoOp,
     };
 
     let mut response = CMessage::new(response_type);
