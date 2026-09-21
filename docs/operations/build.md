@@ -37,7 +37,7 @@ cd runtime/AuthServer
 
 ## Образы гибридного стенда
 
-Docker должен работать с Linux-контейнерами и поддерживать BuildKit cache-mount. Из корня `C:\Nebokrai` образы можно собрать независимо от запуска Compose:
+Docker должен работать с Linux-контейнерами и поддерживать BuildKit cache-mount. Из корня репозитория образы можно собрать независимо от запуска Compose:
 
 ```powershell
 docker build -f deploy/hybrid/Dockerfile.rust -t nebokrai-rust-services:local .
