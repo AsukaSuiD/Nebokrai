@@ -63,6 +63,6 @@ Original EXE/DLL/PDB files, the client, game assets, database backups, private c
 
 [CONTRIBUTING.md](CONTRIBUTING.md) explains the fork/branch → pull request → review → main workflow. Do not attach proprietary materials, credentials, or user data to issues or PRs. See [SECURITY.md](SECURITY.md) for the current reporting policy.
 
-Nebokrai's own source code and documentation are licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). Dependencies retain their respective licenses. This license does not cover the original game materials or private research corpus, and does not certify third-party rights.
+Nebokrai's own source code and documentation are licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). Dependencies retain their respective licenses; see [third-party components and credits](THIRD_PARTY_NOTICES.md). This license does not cover the original game materials or private research corpus, and does not certify third-party rights.
 
 Nebokrai is not affiliated with or endorsed by the original game's developers or publishers. Game names and trademarks belong to their respective owners.

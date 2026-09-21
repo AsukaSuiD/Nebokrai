@@ -4,6 +4,8 @@
 
 ## Активный Rust-сервер
 
+[GitHub Actions](../../.github/workflows/rust-check.yml) проверяет библиотеку и шесть серверных входов командой `cargo check --locked --lib --bins` при push в `main` и в pull request. Образ Rust и checkout action закреплены по digest/commit. Проверка не запускает тесты или игровые службы, не использует оригинальные материалы и не требует секретов репозитория. Успех этой проверки подтверждает типы и заимствования, а не линковку или работу клиента.
+
 Пакет объявляет Rust edition 2024 и шесть бинарников: `authserver`, `billingserver`, `gameserver`, `loginserver`, `miscserver`, `worldserver`. В манифесте и toolchain закреплена версия `1.97.1`. Общий процессный модуль без условной компиляции импортирует Unix-сигналы: установка Rust в Windows сама по себе не даёт нативную Windows-сборку этого дерева. Основание выбора платформы — [ADR-0002](../decisions/0002-semantic-boundary.md); сборочные входы — [Cargo.toml](../../server/rust/Cargo.toml), [rust-toolchain.toml](../../server/rust/rust-toolchain.toml) и [process/mod.rs](../../server/rust/src/process/mod.rs).
 
 Для быстрой проверки типов и заимствований на ПК с Docker Desktop есть [check-rust.ps1](../../deploy/check-rust.ps1). Запускайте из PowerShell 7.3 или новее, из корня проекта:
