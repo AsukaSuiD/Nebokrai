@@ -8,7 +8,9 @@
 //! `0x90002` сохраняет current-skill/IsEnd/End gate, `0x90003` — exact три
 //! script path family и battle-fairy feature reject, `0x90004` — client level,
 //! ordered item-skill state и тот же target/AI route. `0x90005` добавляет
-//! battle-fairy equipment gates; `0x90006` остаётся подтверждённым no-op.
+//! battle-fairy equipment gates; `0x90006` остаётся подтверждённым no-op:
+//! matching `OnSkillMessage @ 0x00488B60` содержит отдельный
+//! `case 0x90006: break` перед общим return.
 //!
 //! Безопасный decoder отклоняет оборванный payload вместо исходного чтения за
 //! границей буфера. Skill-script path входит в reached `CGame::run_script_file`
@@ -39,6 +41,7 @@ const END_PLAYER_SKILL: u32 = 0x0009_0002;
 const RUN_SKILL_SCRIPT: u32 = 0x0009_0003;
 const USE_ITEM_SKILL: u32 = 0x0009_0004;
 const USE_BATTLE_FAIRY_SKILL: u32 = 0x0009_0005;
+const PROVEN_NOOP_SKILL_MESSAGE: u32 = 0x0009_0006;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerSkillEndRuntimeOutcome {
@@ -71,8 +74,13 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
             | RUN_SKILL_SCRIPT
             | USE_ITEM_SKILL
             | USE_BATTLE_FAIRY_SKILL
+            | PROVEN_NOOP_SKILL_MESSAGE
     ) {
         return None;
+    }
+    if message_type == PROVEN_NOOP_SKILL_MESSAGE {
+        trace!(message_type, "исходный no-op skill message проигнорирован");
+        return Some(Ok(()));
     }
 
     message.resolve_player_context(game);
@@ -238,6 +246,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
             trace!(player_id, skill_id = request.skill_id(), "Обработан запрос навыка боевой феи");
         }
+        PROVEN_NOOP_SKILL_MESSAGE => unreachable!("no-op возвращён до player context"),
         _ => unreachable!("unsupported skill message отфильтрован до decode"),
     };
     Some(Ok(()))

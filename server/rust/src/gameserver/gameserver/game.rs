@@ -29488,7 +29488,7 @@ impl CGame {
 
     /// Synchronous message-loop entry эквивалента `CreateConnectWorldThread`.
     /// Если прежний worker ещё жив, новый task сначала выставляет ему exit и
-    /// await-ит handle, затем начинает исходный трёхсекундный retry loop.
+    /// await-ит handle, затем начинает исходный восьмисекундный retry loop.
     pub(crate) fn schedule_world_reconnect_task(
         &mut self,
     ) -> Result<(), GameReconnectTaskStartError> {
