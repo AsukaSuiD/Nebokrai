@@ -1,94 +1,83 @@
-//! Player properties и progression `CPlayerList` из WorldServer/GameServer.
-//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
-//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/playerlist.cpp`.
-//!
-//! Wire состоит из player map, level-exp и трёх upgrade maps для Fighter,
-//! Hunter и Taoist. Player record сохраняет 0x58-байтный значимый layout, но
-//! неопределённый padding обнулён; upgrade record пишет level и scalars перед
-//! NUL notification. Game decoder очищает player-map и experience до
-//! чтения, но не очищает upgrade-map: отсутствующие в новом snapshot
-//! старые levels остаются, как в exact Game EXE.
-//!
-//! Create-role equipment хранит occupation, slot и byte-name в list order.
-//! Отсутствующий `sex + occupation*2` по-прежнему вставляет нулевую запись.
-//!
-//! Loaders очищают каждый свой owner до открытия. Ошибка первого player файла
-//! сохраняет прежний equipment list; ошибка второго оставляет новый player map
-//! и пустой equipment list. Malformed input сохраняет только полный префикс.
+//! Общие определения персонажа и их передача World → Game.
+//! Исходный владелец: `server/setup/playerlist.cpp/.h`.
+//! Пара World: `Nworldserver.exe` и совпадающий `WorldServer.pdb`,
+//! `AddToByteArray` VA 0x0042C4D0. Пара Game: `gameserver.exe` и
+//! совпадающий `GameServer.pdb`, `DecordFromByteArray` VA 0x004C76B0.
+//! Game очищает шаблоны и опыт перед чтением, но накладывает записи
+//! трёх таблиц улучшений на существующие. Полный формат, загрузка
+//! файлов и неизвестные границы описаны в документации ресурсов.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::io;
-use std::path::Path;
 
-use nebokrai_shared::protocol::LegacyReader;
-use crate::public::readwrite::read_to;
+use super::marker::read_to_marker;
+use crate::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerBaseProperties {
-    pub(crate) occupation: u8,
-    pub(crate) sex: u8,
-    pub(crate) hot_hit: u32,
-    pub(crate) remain_point: u16,
-    pub(crate) yp: u16,
-    pub(crate) hp: u32,
-    pub(crate) mp: u32,
-    pub(crate) rp: u16,
-    pub(crate) base_maximum_hp: u32,
-    pub(crate) base_maximum_mp: u32,
-    pub(crate) base_maximum_yp: u16,
-    pub(crate) base_maximum_rp: u16,
-    pub(crate) base_strength: u32,
-    pub(crate) base_dexterity: u32,
-    pub(crate) base_constitution: u32,
-    pub(crate) base_intelligence: u32,
-    pub(crate) base_minimum_attack: u32,
-    pub(crate) base_maximum_attack: u32,
-    pub(crate) base_hit: u16,
-    pub(crate) base_burden: u16,
-    pub(crate) base_cch: u16,
-    pub(crate) base_defence: u32,
-    pub(crate) base_dodge: u16,
-    pub(crate) base_attack_speed: u16,
-    pub(crate) base_element_resistant: u32,
-    pub(crate) base_hp_recover_speed: u16,
-    pub(crate) base_mp_recover_speed: u16,
-    pub(crate) constitution_to_maximum_hp: u16,
-    pub(crate) intelligence_to_maximum_mp: u16,
+pub struct PlayerBaseProperties {
+    pub occupation: u8,
+    pub sex: u8,
+    pub hot_hit: u32,
+    pub remain_point: u16,
+    pub yp: u16,
+    pub hp: u32,
+    pub mp: u32,
+    pub rp: u16,
+    pub base_maximum_hp: u32,
+    pub base_maximum_mp: u32,
+    pub base_maximum_yp: u16,
+    pub base_maximum_rp: u16,
+    pub base_strength: u32,
+    pub base_dexterity: u32,
+    pub base_constitution: u32,
+    pub base_intelligence: u32,
+    pub base_minimum_attack: u32,
+    pub base_maximum_attack: u32,
+    pub base_hit: u16,
+    pub base_burden: u16,
+    pub base_cch: u16,
+    pub base_defence: u32,
+    pub base_dodge: u16,
+    pub base_attack_speed: u16,
+    pub base_element_resistant: u32,
+    pub base_hp_recover_speed: u16,
+    pub base_mp_recover_speed: u16,
+    pub constitution_to_maximum_hp: u16,
+    pub intelligence_to_maximum_mp: u16,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerPropertiesUpgrade {
-    pub(crate) base_maximum_hp: u32,
-    pub(crate) base_maximum_mp: u32,
-    pub(crate) base_strength: u32,
-    pub(crate) base_dexterity: u32,
-    pub(crate) base_constitution: u32,
-    pub(crate) base_intelligence: u32,
-    pub(crate) base_burden: u16,
-    pub(crate) notification: Vec<u8>,
+pub struct PlayerPropertiesUpgrade {
+    pub base_maximum_hp: u32,
+    pub base_maximum_mp: u32,
+    pub base_strength: u32,
+    pub base_dexterity: u32,
+    pub base_constitution: u32,
+    pub base_intelligence: u32,
+    pub base_burden: u16,
+    pub notification: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerOriginEquipment {
-    pub(crate) occupation: u8,
-    pub(crate) place_position: u16,
-    pub(crate) original_name: Vec<u8>,
+pub struct PlayerOriginEquipment {
+    pub occupation: u8,
+    pub place_position: u16,
+    pub original_name: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerCreationPropertiesLookup {
-    pub(crate) key: u32,
-    pub(crate) inserted: bool,
-    pub(crate) properties: PlayerBaseProperties,
+pub struct PlayerCreationPropertiesLookup {
+    pub key: u32,
+    pub inserted: bool,
+    pub properties: PlayerBaseProperties,
 }
 
-pub(crate) type PlayerBasePropertiesMap = BTreeMap<u32, PlayerBaseProperties>;
-pub(crate) type PlayerPropertiesUpgradeMap = BTreeMap<u32, PlayerPropertiesUpgrade>;
+pub type PlayerBasePropertiesMap = BTreeMap<u32, PlayerBaseProperties>;
+pub type PlayerPropertiesUpgradeMap = BTreeMap<u32, PlayerPropertiesUpgrade>;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CPlayerList {
+pub struct CPlayerList {
     player_properties: PlayerBasePropertiesMap,
     origin_equipment: Vec<PlayerOriginEquipment>,
     player_experience: Vec<u32>,
@@ -98,7 +87,7 @@ pub(crate) struct CPlayerList {
 }
 
 impl CPlayerList {
-    pub(crate) fn from_parts(
+    pub fn from_parts(
         player_properties: PlayerBasePropertiesMap,
         player_experience: Vec<u32>,
         fighter_upgrades: PlayerPropertiesUpgradeMap,
@@ -115,55 +104,54 @@ impl CPlayerList {
         }
     }
 
-    pub(crate) fn set_origin_equipment(&mut self, equipment: Vec<PlayerOriginEquipment>) {
+    pub fn set_origin_equipment(&mut self, equipment: Vec<PlayerOriginEquipment>) {
         self.origin_equipment = equipment;
     }
 
-    pub(crate) fn origin_equipment(&self) -> &[PlayerOriginEquipment] {
+    pub fn origin_equipment(&self) -> &[PlayerOriginEquipment] {
         &self.origin_equipment
     }
 
-    pub(crate) fn clear_player_properties(&mut self) {
+    pub fn clear_player_properties(&mut self) {
         self.player_properties.clear();
     }
 
-    pub(crate) fn clear_origin_equipment(&mut self) {
+    pub fn clear_origin_equipment(&mut self) {
         self.origin_equipment.clear();
     }
 
-    pub(crate) fn clear_player_experience(&mut self) {
+    pub fn clear_player_experience(&mut self) {
         self.player_experience.clear();
     }
 
-    /// Exact `GetLelExp(unsigned char)`: нулевой и превышающий count level дают
-    /// ноль, остальные адресуют positional массив как `level - 1`.
-    pub(crate) fn level_experience(&self, level: u8) -> u32 {
+    /// Game `GetLelExp` VA 0x004C6240: уровень вне `1..=count` даёт ноль,
+    /// остальные адресуют вектор как `level - 1`.
+    pub fn level_experience(&self, level: u8) -> u32 {
         let Some(index) = level.checked_sub(1).map(usize::from) else {
             return 0;
         };
         self.player_experience.get(index).copied().unwrap_or(0)
     }
 
-    /// Exact `GetLevelNum`: selector возвращает число строк текущего
-    /// World-provided experience snapshot, а не максимальный level игрока.
-    pub(crate) fn level_count(&self) -> usize {
+    /// Game `GetLevelNum` VA 0x004300B0 возвращает длину таблицы опыта.
+    pub fn level_count(&self) -> usize {
         self.player_experience.len()
     }
 
-    pub(crate) fn clear_properties_upgrades(&mut self) {
+    pub fn clear_properties_upgrades(&mut self) {
         self.fighter_upgrades.clear();
         self.hunter_upgrades.clear();
         self.taoist_upgrades.clear();
     }
 
-    pub(crate) fn load_player_properties_from_bytes(
+    pub fn load_player_properties_from_bytes(
         &mut self,
         source: &[u8],
     ) -> Result<usize, PlayerListFormatError> {
         self.clear_player_properties();
         let mut tokens = tokens(source);
         let mut loaded = 0;
-        while read_to(&mut tokens, b"*") {
+        while read_to_marker(&mut tokens, b"*") {
             let occupation_token = read_i32(&mut tokens, "occupation")?;
             let sex_token = read_i32(&mut tokens, "sex")?;
             let occupation = u8::try_from(occupation_token)
@@ -218,13 +206,13 @@ impl CPlayerList {
         Ok(loaded)
     }
 
-    pub(crate) fn load_origin_equipment_from_bytes(
+    pub fn load_origin_equipment_from_bytes(
         &mut self,
         source: &[u8],
     ) -> Result<usize, PlayerListFormatError> {
         self.clear_origin_equipment();
         let mut tokens = tokens(source);
-        while read_to(&mut tokens, b"*") {
+        while read_to_marker(&mut tokens, b"*") {
             let occupation = read_i32(&mut tokens, "origin equipment occupation")?;
             let place_position = read_u16(&mut tokens, "origin equipment position")?;
             let original_name = next_token(&mut tokens, "origin equipment original name")?.to_vec();
@@ -237,7 +225,7 @@ impl CPlayerList {
         Ok(self.origin_equipment.len())
     }
 
-    pub(crate) fn load_player_list_from_bytes(
+    pub fn load_player_list_from_bytes(
         &mut self,
         player_list_source: &[u8],
         origin_equipment_source: &[u8],
@@ -250,36 +238,13 @@ impl CPlayerList {
         })
     }
 
-    pub(crate) fn load_player_list_from_files(
-        &mut self,
-        player_list_path: impl AsRef<Path>,
-        origin_equipment_path: impl AsRef<Path>,
-    ) -> Result<PlayerListLoadReport, PlayerListFileLoadError> {
-        self.clear_player_properties();
-        let player_list_source =
-            std::fs::read(player_list_path).map_err(PlayerListFileLoadError::Io)?;
-        let player_properties = self
-            .load_player_properties_from_bytes(&player_list_source)
-            .map_err(PlayerListFileLoadError::Format)?;
-        self.clear_origin_equipment();
-        let origin_equipment_source =
-            std::fs::read(origin_equipment_path).map_err(PlayerListFileLoadError::Io)?;
-        let origin_equipment = self
-            .load_origin_equipment_from_bytes(&origin_equipment_source)
-            .map_err(PlayerListFileLoadError::Format)?;
-        Ok(PlayerListLoadReport {
-            player_properties,
-            origin_equipment,
-        })
-    }
-
-    pub(crate) fn load_player_experience_from_bytes(
+    pub fn load_player_experience_from_bytes(
         &mut self,
         source: &[u8],
     ) -> Result<usize, PlayerListFormatError> {
         self.clear_player_experience();
         let mut tokens = tokens(source);
-        while read_to(&mut tokens, b"#") {
+        while read_to_marker(&mut tokens, b"#") {
             let _level = read_u32(&mut tokens, "experience level")?;
             self.player_experience
                 .push(read_u32(&mut tokens, "experience value")?);
@@ -287,22 +252,12 @@ impl CPlayerList {
         Ok(self.player_experience.len())
     }
 
-    pub(crate) fn load_player_experience_from_file(
-        &mut self,
-        path: impl AsRef<Path>,
-    ) -> Result<usize, PlayerListFileLoadError> {
-        self.clear_player_experience();
-        let source = std::fs::read(path).map_err(PlayerListFileLoadError::Io)?;
-        self.load_player_experience_from_bytes(&source)
-            .map_err(PlayerListFileLoadError::Format)
-    }
-
     /// Выполняет три последовательных блока `LoadPlayerProperitiesUpgrade`.
     ///
     /// `StringTable::getStringByID` в EXE подменял отсутствующий key пустой
     /// строкой. Closure получает byte-оригинал key и возвращает локализованный
     /// текст либо `None` для того же результата.
-    pub(crate) fn load_properties_upgrades_from_bytes<ResolveNotification>(
+    pub fn load_properties_upgrades_from_bytes<ResolveNotification>(
         &mut self,
         source: &[u8],
         resolve_notification: &mut ResolveNotification,
@@ -328,21 +283,7 @@ impl CPlayerList {
         })
     }
 
-    pub(crate) fn load_properties_upgrades_from_file<ResolveNotification>(
-        &mut self,
-        path: impl AsRef<Path>,
-        resolve_notification: &mut ResolveNotification,
-    ) -> Result<PlayerPropertiesUpgradeLoadReport, PlayerListFileLoadError>
-    where
-        ResolveNotification: FnMut(&[u8]) -> Option<Vec<u8>>,
-    {
-        self.clear_properties_upgrades();
-        let source = std::fs::read(path).map_err(PlayerListFileLoadError::Io)?;
-        self.load_properties_upgrades_from_bytes(&source, resolve_notification)
-            .map_err(PlayerListFileLoadError::Format)
-    }
-
-    pub(crate) fn creation_properties(
+    pub fn creation_properties(
         &mut self,
         sex: u8,
         occupation: u8,
@@ -357,7 +298,7 @@ impl CPlayerList {
         }
     }
 
-    pub(crate) fn properties_upgrade(
+    pub fn properties_upgrade(
         &self,
         occupation: u8,
         level: u8,
@@ -371,7 +312,7 @@ impl CPlayerList {
         upgrades.get(&u32::from(level))
     }
 
-    pub(crate) fn add_to_byte_array(
+    pub fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
     ) -> Result<(), PlayerListSerializeError> {
@@ -400,7 +341,7 @@ impl CPlayerList {
     }
 
     /// Декодирует World startup snapshot с partial mutation exact Game owner-а.
-    pub(crate) fn decord_from_byte_array(
+    pub fn decord_from_byte_array(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
@@ -431,33 +372,25 @@ impl CPlayerList {
         decode_upgrade_map(source, cursor, &mut self.hunter_upgrades)?;
         decode_upgrade_map(source, cursor, &mut self.taoist_upgrades)?;
 
-        tracing::trace!(
-            player_properties = self.player_properties.len(),
-            player_experience = self.player_experience.len(),
-            fighter_upgrades = self.fighter_upgrades.len(),
-            hunter_upgrades = self.hunter_upgrades.len(),
-            taoist_upgrades = self.taoist_upgrades.len(),
-            "шаблоны игроков декодированы"
-        );
         Ok(())
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerListLoadReport {
-    pub(crate) player_properties: usize,
-    pub(crate) origin_equipment: usize,
+pub struct PlayerListLoadReport {
+    pub player_properties: usize,
+    pub origin_equipment: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerPropertiesUpgradeLoadReport {
-    pub(crate) fighter: usize,
-    pub(crate) hunter: usize,
-    pub(crate) taoist: usize,
+pub struct PlayerPropertiesUpgradeLoadReport {
+    pub fighter: usize,
+    pub hunter: usize,
+    pub taoist: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerListFormatError {
+pub enum PlayerListFormatError {
     UnexpectedEnd { field: &'static str },
     InvalidUnsignedLong { field: &'static str, token: Vec<u8> },
     InvalidOccupation(i32),
@@ -485,30 +418,6 @@ impl fmt::Display for PlayerListFormatError {
 
 impl Error for PlayerListFormatError {}
 
-#[derive(Debug)]
-pub(crate) enum PlayerListFileLoadError {
-    Io(io::Error),
-    Format(PlayerListFormatError),
-}
-
-impl fmt::Display for PlayerListFileLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => error.fmt(formatter),
-            Self::Format(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for PlayerListFileLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::Format(error) => Some(error),
-        }
-    }
-}
-
 fn tokens(source: &[u8]) -> impl Iterator<Item = &[u8]> {
     source
         .split(u8::is_ascii_whitespace)
@@ -523,7 +432,7 @@ fn load_upgrade_block<'source, ResolveNotification>(
 where
     ResolveNotification: FnMut(&[u8]) -> Option<Vec<u8>>,
 {
-    if !read_to(tokens, b"*") {
+    if !read_to_marker(tokens, b"*") {
         return Err(PlayerListFormatError::MissingUpgradeBlock {
             block: "properties",
         });
@@ -618,9 +527,9 @@ fn parse_u32(token: &[u8], field: &'static str) -> Result<u32, PlayerListFormatE
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerListSerializeError {
-    pub(crate) owner: &'static str,
-    pub(crate) count: usize,
+pub struct PlayerListSerializeError {
+    pub owner: &'static str,
+    pub count: usize,
 }
 
 impl fmt::Display for PlayerListSerializeError {
@@ -636,7 +545,7 @@ impl fmt::Display for PlayerListSerializeError {
 impl Error for PlayerListSerializeError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerListDecodeError {
+pub enum PlayerListDecodeError {
     UnexpectedEnd {
         offset: usize,
         needed: usize,
@@ -809,9 +718,7 @@ fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, PlayerListDec
     LegacyReader::read_u16_from(source, cursor).map_err(map_read_block)
 }
 
-fn map_read_block(
-    block: nebokrai_shared::protocol::LegacyReadBlock,
-) -> PlayerListDecodeError {
+fn map_read_block(block: crate::protocol::LegacyReadBlock) -> PlayerListDecodeError {
     PlayerListDecodeError::UnexpectedEnd {
         offset: block.offset,
         needed: block.needed,

@@ -24,7 +24,7 @@ use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
 use crate::setup::globesetup::GlobeSetupSnapshot;
-use crate::setup::playerlist::CPlayerList;
+use nebokrai_shared::resources::CPlayerList;
 use crate::public::tools::put_string_to_file;
 use crate::worldserver::appworld::country::country::{
     CountryExileTextArgument, CountryHasJobContext,

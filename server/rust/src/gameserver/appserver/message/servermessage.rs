@@ -103,7 +103,7 @@ use crate::setup::lingbao::LingBaoDecodeError;
 use crate::setup::logsystem::LogSystemDecodeError;
 use crate::setup::monsterlist::{MonsterListDecodeError, MonsterRegistry};
 use crate::setup::newskillmonsterlist::NewSkillMonsterDecodeError;
-use crate::setup::playerlist::PlayerListDecodeError;
+use nebokrai_shared::resources::PlayerListDecodeError;
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
 use crate::setup::prisonconf::PrisonConfDecodeError;
 use nebokrai_shared::resources::QuestSystemDecodeError;

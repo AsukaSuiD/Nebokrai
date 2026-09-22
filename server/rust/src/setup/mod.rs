@@ -63,7 +63,6 @@ pub(crate) mod monsterlist;
     reason = "new-skill-monster serializer подключён к initial-config до XML loader-а"
 )]
 pub(crate) mod newskillmonsterlist;
-pub(crate) mod playerlist;
 #[allow(
     dead_code,
     reason = "PreciousBox serializer подключён к initial-config до точного XML→range materializer-а"

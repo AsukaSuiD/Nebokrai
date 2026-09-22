@@ -6281,7 +6281,7 @@ impl CPlayer {
 
     pub(crate) fn apply_level_property_upgrade(
         &mut self,
-        upgrade: &crate::setup::playerlist::PlayerPropertiesUpgrade,
+        upgrade: &nebokrai_shared::resources::PlayerPropertiesUpgrade,
     ) {
         self.base_properties.base_maximum_hp = upgrade.base_maximum_hp;
         self.base_properties.base_dexterity = upgrade.base_dexterity;

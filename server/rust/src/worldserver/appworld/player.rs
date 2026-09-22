@@ -40,7 +40,7 @@ use crate::public::dupliregionsetup::CDupliRegionSetup;
 use nebokrai_shared::values::CGuid;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing, LeiTingLocalTime};
-use crate::setup::playerlist::{
+use nebokrai_shared::resources::{
     CPlayerList, PlayerCreationPropertiesLookup, PlayerOriginEquipment,
 };
 

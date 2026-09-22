@@ -1384,7 +1384,7 @@ use crate::setup::monsterlist::{
     get_monster_property_by_origin_name_mut,
 };
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
-use crate::setup::playerlist::CPlayerList;
+use nebokrai_shared::resources::CPlayerList;
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxItem};
 use crate::setup::prisonconf::PrisonConf;
 use nebokrai_shared::resources::CQuestSystem;

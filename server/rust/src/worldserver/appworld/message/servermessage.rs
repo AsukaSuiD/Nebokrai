@@ -64,7 +64,7 @@ use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
 use crate::setup::newskillmonsterlist::{NewSkillMonsterConf, NewSkillMonsterSerializeError};
-use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
+use nebokrai_shared::resources::{CPlayerList, PlayerListSerializeError};
 use std::sync::Arc;
 
 use parking_lot::Mutex;

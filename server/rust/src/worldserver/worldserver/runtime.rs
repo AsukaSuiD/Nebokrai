@@ -79,7 +79,7 @@ use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{MonsterDropRegistry, MonsterRegistry};
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
-use crate::setup::playerlist::CPlayerList;
+use nebokrai_shared::resources::CPlayerList;
 use crate::setup::preciousboxconf::PreciousBoxConf;
 use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;

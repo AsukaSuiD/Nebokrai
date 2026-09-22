@@ -159,7 +159,7 @@ use crate::setup::monsterlist::{
 use crate::setup::regionsetup::{
     CRegionSetup, RegionSetupLoadError, RegionSetupSerializeError,
 };
-use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
+use nebokrai_shared::resources::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{
     PreciousBoxConf, PreciousBoxSerializeError,
 };

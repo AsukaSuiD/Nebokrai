@@ -7,6 +7,7 @@ mod hitlevel;
 mod marker;
 mod package;
 mod path;
+mod playerlist;
 mod quest;
 mod quest_text;
 mod quest_wire;
@@ -27,6 +28,12 @@ pub use hitlevel::{
 pub use marker::read_to_marker;
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};
 pub use path::{normalize_resource_path, resolve_resource_path};
+pub use playerlist::{
+    CPlayerList, PlayerBaseProperties, PlayerBasePropertiesMap, PlayerCreationPropertiesLookup,
+    PlayerListDecodeError, PlayerListFormatError, PlayerListLoadReport, PlayerListSerializeError,
+    PlayerOriginEquipment, PlayerPropertiesUpgrade, PlayerPropertiesUpgradeLoadReport,
+    PlayerPropertiesUpgradeMap,
+};
 pub use quest::{CQuestSystem, QuestEntry};
 pub use quest_text::{
     QuestSystemLoadCompletion, QuestSystemLoadReport, QuestTextError, QuestTextErrorKind,
