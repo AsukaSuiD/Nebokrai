@@ -444,7 +444,6 @@ pub(crate) mod appserver {
         pub(crate) mod playermessage;
         pub(crate) mod playershopmessage;
         pub(crate) mod regionmessage;
-        pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
         pub(crate) mod shapemessage;
         pub(crate) mod shopmessage;

@@ -902,7 +902,7 @@ use crate::gameserver::appserver::message::playermessage::{
 };
 use crate::gameserver::appserver::message::playershopmessage::dispatch_player_shop_message;
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
-use crate::gameserver::appserver::message::sequencestring::{
+use nebokrai_zone::sessions::{
     CSequenceRegistry, CSequenceString, SequenceRegistryInitializationError, SequenceSerializeError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;

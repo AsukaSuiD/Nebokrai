@@ -1,10 +1,15 @@
-//! Владелец проверки последовательности GameServer из `message/sequencestring.cpp`.
+//! Проверочная последовательность сессии Zone; перенесена из переходного
+//! `src/gameserver/appserver/message/sequencestring.rs`.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает конструктор,
-//! `Initialize` и `Serialize`: в реестр добавляется `count` значений прямого
-//! MSVCRT `rand`, ноль заменяется единицей, а новый player-owner выбирает
-//! стартовый индекс через `rand % len`. Формат содержит знаковые начальную позицию
-//! и `count`, затем все `u32` в little-endian порядке.
+//! Исходный владелец PDB: `server/gameserver/appserver/message/sequencestring.cpp`.
+//! Пара GameServer: EXE SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`,
+//! PDB SHA-256 `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`.
+//! Машинный код конструктора (VA `0x0042A390`), `Initialize` (`0x0042A6D0`)
+//! и `Serialize` (`0x0042A3D0`) подтверждает: в реестр добавляется `count`
+//! значений прямого MSVCRT `rand`, ноль заменяется единицей, а новый player-owner выбирает
+//! стартовый индекс через `rand % len`. Формат содержит два 32-битных слова
+//! (индекс с битовым значением `-1` для пустого реестра и count), затем все
+//! `u32` в little-endian порядке.
 //!
 //! Общий CRT RNG принадлежит `CGame`; этот владелец получает только обратный вызов
 //! следующего 15-битного значения, чтобы не создавать второй поток случайных
@@ -19,25 +24,25 @@ use nebokrai_shared::protocol::LegacyWriter;
 
 #[derive(Debug, Error)]
 #[error("не удалось зарезервировать Game sequence registry")]
-pub(crate) struct SequenceRegistryInitializationError {
+pub struct SequenceRegistryInitializationError {
     #[source]
     source: TryReserveError,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub(crate) enum SequenceSerializeError {
+pub enum SequenceSerializeError {
     #[error("число Game sequence elements не представимо Windows long")]
     CountOutsideLegacyRange,
 }
 
 #[derive(Default)]
-pub(crate) struct CSequenceRegistry {
+pub struct CSequenceRegistry {
     elements: Vec<u32>,
 }
 
 impl CSequenceRegistry {
     /// Добавляет новый initialized batch; исходный static vector не очищался.
-    pub(crate) fn initialize(
+    pub fn initialize(
         &mut self,
         count: u32,
         mut next_random: impl FnMut() -> u32,
@@ -52,26 +57,26 @@ impl CSequenceRegistry {
         Ok(())
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.elements.clear();
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.elements.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
 }
 
-pub(crate) struct CSequenceString {
+pub struct CSequenceString {
     position: i32,
     usable: bool,
 }
 
 impl CSequenceString {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             position: -1,
             usable: false,
@@ -79,7 +84,7 @@ impl CSequenceString {
     }
 
     /// Строит точный validation payload и сохраняет выбранную позицию owner-а.
-    pub(crate) fn serialize(
+    pub fn serialize(
         &mut self,
         registry: &CSequenceRegistry,
         mut next_random: impl FnMut() -> u32,
@@ -107,11 +112,11 @@ impl CSequenceString {
         Ok(payload)
     }
 
-    pub(crate) const fn position(&self) -> i32 {
+    pub const fn position(&self) -> i32 {
         self.position
     }
 
-    pub(crate) const fn is_usable(&self) -> bool {
+    pub const fn is_usable(&self) -> bool {
         self.usable
     }
 }
