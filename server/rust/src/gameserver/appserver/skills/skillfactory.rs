@@ -76,7 +76,7 @@ use thiserror::Error;
 use super::skillbaseproperties::{CSkillBaseProperties, UNKNOWN_SKILL_TYPE};
 use nebokrai_shared::protocol::LegacyReader;
 
-pub(crate) const UNKNOWN_SKILL_ID: u32 = 0x7fff_ffff;
+pub(crate) use nebokrai_zone::combat::UNKNOWN_SKILL_ID;
 const MAX_SKILL_NAME_LENGTH: usize = 255;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
