@@ -903,7 +903,8 @@ use crate::gameserver::appserver::message::playermessage::{
 use crate::gameserver::appserver::message::playershopmessage::dispatch_player_shop_message;
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
 use nebokrai_zone::sessions::{
-    CSequenceRegistry, CSequenceString, SequenceRegistryInitializationError, SequenceSerializeError,
+    LoginValidationState, PlayerLoginValidateTime, SequencePreparationError,
+    SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
@@ -2244,18 +2245,7 @@ pub(crate) enum GamePlayerLoginBlock {
     ClientSnapshot { player_id: i32 },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerLoginValidateTime {
-    pub(crate) issued_tick_ms: u32,
-    pub(crate) issued_wall_seconds: u32,
-    pub(crate) timeout_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GamePlayerLoginPreludeError {
-    DuplicateSequenceOwner { player_id: i32 },
-    Sequence(SequenceSerializeError),
-}
+pub(crate) type GamePlayerLoginPreludeError = SequencePreparationError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerRegionChangeOutcome {
@@ -4677,9 +4667,7 @@ pub(crate) struct CGame {
     setup: GameSetup,
     setup_ex: GameSetupEx,
     random_state: u32,
-    sequence_registry: CSequenceRegistry,
-    login_sequences: BTreeMap<i32, CSequenceString>,
-    login_validate_times: BTreeMap<i32, bool>,
+    login_validation: LoginValidationState,
     player_list: CPlayerList,
     trade_list: CTradeList,
     goods_factory: CGoodsFactory,
@@ -5571,9 +5559,7 @@ impl CGame {
             setup: GameSetup::default(),
             setup_ex: GameSetupEx::default(),
             random_state: 1,
-            sequence_registry: CSequenceRegistry::default(),
-            login_sequences: BTreeMap::new(),
-            login_validate_times: BTreeMap::new(),
+            login_validation: LoginValidationState::default(),
             player_list: CPlayerList::default(),
             trade_list: CTradeList::default(),
             goods_factory: CGoodsFactory::default(),
@@ -5792,10 +5778,10 @@ impl CGame {
         self.random_state = sequence_seed_ms;
         let sequence_count = self.setup.sequence_count;
         let random_state = &mut self.random_state;
-        self.sequence_registry
-            .initialize(sequence_count, || next_msvc_rand(random_state))
+        self.login_validation
+            .initialize_registry(sequence_count, || next_msvc_rand(random_state))
             .map_err(GameInitializationThroughBillingError::Sequence)?;
-        let sequence_elements = self.sequence_registry.len();
+        let sequence_elements = self.login_validation.registry_len();
 
         let billing = self.init_billing_client().await;
         tracing::debug!(
@@ -5938,10 +5924,6 @@ impl CGame {
             self.team_id_counter = 1;
         }
         result
-    }
-
-    pub(crate) const fn sequence_registry(&self) -> &CSequenceRegistry {
-        &self.sequence_registry
     }
 
     pub(crate) const fn player_list(&self) -> &CPlayerList {
@@ -29812,12 +29794,10 @@ impl CGame {
             "освобождены сессии, магазин улучшений и система заданий"
         );
 
-        let login_sequences = self.login_sequences.len();
-        let login_validate_times = self.login_validate_times.len();
-        self.login_sequences.clear();
-        self.login_validate_times.clear();
-        let sequence_count = self.sequence_registry.len();
-        self.sequence_registry.clear();
+        let released_login_validation = self.login_validation.release();
+        let login_sequences = released_login_validation.sequences;
+        let login_validate_times = released_login_validation.validate_times;
+        let sequence_count = released_login_validation.registry_elements;
         let player_ranks_present = self.player_ranks.take().is_some();
         self.words_filter.clear();
         self.honor_ranks = CHonorRanks::default();
@@ -29893,8 +29873,7 @@ impl CGame {
 
     pub(crate) fn discard_player_login(&mut self, player_id: i32) -> (bool, i32) {
         let removed = self.players.remove(&player_id).is_some();
-        self.login_sequences.remove(&player_id);
-        self.login_validate_times.remove(&player_id);
+        self.login_validation.remove_player(player_id);
         let route_command = self.net_server().clear_player_map_id(player_id);
         (removed, route_command)
     }
@@ -29915,7 +29894,7 @@ impl CGame {
                 timeout_ms: self.setup.message_validate_time_ms,
             });
         let validate_delivery = validate_time.map(|validation| {
-            self.login_validate_times.insert(player_id, true);
+            self.login_validation.append_validate_time(player_id, true);
             let mut message = CMessage::new(0x000b_f402);
             message.add_long(player_id);
             message.add_ulong(validation.issued_tick_ms);
@@ -29927,22 +29906,16 @@ impl CGame {
         let mut sequence_elements = 0usize;
         let mut sequence_delivery = None;
         // OnLogMessage VA 0x49F6CC..0x49F6F9 проверяет настройку и реестр.
-        if self.setup.sequence_count != 0 && !self.sequence_registry.is_empty() {
-            if self.login_sequences.remove(&player_id).is_some() {
-                return Err(GamePlayerLoginPreludeError::DuplicateSequenceOwner { player_id });
-            }
-            let (registry, random_state) = (&self.sequence_registry, &mut self.random_state);
-            let mut sequence = CSequenceString::new();
-            let payload = sequence
-                .serialize(registry, || next_msvc_rand(random_state))
-                .map_err(GamePlayerLoginPreludeError::Sequence)?;
-            sequence_position = Some(sequence.position());
-            sequence_elements = registry.len();
-            self.login_sequences.insert(player_id, sequence);
+        if self.setup.sequence_count != 0 && self.login_validation.has_sequences() {
+            let (validation, random_state) = (&mut self.login_validation, &mut self.random_state);
+            let sequence = validation
+                .prepare_sequence(player_id, || next_msvc_rand(random_state))?;
+            sequence_position = Some(sequence.position);
+            sequence_elements = sequence.elements;
 
             let mut message = CMessage::new(0x000b_f403);
             message.add_long(player_id);
-            message.base_mut().add(&payload);
+            message.base_mut().add(&sequence.payload);
             sequence_delivery = Some(message.send_to_player(self.net_server(), player_id));
         }
 
@@ -29959,8 +29932,7 @@ impl CGame {
     }
 
     pub(crate) fn clear_player_login_validation(&mut self, player_id: i32) {
-        self.login_sequences.remove(&player_id);
-        self.login_validate_times.remove(&player_id);
+        self.login_validation.remove_player(player_id);
     }
 
     fn restore_player_region_pets(&mut self, player_id: i32, region_id: i32) {
