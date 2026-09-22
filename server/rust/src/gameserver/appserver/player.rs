@@ -9189,10 +9189,7 @@ impl CPlayer {
         &mut self,
         definitions: Option<&[u8]>,
     ) -> Result<(), GameVariableSnapshotError> {
-        if self.variable_list.variables().is_empty() {
-            self.variable_list.load_definitions(definitions)?;
-        }
-        Ok(())
+        self.variable_list.initialize_if_empty(definitions)
     }
 
     pub(crate) fn set_string_variable(

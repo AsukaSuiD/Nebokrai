@@ -85,6 +85,16 @@ impl CVariableList {
         &self.variables
     }
 
+    pub fn initialize_if_empty(
+        &mut self,
+        definitions: Option<&[u8]>,
+    ) -> Result<(), GameVariableSnapshotError> {
+        if self.variables.is_empty() {
+            self.load_definitions(definitions)?;
+        }
+        Ok(())
+    }
+
     pub fn integer(&self, name: &[u8], element_index: usize) -> Option<i32> {
         let variable = self
             .variables
@@ -303,7 +313,7 @@ impl CVariableList {
         true
     }
 
-    pub(crate) fn load_definitions(
+    fn load_definitions(
         &mut self,
         definitions: Option<&[u8]>,
     ) -> Result<(), GameVariableSnapshotError> {
