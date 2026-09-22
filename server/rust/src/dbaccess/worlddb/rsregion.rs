@@ -309,16 +309,19 @@ impl RsRegionOwner for TiberiusRsRegion {
             save.bind(snapshot.owned_faction_id);
             save.bind(snapshot.owned_union_id);
             save.bind(snapshot.current_tax_rate);
-            save.bind(i64::from(snapshot.today_total_tax));
-            save.bind(i64::from(snapshot.total_tax));
+            // `CSL_Region` хранит эти legacy DWORD как SQL `int`. Load
+            // восстанавливает их через `i32 as u32`, поэтому Save должен
+            // переносить те же 32 бита обратно, а не расширять `u32` до i64.
+            save.bind(snapshot.today_total_tax as i32);
+            save.bind(snapshot.total_tax as i32);
             save.bind(snapshot.region_id);
         } else {
             save.bind(snapshot.region_id);
             save.bind(snapshot.owned_faction_id);
             save.bind(snapshot.owned_union_id);
             save.bind(snapshot.current_tax_rate);
-            save.bind(i64::from(snapshot.today_total_tax));
-            save.bind(i64::from(snapshot.total_tax));
+            save.bind(snapshot.today_total_tax as i32);
+            save.bind(snapshot.total_tax as i32);
         }
 
         match save.execute(active_transaction).await {

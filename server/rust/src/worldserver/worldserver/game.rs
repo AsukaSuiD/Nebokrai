@@ -4259,8 +4259,8 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
 /// Rust-ссылками.
 #[derive(Clone)]
 pub(crate) struct WorldMainLoopResourceSnapshot {
-    pub(crate) registry: GoodsBasePropertiesRegistry,
-    pub(crate) original_name_index: GoodsOriginalNameIndex,
+    pub(crate) registry: Arc<GoodsBasePropertiesRegistry>,
+    pub(crate) original_name_index: Arc<GoodsOriginalNameIndex>,
     pub(crate) coefficients: PlayerPropertyCoefficients,
     pub(crate) player_list: CPlayerList,
     pub(crate) globe_setup: GlobeSetupSnapshot,

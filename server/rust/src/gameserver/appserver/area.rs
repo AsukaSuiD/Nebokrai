@@ -214,6 +214,15 @@ impl CArea {
         destination.extend_from_slice(&self.carriages);
     }
 
+    /// Упорядоченное monster-подмножество `GetActivedShapes`: sleeping storage
+    /// намеренно не входит сюда, пока `WakeUpMonsters` не вернёт ID в
+    /// active/pet/carriage storage.
+    pub(crate) fn append_active_monster_ids(&self, destination: &mut Vec<i32>) {
+        destination.extend_from_slice(&self.active_monsters);
+        destination.extend_from_slice(&self.pets);
+        destination.extend_from_slice(&self.carriages);
+    }
+
     /// Exact storage `GetSleepMonster`, используемый Nation clear после
     /// общего type `600` pass.
     pub(crate) fn append_sleeping_monster_ids(&self, destination: &mut Vec<i32>) {

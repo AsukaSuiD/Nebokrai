@@ -2619,6 +2619,25 @@ impl CServerRegion {
             .map_or_else(Vec::new, CArea::active_shape_candidates)
     }
 
+    pub(crate) fn active_monster_ids_in_area(&self, area_index: usize) -> Vec<i32> {
+        let mut ids = Vec::new();
+        if let Some(area) = self.areas.get(area_index) {
+            area.append_active_monster_ids(&mut ids);
+        }
+        ids
+    }
+
+    /// Row-major monster-подмножество достигнутого active-shape AI-прохода.
+    /// `CArea::GetActivedShapes` не включает sleeping monsters; они возвращаются
+    /// в этот обход только через подтверждённый переход `WakeUpMonsters`.
+    pub(crate) fn active_monster_ids(&self) -> Vec<i32> {
+        let mut ids = Vec::new();
+        for area in &self.areas {
+            area.append_active_monster_ids(&mut ids);
+        }
+        ids
+    }
+
     pub(crate) fn forget_unresolved_active_shape(
         &mut self,
         area_index: usize,
@@ -2695,6 +2714,12 @@ impl CServerRegion {
 
     pub(crate) fn stage_remove_shape(&mut self, identity: ShapeIdentity) -> bool {
         self.remove_shapes.insert(identity)
+    }
+
+    pub(crate) fn has_staged_shape_cleanup(&self) -> bool {
+        !self.delete_shapes.is_empty()
+            || !self.remove_shapes.is_empty()
+            || !self.change_area_shapes.is_empty()
     }
 
     pub(crate) fn take_staged_remove_shapes(&mut self) -> Vec<ShapeIdentity> {

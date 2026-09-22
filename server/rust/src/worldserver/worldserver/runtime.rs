@@ -805,8 +805,8 @@ impl WorldGameReleaseContext for WorldProcessReleaseContext<'_> {
             }
             WorldGameReleaseVoidOwner::ReleaseGoodsFactory => {
                 release_goods_registry(
-                    &mut self.resources.goods,
-                    &mut self.resources.goods_by_original_name,
+                    Arc::make_mut(&mut self.resources.goods),
+                    Arc::make_mut(&mut self.resources.goods_by_original_name),
                     &mut self.resources.goods_by_name,
                 );
             }
@@ -1177,7 +1177,7 @@ pub(crate) struct WorldPlayerLoadSnapshot {
     pub(crate) player_list: CPlayerList,
     pub(crate) globe_setup: GlobeSetupSnapshot,
     pub(crate) coefficients: PlayerPropertyCoefficients,
-    pub(crate) goods: GoodsBasePropertiesRegistry,
+    pub(crate) goods: Arc<GoodsBasePropertiesRegistry>,
     pub(crate) gold_coin_index: u32,
     pub(crate) gold_coin_limit: u32,
     pub(crate) use_log_system: bool,
@@ -1906,7 +1906,7 @@ impl WorldProcessMainLoopContexts {
             .ok_or(WorldMainLoopContextBuildError::MissingLargessOwner)?;
         let (db_misc, db_misc_configuration) = init
             .take_db_misc_context(
-                snapshot.goods.clone(),
+                snapshot.goods.as_ref().clone(),
                 snapshot.globe_setup.clone(),
                 snapshot.gold_coin_index,
                 domains.db_misc.output_publisher(),
@@ -2317,8 +2317,8 @@ impl WorldPlayerDataLoadOwner for WorldProcessPlayerLoadDatabase {
 pub(crate) struct WorldProcessResources {
     runtime_directory: PathBuf,
     default_client_resource: DefaultClientResourceOwner,
-    goods: GoodsBasePropertiesRegistry,
-    goods_by_original_name: GoodsOriginalNameIndex,
+    goods: Arc<GoodsBasePropertiesRegistry>,
+    goods_by_original_name: Arc<GoodsOriginalNameIndex>,
     goods_by_name: GoodsNameIndex,
     monsters: MonsterRegistry,
     monster_drops: MonsterDropRegistry,
@@ -2355,7 +2355,7 @@ impl WorldProcessResources {
             player_list: CPlayerList::default(),
             globe_setup: globe_setup.clone(),
             coefficients: globe_setup.player_property_coefficients().into(),
-            goods: GoodsBasePropertiesRegistry::default(),
+            goods: Arc::new(GoodsBasePropertiesRegistry::default()),
             gold_coin_index: 0,
             gold_coin_limit: 0,
             use_log_system: false,
@@ -2364,8 +2364,8 @@ impl WorldProcessResources {
         Self {
             runtime_directory,
             default_client_resource: Default::default(),
-            goods: Default::default(),
-            goods_by_original_name: Default::default(),
+            goods: Arc::new(Default::default()),
+            goods_by_original_name: Arc::new(Default::default()),
             goods_by_name: Default::default(),
             monsters: Default::default(),
             monster_drops: Default::default(),
@@ -2450,8 +2450,8 @@ impl WorldReloadContext for WorldProcessResources {
         &mut GoodsNameIndex,
     ) {
         (
-            &mut self.goods,
-            &mut self.goods_by_original_name,
+            Arc::make_mut(&mut self.goods),
+            Arc::make_mut(&mut self.goods_by_original_name),
             &mut self.goods_by_name,
         )
     }
@@ -2496,7 +2496,7 @@ impl WorldReloadContext for WorldProcessResources {
             player_list: self.player_list.clone(),
             globe_setup: self.globe_setup.clone(),
             coefficients: self.globe_setup.player_property_coefficients().into(),
-            goods: self.goods.clone(),
+            goods: Arc::clone(&self.goods),
             gold_coin_index,
             gold_coin_limit,
             use_log_system,
@@ -2548,8 +2548,8 @@ impl WorldMainLoopResourceContext for WorldProcessResources {
     fn main_loop_resource_snapshot(&self) -> WorldMainLoopResourceSnapshot {
         let gold_coin_index = self.player_load_snapshot.read().gold_coin_index;
         WorldMainLoopResourceSnapshot {
-            registry: self.goods.clone(),
-            original_name_index: self.goods_by_original_name.clone(),
+            registry: Arc::clone(&self.goods),
+            original_name_index: Arc::clone(&self.goods_by_original_name),
             coefficients: self.globe_setup.player_property_coefficients().into(),
             player_list: self.player_list.clone(),
             globe_setup: self.globe_setup.clone(),

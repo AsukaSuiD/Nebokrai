@@ -50,9 +50,10 @@
 //! Синхронные callback-и временно извлечённого региона используют тот же
 //! sender через recipient/spatial snapshot: сохраняются area order и team-tail,
 //! но owning объекты с навыками и visual-ресурсами не клонируются.
-//! Если callback временно извлёк только игрока, around-runtime заимствует его:
-//! точный ID разрешается в этот живой объект и для area, и для main/team, и для
-//! владельца plug; остальные игроки по-прежнему берутся из `CGame`.
+//! Если callback временно извлёк только игрока, around-runtime сохраняет узкий
+//! snapshot его ID/team/shape: точный ID разрешается через этот snapshot и для
+//! area, и для main/team, и для владельца plug; остальные игроки по-прежнему
+//! берутся из `CGame`.
 //! Положительные глобальные `AREA_WIDTH/HEIGHT` выражены проверяемой concrete
 //! runtime-границей. `SendAll` oversized-log читает неинициализированное
 //! constructor-ом `CMySocket::m_lIndexID`; Rust не подставляет значение и
@@ -202,10 +203,44 @@ pub(crate) enum GameMessageRoute {
     UniBill,
 }
 
+struct GameServerAroundPlayer {
+    player_id: i32,
+    team_id: i32,
+    shape: CShape,
+}
+
+enum GameServerAroundPlayerRef<'a> {
+    Detached(&'a GameServerAroundPlayer),
+    Live(&'a CPlayer),
+}
+
+impl GameServerAroundPlayerRef<'_> {
+    fn player_id(&self) -> i32 {
+        match self {
+            Self::Detached(player) => player.player_id,
+            Self::Live(player) => player.player_id(),
+        }
+    }
+
+    fn team_id(&self) -> i32 {
+        match self {
+            Self::Detached(player) => player.team_id,
+            Self::Live(player) => player.team_id(),
+        }
+    }
+
+    fn shape(&self) -> &CShape {
+        match self {
+            Self::Detached(player) => &player.shape,
+            Self::Live(player) => player.shape(),
+        }
+    }
+}
+
 pub(crate) struct GameServerAroundRuntime<'a> {
     game: &'a CGame,
     sessions: &'a CSessionFactory,
-    player: Option<&'a CPlayer>,
+    player: Option<GameServerAroundPlayer>,
     area_width: i32,
     area_height: i32,
 }
@@ -227,15 +262,21 @@ impl<'a> GameServerAroundRuntime<'a> {
         })
     }
 
-    pub(crate) fn with_player(mut self, player: &'a CPlayer) -> Self {
-        self.player = Some(player);
+    pub(crate) fn with_player(mut self, player: &CPlayer) -> Self {
+        self.player = Some(GameServerAroundPlayer {
+            player_id: player.player_id(),
+            team_id: player.team_id(),
+            shape: player.shape().clone(),
+        });
         self
     }
 
-    fn resolve_player(&self, player_id: i32) -> Option<&CPlayer> {
+    fn resolve_player(&self, player_id: i32) -> Option<GameServerAroundPlayerRef<'_>> {
         self.player
-            .filter(|player| player.player_id() == player_id)
-            .or_else(|| self.game.find_player(player_id))
+            .as_ref()
+            .filter(|player| player.player_id == player_id)
+            .map(GameServerAroundPlayerRef::Detached)
+            .or_else(|| self.game.find_player(player_id).map(GameServerAroundPlayerRef::Live))
     }
 }
 

@@ -924,7 +924,8 @@ use crate::gameserver::appserver::monster::{
 };
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, KillingAttackIdentity, MoveShapeCommandBlock, MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE,
+    CMoveShape, KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePositionBlock,
+    MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE,
 };
 use crate::gameserver::appserver::build::{
     BUILD_OBJECT_TYPE, BuildClientPublication, CBuild,
@@ -987,12 +988,13 @@ use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use crate::gameserver::appserver::servercityregion::{
-    CServerCityRegion, CityGuardRefreshTargets, CityReturnPointContext, CityReturnPointError,
+    CServerCityRegion, CityEntryContext, CityEntryError, CityGuardRefreshTargets,
+    CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryCampContext, CountryContendContext, CountryContendEntryContext,
-    CountryContendPlayer, CountryGuardRefreshTargets, CountryMoveShape,
-    CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
+    CountryContendPlayer, CountryEntryContext, CountryEntryError, CountryGuardRefreshTargets,
+    CountryMoveShape, CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleContender,
@@ -2236,6 +2238,9 @@ pub(crate) enum GamePlayerLoginBlock {
     PlayerIdMismatch { expected: i32, decoded: i32 },
     AlreadyRegistered { player_id: i32 },
     MissingRegion { region_id: i32 },
+    CityEntry(CityEntryError),
+    CountryEntry(CountryEntryError),
+    EntryPosition(MoveShapePositionBlock),
     Membership(RegionMembershipBlock),
     ClientSnapshot { player_id: i32 },
 }
@@ -4074,6 +4079,74 @@ impl CityReturnPointContext for CityReturnPointFacts {
         (player_id == self.player_id)
             .then_some(self.tile_x)
             .unwrap_or(0)
+    }
+}
+
+/// Adapter virtual `CPlayer` для region-specific `SetEnterPosXY` при входе.
+/// Игрок здесь ещё не добавлен в spatial membership региона, поэтому virtual
+/// `SetPosXY` меняет detached shape и использует тот же process-wide legacy RNG.
+struct GameLoginRegionEntryContext<'a> {
+    player: &'a mut CPlayer,
+    random_state: &'a mut u32,
+    area_width: i32,
+    area_height: i32,
+    position_block: Option<MoveShapePositionBlock>,
+}
+
+impl GameLoginRegionEntryContext<'_> {
+    fn set_player_position(&mut self, player_id: i32, x: i32, y: i32) {
+        if self.player.player_id() != player_id || self.position_block.is_some() {
+            return;
+        }
+        let facts = self
+            .player
+            .movement_position_facts(self.area_width, self.area_height);
+        if let Err(block) = self.player.move_shape_mut().set_pos_xy(
+            None,
+            x as f32 + 0.5,
+            y as f32 + 0.5,
+            facts,
+        ) {
+            self.position_block = Some(block);
+        }
+    }
+}
+
+impl RegionRandomContext for GameLoginRegionEntryContext<'_> {
+    fn random_below(&mut self, bound: i32) -> i32 {
+        game_legacy_random(self.random_state, bound)
+    }
+}
+
+impl CityReturnPointContext for GameLoginRegionEntryContext<'_> {
+    fn read_city_player_tile_y(&mut self, player_id: i32) -> i32 {
+        (self.player.player_id() == player_id)
+            .then(|| self.player.shape().get_tile_y().unwrap_or_default())
+            .unwrap_or_default()
+    }
+
+    fn read_city_player_tile_x(&mut self, player_id: i32) -> i32 {
+        (self.player.player_id() == player_id)
+            .then(|| self.player.shape().get_tile_x().unwrap_or_default())
+            .unwrap_or_default()
+    }
+}
+
+impl CityEntryContext for GameLoginRegionEntryContext<'_> {
+    fn set_city_player_position(&mut self, player_id: i32, x: i32, y: i32) {
+        self.set_player_position(player_id, x, y);
+    }
+}
+
+impl CountryReturnPointContext for GameLoginRegionEntryContext<'_> {
+    fn random_country_area_key(&mut self, area_count: u32) -> i32 {
+        game_legacy_random(self.random_state, area_count as i32)
+    }
+}
+
+impl CountryEntryContext for GameLoginRegionEntryContext<'_> {
+    fn set_country_player_position(&mut self, player_id: i32, x: i32, y: i32) {
+        self.set_player_position(player_id, x, y);
     }
 }
 
@@ -30452,7 +30525,7 @@ impl CGame {
             .players
             .remove(&expected_player_id)
             .expect("login player только что зарегистрирован");
-        let Some(owner) = self.take_region_owner(region_id) else {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
             self.players.insert(expected_player_id, player);
             return Err(GamePlayerLoginBlock::MissingRegion { region_id });
         };
@@ -30489,11 +30562,57 @@ impl CGame {
                 .set_pos_xy_base(position.x as f32 + 0.5, position.y as f32 + 0.5);
             relocation = Some((position.x, position.y));
         }
+        let player_facts = ServerReturnPlayer {
+            id: expected_player_id,
+            country: player.country(),
+            faction_id: player.faction_id(),
+        };
+        let (area_width, area_height) = self.area_dimensions();
+        let (entry_result, entry_position_block) = {
+            let mut entry_context = GameLoginRegionEntryContext {
+                player: &mut player,
+                random_state: &mut self.random_state,
+                area_width,
+                area_height,
+                position_block: None,
+            };
+            let result = match &mut owner {
+                ServerRegionOwner::City(region) => region
+                    .set_enter_pos_xy(
+                        player_facts,
+                        &mut self.country_param,
+                        &mut entry_context,
+                    )
+                    .map_err(GamePlayerLoginBlock::CityEntry),
+                ServerRegionOwner::Country(region) => region
+                    .set_enter_pos_xy(
+                        player_facts,
+                        &mut self.country_param,
+                        &mut entry_context,
+                    )
+                    .map_err(GamePlayerLoginBlock::CountryEntry),
+                _ => Ok(None),
+            };
+            (result, entry_context.position_block)
+        };
+        if let Some(block) = entry_position_block {
+            self.restore_region_owner(owner);
+            self.players.insert(expected_player_id, player);
+            return Err(GamePlayerLoginBlock::EntryPosition(block));
+        }
+        match entry_result {
+            Ok(Some(position)) => relocation = Some((position.x, position.y)),
+            Ok(None) => {}
+            Err(block) => {
+                self.restore_region_owner(owner);
+                self.players.insert(expected_player_id, player);
+                return Err(block);
+            }
+        }
         // OnLogMessage 0x49F140 ещё не выполняет spatial AddObject: после
-        // подготовки XY остаётся ссылка на регион, а AddObject/AutoStart и
-        // OnEnterRegion(false) исполняет только подтверждение 8F801.
-        // Region-specific SetEnterPosXY(+0xA8, call 0x49FBAF) для City/Country
-        // пока не подключён: здесь сохранена только прежняя общая XY-подготовка.
+        // общей XY-подготовки и concrete City/Country SetEnterPosXY остаётся
+        // ссылка на регион, а AddObject/AutoStart и OnEnterRegion(false)
+        // исполняет только подтверждение 8F801.
         player.movement_shape_mut().assign_to_server_region();
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
@@ -39858,6 +39977,7 @@ impl CGame {
             area_width,
             area_height,
         )
+        .map(|around| around.with_player(&player))
         .and_then(|around| {
             Some(player
                 .move_step(
@@ -39879,16 +39999,19 @@ impl CGame {
         // без проверки результата вызывает virtual SetTileXY. Вернувшийся
         // CPlayerAI::MoveTo 0x005090FB всегда ставит ASA_MOVE. Поэтому ошибка
         // уже начатой spatial-мутации не отменяет исходное ожидание AI.
-        if matches!(movement_result, Some(Ok(())) | Some(Err(MoveShapeCommandBlock::Position(_)))) {
+        let starts_move_delay = matches!(
+            &movement_result,
+            Some(Ok(())) | Some(Err(MoveShapeCommandBlock::Position(_)))
+        );
+        if starts_move_delay {
             let movement_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
-            player_ai.begin_destination_move(
-                crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms(
-                    movement_direction,
-                    speed,
-                    0,
-                ),
-                runtime.now_milliseconds(),
+            let delay_ms = crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms(
+                movement_direction,
+                speed,
+                0,
             );
+            let now_ms = runtime.now_milliseconds();
+            player_ai.begin_destination_move(delay_ms, now_ms);
         } else {
             player_ai.stop_destination_move();
         }
@@ -43518,12 +43641,8 @@ impl CGame {
         for area_index in 0..region.area_count() {
             areas = areas.wrapping_add(1);
             let mut monster_facts = BTreeMap::new();
-            for identity in region
-                .active_shape_candidates(area_index)
-                .into_iter()
-                .filter(|identity| identity.object_type == MONSTER_TYPE)
-            {
-                let facts = region.find_monster_by_id(identity.id).and_then(|monster| {
+            for monster_id in region.active_monster_ids_in_area(area_index) {
+                let facts = region.find_monster_by_id(monster_id).and_then(|monster| {
                     let property = self
                         .find_monster_property_by_origin_name(monster.base_property_key()?)?;
                     Some(AreaMonsterAiFacts {
@@ -43532,15 +43651,14 @@ impl CGame {
                         carriage: monster.is_carriage(property),
                     })
                 });
-                monster_facts.insert(identity.id, facts);
+                monster_facts.insert(monster_id, facts);
             }
-            let expired_goods = {
-                let mut context = GameAreaAiContext {
-                    runtime,
-                    monster_facts: monster_facts.clone(),
-                };
-                region.begin_area_ai(area_index, goods_disappear_timer_ms, &mut context)
+            let mut context = GameAreaAiContext {
+                runtime,
+                monster_facts,
             };
+            let expired_goods =
+                region.begin_area_ai(area_index, goods_disappear_timer_ms, &mut context);
             if let Some(expired_goods) = expired_goods {
                 for ex_id in expired_goods {
                     let mut around_delivery = None;
@@ -43587,13 +43705,7 @@ impl CGame {
                     ground_goods_expirations = ground_goods_expirations.wrapping_add(1);
                     tracing::trace!(region_id = region.id, ex_id = ?ex_id, ?around_delivery, staged_for_delete, "завершён срок жизни предмета на земле");
                 }
-                {
-                    let mut context = GameAreaAiContext {
-                        runtime,
-                        monster_facts,
-                    };
-                    region.finish_area_ai(area_index, goods_protected_timer_ms, &mut context);
-                }
+                region.finish_area_ai(area_index, goods_protected_timer_ms, &mut context);
                 area_ai_passes = area_ai_passes.wrapping_add(1);
                 tracing::trace!(
                     region_id = region.id,
@@ -43601,6 +43713,9 @@ impl CGame {
                     "завершён проход ИИ области"
                 );
             }
+            drop(context);
+            // `CArea::AI` может перенести уснувших монстров в sleeping storage,
+            // поэтому исходный снимок `GetActivedShapes` берётся после этого перехода.
             for identity in region.active_shape_candidates(area_index) {
                 let Some(change_state) = self.region_shape_change_state(
                     region,
@@ -44317,15 +44432,7 @@ impl CGame {
             }
             let monster_ids: Vec<i32> = self
                 .find_region(region_id)
-                .map(|owner| {
-                    owner
-                        .base()
-                        .registered_shape_identities()
-                        .into_iter()
-                        .filter(|identity| identity.object_type == MONSTER_TYPE)
-                        .map(|identity| identity.id)
-                        .collect()
-                })
+                .map(|owner| owner.base().active_monster_ids())
                 .unwrap_or_default();
             for monster_id in monster_ids {
                 if let Some(owner) = self.take_region_owner(region_id) {
@@ -44680,10 +44787,15 @@ impl CGame {
                 (None, None, None, None, None, None)
             };
             let mut area_resolver = RegionBlockRefreshResolver::default();
-            if let Some(region) = self.find_region(region_id) {
-                for identity in region.base().registered_shape_identities() {
-                    if let Some(shape) = self.resolve_shape(identity) {
-                        area_resolver.facts.insert(identity, (shape, true));
+            if self
+                .find_region(region_id)
+                .is_some_and(|region| region.base().has_staged_shape_cleanup())
+            {
+                if let Some(region) = self.find_region(region_id) {
+                    for identity in region.base().registered_shape_identities() {
+                        if let Some(shape) = self.resolve_shape(identity) {
+                            area_resolver.facts.insert(identity, (shape, true));
+                        }
                     }
                 }
             }
