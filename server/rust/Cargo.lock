@@ -942,7 +942,6 @@ dependencies = [
  "nebokrai-realm",
  "nebokrai-shared",
  "nebokrai-zone",
- "nom",
  "parking_lot",
  "procfs",
  "quick-xml",
@@ -968,6 +967,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "lzo",
+ "nom",
  "uuid",
 ]
 

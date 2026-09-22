@@ -71,8 +71,8 @@ use super::function::{
     script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
 use super::jjcfunc::{JjcScriptFunctionOutcome, dispatch_jjc_script_function};
-use super::parser;
 use crate::gameserver::gameserver::game::CGame;
+use nebokrai_shared::scripting::parser;
 use nebokrai_shared::values::CGuid;
 
 

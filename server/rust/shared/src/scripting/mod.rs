@@ -4,6 +4,7 @@ mod functionlist;
 mod ini;
 mod integer_expression;
 mod variablelist;
+pub mod parser;
 
 pub use functionlist::{
     FunctionDefinition, FunctionListError, FunctionListErrorKind, FunctionListRecords,

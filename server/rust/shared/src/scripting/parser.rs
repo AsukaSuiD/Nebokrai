@@ -1,4 +1,4 @@
-//! Структурный байтовый разбор достигнутого языка `CScript`.
+//! Структурный байтовый разбор команд, используемый Zone-исполнителем `CScript`.
 //!
 //! `nom` отвечает за безопасное продвижение входного среза, распознавание
 //! комментариев, границ команд и токенов, меток и внешнюю форму вызова с
@@ -6,6 +6,16 @@
 //! хвостами: вычислитель обрабатывает их позднее и в порядке GameServer. Модуль
 //! `parser` не строит предварительное синтаксическое дерево и не касается
 //! переменных, диспетчера или игровых эффектов.
+//!
+//! Пара GameServer: `gameserver.exe` SHA-256
+//! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E` и
+//! `GameServer.pdb` SHA-256
+//! `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`;
+//! CodeView GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`. В `RunStep`
+//! (`0x00428d80`) `ReadCmd` предшествует `GetFunctionName`; машинный код последнего
+//! (`0x00425000`) завершает имя на `(`, пробеле, TAB, LF, CR или `;`. Тело
+//! `ReadCmd` и полнота грамматики остаются `PARTIAL`/`UNKNOWN`.
+//! Исходный владелец PDB: `server/gameserver/appserver/script/script.cpp`.
 
 use nom::Parser;
 use nom::bytes::complete::{tag, take, take_till, take_until, take_while1};
@@ -14,18 +24,18 @@ use nom::error::{Error, ErrorKind};
 use nom::sequence::terminated;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptParseError {
-    pub(crate) offset: usize,
-    pub(crate) kind: ErrorKind,
+pub struct ScriptParseError {
+    pub offset: usize,
+    pub kind: ErrorKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ParsedCommand {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) next_point: usize,
+pub struct ParsedCommand {
+    pub bytes: Vec<u8>,
+    pub next_point: usize,
 }
 
-pub(crate) fn next_command(
+pub fn next_command(
     source: &[u8],
     point: usize,
 ) -> Result<Option<ParsedCommand>, ScriptParseError> {
@@ -92,16 +102,15 @@ pub(crate) fn next_command(
     }))
 }
 
-pub(crate) fn command_name(command: &[u8]) -> Result<&[u8], ScriptParseError> {
-    let (_, name) = take_while1::<_, _, Error<&[u8]>>(|byte: u8| {
-        !byte.is_ascii_whitespace() && !matches!(byte, b'(' | b';')
-    })
-    .parse(command)
-    .map_err(|error| map_error(command, error))?;
+pub fn command_name(command: &[u8]) -> Result<&[u8], ScriptParseError> {
+    let (_, name) =
+        take_while1::<_, _, Error<&[u8]>>(|byte: u8| !is_function_name_terminator(byte))
+            .parse(command)
+            .map_err(|error| map_error(command, error))?;
     Ok(name)
 }
 
-pub(crate) fn label(command: &[u8]) -> Option<&[u8]> {
+pub fn label(command: &[u8]) -> Option<&[u8]> {
     let mut parser = terminated(
         take_while1::<_, _, Error<&[u8]>>(|byte: u8| byte != b':'),
         tag(&b":"[..]),
@@ -110,13 +119,12 @@ pub(crate) fn label(command: &[u8]) -> Option<&[u8]> {
     remaining.is_empty().then_some(trim_ascii(name))
 }
 
-pub(crate) fn function(expression: &[u8]) -> Result<(&[u8], Vec<&[u8]>), ScriptParseError> {
+pub fn function(expression: &[u8]) -> Result<(&[u8], Vec<&[u8]>), ScriptParseError> {
     let expression = trim_ascii(expression);
-    let (input, name) = take_while1::<_, _, Error<&[u8]>>(|byte: u8| {
-        !byte.is_ascii_whitespace() && byte != b'('
-    })
-    .parse(expression)
-    .map_err(|error| map_error(expression, error))?;
+    let (input, name) =
+        take_while1::<_, _, Error<&[u8]>>(|byte: u8| !byte.is_ascii_whitespace() && byte != b'(')
+            .parse(expression)
+            .map_err(|error| map_error(expression, error))?;
     let (input, _) = multispace0::<_, Error<&[u8]>>
         .parse(input)
         .map_err(|error| map_error(expression, error))?;
@@ -192,4 +200,8 @@ fn trim_ascii(mut value: &[u8]) -> &[u8] {
 
 fn is_command_start(value: u8) -> bool {
     matches!(value, b'{' | b'}' | b'<' | b'>' | b'#' | b'$') || value.is_ascii_alphabetic()
+}
+
+fn is_function_name_terminator(value: u8) -> bool {
+    matches!(value, b'(' | b' ' | b'\t' | b'\n' | b'\r' | b';')
 }
