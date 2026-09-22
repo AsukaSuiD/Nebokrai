@@ -2,5 +2,6 @@
 
 pub mod combat;
 pub mod content;
+pub mod effects;
 pub mod scripts;
 pub mod sessions;

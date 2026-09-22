@@ -19149,7 +19149,7 @@ impl CGame {
         let resume_timer = self.globe_setup.player_entry_resume_timer_ms();
         if let Some(player) = self.find_player_mut(player_id) {
             let states = crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState::region_entry_peace(
-                resume_timer, player.combat_properties(),
+                resume_timer, player.combat_properties().into(),
             );
             for state in states {
                 player.move_shape_mut().append_automatic_restore_state(state);

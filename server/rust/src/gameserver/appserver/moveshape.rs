@@ -1842,7 +1842,7 @@ impl CMoveShape {
         &mut self,
         properties: super::player::PlayerCombatProperties,
     ) {
-        for state in AutomaticRestoreState::restored(properties) {
+        for state in AutomaticRestoreState::restored(properties.into()) {
             self.append_automatic_restore_state(state);
         }
     }

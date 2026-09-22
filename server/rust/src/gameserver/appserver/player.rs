@@ -13269,7 +13269,7 @@ impl CPlayer {
             .and_then(|state| {
                 state.apply(
                     recorded_at_ms,
-                    properties,
+                    properties.into(),
                     health,
                     maximum_health,
                     mana,
