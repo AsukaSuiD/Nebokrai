@@ -6,18 +6,7 @@
 //! заменяют iostream/string, не интерпретируя кодировку и не проходя границу
 //! `<end>`. World formatted `Read` остаётся отдельной typed границей.
 
-/// Продвигает token-stream до точного маркера, но не проходит через `<end>`.
-pub(crate) fn read_to<'a>(tokens: &mut impl Iterator<Item = &'a [u8]>, expected: &[u8]) -> bool {
-    for token in tokens {
-        if token == expected {
-            return true;
-        }
-        if token == b"<end>" {
-            return false;
-        }
-    }
-    false
-}
+pub(crate) use nebokrai_shared::resources::read_to_marker as read_to;
 
 // typed boundary: World `Read` сначала вызывал
 // `ReadTo(stream, marker)`, затем выполнял `stream >> unsigned long`, но

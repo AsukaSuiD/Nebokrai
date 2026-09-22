@@ -116,7 +116,7 @@ use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleF
 use crate::setup::changebody::{
     CChangeBodyConf, ChangeBodySerializeError,
 };
-use crate::setup::emotion::{CEmotion, EmotionFormatError, EmotionSerializeError};
+use nebokrai_shared::resources::{CEmotion, EmotionFormatError, EmotionSerializeError};
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::goodsdestructionconfig::{
     GoodsDestroyFormatError, GoodsDestroySerializeError, GoodsDestroySetup,

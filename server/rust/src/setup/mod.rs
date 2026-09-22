@@ -20,7 +20,6 @@ pub(crate) mod fairyexpconf;
     reason = "contribute setup подключён к initial-config до общего setup lifecycle"
 )]
 pub(crate) mod contributesetup;
-pub(crate) mod emotion;
 #[allow(
     dead_code,
     reason = "goods-destroy serializer подключён к initial-config до text loader-а"

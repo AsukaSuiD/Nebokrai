@@ -1,7 +1,9 @@
 //! Общие форматы ресурсов; выбор корня и публикация остаются у владельца роли.
 
 mod catalog;
+mod emotion;
 mod filesinfo;
+mod marker;
 mod package;
 mod path;
 mod quest;
@@ -13,7 +15,11 @@ mod stringtable;
 mod stringtable_wire;
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
+pub use emotion::{
+    CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
+};
 pub use filesinfo::{FileInfo, FilesInfo, FilesInfoParseError, PackFileInfo};
+pub use marker::read_to_marker;
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};
 pub use path::{normalize_resource_path, resolve_resource_path};
 pub use quest::{CQuestSystem, QuestEntry};

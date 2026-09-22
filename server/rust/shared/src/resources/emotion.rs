@@ -1,32 +1,34 @@
-//! Общий owner эмоций `CEmotion`, подтверждённый точными
-//! `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`;
-//! исходный owner `server/setup/emotion.cpp`.
+//! Общий формат и таблица эмоций `CEmotion` для Realm и Zone.
+//! Исходный владелец: `server/setup/emotion.cpp/.h`; World `Nworldserver.exe`
+//! с совпадающим `WorldServer.pdb` и Game `gameserver.exe` с `GameServer.pdb`.
+//! Основания формата: World `LoadSetup` VA 0x004A0CA0,
+//! `Serialize` VA 0x004A03F0; Game `Unserialize` VA 0x004D80C0,
+//! `IsEmotionRepeated` VA 0x004D7870.
 //!
-//! Loader не очищает static map: каждая `*` запись заменяет только свой signed
-//! ID. Missing file не меняет state, открытый файл успешен даже без records;
-//! malformed tail сохраняет полный префикс.
+//! Загрузка не очищает таблицу: запись после `*` заменяет свой signed ID.
+//! Отсутствие файла не меняет состояние; открытый файл успешен и без записей.
+//! Rust сохраняет разобранный префикс при ошибке в конце текста.
 //!
-//! Wire — signed count и ordered пары signed ID/value. `BTreeMap` и стандартный
-//! файловый ввод заменяют MSVC map/CRFile без транзакционной подмены. Game
-//! decoder также не очищает map, применяет complete records немедленно и
+//! Передача: signed count и пары signed ID/value в порядке map. `BTreeMap`
+//! заменяет MSVC map, а байты предоставляет владелец ресурса. Game-приёмник
+//! также не очищает таблицу, применяет полные записи сразу и
 //! отклоняет отрицательный count, который в оригинале небезопасно декрементился
 //! до выхода за входной буфер.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::path::Path;
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::public::readwrite::read_to;
+use super::marker::read_to_marker;
+use crate::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CEmotion {
+pub struct CEmotion {
     emotions: BTreeMap<i32, i32>,
 }
 
 impl CEmotion {
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
@@ -36,33 +38,20 @@ impl CEmotion {
             return Err(EmotionDecodeError::NegativeCount { declared });
         }
 
-        let mut decoded = 0;
         for _ in 0..declared as usize {
             let emotion_id = read_wire_i32(source, cursor, "emotion ID")?;
             let value = read_wire_i32(source, cursor, "emotion value")?;
             self.emotions.insert(emotion_id, value);
-            decoded += 1;
         }
-
-        tracing::trace!(declared, decoded, retained = self.emotions.len(), "эмоции декодированы");
         Ok(())
     }
 
-    pub(crate) fn load_from_file(
-        &mut self,
-        path: impl AsRef<Path>,
-    ) -> Result<usize, EmotionFileLoadError> {
-        let source = std::fs::read(path).map_err(EmotionFileLoadError::Io)?;
-        self.load_from_bytes(&source)
-            .map_err(EmotionFileLoadError::Format)
-    }
-
-    pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, EmotionFormatError> {
+    pub fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, EmotionFormatError> {
         let mut tokens = source
             .split(u8::is_ascii_whitespace)
             .filter(|token| !token.is_empty());
         let mut applied = 0;
-        while read_to(&mut tokens, b"*") {
+        while read_to_marker(&mut tokens, b"*") {
             let emotion_id = read_text_i32(&mut tokens, "emotion ID")?;
             let value = read_text_i32(&mut tokens, "emotion value")?;
             self.emotions.insert(emotion_id, value);
@@ -71,11 +60,11 @@ impl CEmotion {
         Ok(applied)
     }
 
-    pub(crate) fn repeated(&self, emotion_id: i32) -> i32 {
+    pub fn repeated(&self, emotion_id: i32) -> i32 {
         self.emotions.get(&emotion_id).copied().unwrap_or(0)
     }
 
-    pub(crate) fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), EmotionSerializeError> {
+    pub fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), EmotionSerializeError> {
         let count = i32::try_from(self.emotions.len()).map_err(|_| EmotionSerializeError {
             count: self.emotions.len(),
         })?;
@@ -90,7 +79,7 @@ impl CEmotion {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EmotionDecodeError {
+pub enum EmotionDecodeError {
     Field {
         field: &'static str,
         offset: usize,
@@ -123,7 +112,7 @@ impl fmt::Display for EmotionDecodeError {
 impl Error for EmotionDecodeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EmotionFormatError {
+pub enum EmotionFormatError {
     UnexpectedEnd { field: &'static str },
     InvalidLong { field: &'static str, token: Vec<u8> },
 }
@@ -145,33 +134,9 @@ impl fmt::Display for EmotionFormatError {
 
 impl Error for EmotionFormatError {}
 
-#[derive(Debug)]
-pub(crate) enum EmotionFileLoadError {
-    Io(std::io::Error),
-    Format(EmotionFormatError),
-}
-
-impl fmt::Display for EmotionFileLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => error.fmt(formatter),
-            Self::Format(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for EmotionFileLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::Format(error) => Some(error),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EmotionSerializeError {
-    pub(crate) count: usize,
+pub struct EmotionSerializeError {
+    pub count: usize,
 }
 
 impl fmt::Display for EmotionSerializeError {

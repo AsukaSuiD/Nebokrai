@@ -90,7 +90,7 @@ use crate::public::wordsfilter::WordsFilterDecodeError;
 use crate::setup::cbattlefairyexpconfig::BattleFairyExpDecodeError;
 use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
-use crate::setup::emotion::EmotionDecodeError;
+use nebokrai_shared::resources::EmotionDecodeError;
 use crate::setup::globesetup::GlobeSetupDecodeError;
 use crate::setup::gmlist::GmListDecodeError;
 use crate::setup::godsbattleconf::GodsBattleDecodeError;

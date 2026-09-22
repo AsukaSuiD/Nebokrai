@@ -1366,7 +1366,7 @@ use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
-use crate::setup::emotion::CEmotion;
+use nebokrai_shared::resources::CEmotion;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::CGMList;

@@ -45,7 +45,7 @@ use crate::public::taozhuangsetup::TaoZhuangSerializationBlock;
 use crate::public::wordsfilter::WordsFilterSerializeError;
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
 use crate::setup::contributesetup::ContributeSetupSerializeError;
-use crate::setup::emotion::EmotionSerializeError;
+use nebokrai_shared::resources::EmotionSerializeError;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
