@@ -13,9 +13,12 @@
 //! `B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016`;
 //! CodeView GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`. В `RunStep`
 //! (`0x00428d80`) `ReadCmd` предшествует `GetFunctionName`; машинный код последнего
-//! (`0x00425000`) завершает имя на `(`, пробеле, TAB, LF, CR или `;`. Тело
-//! `ReadCmd` и полнота грамматики остаются `PARTIAL`/`UNKNOWN`.
+//! (`0x00425000`) завершает имя на `(`, пробеле, TAB, LF, CR или `;`.
+//! `ReadCmd` (`0x00424cb0`) пропускает TAB сразу после CR/LF внутри кавычек;
+//! другие ветви и полнота грамматики остаются `PARTIAL`/`UNKNOWN`.
 //! Исходный владелец PDB: `server/gameserver/appserver/script/script.cpp`.
+//! Вспомогательный разбор выражений перенесён из переходного Game `script.rs`;
+//! его соответствие полному языку оригинала этим переносом не устанавливается.
 
 use nom::Parser;
 use nom::bytes::complete::{tag, take, take_till, take_until, take_while1};
@@ -73,32 +76,43 @@ pub fn next_command(
     }
 
     let mut quoted = false;
-    let mut end = input.len();
+    let mut normalized: Option<Vec<u8>> = None;
+    let mut segment_start = 0;
+    let mut position = 0;
     let mut delimiter = false;
-    for (position, byte) in input.iter().copied().enumerate() {
+    while let Some(&byte) = input.get(position) {
         if byte == b'"' {
             quoted = !quoted;
         }
         if !quoted && matches!(byte, b';' | b'\t' | b'\n' | b'\r') {
-            end = position;
             delimiter = true;
             break;
         }
+        position += 1;
+        // ReadCmd сохраняет перевод строки внутри кавычек, но пропускает
+        // непосредственно следующие за ним TAB (Game VA 0x00424e4f–0x00424e7c).
+        if quoted && matches!(byte, b'\n' | b'\r') {
+            let tab_start = position;
+            while input.get(position) == Some(&b'\t') {
+                position += 1;
+            }
+            if position != tab_start {
+                normalized
+                    .get_or_insert_with(Vec::new)
+                    .extend_from_slice(&input[segment_start..tab_start]);
+                segment_start = position;
+            }
+        }
     }
-    let (remaining, command) = take::<_, _, Error<&[u8]>>(end)
-        .parse(input)
-        .map_err(|error| map_error(source, error))?;
-    let remaining = if delimiter {
-        take::<_, _, Error<&[u8]>>(1usize)
-            .parse(remaining)
-            .map_err(|error| map_error(source, error))?
-            .0
+    let command = if let Some(mut normalized) = normalized {
+        normalized.extend_from_slice(&input[segment_start..position]);
+        normalized
     } else {
-        remaining
+        input[..position].to_vec()
     };
     Ok(Some(ParsedCommand {
-        bytes: command.to_vec(),
-        next_point: source.len() - remaining.len(),
+        bytes: command,
+        next_point: source.len() - input.len() + position + usize::from(delimiter),
     }))
 }
 
@@ -162,6 +176,100 @@ pub fn function(expression: &[u8]) -> Result<(&[u8], Vec<&[u8]>), ScriptParseErr
         offset: expression.len(),
         kind: ErrorKind::Eof,
     })
+}
+
+pub fn find_assignment(value: &[u8]) -> Option<usize> {
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    for (position, byte) in value.iter().copied().enumerate() {
+        match byte {
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            b'=' if !quoted && depth == 0 => {
+                let previous = position.checked_sub(1).and_then(|index| value.get(index));
+                let next = value.get(position + 1);
+                if !matches!(previous, Some(b'=' | b'!' | b'<' | b'>')) && next != Some(&b'=') {
+                    return Some(position);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn find_top_level(value: &[u8], needle: &[u8], reverse: bool) -> Option<usize> {
+    let mut found = None;
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    let mut position = 0;
+    while position + needle.len() <= value.len() {
+        match value[position] {
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            _ => {}
+        }
+        if !quoted && depth == 0 && &value[position..position + needle.len()] == needle {
+            if !reverse {
+                return Some(position);
+            }
+            found = Some(position);
+        }
+        position += 1;
+    }
+    found
+}
+
+pub fn find_top_level_chars_reverse(
+    value: &[u8],
+    operations: &[u8],
+    allow_unary: bool,
+) -> Option<usize> {
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    for position in (0..value.len()).rev() {
+        let byte = value[position];
+        match byte {
+            b'"' => {
+                quoted = !quoted;
+                continue;
+            }
+            b')' if !quoted => {
+                depth += 1;
+                continue;
+            }
+            b'(' if !quoted => {
+                depth -= 1;
+                continue;
+            }
+            _ => {}
+        }
+        if quoted || depth != 0 || !operations.contains(&byte) {
+            continue;
+        }
+        if allow_unary && matches!(byte, b'+' | b'-') {
+            let previous = trim_ascii(&value[..position]).last().copied();
+            if previous.is_none_or(|previous| b"(=+-*/%&|".contains(&previous)) {
+                continue;
+            }
+        }
+        return Some(position);
+    }
+    None
+}
+
+pub fn split_variable_reference(value: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
+    let open = value.iter().position(|byte| *byte == b'[');
+    match open {
+        None => Some((value, None)),
+        Some(open) if value.last() == Some(&b']') => Some((
+            &value[..open],
+            Some(trim_ascii(&value[open + 1..value.len() - 1])),
+        )),
+        Some(_) => None,
+    }
 }
 
 fn line_comment(input: &[u8]) -> nom::IResult<&[u8], (), Error<&[u8]>> {

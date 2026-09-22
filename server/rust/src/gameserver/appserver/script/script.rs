@@ -919,7 +919,7 @@ impl<'a> CScript<'a> {
             return None;
         }
         for operation in [b"||".as_slice(), b"&&".as_slice()] {
-            if let Some(position) = find_top_level(expression, operation, false) {
+            if let Some(position) = parser::find_top_level(expression, operation, false) {
                 let left = self.evaluate_integer(game, runtime, &expression[..position])?;
                 let right = self.evaluate_integer(
                     game,
@@ -941,7 +941,7 @@ impl<'a> CScript<'a> {
             b">".as_slice(),
             b"<".as_slice(),
         ] {
-            if let Some(position) = find_top_level(expression, operation, true) {
+            if let Some(position) = parser::find_top_level(expression, operation, true) {
                 if (operation == b"==" || operation == b"!=")
                     && (is_string_expression(&expression[..position])
                         || is_string_expression(&expression[position + operation.len()..]))
@@ -975,7 +975,7 @@ impl<'a> CScript<'a> {
                 return Some(i32::from(result));
             }
         }
-        if let Some(position) = find_top_level_chars_reverse(expression, b"&|", false) {
+        if let Some(position) = parser::find_top_level_chars_reverse(expression, b"&|", false) {
             let left = self.evaluate_integer(game, runtime, &expression[..position])?;
             let right = self.evaluate_integer(game, runtime, &expression[position + 1..])?;
             return Some(if expression[position] == b'&' {
@@ -984,7 +984,7 @@ impl<'a> CScript<'a> {
                 left | right
             });
         }
-        if let Some(position) = find_top_level_chars_reverse(expression, b"+-", true) {
+        if let Some(position) = parser::find_top_level_chars_reverse(expression, b"+-", true) {
             let left = self.evaluate_integer(game, runtime, &expression[..position])?;
             let right = self.evaluate_integer(game, runtime, &expression[position + 1..])?;
             return if expression[position] == b'+' {
@@ -993,7 +993,7 @@ impl<'a> CScript<'a> {
                 left.checked_sub(right)
             };
         }
-        if let Some(position) = find_top_level_chars_reverse(expression, b"*/%", false) {
+        if let Some(position) = parser::find_top_level_chars_reverse(expression, b"*/%", false) {
             let left = self.evaluate_integer(game, runtime, &expression[..position])?;
             let right = self.evaluate_integer(game, runtime, &expression[position + 1..])?;
             return match expression[position] {
@@ -1008,7 +1008,7 @@ impl<'a> CScript<'a> {
             }
         }
         if expression.starts_with(b"$") {
-            let (name, index) = split_variable_reference(expression)?;
+            let (name, index) = parser::split_variable_reference(expression)?;
             let index = match index {
                 Some(index) => {
                     usize::try_from(self.evaluate_integer(game, runtime, index)?).ok()?
@@ -1046,7 +1046,7 @@ impl<'a> CScript<'a> {
         expression: &[u8],
     ) -> Option<Vec<u8>> {
         let expression = trim_ascii(expression);
-        if let Some(position) = find_top_level_chars_reverse(expression, b"+", false) {
+        if let Some(position) = parser::find_top_level_chars_reverse(expression, b"+", false) {
             let mut left = self.evaluate_string(game, runtime, &expression[..position])?;
             let right = self.evaluate_string(game, runtime, &expression[position + 1..])?;
             left.extend_from_slice(&right);
@@ -1137,7 +1137,7 @@ impl<'a> CScript<'a> {
         runtime: &mut Runtime,
         command: &[u8],
     ) -> Option<bool> {
-        let Some(position) = find_assignment(command) else {
+        let Some(position) = parser::find_assignment(command) else {
             return None;
         };
         let name = trim_ascii(&command[..position]);
@@ -1312,100 +1312,6 @@ fn unquote(value: &[u8]) -> &[u8] {
 
 fn normalize_name(value: &[u8]) -> Vec<u8> {
     value.iter().map(u8::to_ascii_lowercase).collect()
-}
-
-fn find_assignment(value: &[u8]) -> Option<usize> {
-    let mut depth = 0_i32;
-    let mut quoted = false;
-    for (position, byte) in value.iter().copied().enumerate() {
-        match byte {
-            b'"' => quoted = !quoted,
-            b'(' if !quoted => depth += 1,
-            b')' if !quoted => depth -= 1,
-            b'=' if !quoted && depth == 0 => {
-                let previous = position.checked_sub(1).and_then(|index| value.get(index));
-                let next = value.get(position + 1);
-                if !matches!(previous, Some(b'=' | b'!' | b'<' | b'>')) && next != Some(&b'=') {
-                    return Some(position);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn find_top_level(value: &[u8], needle: &[u8], reverse: bool) -> Option<usize> {
-    let mut found = None;
-    let mut depth = 0_i32;
-    let mut quoted = false;
-    let mut position = 0;
-    while position + needle.len() <= value.len() {
-        match value[position] {
-            b'"' => quoted = !quoted,
-            b'(' if !quoted => depth += 1,
-            b')' if !quoted => depth -= 1,
-            _ => {}
-        }
-        if !quoted && depth == 0 && &value[position..position + needle.len()] == needle {
-            if !reverse {
-                return Some(position);
-            }
-            found = Some(position);
-        }
-        position += 1;
-    }
-    found
-}
-
-fn find_top_level_chars_reverse(
-    value: &[u8],
-    operations: &[u8],
-    allow_unary: bool,
-) -> Option<usize> {
-    let mut depth = 0_i32;
-    let mut quoted = false;
-    for position in (0..value.len()).rev() {
-        let byte = value[position];
-        match byte {
-            b'"' => {
-                quoted = !quoted;
-                continue;
-            }
-            b')' if !quoted => {
-                depth += 1;
-                continue;
-            }
-            b'(' if !quoted => {
-                depth -= 1;
-                continue;
-            }
-            _ => {}
-        }
-        if quoted || depth != 0 || !operations.contains(&byte) {
-            continue;
-        }
-        if allow_unary && matches!(byte, b'+' | b'-') {
-            let previous = trim_ascii(&value[..position]).last().copied();
-            if previous.is_none_or(|previous| b"(=+-*/%&|".contains(&previous)) {
-                continue;
-            }
-        }
-        return Some(position);
-    }
-    None
-}
-
-fn split_variable_reference(value: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
-    let open = value.iter().position(|byte| *byte == b'[');
-    match open {
-        None => Some((value, None)),
-        Some(open) if value.last() == Some(&b']') => Some((
-            &value[..open],
-            Some(trim_ascii(&value[open + 1..value.len() - 1])),
-        )),
-        Some(_) => None,
-    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
