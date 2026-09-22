@@ -14,7 +14,8 @@
 //! первое обновление снимка по точному имени и порядок курсора. Ветка `0x7F805`
 //! сохраняет поиск `_stricmp`, правила индекса scalar/array и смену типа строки.
 //! Повреждённый wire возвращает типизированную ошибку вместо чтения за границей;
-//! остальные операции над выражениями сохранены только в локальном исследовательском корпусе.
+//! размер массива сверяется с оставшимися байтами до выделения памяти.
+//! Остальные операции над выражениями сохранены только в локальном исследовательском корпусе.
 
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use nebokrai_shared::scripting::{VariableDefault, VariableListError, VariableListRecords};
@@ -75,6 +76,8 @@ pub enum GameVariableSnapshotError {
     NameTooLong { length: usize },
     #[error("variable snapshot содержит недопустимую длину массива {0}")]
     InvalidArrayLength(i32),
+    #[error("не удалось выделить массив из {0} элементов для variable snapshot")]
+    SnapshotAllocation(usize),
 }
 
 impl CVariableList {
@@ -226,7 +229,21 @@ impl CVariableList {
             } else {
                 let length = usize::try_from(tag)
                     .map_err(|_| GameVariableSnapshotError::InvalidArrayLength(tag))?;
-                let mut values = Vec::with_capacity(length);
+                let needed = length
+                    .checked_mul(std::mem::size_of::<i32>())
+                    .ok_or(GameVariableSnapshotError::InvalidArrayLength(tag))?;
+                let available = source.len().saturating_sub(*cursor);
+                if needed > available {
+                    return Err(GameVariableSnapshotError::UnexpectedEnd {
+                        offset: *cursor,
+                        needed,
+                        available,
+                    });
+                }
+                let mut values = Vec::new();
+                values
+                    .try_reserve_exact(length)
+                    .map_err(|_| GameVariableSnapshotError::SnapshotAllocation(length))?;
                 for _ in 0..length {
                     values.push(read_i32(source, cursor)?);
                 }
