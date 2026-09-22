@@ -2,6 +2,7 @@
 
 mod functionlist;
 mod ini;
+mod integer_expression;
 mod variablelist;
 
 pub use functionlist::{

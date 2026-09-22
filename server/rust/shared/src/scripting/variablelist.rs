@@ -1,15 +1,14 @@
 //! Объявления по appserver/script/variablelist.cpp/.h: LoadVarList, GetArrayNum.
 //! Game RVA 0xadc30/0xad840; правила и границы — docs/gameplay/scripting.md.
-//! Сложные выражения размера требуют исполнителя; здесь поддержан десятичный литерал.
 
 use super::ini::{IniListError, IniListErrorKind, IniRecord, IniRecords, decimal_i32};
+use super::integer_expression::evaluate_array_length;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VariableListErrorKind {
     Syntax(IniListErrorKind),
     MissingArrayClose,
     UnsupportedArrayExpression,
-    NegativeArrayLength,
     ArraySizeOverflow,
     StringTooShort,
 }
@@ -87,14 +86,10 @@ fn definition(record: IniRecord<'_>) -> Result<VariableDefinition<'_>, VariableL
             .position(|b| *b == b']')
             .ok_or_else(|| error(VariableListErrorKind::MissingArrayClose))?;
         let expression = &expression[..close];
-        // GetArrayNum запускает CScript::RunLine. Не заменяем выражение его числовым префиксом.
-        if expression.is_empty() || !expression.iter().all(u8::is_ascii_digit) {
-            return Err(error(VariableListErrorKind::UnsupportedArrayExpression));
-        }
-        let length = decimal_i32(expression);
-        if length < 0 {
-            return Err(error(VariableListErrorKind::NegativeArrayLength));
-        }
+        // GetArrayNum запускает CScript::RunLine; Shared вычисляет только
+        // контекстно-свободную целочисленную арифметику.
+        let length = evaluate_array_length(expression)
+            .ok_or_else(|| error(VariableListErrorKind::UnsupportedArrayExpression))?;
         if length > 0 {
             if (length as u32).checked_mul(4).is_none() {
                 return Err(error(VariableListErrorKind::ArraySizeOverflow));
@@ -114,7 +109,7 @@ fn definition(record: IniRecord<'_>) -> Result<VariableDefinition<'_>, VariableL
                 },
             });
         }
-        // Нулевой размер идёт в scalar/string-ветвь без обрезания имени.
+        // LoadVarList направляет любой неположительный результат в scalar/string-ветвь.
     }
     let text = record.value.ok_or_else(|| {
         error(VariableListErrorKind::Syntax(
