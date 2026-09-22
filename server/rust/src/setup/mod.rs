@@ -40,7 +40,6 @@ pub(crate) mod globesetup;
     reason = "общий GodsBattle config связан с World loader/serializer и Game startup owner до полного runtime"
 )]
 pub(crate) mod godsbattleconf;
-pub(crate) mod hitlevelsetup;
 #[allow(
     dead_code,
     reason = "honor-eliminate serializer подключён к initial-config до точного loader-а"

@@ -107,7 +107,7 @@ use crate::public::taozhuangsetup::{CTaoZhuangSetup, TaoZhuangSerializationBlock
 use crate::public::dakongxiangqian::{
     CDaKongXiangQian, DaKongSerializeError,
 };
-use crate::setup::hitlevelsetup::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
+use nebokrai_shared::resources::{CHitLevelSetup, HitLevelFormatError, HitLevelSerializeError};
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::contributesetup::{
     CContributeSetup, ContributeSetupFormatError, ContributeSetupSerializeError,

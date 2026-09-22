@@ -54,7 +54,7 @@ use crate::setup::godsbattleconf::{
     GodsBattleSerializeError,
 };
 use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
-use crate::setup::hitlevelsetup::HitLevelSerializeError;
+use nebokrai_shared::resources::HitLevelSerializeError;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::IncrementShopSerializeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;

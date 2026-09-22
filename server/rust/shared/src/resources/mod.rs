@@ -3,6 +3,7 @@
 mod catalog;
 mod emotion;
 mod filesinfo;
+mod hitlevel;
 mod marker;
 mod package;
 mod path;
@@ -19,6 +20,10 @@ pub use emotion::{
     CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
 };
 pub use filesinfo::{FileInfo, FilesInfo, FilesInfoParseError, PackFileInfo};
+pub use hitlevel::{
+    CHitLevelSetup, HitLevelDecodeError, HitLevelEntry, HitLevelFormatError,
+    HitLevelSerializeError,
+};
 pub use marker::read_to_marker;
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};
 pub use path::{normalize_resource_path, resolve_resource_path};

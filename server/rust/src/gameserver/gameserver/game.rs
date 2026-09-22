@@ -1372,7 +1372,7 @@ use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::CGMList;
 use crate::setup::godsbattleconf::{GodsBattleFactionXydUpdate, GodsBattleSzlCalculation};
 use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
-use crate::setup::hitlevelsetup::CHitLevelSetup;
+use nebokrai_shared::resources::CHitLevelSetup;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
@@ -37411,11 +37411,11 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<u32> {
         let (_, hit_time_ms, _, _) = self.globe_setup.monster_continuous_kill_parameters();
-        let hit_levels = self.hit_level_setup.entries().to_vec();
-        let update = self.find_player_mut(player_id)?.increase_continuous_kill(
+        let hit_levels = self.hit_level_setup.entries();
+        let update = self.players.get_mut(&player_id)?.increase_continuous_kill(
             runtime.now_milliseconds(),
             hit_time_ms,
-            &hit_levels,
+            hit_levels,
         );
         if update.bonus_experience != 0 {
             let _ = self.add_player_experience(player_id, update.bonus_experience, runtime);

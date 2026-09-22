@@ -95,7 +95,7 @@ use crate::setup::globesetup::GlobeSetupDecodeError;
 use crate::setup::gmlist::GmListDecodeError;
 use crate::setup::godsbattleconf::GodsBattleDecodeError;
 use crate::setup::goodsdestructionconfig::GoodsDestroyDecodeError;
-use crate::setup::hitlevelsetup::HitLevelDecodeError;
+use nebokrai_shared::resources::HitLevelDecodeError;
 use crate::setup::honorelimilateconfig::HonorEliminateDecodeError;
 use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;

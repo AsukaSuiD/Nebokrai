@@ -516,7 +516,7 @@ use crate::public::auctionnode::CGoodsNode;
 use nebokrai_shared::values::CGuid;
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
-use crate::setup::hitlevelsetup::HitLevelEntry;
+use nebokrai_shared::resources::HitLevelEntry;
 use nebokrai_shared::resources::CQuestSystem;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
