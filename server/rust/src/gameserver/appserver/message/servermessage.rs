@@ -47,7 +47,7 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::region::RegionRandomContext;
-use crate::gameserver::appserver::script::variablelist::GameVariableSnapshotError;
+use nebokrai_zone::scripts::GameVariableSnapshotError;
 use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityRegionDecodeError,
 };

@@ -976,6 +976,8 @@ name = "nebokrai-zone"
 version = "0.0.0"
 dependencies = [
  "nebokrai-shared",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

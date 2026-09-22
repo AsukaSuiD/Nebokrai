@@ -1,8 +1,10 @@
-//! Персональные переменные и копия общих переменных GameServer.
-//! Объявления разбирает Shared scripting/variablelist.rs; состояние и wire остаются здесь.
+//! Механика и wire-формат списков сценарных переменных Zone.
+//! Экземпляры списка по-прежнему принадлежат игроку или копии общих значений Game;
+//! объявления разбирает Shared scripting/variablelist.rs.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
-//! `server/gameserver/appserver/script/variablelist.cpp`. Startup сначала
+//! Перенесено из старого Game-модуля по исходному владельцу
+//! `server/gameserver/appserver/script/variablelist.cpp`; основание — точная пара
+//! `gameserver.exe + GameServer.pdb`. Startup сначала
 //! загружает объявления из полученного ресурса `VariableList`, затем
 //! `DecordFromByteArray` применяет World snapshot: signed count, ignored
 //! длину payload, C-string имени, знаковый tag и значения scalar/string/array.
@@ -19,25 +21,25 @@ use nebokrai_shared::scripting::{VariableDefault, VariableListError, VariableLis
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameVariableValue {
+pub enum GameVariableValue {
     Integer(i32),
     String(Vec<u8>),
     IntegerArray(Vec<i32>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameVariable {
-    pub(crate) name: Vec<u8>,
-    pub(crate) value: GameVariableValue,
+pub struct GameVariable {
+    pub name: Vec<u8>,
+    pub value: GameVariableValue,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CVariableList {
+pub struct CVariableList {
     variables: Vec<GameVariable>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameVariableMutationOutcome {
+pub enum GameVariableMutationOutcome {
     UpdatedInteger {
         variable_index: usize,
     },
@@ -56,7 +58,7 @@ pub(crate) enum GameVariableMutationOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub(crate) enum GameVariableSnapshotError {
+pub enum GameVariableSnapshotError {
     #[error("отказ объявлений VariableList: {0:?}")]
     Definitions(VariableListError),
     #[error("не удалось выделить массив из {length} элементов для объявления в {offset}")]
@@ -70,19 +72,17 @@ pub(crate) enum GameVariableSnapshotError {
     #[error("variable snapshot содержит отрицательное count {0}")]
     NegativeCount(i32),
     #[error("variable snapshot содержит имя длиной {length}")]
-    NameTooLong {
-        length: usize,
-    },
+    NameTooLong { length: usize },
     #[error("variable snapshot содержит недопустимую длину массива {0}")]
     InvalidArrayLength(i32),
 }
 
 impl CVariableList {
-    pub(crate) fn variables(&self) -> &[GameVariable] {
+    pub fn variables(&self) -> &[GameVariable] {
         &self.variables
     }
 
-    pub(crate) fn integer(&self, name: &[u8], element_index: usize) -> Option<i32> {
+    pub fn integer(&self, name: &[u8], element_index: usize) -> Option<i32> {
         let variable = self
             .variables
             .iter()
@@ -94,7 +94,7 @@ impl CVariableList {
         }
     }
 
-    pub(crate) fn string(&self, name: &[u8]) -> Option<&[u8]> {
+    pub fn string(&self, name: &[u8]) -> Option<&[u8]> {
         let variable = self
             .variables
             .iter()
@@ -105,7 +105,7 @@ impl CVariableList {
         }
     }
 
-    pub(crate) fn release(&mut self) -> usize {
+    pub fn release(&mut self) -> usize {
         let count = self.variables.len();
         self.variables.clear();
         count
@@ -114,7 +114,7 @@ impl CVariableList {
     /// Exact integer `SetVarValue(name, index, value)`: первый
     /// ASCII-case-insensitive owner, scalar только при index `0`, массив только
     /// внутри длины; строка с совпавшим именем блокирует дальнейший поиск.
-    pub(crate) fn set_integer(
+    pub fn set_integer(
         &mut self,
         name: &[u8],
         element_index: usize,
@@ -151,7 +151,7 @@ impl CVariableList {
 
     /// Exact string `SetVarValue(name, value)` переводит первую совпавшую
     /// scalar/array запись в строковый layout и заменяет существующую строку.
-    pub(crate) fn set_string(&mut self, name: &[u8], value: &[u8]) -> GameVariableMutationOutcome {
+    pub fn set_string(&mut self, name: &[u8], value: &[u8]) -> GameVariableMutationOutcome {
         let Some((variable_index, variable)) = self
             .variables
             .iter_mut()
@@ -170,11 +170,7 @@ impl CVariableList {
 
     /// Exact `AddVar(name, value)`: существующее имя проверяется побайтно,
     /// иначе новая scalar-запись добавляется в конец insertion-order списка.
-    pub(crate) fn add_integer(
-        &mut self,
-        name: &[u8],
-        value: i32,
-    ) -> GameVariableMutationOutcome {
+    pub fn add_integer(&mut self, name: &[u8], value: i32) -> GameVariableMutationOutcome {
         if self.variables.iter().any(|variable| variable.name == name) {
             return self.set_integer(name, 0, value);
         }
@@ -188,11 +184,7 @@ impl CVariableList {
 
     /// Строковая перегрузка `AddVar` сохраняет тот же exact-name append и
     /// штатную смену типа уже существующей записи через `SetVarValue`.
-    pub(crate) fn add_string(
-        &mut self,
-        name: &[u8],
-        value: &[u8],
-    ) -> GameVariableMutationOutcome {
+    pub fn add_string(&mut self, name: &[u8], value: &[u8]) -> GameVariableMutationOutcome {
         if self.variables.iter().any(|variable| variable.name == name) {
             return self.set_string(name, value);
         }
@@ -207,7 +199,7 @@ impl CVariableList {
         }
     }
 
-    pub(crate) fn decode_world_snapshot(
+    pub fn decode_world_snapshot(
         &mut self,
         definitions: Option<&[u8]>,
         source: &[u8],
@@ -254,7 +246,7 @@ impl CVariableList {
 
     /// Exact `AddToByteArray`: count, размер временного payload и сами records.
     /// Строковые значения используют tag `-1`; scalar — `0`, массив — длину.
-    pub(crate) fn encode_world_snapshot(&self, destination: &mut Vec<u8>) -> bool {
+    pub fn encode_world_snapshot(&self, destination: &mut Vec<u8>) -> bool {
         let Ok(count) = i32::try_from(self.variables.len()) else {
             return false;
         };
@@ -312,14 +304,20 @@ impl CVariableList {
                 VariableDefault::IntegerArray { length, value } => {
                     let mut values = Vec::new();
                     values.try_reserve_exact(length).map_err(|_| {
-                        GameVariableSnapshotError::DefinitionAllocation { offset: record.offset, length }
+                        GameVariableSnapshotError::DefinitionAllocation {
+                            offset: record.offset,
+                            length,
+                        }
                     })?;
                     values.resize(length, value);
                     GameVariableValue::IntegerArray(values)
                 }
             };
             // LoadVarList заполняет отдельную запись каждой строки, включая повторы имён.
-            self.variables.push(GameVariable { name: record.name.to_vec(), value });
+            self.variables.push(GameVariable {
+                name: record.name.to_vec(),
+                value,
+            });
         }
         Ok(())
     }
@@ -341,11 +339,13 @@ fn read_i32(source: &[u8], cursor: &mut usize) -> Result<i32, GameVariableSnapsh
             available: block.available,
         }
     })?;
-    let value = reader.read_i32().map_err(|block| GameVariableSnapshotError::UnexpectedEnd {
-        offset: block.offset,
-        needed: block.needed,
-        available: block.available,
-    })?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| GameVariableSnapshotError::UnexpectedEnd {
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        })?;
     *cursor = reader.position();
     Ok(value)
 }
@@ -360,13 +360,13 @@ fn read_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, GameVaria
             available: block.available,
         }
     })?;
-    let value = reader
-        .read_c_string(available)
-        .map_err(|block| GameVariableSnapshotError::UnexpectedEnd {
+    let value = reader.read_c_string(available).map_err(|block| {
+        GameVariableSnapshotError::UnexpectedEnd {
             offset: block.offset,
             needed: block.needed,
             available: block.available,
-        })?;
+        }
+    })?;
     *cursor = reader.position();
     Ok(value.to_vec())
 }

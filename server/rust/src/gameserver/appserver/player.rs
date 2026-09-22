@@ -498,7 +498,7 @@ use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts,
     MoveShapeSkill, SKILL_BASE_DEFENSE,
 };
-use super::script::variablelist::{
+use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use super::serverregion::CServerRegion;

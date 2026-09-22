@@ -1159,7 +1159,7 @@ impl<'a> CScript<'a> {
                 let outcome = player.set_integer_variable(name, 0, value);
                 if !matches!(
                     outcome,
-                    super::variablelist::GameVariableMutationOutcome::NameNotFound
+                    nebokrai_zone::scripts::GameVariableMutationOutcome::NameNotFound
                 ) {
                     return Some(true);
                 }
@@ -1184,7 +1184,7 @@ impl<'a> CScript<'a> {
                 let outcome = player.set_string_variable(name, &value);
                 if !matches!(
                     outcome,
-                    super::variablelist::GameVariableMutationOutcome::NameNotFound
+                    nebokrai_zone::scripts::GameVariableMutationOutcome::NameNotFound
                 ) {
                     return Some(true);
                 }

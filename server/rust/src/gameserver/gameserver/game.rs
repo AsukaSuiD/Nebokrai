@@ -989,7 +989,7 @@ use crate::gameserver::appserver::script::function::{
 use crate::gameserver::appserver::script::script::{
     ActiveScript, ScriptExecutionContext, ScriptStepDisposition,
 };
-use crate::gameserver::appserver::script::variablelist::{
+use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use crate::gameserver::appserver::servercityregion::{

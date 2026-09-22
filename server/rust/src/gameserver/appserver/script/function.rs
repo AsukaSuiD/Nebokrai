@@ -437,7 +437,7 @@ use crate::gameserver::appserver::script::buffskillfunc::{
     BuffSkillScriptFunctionOutcome, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
     run_buff_skill_script_function,
 };
-use crate::gameserver::appserver::script::variablelist::GameVariableValue;
+use nebokrai_zone::scripts::GameVariableValue;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };

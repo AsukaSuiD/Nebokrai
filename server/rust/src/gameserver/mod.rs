@@ -504,7 +504,6 @@ pub(crate) mod appserver {
         pub(crate) mod jjcfunc;
         pub(crate) mod parser;
         pub(crate) mod script;
-        pub(crate) mod variablelist;
     }
     pub(crate) mod shape;
     pub(crate) mod summonshape;
