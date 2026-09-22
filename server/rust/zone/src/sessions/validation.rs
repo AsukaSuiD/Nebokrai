@@ -11,13 +11,6 @@ use super::sequence::{CSequenceRegistry, CSequenceString};
 use super::{SequenceRegistryInitializationError, SequenceSerializeError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PlayerLoginValidateTime {
-    pub issued_tick_ms: u32,
-    pub issued_wall_seconds: u32,
-    pub timeout_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SequencePreparationError {
     DuplicateSequenceOwner { player_id: i32 },
     Sequence(SequenceSerializeError),

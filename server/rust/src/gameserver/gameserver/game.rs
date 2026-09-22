@@ -290,9 +290,9 @@
 //! копирует исходные байты имени, затем передаёт ResourceID и биты expScale.
 //! Совпадающий EXE/PDB задаёт `m_lResourceID` по `region+0x64`, `m_fExpScale`
 //! по `+0x68`; размеры находятся по `+0x6C/+0x70` и в этот хвост не входят.
-//! Pending login теперь начинается реальным client `0x8F702` caller-ом и
-//! хранит validate/sequence owners в `CGame`: exact `0xBF402/0xBF403` идут до
-//! decode, reject/OnLost/Kick очищают state, а Release закрывает остатки.
+//! Pending login начинается реальным client `0x8F702` caller-ом. Zone sessions
+//! хранит записи проверок по игрокам; `CGame` отправляет `0xBF402/0xBF403`
+//! до decode, а отказ/OnLost/Kick и Release очищают записи.
 //! Reached faction `Create/ApplyJoin` sessions хранят exact correlation,
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
 //! callback списывает обещанные packet goods и деньги через canonical player/
@@ -903,7 +903,7 @@ use crate::gameserver::appserver::message::playermessage::{
 use crate::gameserver::appserver::message::playershopmessage::dispatch_player_shop_message;
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
 use nebokrai_zone::sessions::{
-    LoginValidationState, PlayerLoginValidateTime, SequencePreparationError,
+    LoginValidationState, SequencePreparationError,
     SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
@@ -29878,27 +29878,23 @@ impl CGame {
         (removed, route_command)
     }
 
-    /// Exact login prefix после успешного World status: optional validation
-    /// clock и sequence выдаются клиенту до decode player snapshot. Оба owner-а
-    /// остаются привязаны к player ID до OnLost/reject, как native maps.
+    /// После успешного World status отправляет включённые проверки до decode
+    /// снимка игрока. Записи по player ID остаются до OnLost/отказа.
     pub(crate) fn begin_player_login_validation(
         &mut self,
         player_id: i32,
         issued_tick_ms: u32,
         issued_wall_seconds: u32,
     ) -> Result<(), GamePlayerLoginPreludeError> {
-        let validate_time =
-            (self.setup.message_validate_time_ms != 0).then(|| PlayerLoginValidateTime {
-                issued_tick_ms,
-                issued_wall_seconds,
-                timeout_ms: self.setup.message_validate_time_ms,
-            });
-        let validate_delivery = validate_time.map(|validation| {
+        // Настройка здесь включает отправку; её числовое значение не входит
+        // в BF402 и не используется текущим Rust для проверки ответа.
+        let validate_enabled = self.setup.message_validate_time_ms != 0;
+        let validate_delivery = validate_enabled.then(|| {
             self.login_validation.append_validate_time(player_id, true);
             let mut message = CMessage::new(0x000b_f402);
             message.add_long(player_id);
-            message.add_ulong(validation.issued_tick_ms);
-            message.add_ulong(validation.issued_wall_seconds);
+            message.add_ulong(issued_tick_ms);
+            message.add_ulong(issued_wall_seconds);
             message.send_to_player(self.net_server(), player_id)
         });
 
@@ -29921,7 +29917,9 @@ impl CGame {
 
         tracing::trace!(
             player_id,
-            ?validate_time,
+            validate_enabled,
+            issued_tick_ms,
+            issued_wall_seconds,
             ?validate_delivery,
             ?sequence_position,
             sequence_elements,
