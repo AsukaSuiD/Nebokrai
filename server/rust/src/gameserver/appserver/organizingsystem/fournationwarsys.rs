@@ -28,7 +28,7 @@
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::public::date::TagTime;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 0xc4;
@@ -452,7 +452,7 @@ fn four_nation_reader<'source>(
     LegacyReader::at(source, cursor).map_err(|block| FourNationGameDecodeError::UnexpectedEnd { field, offset: block.offset, required, available: block.available })
 }
 
-fn four_nation_error(field: &'static str, block: crate::gameserver::appserver::legacycodec::LegacyReadBlock) -> FourNationGameDecodeError {
+fn four_nation_error(field: &'static str, block: nebokrai_shared::protocol::LegacyReadBlock) -> FourNationGameDecodeError {
     FourNationGameDecodeError::UnexpectedEnd { field, offset: block.offset, required: block.needed, available: block.available }
 }
 

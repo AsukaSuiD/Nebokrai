@@ -295,7 +295,7 @@ use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::pet::{PetBehaviorState, PetLifecycleFacts, PetLifecycleOutcome};
 use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
-use super::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, KillingAttackIdentity, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};

@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::gameserver::gameserver::game::CGame;
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GOODS_WAR_WORLD_MESSAGE: i32 = 0x0006_0139;
@@ -334,7 +334,7 @@ fn goods_war_reader<'source>(
 
 fn goods_war_error(
     field: &'static str,
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> GameGoodsWarMessageError {
     GameGoodsWarMessageError::Input(GoodsWarMessageInputBlock {
         field,

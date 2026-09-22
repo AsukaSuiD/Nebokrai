@@ -23,7 +23,7 @@ use super::thunder::{
 };
 use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -32,7 +32,7 @@ use crate::gameserver::appserver::states::attackpower::{
 };
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix};
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const THUNDER_SCOPE_SIDE: i32 = 7;
 pub(crate) const THUNDER_SCOPE: [u8; 49] = [

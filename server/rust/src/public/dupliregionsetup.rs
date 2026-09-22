@@ -23,7 +23,7 @@ use std::collections::TryReserveError;
 use thiserror::Error;
 
 use super::readwrite::read_to;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 /// Точный восьмибайтовый `CDupliRegionSetup::tagDupliRegion`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

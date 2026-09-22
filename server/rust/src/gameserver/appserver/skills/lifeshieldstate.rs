@@ -18,7 +18,7 @@ use super::fightdefense::truncate_original;
 use super::lifeshield::{
     LIFE_SHIELD_SKILL_ID, SKILL_USAGE_STATE_PERSIST_TIME,
 };
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::attackpower::AttackPower;
 use crate::gameserver::appserver::shape::ShapeIdentity;

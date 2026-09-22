@@ -21,7 +21,7 @@ use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
 use crate::gameserver::gameserver::game::{CGame, ScriptRegionChangeContext, ServerRegionOwner};
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::nets::netserver::message::CMessage;
 use std::mem::size_of;
 

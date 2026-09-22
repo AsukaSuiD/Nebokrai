@@ -11,7 +11,7 @@
 //! unsigned wrapping остатков и суммы.
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;

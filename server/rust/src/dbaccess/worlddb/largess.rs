@@ -27,7 +27,7 @@ use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::worldserver::appworld::goods::cgoods::{
     CGoods, GAP_GOODS_PACKAGE_EXTENTION,
 };
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods,
 };

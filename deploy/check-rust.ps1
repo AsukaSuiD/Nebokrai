@@ -51,7 +51,7 @@ fi
 '@
 $checkScript = $checkScript.Replace("`r`n", "`n")
 
-$cargoArguments = @('check', '--locked', '--lib', '--bins')
+$cargoArguments = @('check', '--locked', '--workspace', '--lib', '--bins')
 $artifactMount = @()
 if ($Mode -eq 'Build') {
     $artifactDirectory = Join-Path $PSScriptRoot '../.local/rust-bin'

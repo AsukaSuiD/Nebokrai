@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum CountryWarDecodeError {
@@ -422,7 +422,7 @@ fn read_country_war_array<const N: usize>(
 
 fn country_war_error(
     field: &'static str,
-    block: super::super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> CountryWarDecodeError {
     CountryWarDecodeError::UnexpectedEnd {
         field,

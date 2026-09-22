@@ -23,7 +23,7 @@
 //! Оригинальный Game читает один long в VA `0x5BB37B`; этот четырёхбайтовый
 //! вариант также сохраняется.
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::shape::SHAPE_CHANGE_REGION;
 use crate::gameserver::gameserver::game::CGame;

@@ -12,7 +12,7 @@
 
 use thiserror::Error;
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct HonorElimilateConfig {

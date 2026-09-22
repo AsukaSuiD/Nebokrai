@@ -22,7 +22,7 @@ use std::fmt;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PreciousBoxItem {
@@ -639,7 +639,7 @@ fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PreciousBoxDe
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> PreciousBoxDecodeError {
     PreciousBoxDecodeError::UnexpectedEnd {
         offset: block.offset,

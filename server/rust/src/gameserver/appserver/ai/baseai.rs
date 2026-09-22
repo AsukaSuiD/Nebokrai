@@ -293,7 +293,7 @@ impl CBaseAI {
         Some(ShapeIdentity {
             object_type: self.target_type,
             id: self.target_id,
-            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
         })
     }
 

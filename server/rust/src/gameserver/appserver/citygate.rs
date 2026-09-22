@@ -77,7 +77,7 @@ impl CCityGate {
         build.move_shape_mut().shape_mut().set_identity(ShapeIdentity {
             object_type: CITY_GATE_OBJECT_TYPE as i32,
             id: init.id,
-            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
         });
         build.move_shape_mut().shape_mut().set_action(init.action);
         Self { build }

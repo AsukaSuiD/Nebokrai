@@ -13,7 +13,7 @@ use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) struct CBank {
     wallet_state: CWallet,

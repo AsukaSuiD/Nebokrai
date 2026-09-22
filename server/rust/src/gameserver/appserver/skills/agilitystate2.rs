@@ -21,7 +21,7 @@
 //! байтов заменяет исходный vector без изменения десятибайтового формата.
 
 use super::agility2::AGILITY_2_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -33,7 +33,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const AGILITY_STATE_2_BYTES: usize = 10;
 

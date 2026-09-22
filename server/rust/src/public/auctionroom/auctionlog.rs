@@ -18,7 +18,7 @@ use tiberius::Row;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const AUCTION_LOG_RECORDS_PER_PAGE: i32 = 17;
 const AUCTION_LOG_NODE_SIZE: usize = 0x150;

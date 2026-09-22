@@ -7,7 +7,7 @@
 //! явный destructor заменены `Vec`/`Drop`.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsListListener {

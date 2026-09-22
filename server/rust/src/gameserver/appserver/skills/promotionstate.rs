@@ -17,7 +17,7 @@
 
 use super::promotion::PROMOTION_SKILL_ID;
 use super::shieldstate::DefenseShieldState;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,

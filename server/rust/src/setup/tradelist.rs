@@ -16,7 +16,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -340,7 +340,7 @@ fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, TradeListDeco
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> TradeListDecodeError {
     TradeListDecodeError::UnexpectedEnd {
         offset: block.offset,

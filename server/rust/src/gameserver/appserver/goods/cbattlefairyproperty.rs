@@ -28,7 +28,7 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 const COMPOSE_RECORD_SIZE: usize = 0x7c;
 const LEGACY_STRING_SIZE: usize = 0x1c;
@@ -402,7 +402,7 @@ fn battle_fairy_reader(
 }
 
 fn battle_fairy_read_error(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> BattleFairyComposeDecodeError {
     BattleFairyComposeDecodeError::UnexpectedEnd {
         offset: block.offset,

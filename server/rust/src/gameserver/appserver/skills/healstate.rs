@@ -31,7 +31,7 @@ use super::heal::HEAL_SKILL_ID;
 use super::shieldstate::DefenseShieldState;
 use super::superheal::SUPER_HEAL_SKILL_ID;
 use super::superheal2::SUPER_HEAL_2_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -40,7 +40,7 @@ use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape_mut, timed_client_state_time,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const HEAL_STATE_BYTES: usize = 16;
 

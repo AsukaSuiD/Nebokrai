@@ -50,9 +50,9 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::CGoodsFactory;
 use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, FairyExpRuntime};
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::{CShape, ShapeDecodeError, ShapeIdentity};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
 const GOODS_OBJECT_TYPE: i32 = 700;
@@ -1444,7 +1444,7 @@ fn goods_reader<'source>(
 
 fn goods_read_error(
     field: &'static str,
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> GoodsDecodeError {
     GoodsDecodeError::UnexpectedEnd {
         field,

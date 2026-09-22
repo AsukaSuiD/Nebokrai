@@ -9,14 +9,14 @@
 //! явно: исходные деление на ноль и выход за массив не воспроизводятся.
 
 use super::snowstorm::SNOW_STORM_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const SCOPE_SIDE: i32 = 5;
 pub(crate) const SNOW_STORM_SCOPE_AREA: u32 = 25;

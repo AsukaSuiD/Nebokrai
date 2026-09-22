@@ -173,11 +173,11 @@ impl CGoods {
         self.shape_base.set_id(id);
     }
 
-    pub(crate) const fn get_ex_id(&self) -> &crate::public::guid::CGuid {
+    pub(crate) const fn get_ex_id(&self) -> &nebokrai_shared::values::CGuid {
         self.shape_base.get_ex_id()
     }
 
-    pub(crate) const fn set_ex_id(&mut self, ex_id: &crate::public::guid::CGuid) {
+    pub(crate) const fn set_ex_id(&mut self, ex_id: &nebokrai_shared::values::CGuid) {
         self.shape_base.set_ex_id(ex_id);
     }
 

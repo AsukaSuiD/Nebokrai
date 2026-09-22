@@ -59,7 +59,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::public::date::TagTime;
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum AttackCityDecodeError {
@@ -490,7 +490,7 @@ fn attack_city_reader<'source>(source: &'source [u8], cursor: usize, field: &'st
     LegacyReader::at(source, cursor).map_err(|block| AttackCityDecodeError::UnexpectedEnd { field, offset: block.offset, needed, available: block.available })
 }
 
-fn attack_city_error(field: &'static str, block: crate::gameserver::appserver::legacycodec::LegacyReadBlock) -> AttackCityDecodeError {
+fn attack_city_error(field: &'static str, block: nebokrai_shared::protocol::LegacyReadBlock) -> AttackCityDecodeError {
     AttackCityDecodeError::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available }
 }
 

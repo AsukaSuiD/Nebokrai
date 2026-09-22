@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CChangeBodyConf {

@@ -12,7 +12,7 @@ use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::super::listener::ccontainerlistener::CContainerListener;
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) struct CYuanBao {
     wallet_state: CWallet,

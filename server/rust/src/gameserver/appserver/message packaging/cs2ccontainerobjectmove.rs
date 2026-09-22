@@ -12,7 +12,7 @@
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const CONTAINER_OBJECT_MOVE_MESSAGE: i32 = 0x000c_0101;
 

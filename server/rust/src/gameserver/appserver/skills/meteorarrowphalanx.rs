@@ -31,13 +31,13 @@
 
 use super::fightdefense::truncate_original;
 use super::meteorarrow::METEOR_ARROW_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MeteorArrowScope {

@@ -78,7 +78,7 @@ use std::fmt;
 use super::baseobject::CBaseObject;
 use super::session::csession::CSession;
 use super::shape::{MonsterAreaClass, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;

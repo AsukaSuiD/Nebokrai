@@ -17,7 +17,7 @@
 use super::accumulatedstate::{
     AccumulatedState, AccumulationParticipant, add_accumulated_state, update_accumulated_visual,
 };
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{

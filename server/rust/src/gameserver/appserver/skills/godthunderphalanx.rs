@@ -14,12 +14,12 @@ use super::elementphalanxattack::ElementPhalanxAttack;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
 use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
 use super::godthunderphalanx2::{GOD_THUNDER_2_SCOPE, GOD_THUNDER_2_SCOPE_SIDE};
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GodThunderParametersError {

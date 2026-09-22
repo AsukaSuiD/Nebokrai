@@ -77,7 +77,7 @@
 
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 use super::baseprojectilecast::BaseProjectileExecutionState;
 use super::armybreak::ArmyBreakExecutionState;

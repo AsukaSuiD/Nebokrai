@@ -15,7 +15,7 @@ use super::camountlimitgoodsshadowcontainer::CAmountLimitGoodsShadowContainer;
 use super::cgoodsshadowcontainer::{GoodsShadow, ShadowRemovedReport};
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CVolumeLimitGoodsShadowContainer {

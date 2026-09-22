@@ -591,7 +591,7 @@ where
                     billing.base_mut().add_long(world_server_id);
                     billing
                         .base_mut()
-                        .add_guid(crate::public::guid::CGuid::GUID_INVALID);
+                        .add_guid(nebokrai_shared::values::CGuid::GUID_INVALID);
                     billing_delivery = Some(billing.send_to_bs(game, false));
                 }
                 let stored = game
@@ -1040,7 +1040,7 @@ pub(super) fn build_auction_buy_log_effects(
         time,
         description,
         guid: node.guid(),
-        guid_key: crate::public::guid::CGuid::GUID_INVALID,
+        guid_key: nebokrai_shared::values::CGuid::GUID_INVALID,
     };
     let buyer_log = common.clone();
     let seller_log = AuctionLogNode {

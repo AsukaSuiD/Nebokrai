@@ -10,14 +10,14 @@
 
 use super::fightdefense::truncate_original;
 use super::thunderblow::THUNDER_BLOW_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ThunderBlowPhalanxTick {

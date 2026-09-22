@@ -26,7 +26,7 @@
 //! Безопасные значения и общая SlotMap заменяют native указатели/контейнеры.
 
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -38,7 +38,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::states::visualeffect::CVisualEffect;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const METEOR_ARROW_MASS_SKILL_ID: u32 = 0xCC;
 pub(crate) const METEOR_ARROW_STATE_BYTES: usize = 12;

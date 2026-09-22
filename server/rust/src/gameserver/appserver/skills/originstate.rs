@@ -18,7 +18,7 @@ use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, end_base_applied_state, resolve_state_move_shape,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 
 pub(crate) const ORIGIN_STATE_BYTES: usize = 8;
 

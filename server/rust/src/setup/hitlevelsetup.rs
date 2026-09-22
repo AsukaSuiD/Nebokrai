@@ -24,7 +24,7 @@ use std::fmt;
 use std::path::Path;
 use thiserror::Error;
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

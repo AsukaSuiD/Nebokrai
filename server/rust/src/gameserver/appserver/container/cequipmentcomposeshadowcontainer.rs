@@ -25,7 +25,7 @@ use super::cgoodsshadowcontainer::{
     ShadowRemovedReport, ShadowSourceChangeOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const GOODS_LIMIT: u32 = 3;
 

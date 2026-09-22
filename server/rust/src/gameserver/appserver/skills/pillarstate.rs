@@ -27,12 +27,12 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const PILLAR_STATE_ID: u32 = 0x74;
 pub(crate) const PILLAR_STATE_BYTES: usize = 12;

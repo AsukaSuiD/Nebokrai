@@ -13,7 +13,7 @@ pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 pub(crate) const CURE_STATE_BYTES: usize = 8;
 
 use super::manashieldstate::MANA_SHIELD_STATE_BEGIN_MESSAGE;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -108,7 +108,7 @@ fn begin_cure_state(
     let participant = |(region, identity)| {
         let shape = resolve_state_move_shape(game, region, identity)?.shape();
         Some((shape.get_region_id(), ShapeIdentity {
-            ex_id: crate::public::guid::CGuid::GUID_INVALID, ..shape.identity()
+            ex_id: nebokrai_shared::values::CGuid::GUID_INVALID, ..shape.identity()
         }))
     };
     let user = match user { Some(user) => Some(participant(user)?), None => None };

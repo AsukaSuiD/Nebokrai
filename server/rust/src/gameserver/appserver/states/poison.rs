@@ -4,7 +4,7 @@
 //! Poison, включая SpriteBurn и Kerosene; MP не изменяется. Конкретный ID сохраняет
 //! отдельный вариант общей арены, без дополнительного хранилища.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::{AppliedState, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;

@@ -52,10 +52,10 @@
 //! порядке без параллельного wire-кодека.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
-use super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::serverregion::CServerRegion;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
 const DIRECTION_OFFSETS: [(i32, i32); 8] = [
@@ -1047,7 +1047,7 @@ fn shape_reader<'source>(source: &'source [u8], cursor: usize, field: &'static s
     LegacyReader::at(source, cursor).map_err(|block| ShapeDecodeError::UnexpectedEnd { field, offset: block.offset, needed, available: block.available })
 }
 
-fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) -> ShapeDecodeError {
+fn shape_error(field: &'static str, block: nebokrai_shared::protocol::LegacyReadBlock) -> ShapeDecodeError {
     ShapeDecodeError::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available }
 }
 

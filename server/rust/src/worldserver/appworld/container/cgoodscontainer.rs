@@ -15,7 +15,7 @@
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use super::ccontainer::{CContainerState, SharedContainerListener};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

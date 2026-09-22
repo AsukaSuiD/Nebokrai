@@ -28,7 +28,7 @@ use super::monster::CMonster;
 use super::npc::CNpc;
 use super::player::CPlayer;
 use super::region::CRegion;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const LEGACY_NAME_CAPACITY: usize = 0x100;
 

@@ -176,7 +176,7 @@ pub(crate) fn search_puniness_enemy(
         let identity = ShapeIdentity {
             object_type: PLAYER_TYPE,
             id: player_id,
-            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
         };
         let Some(candidate) = live_target_view(game, region, identity) else {
             continue;

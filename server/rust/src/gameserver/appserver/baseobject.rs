@@ -28,9 +28,9 @@
 use std::fmt;
 use thiserror::Error;
 
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
-use super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::npc::CNpc;
 

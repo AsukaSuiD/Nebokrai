@@ -12,14 +12,14 @@
 //! `tracing`.
 
 use crate::gameserver::appserver::player::PlayerProgress;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::region::RegionCellAccessBlock;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use tracing::{debug, trace};
 
 const PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;

@@ -917,6 +917,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nebokrai-realm"
+version = "0.0.0"
+dependencies = [
+ "nebokrai-shared",
+ "walkdir",
+]
+
+[[package]]
 name = "nebokrai-server"
 version = "0.0.0"
 dependencies = [
@@ -925,14 +933,15 @@ dependencies = [
  "chrono",
  "crc32fast",
  "encoding_rs",
- "flate2",
  "freetype-rs",
  "futures-util",
  "getrandom 0.4.3",
  "indexmap",
  "libc",
- "lzo",
  "md-5",
+ "nebokrai-realm",
+ "nebokrai-shared",
+ "nebokrai-zone",
  "nom",
  "parking_lot",
  "procfs",
@@ -948,8 +957,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "walkdir",
  "zerocopy",
+]
+
+[[package]]
+name = "nebokrai-shared"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "flate2",
+ "getrandom 0.4.3",
+ "lzo",
+ "uuid",
+]
+
+[[package]]
+name = "nebokrai-zone"
+version = "0.0.0"
+dependencies = [
+ "nebokrai-shared",
 ]
 
 [[package]]

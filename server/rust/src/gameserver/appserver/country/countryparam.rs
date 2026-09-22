@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 const COUNTRY_PARAMETER_COUNT: usize = 39;
 const MAX_COUNTRY_POWER: usize = 2;
@@ -341,7 +341,7 @@ fn country_reader<'source>(
 
 fn country_error(
     field: &'static str,
-    block: super::super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> CountryParamInputBlock {
     CountryParamInputBlock {
         field,

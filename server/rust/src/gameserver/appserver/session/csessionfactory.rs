@@ -55,7 +55,7 @@ use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 use super::cequipmentcompose::CEquipmentCompose;
 use super::cequipmentdakong::CEquipmentDaKong;

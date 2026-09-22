@@ -1,14 +1,13 @@
 //! Reached buff-skill extension исторического `CScript::RunFunction`.
 //!
-//! `AddJingJieBuff` присутствует в shipped RU scripts, но отсутствует в их
-//! `function.ini`; поздний GameServer регистрирует selector `11131` кодом.
+//! Привязка имени AddJingJieBuff к selector 11131 в исследованной сборке не подтверждена.
+//! Обработчик сохраняется, но реестр получает имя и ID только из FunctionList.
 //! Исполнение сохраняет player-before-argument gate и передаёт mutation в
 //! concrete realm/property owner, а не в отдельный script shadow.
 
 use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) const SCRIPT_FUNCTION_ADD_JING_JIE_BUFF: i32 = 11131;
-pub(crate) const SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME: &[u8] = b"AddJingJieBuff";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BuffSkillScriptFunctionOutcome {

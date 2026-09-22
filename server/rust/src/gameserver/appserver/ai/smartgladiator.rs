@@ -319,7 +319,7 @@ pub(crate) fn apply_player_hurt_response<Runtime: GameMainLoopRuntime>(
             monster.set_ai_target(ShapeIdentity {
                 object_type: PLAYER_TYPE,
                 id: player_id,
-                ex_id: crate::public::guid::CGuid::GUID_INVALID,
+                ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
             });
         }
         return;
@@ -363,7 +363,7 @@ pub(crate) fn apply_monster_hurt_response(
         monster.set_ai_target(ShapeIdentity {
             object_type: MONSTER_TYPE,
             id: attacker_id,
-            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
         });
     }
 }

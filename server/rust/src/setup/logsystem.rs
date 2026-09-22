@@ -24,7 +24,7 @@
 //! GM-команды используют подтверждённый positional byte `50`, `bGMCommand`,
 //! для межсерверного аудита `0x6020B`.
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;

@@ -10,7 +10,7 @@
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SeekGoodsListener {

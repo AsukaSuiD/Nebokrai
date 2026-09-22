@@ -12,7 +12,7 @@
 use super::fightdefense::truncate_original;
 use super::manashield::MANA_SHIELD_SKILL_ID;
 use super::thunder::truncate_original_i64_low;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 

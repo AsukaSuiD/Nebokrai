@@ -21,7 +21,7 @@ use std::path::Path;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NewSkillMonsterConf {
     groups: BTreeMap<u32, Vec<Vec<u8>>>,
@@ -504,7 +504,7 @@ fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, NewSkillMonst
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> NewSkillMonsterDecodeError {
     NewSkillMonsterDecodeError::UnexpectedEnd {
         offset: block.offset,

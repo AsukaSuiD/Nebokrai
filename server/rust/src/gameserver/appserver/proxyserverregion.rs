@@ -11,7 +11,7 @@
 //! Других неизвестных domain-полей этот конкретный wire-owner не читает.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
-use super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use super::serverregion::RegionParamState;
 use thiserror::Error;
 
@@ -206,6 +206,6 @@ fn proxy_reader<'source>(source: &'source [u8], cursor: usize, field: &'static s
     LegacyReader::at(source, cursor).map_err(|block| ProxyRegionDecodeError::UnexpectedEnd { field, offset: block.offset, needed, available: block.available })
 }
 
-fn proxy_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) -> ProxyRegionDecodeError {
+fn proxy_error(field: &'static str, block: nebokrai_shared::protocol::LegacyReadBlock) -> ProxyRegionDecodeError {
     ProxyRegionDecodeError::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available }
 }

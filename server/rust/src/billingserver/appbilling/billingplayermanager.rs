@@ -32,7 +32,7 @@ use crate::dbaccess::dbbilling::rsplayeraccount::{
 };
 use crate::nets::netbilling::message::CMessage;
 use crate::nets::servers::ServerCommandHandle;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::public::tools::put_string_to_file;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

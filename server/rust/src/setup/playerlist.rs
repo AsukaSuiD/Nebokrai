@@ -22,7 +22,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -810,7 +810,7 @@ fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, PlayerListDec
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> PlayerListDecodeError {
     PlayerListDecodeError::UnexpectedEnd {
         offset: block.offset,

@@ -25,7 +25,7 @@
 //! только при result == 0; короткий отказ не меняет кошельки и сеансы.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::gameserver::appserver::player::PlayerYuanBaoChange;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message,

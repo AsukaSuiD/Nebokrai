@@ -16,7 +16,7 @@
 
 use thiserror::Error;
 
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 pub(crate) const GOODS_TYPE_USELESS: i32 = 0;
 pub(crate) const GOODS_TYPE_CONSUMABLE: i32 = 1;
@@ -588,7 +588,7 @@ fn goods_reader<'source>(
 
 fn goods_read_error(
     field: &'static str,
-    block: super::super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> GoodsBasePropertiesDecodeError {
     GoodsBasePropertiesDecodeError::UnexpectedEnd {
         field,

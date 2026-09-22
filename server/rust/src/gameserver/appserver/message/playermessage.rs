@@ -57,7 +57,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const ALLOCATE_STAT_POINT: u32 = 0x0008_fa01;
 const REQUEST_RELIVE: u32 = 0x0008_fa02;

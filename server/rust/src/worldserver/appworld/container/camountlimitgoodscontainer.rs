@@ -25,7 +25,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::listener::ccontainerlistener::{
     CContainerListener, TraversedContainerObject,
 };

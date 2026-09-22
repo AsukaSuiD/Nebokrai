@@ -62,7 +62,7 @@
 //! byte-exact cell storage. Monster, loot и player death/PK owners остаются RAW.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
-use super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 
 const REGION_RESOURCE_HEADER: &[u8; 7] = b"CLS-RGN";
 const REGION_RESOURCE_VERSION: i32 = 1;
@@ -786,7 +786,7 @@ fn region_reader<'source>(
 
 fn region_read_error(
     field: &'static str,
-    block: super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> RegionDecodeError {
     RegionDecodeError::UnexpectedEnd {
         field,

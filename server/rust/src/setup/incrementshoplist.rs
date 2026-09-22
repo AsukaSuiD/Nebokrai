@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::public::readwrite::read_to;
 
 const ITEM_WIRE_LENGTH: usize = 0x18;

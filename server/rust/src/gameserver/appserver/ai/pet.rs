@@ -73,7 +73,7 @@ use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIde
 use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;

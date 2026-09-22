@@ -14,7 +14,7 @@ use super::elementphalanxattack::ElementPhalanxAttack;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CChaosSpherePhalanx {

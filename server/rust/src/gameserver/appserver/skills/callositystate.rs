@@ -26,7 +26,7 @@
 
 use super::callosity::CALLOSITY_SKILL_ID;
 use super::callosity2::CALLOSITY_2_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -38,7 +38,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const CALLOSITY_STATE_BYTES: usize = 10;
 

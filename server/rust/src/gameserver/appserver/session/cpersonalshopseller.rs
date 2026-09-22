@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
 use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowRemovedReport;
 use crate::gameserver::appserver::container::cvolumelimitgoodsshadowcontainer::CVolumeLimitGoodsShadowContainer;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PersonalShopPrice {

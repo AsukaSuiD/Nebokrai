@@ -44,14 +44,14 @@
 //! выполняет общий MountEquipRide(true) → MountEquipRide(false)0x0043C5E0.
 //! Недостигнутые coordinate/typed-target перегрузки Begin сохранены только в локальном исследовательском корпусе.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     default_client_state_time, resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const RIDE_STATE_ID: u32 = 100_004;
 const RIDE_STATE_FIXED_BYTES: usize = 16;

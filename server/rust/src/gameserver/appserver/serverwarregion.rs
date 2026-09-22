@@ -40,7 +40,7 @@
 
 use std::collections::BTreeMap;
 
-use super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::servercountryregion::is_player_contend_symbol;

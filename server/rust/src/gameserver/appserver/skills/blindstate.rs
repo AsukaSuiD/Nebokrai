@@ -17,7 +17,7 @@
 //! OnAction не объединён: Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
 //! Rush/Rush2/SpiderWeb/Strike/BoaLock ничего не делают.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::{AppliedState, StateData, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -28,7 +28,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const BLIND_STATE_ID: u32 = 0x76;
 pub(crate) const BLIND_STATE_BYTES: usize = 8;

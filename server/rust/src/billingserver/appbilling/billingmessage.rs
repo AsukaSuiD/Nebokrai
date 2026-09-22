@@ -11,7 +11,7 @@ use crate::billingserver::appbilling::billingplayermanager::{
     CBillingPlayerManager, TagAccInfo, TagTradeNode, TagTradeNodeParts,
 };
 use crate::nets::netbilling::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const ACCOUNT_BALANCE_REQUEST: i32 = 0x000E_F201;
 const INCREMENT_PURCHASE_REQUEST: i32 = 0x000E_F202;

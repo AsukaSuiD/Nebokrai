@@ -14,10 +14,10 @@
 //! CBuild с одним аргументом: смерть проходит общий End/очистку состояний,
 //! а отсутствие CBaseAI не подменяется синхронным запуском OnDied/script.
 
-use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;
 use super::shape::{ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const BUILD_OBJECT_TYPE: u32 = 0x44C;
 

@@ -258,7 +258,7 @@ use slotmap::{SlotMap, new_key_type};
 use super::ai::baseai::CBaseAI;
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyState};
 use super::exstate::{ExtendedState, ExtendedStateKind};
-use super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};

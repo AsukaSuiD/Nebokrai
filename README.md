@@ -12,7 +12,7 @@ The available Git history begins on **18 August 2026**. The [project history](do
 
 ## Architecture
 
-One Rust package builds six executables:
+The workspace contains the existing server package and the Shared, Realm, and Zone libraries. Realm prepares script resources; Zone owns their received texts and replacement. The server package still builds six executables:
 
 | Service | Responsibility |
 | --- | --- |
@@ -35,7 +35,7 @@ As documented on **21 September 2026**:
 - **A stable, playable session has not been demonstrated.** The same client scenario still needs to be repeated on that corrected release build.
 - Full persistence across sessions, region transitions, billing, auctions, and sustained performance remain unproven.
 
-The immediate next step is to repeat the already reached entry-and-movement scenario on the corrected release build and compare movement quality and synchronization. The [status overview](docs/overview/status.md) separates implementation from observed behavior and links to the detailed evidence.
+The current work is component refactoring with technical debt and defects addressed in each affected area; see the [roadmap](docs/overview/roadmap.md). The [status overview](docs/overview/status.md) separates implementation from observed behavior and links to the detailed evidence.
 
 ## Reconstruction methodology
 
@@ -51,7 +51,7 @@ On Linux, install the toolchain in [rust-toolchain.toml](server/rust/rust-toolch
 
 ```sh
 cd server/rust
-cargo check --locked --lib --bins
+cargo check --locked --workspace --lib --bins
 ```
 
 The [build guide](docs/operations/build.md) covers dependencies and the PowerShell/Docker workflow. Native Windows compilation is not currently supported. Running the services requires separately supplied local configuration, compatible resources, and database data: a clone is not a runnable game distribution.

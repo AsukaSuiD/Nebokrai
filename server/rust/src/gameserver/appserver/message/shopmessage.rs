@@ -30,7 +30,7 @@ use crate::gameserver::gameserver::game::{
     CGame, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use tracing::{debug, trace};
 
 const BUY: i32 = 0x0008_fd01;

@@ -461,7 +461,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::public::tools::put_debug_string;
 use crate::setup::leitingsetup::{CThingSetup, LeiTingLocalTime};
 

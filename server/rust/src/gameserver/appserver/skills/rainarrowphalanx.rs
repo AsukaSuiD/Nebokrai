@@ -34,7 +34,7 @@ use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const RAIN_ARROW_SKILL_ID: u32 = 0xce;
 pub(crate) type RainArrowCell = (i32, i32, u8);

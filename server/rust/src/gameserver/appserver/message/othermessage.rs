@@ -17,7 +17,7 @@
 //! не используется. Все селекторы владельца материализованы typed dispatcher-ом.
 
 use crate::gameserver::appserver::player::{PlayerLeiTingDecodeBlock, PlayerTalkChannel};
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::gameserver::appserver::message::gmmessage::parse_gm_command;
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::{ScriptExecutionContext, legacy_atoi};

@@ -21,7 +21,7 @@
 //! объектным runtime: их проверка GetS после base Begin имеет отдельный контракт.
 
 use super::blindstate::{self, BlindStatePayload};
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{

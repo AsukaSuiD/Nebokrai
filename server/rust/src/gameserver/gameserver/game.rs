@@ -753,6 +753,8 @@ mod playerskillschedule;
 pub(crate) mod baseattackruntime;
 
 use std::collections::{BTreeMap, BTreeSet};
+use nebokrai_zone::content::{ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
+use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
 use std::ffi::CString;
 use std::fs;
@@ -840,7 +842,7 @@ use crate::gameserver::appserver::exstate::{ExtendedState, ExtendedStateKind};
 use crate::gameserver::appserver::gameeffectjournal::{
     GameEffect, GameEffectJournal, SharedGameEffectJournal, shared_game_effect_journal,
 };
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::{
     BattleFairyExpUpResult, BattleFairyPlayerFacts, CBattleFairyProperty,
 };
@@ -855,6 +857,9 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::goods::identity::{
+    clone_goods_with_new_guid, create_goods_guid,
+};
 use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpRuntime, FairyExpUpResult, FairyGrowLog,
 };
@@ -982,7 +987,7 @@ use crate::gameserver::appserver::script::function::{
     ScriptAwardAuthenticationContext, ScriptAwardAuthenticationSubmission, ScriptFunctionRuntime,
 };
 use crate::gameserver::appserver::script::script::{
-    ActiveScript, CScriptFunctionRegistry, ScriptExecutionContext, ScriptStepDisposition,
+    ActiveScript, ScriptExecutionContext, ScriptStepDisposition,
 };
 use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
@@ -1347,8 +1352,8 @@ use crate::public::ciqing::CCiQingSetup;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
-use crate::public::guid::CGuid;
-use crate::public::mystringtable::{MyStringTable, MyStringTableDecodeError};
+use nebokrai_shared::values::CGuid;
+use nebokrai_shared::resources::{MyStringTable, MyStringTableDecodeError};
 use crate::public::netsessionmanager::{
     CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant,
 };
@@ -1381,7 +1386,7 @@ use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxItem};
 use crate::setup::prisonconf::PrisonConf;
-use crate::setup::questsystem::CQuestSystem;
+use nebokrai_shared::resources::CQuestSystem;
 use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
@@ -1917,12 +1922,6 @@ pub(crate) enum GameInitializationThroughBillingError {
     },
     #[error(transparent)]
     Sequence(#[from] SequenceRegistryInitializationError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameSingleFilePublication {
-    Published,
-    RepeatedOwnerFreed,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -4701,10 +4700,8 @@ pub(crate) struct CGame {
     auction_now: bool,
     auction_last_check_seconds: u32,
     auction_tick_ms: u32,
-    function_list_file_data: Option<Vec<u8>>,
-    variable_list_file_data: Option<Vec<u8>>,
-    script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
-    script_functions: CScriptFunctionRegistry,
+    script_resources: ScriptResources,
+    script_functions: ScriptFunctionRegistry,
     general_variables: CVariableList,
     active_scripts: BTreeMap<i32, ActiveScript>,
     next_script_id: i32,
@@ -5597,10 +5594,8 @@ impl CGame {
             auction_now: false,
             auction_last_check_seconds: 0,
             auction_tick_ms: 0,
-            function_list_file_data: None,
-            variable_list_file_data: None,
-            script_file_data: BTreeMap::new(),
-            script_functions: CScriptFunctionRegistry::default(),
+            script_resources: ScriptResources::default(),
+            script_functions: ScriptFunctionRegistry::default(),
             general_variables: CVariableList::default(),
             active_scripts: BTreeMap::new(),
             next_script_id: 0,
@@ -6308,7 +6303,7 @@ impl CGame {
             cursor,
             &self.goods_factory,
             &self.skill_factory,
-            self.variable_list_file_data.as_deref(),
+            self.script_resources.variables(),
             now_ms,
             self.globe_setup.one_pk_count_time_ms(),
             state_now,
@@ -6920,15 +6915,13 @@ impl CGame {
                 )
             }
             11 => {
-                let mut split_template = goods.clone();
-                split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+                let split_template = clone_goods_with_new_guid(&goods);
                 let outcome = player.fairy_container_mut().take(
                     source_position,
                     amount,
                     &self.goods_factory,
                     |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     },
                 );
                 let taken = match outcome {
@@ -7341,8 +7334,7 @@ impl CGame {
             }
         }
         let audit_name = source.name().to_vec();
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
 
         let mut player = self
             .players
@@ -7353,8 +7345,7 @@ impl CGame {
             amount,
             &self.goods_factory,
             |_| {
-                (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                    .then(|| split_template.clone())
+                split_template.clone()
             },
         ) {
             Some(removal) => removal,
@@ -7575,8 +7566,7 @@ impl CGame {
         let source_identity = source.identity();
         let audit_name = source.name().to_vec();
         let audit_price = source.price();
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
 
         let mut player = self
             .players
@@ -7588,8 +7578,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -7662,8 +7651,7 @@ impl CGame {
                 player
                     .depot_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
                 self.players.insert(player_id, player);
@@ -7899,8 +7887,7 @@ impl CGame {
         let source_identity = source.identity();
         let audit_name = source.name().to_vec();
         let audit_price = source.price();
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
         let mut player = self
             .players
             .remove(&player_id)
@@ -7911,8 +7898,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -7985,8 +7971,7 @@ impl CGame {
                 player
                     .depot_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
                 self.players.insert(player_id, player);
@@ -8145,8 +8130,7 @@ impl CGame {
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
                 > u32::from(player.combat_properties().burden);
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
         let mut player = self
             .players
             .remove(&player_id)
@@ -8158,8 +8142,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -8211,8 +8194,7 @@ impl CGame {
                 player
                     .hand_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(taken) = removed else {
                 self.players.insert(player_id, player);
@@ -8250,8 +8232,7 @@ impl CGame {
                 player
                     .depot_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
                 self.players.insert(player_id, player);
@@ -8290,8 +8271,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let taken = match outcome {
@@ -8612,8 +8592,7 @@ impl CGame {
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
                 > u32::from(player.combat_properties().burden);
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
         let mut player = self
             .players
             .remove(&player_id)
@@ -8625,8 +8604,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -8678,8 +8656,7 @@ impl CGame {
                 player
                     .hand_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(taken) = removed else {
                 self.players.insert(player_id, player);
@@ -8717,8 +8694,7 @@ impl CGame {
                 player
                     .depot_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
                 self.players.insert(player_id, player);
@@ -8757,8 +8733,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let taken = match outcome {
@@ -8809,8 +8784,7 @@ impl CGame {
                 &self.goods_factory,
                 coefficients,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
                 &mut encode,
             );
@@ -9172,8 +9146,7 @@ impl CGame {
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
                 > u32::from(player.combat_properties().burden);
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
         let mut player = self
             .players
             .remove(&player_id)
@@ -9185,8 +9158,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -9238,8 +9210,7 @@ impl CGame {
                 player
                     .hand_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(taken) = removed else {
                 self.players.insert(player_id, player);
@@ -9277,8 +9248,7 @@ impl CGame {
                 player
                     .depot_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
                 self.players.insert(player_id, player);
@@ -9317,8 +9287,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let taken = match outcome {
@@ -9369,8 +9338,7 @@ impl CGame {
                 &self.goods_factory,
                 coefficients,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
                 &mut encode,
             );
@@ -9424,8 +9392,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -9790,8 +9757,7 @@ impl CGame {
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
                 > u32::from(player.combat_properties().burden);
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
         let mut player = self
             .players
             .remove(&player_id)
@@ -9801,8 +9767,7 @@ impl CGame {
             amount,
             &self.goods_factory,
             |_| {
-                (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                    .then(|| split_template.clone())
+                split_template.clone()
             },
         );
         let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -10016,8 +9981,7 @@ impl CGame {
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
                 > u32::from(player.combat_properties().burden);
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
         let mut player = self
             .players
             .remove(&player_id)
@@ -10028,8 +9992,7 @@ impl CGame {
                 player
                     .hand_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(taken) = removed else {
                 self.players.insert(player_id, player);
@@ -10068,8 +10031,7 @@ impl CGame {
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
@@ -10311,8 +10273,7 @@ impl CGame {
         let burden_exceeded = matches!(destination_extend_id, 1 | 2)
             && player.current_burden(&self.goods_factory)
                 > u32::from(player.combat_properties().burden);
-        let mut split_template = source.clone();
-        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let split_template = clone_goods_with_new_guid(&source);
 
         let mut player = self
             .players
@@ -10321,8 +10282,7 @@ impl CGame {
         let removed = player
             .hand_mut()
             .take_goods(0, amount, &self.goods_factory, |_| {
-                (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                    .then(|| split_template.clone())
+                split_template.clone()
             });
         let Some(removed) = removed else {
             self.players.insert(player_id, player);
@@ -10920,15 +10880,13 @@ impl CGame {
             source_depot_mutation,
             source_fairy_mutation,
         ) = if source_extend_id == 1 {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let split_template = clone_goods_with_new_guid(&source);
             let Some(removed) = player.packet_mut().take_goods(
                 source_position,
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             ) else {
                 self.players.insert(player_id, player);
@@ -11001,14 +10959,12 @@ impl CGame {
             };
             (removed.goods, Some(mutation), None, None, None, None)
         } else if source_extend_id == 3 {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let split_template = clone_goods_with_new_guid(&source);
             let Some(removed) =
                 player
                     .hand_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     })
             else {
                 self.players.insert(player_id, player);
@@ -11042,14 +10998,12 @@ impl CGame {
                 }
             }
         } else if source_extend_id == 9 {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let split_template = clone_goods_with_new_guid(&source);
             let removed =
                 player
                     .depot_mut()
                     .take_goods(source_position, amount, &self.goods_factory, |_| {
-                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                            .then(|| split_template.clone())
+                        split_template.clone()
                     });
             let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
                 self.players.insert(player_id, player);
@@ -11083,15 +11037,13 @@ impl CGame {
                 }
             }
         } else if source_extend_id == 11 {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let split_template = clone_goods_with_new_guid(&source);
             let outcome = player.fairy_container_mut().take(
                 source_position,
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             );
             let taken = match outcome {
@@ -11127,15 +11079,13 @@ impl CGame {
                 }
             }
         } else {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let split_template = clone_goods_with_new_guid(&source);
             let Some(removed) = player.take_ground_currency_goods(
                 source_extend_id,
                 amount,
                 &self.goods_factory,
                 |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
+                    split_template.clone()
                 },
             ) else {
                 self.players.insert(player_id, player);
@@ -12226,7 +12176,7 @@ impl CGame {
         self.goods_factory.create_goods_core(
             goods_index,
             |upper_bound| game_legacy_random(random_state, upper_bound),
-            || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+            create_goods_guid,
         )
     }
 
@@ -12244,7 +12194,7 @@ impl CGame {
             goods_index,
             amount,
             &mut random,
-            || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+            create_goods_guid,
             |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
             |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
         )
@@ -14652,7 +14602,12 @@ impl CGame {
                 _ => break,
             };
             let _ = goods.set_addon_property_value_core(GAP_GOODS_AUCTION_SCALE, 1, 1);
-            goods.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let Some(guid) = create_goods_guid() else {
+                // Текущий аукционный узел ещё не заменён; предыдущие шаги
+                // этого сценарного прохода остаются применёнными.
+                break;
+            };
+            goods.set_ex_id(guid);
 
             let seller_time = game_wall_time_seconds() as u32;
             let end_time = (game_wall_time_seconds() as u32).wrapping_add(0x3840);
@@ -16077,28 +16032,23 @@ impl CGame {
         self.set_auction_state(false, self.auction_last_check_seconds);
     }
 
-    pub(crate) fn set_function_file_data(&mut self, data: Vec<u8>) -> GameSingleFilePublication {
-        if self.function_list_file_data.is_some() {
-            self.function_list_file_data.take();
-            return GameSingleFilePublication::RepeatedOwnerFreed;
+    pub(crate) fn set_function_file_data(
+        &mut self,
+        data: Vec<u8>,
+    ) -> Result<ScriptResourcePublication, FunctionListError> {
+        let registry = &mut self.script_functions;
+        let (publication, report) = self.script_resources
+            .set_functions(data, |source| registry.load(source));
+        if let Some(error) = report.error {
+            tracing::warn!(?publication, ?report, "Разбор FunctionList остановлен");
+            return Err(error);
         }
-        self.function_list_file_data = Some(data);
-        let published = self
-            .function_list_file_data
-            .as_deref()
-            .expect("function list только что опубликован");
-        self.script_functions
-            .load(legacy_c_string_prefix(published));
-        GameSingleFilePublication::Published
+        tracing::debug!(?publication, ?report, "Загружен реестр сценарных функций");
+        Ok(publication)
     }
 
-    pub(crate) fn set_variable_file_data(&mut self, data: Vec<u8>) -> GameSingleFilePublication {
-        if self.variable_list_file_data.is_some() {
-            self.variable_list_file_data.take();
-            return GameSingleFilePublication::RepeatedOwnerFreed;
-        }
-        self.variable_list_file_data = Some(data);
-        GameSingleFilePublication::Published
+    pub(crate) fn set_variable_file_data(&mut self, data: Vec<u8>) -> ScriptResourcePublication {
+        self.script_resources.set_variables(data)
     }
 
     pub(crate) fn set_general_variable_file_data(
@@ -16108,30 +16058,26 @@ impl CGame {
     ) -> Result<(), GameVariableSnapshotError> {
         let mut local_cursor = cursor;
         self.general_variables.decode_world_snapshot(
-            self.variable_list_file_data.as_deref(),
+            self.script_resources.variables(),
             source,
             &mut local_cursor,
         )
     }
 
     pub(crate) fn set_script_file_data(&mut self, path: Vec<u8>, data: Vec<u8>) -> bool {
-        self.script_file_data
-            .insert(legacy_c_string_prefix(&path).to_vec(), data)
-            .is_some()
+        self.script_resources.set_script(path, data)
     }
 
     pub(crate) fn function_file_data(&self) -> Option<&[u8]> {
-        self.function_list_file_data.as_deref()
+        self.script_resources.functions()
     }
 
     pub(crate) fn variable_file_data(&self) -> Option<&[u8]> {
-        self.variable_list_file_data.as_deref()
+        self.script_resources.variables()
     }
 
     pub(crate) fn script_file_data(&self, path: &[u8]) -> Option<&[u8]> {
-        self.script_file_data
-            .get(legacy_c_string_prefix(path))
-            .map(Vec::as_slice)
+        self.script_resources.script(path)
     }
 
     pub(crate) fn script_function_id(&self, name: &[u8]) -> Option<i32> {
@@ -19475,8 +19421,8 @@ impl CGame {
     }
 
 
-    /// Очищает и декодирует language table, пишет exact log и лишь затем
-    /// сдвигает внешний message cursor на consumed length.
+    /// Очищает таблицу, декодирует сообщение и пишет журнал. Внешний курсор
+    /// сдвигается после успеха; при отказе уже декодированные пары сохраняются.
     pub(crate) fn create_string_table(
         &mut self,
         source: &[u8],
@@ -19487,6 +19433,14 @@ impl CGame {
         self.string_table.table_mut().free();
         let payload = source.get(start..).unwrap_or_default();
         let outcome = self.string_table.from_byte_array(payload)?;
+        tracing::trace!(
+            declared_entries = outcome.declared_entries,
+            decoded_entries = outcome.decoded_entries,
+            replaced_entries = outcome.replaced_entries,
+            unique_entries = outcome.unique_entries,
+            consumed = outcome.consumed,
+            "таблица строк декодирована"
+        );
         if outcome.empty {
             add_log_text(b"WARNING : Received a NULL language packet from WorldServer!");
         } else {
@@ -20979,7 +20933,7 @@ impl CGame {
                 result_index,
                 1,
                 |upper_bound| game_legacy_random(random_state, upper_bound),
-                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                create_goods_guid,
                 |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
@@ -23551,7 +23505,7 @@ impl CGame {
                 goods_factory.create_goods(
                     base_index,
                     &mut random,
-                    || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                    create_goods_guid,
                     |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                     |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
                 )
@@ -23615,7 +23569,7 @@ impl CGame {
                 goods_factory.create_goods(
                     base_index,
                     &mut random,
-                    || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                    create_goods_guid,
                     |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                     |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
                 )
@@ -23829,7 +23783,7 @@ impl CGame {
                 recipe.destination_base_index,
                 amount,
                 &mut random,
-                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                create_goods_guid,
                 |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
@@ -24022,7 +23976,7 @@ impl CGame {
                 goods_factory.create_goods(
                     result_index,
                     &mut random,
-                    || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                    create_goods_guid,
                     |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                     |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
                 )
@@ -26797,7 +26751,7 @@ impl CGame {
                         goods_index,
                         1,
                         &mut random,
-                        || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                        create_goods_guid,
                         |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                         |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
                     )
@@ -26947,7 +26901,7 @@ impl CGame {
                         goods_index,
                         1,
                         &mut random,
-                        || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                        create_goods_guid,
                         |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                         |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
                     )
@@ -27104,7 +27058,7 @@ impl CGame {
                         goods_index,
                         1,
                         &mut random,
-                        || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                        create_goods_guid,
                         |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                         |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
                     )
@@ -27356,7 +27310,7 @@ impl CGame {
                 recipe.goods_index,
                 result_amount,
                 &mut random,
-                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                create_goods_guid,
                 |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
@@ -29788,10 +29742,10 @@ impl CGame {
         self.proxy_regions.clear();
         tracing::debug!(proxy_regions, "очищены proxy-регионы");
 
-        let function_list = self.function_list_file_data.take().is_some();
-        let variable_list = self.variable_list_file_data.take().is_some();
-        let script_files = self.script_file_data.len();
-        self.script_file_data.clear();
+        let released = self.script_resources.clear();
+        let function_list = released.functions;
+        let variable_list = released.variables;
+        let script_files = released.scripts;
         let active_scripts = self.active_scripts.len();
         self.active_scripts.clear();
         let function_registry = self.script_functions.release();
@@ -29931,7 +29885,9 @@ impl CGame {
     }
 
     pub(crate) fn register_player(&mut self, mut player: CPlayer) -> Option<CPlayer> {
-        player.initialize_variable_list(self.variable_list_file_data.as_deref());
+        if let Err(error) = player.initialize_variable_list(self.script_resources.variables()) {
+            tracing::warn!(player_id = player.player_id(), ?error, "Объявления переменных игрока загружены не полностью");
+        }
         self.players.insert(player.player_id(), player)
     }
 
@@ -34484,7 +34440,7 @@ impl CGame {
             goods_factory.create_goods(
                 goods_index,
                 |upper_bound| random(upper_bound),
-                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                create_goods_guid,
                 |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
@@ -47071,8 +47027,9 @@ fn shape_view(
 // материализован выше с exact `QuitClientByMapID` side effect и постоянным
 // `false` return; покрытый raw удалён.
 
-// `SetFunctionFileData`, `SetVariableFileData` и `SetGeneralVariableFileData`
-// материализованы выше с подтверждённой семантикой владения и повторной публикации.
+// Буферы SetFunctionFileData/SetVariableFileData принадлежат zone/content;
+// исходная повторная публикация сверена по инструкциям за вызовом delete.
+// SetGeneralVariableFileData применяет снимок через отдельный CVariableList.
 
 // IMPLEMENTED: `SetAuctionState` RVA `0x00002390` материализован выше
 // и связан с exact World `0x80403` caller-ом; покрытый raw удалён.

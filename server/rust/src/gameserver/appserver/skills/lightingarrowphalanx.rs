@@ -40,7 +40,7 @@ use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ArrowTargetIdentity {

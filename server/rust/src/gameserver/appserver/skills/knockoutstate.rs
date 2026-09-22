@@ -16,7 +16,7 @@
 //! BoaLock использует тот же Begin, но снимает первый ID 0x73 и добавляет
 //! новый KnockOut в конец; эта отдельная политика остаётся у boalockattack.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, timed_client_state_time,

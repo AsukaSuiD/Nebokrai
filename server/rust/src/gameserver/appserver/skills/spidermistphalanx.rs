@@ -21,7 +21,7 @@ use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const SCOPE_SIDE: usize = 5;
 const SCOPE: [[u8; SCOPE_SIDE]; SCOPE_SIDE] = [

@@ -16,7 +16,7 @@
 //! общий visual сохраняет loop1, сообщения BFE03/BFE04 и порядок callbacks.
 
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -28,7 +28,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const ROAR_STATE_ID: u32 = 0x83;
 pub(crate) const ROAR_STATE_BYTES: usize = 16;

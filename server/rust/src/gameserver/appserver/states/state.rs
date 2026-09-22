@@ -24,7 +24,7 @@
 //! вызывает UpdateProperty; RemoveState добавляет этот callback после удаления.
 //! Неперенесённые контракты сохранены адресно в локальном исследовательском корпусе.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::{AppliedState, CMoveShape, StateData, StateKey};
 use crate::gameserver::appserver::skills;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -32,7 +32,7 @@ use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillLifecycle;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 

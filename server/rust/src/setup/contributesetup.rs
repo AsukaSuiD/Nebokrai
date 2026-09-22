@@ -14,7 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::public::readwrite::read_to;
 
 const PARAMETER_COUNT: usize = 11;
@@ -324,7 +324,7 @@ fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, ContributeSet
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> ContributeSetupDecodeError {
     ContributeSetupDecodeError::UnexpectedEnd {
         offset: block.offset,

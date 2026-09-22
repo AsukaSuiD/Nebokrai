@@ -3,6 +3,9 @@ FROM rust:1.97.1-bookworm AS builder
 WORKDIR /source
 COPY server/rust/Cargo.toml server/rust/Cargo.lock server/rust/rust-toolchain.toml ./
 COPY server/rust/src ./src
+COPY server/rust/shared ./shared
+COPY server/rust/realm ./realm
+COPY server/rust/zone ./zone
 RUN --mount=type=cache,id=nebokrai-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=nebokrai-rust-target,target=/source/target \
     cargo build --locked --release --bins \

@@ -9,7 +9,7 @@
 //! Поле dodge_loss сохраняется в 36-байтовой записи, но формулы его не читают.
 //! Load читает часы после уровня и до remaining; Save не меняет payload.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -21,7 +21,7 @@ use crate::gameserver::appserver::states::state::{
     StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const POISON_FOG_STATE_ID: u32 = 0xc9;
 pub(crate) const POISON_FOG_STATE_BYTES: usize = 36;

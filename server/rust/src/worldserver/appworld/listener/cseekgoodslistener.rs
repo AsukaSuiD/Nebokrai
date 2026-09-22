@@ -10,7 +10,7 @@
 
 use std::ffi::CStr;
 
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsOriginalNameIndex, query_goods_id_by_original_name,
 };

@@ -15,7 +15,7 @@
 use std::collections::TryReserveError;
 use thiserror::Error;
 
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 
 #[derive(Debug, Error)]
 #[error("не удалось зарезервировать Game sequence registry")]

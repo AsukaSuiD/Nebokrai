@@ -28,7 +28,7 @@ use super::cgoodsshadowcontainer::{
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{GAP_BF_GEM, GAP_GEM_TYPE};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const GOODS_LIMIT: u32 = 5;
 

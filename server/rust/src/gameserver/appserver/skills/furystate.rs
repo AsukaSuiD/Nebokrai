@@ -14,7 +14,7 @@
 //! монстр прибавляет полный signed delta к modifier максимальной атаки.
 //! Временный расчётный delta не является сериализуемым полем.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::{AppliedState, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
@@ -24,7 +24,7 @@ use crate::gameserver::appserver::states::state::{
     update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const FURY_STATE_SKILL_ID: u32 = 0x1a3;
 pub(crate) const FURY_STATE_BYTES: usize = 12;

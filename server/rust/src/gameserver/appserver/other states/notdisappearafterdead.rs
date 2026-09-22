@@ -63,7 +63,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) fn undead_state_visual_message(
     target: ShapeIdentity,

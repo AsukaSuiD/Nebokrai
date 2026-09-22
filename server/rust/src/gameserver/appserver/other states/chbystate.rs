@@ -62,7 +62,7 @@
 //! и не читает часы; расчёт заимствует payload без копии накопленного m_vskill.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -72,7 +72,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const CHANGE_BODY_STATE_ID: u32 = 0x37;
 pub(crate) const CHANGE_BODY_SKILL_TYPE: u32 = 55;

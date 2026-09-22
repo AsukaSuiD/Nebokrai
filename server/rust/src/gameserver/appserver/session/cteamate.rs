@@ -14,7 +14,7 @@
 //! и reconnect-сигнал для повторной публикации team snapshot; остальные
 //! недостигнутые ветви сохранены только в локальном исследовательском корпусе.
 
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 
 const PLAYER_LOSE_TIMEOUT_MS: u32 = 300_000;
 

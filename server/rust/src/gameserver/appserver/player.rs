@@ -492,7 +492,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_WEAPON_CATEGORY, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
-use super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::listener::cgoodsparticularpropertylistener::GoodsParticularPropertyListener;
 use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts,
@@ -513,11 +513,11 @@ use super::states::automaticrestore::AutomaticRestoreMutation;
 use super::teamstate::CTeamState;
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use crate::setup::hitlevelsetup::HitLevelEntry;
-use crate::setup::questsystem::CQuestSystem;
+use nebokrai_shared::resources::CQuestSystem;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bitflags::bitflags;
@@ -9185,10 +9185,14 @@ impl CPlayer {
         &self.variable_list
     }
 
-    pub(crate) fn initialize_variable_list(&mut self, definitions: Option<&[u8]>) {
+    pub(crate) fn initialize_variable_list(
+        &mut self,
+        definitions: Option<&[u8]>,
+    ) -> Result<(), GameVariableSnapshotError> {
         if self.variable_list.variables().is_empty() {
-            self.variable_list = CVariableList::from_definitions(definitions);
+            self.variable_list.load_definitions(definitions)?;
         }
+        Ok(())
     }
 
     pub(crate) fn set_string_variable(
@@ -14188,7 +14192,7 @@ fn player_save_reader<'source>(
 
 fn player_save_read_error(
     field: &'static str,
-    block: super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> PlayerGameSaveCodecError {
     PlayerGameSaveCodecError::UnexpectedEnd {
         field,

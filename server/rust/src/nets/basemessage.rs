@@ -113,7 +113,7 @@ use std::ffi::CStr;
 use zerocopy::byteorder::little_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const HEADER_LEN: usize = 16;
 const RLE_MARKER_BASE: u8 = 0xF7;

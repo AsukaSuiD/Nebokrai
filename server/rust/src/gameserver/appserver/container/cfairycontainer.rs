@@ -32,12 +32,12 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_HEADGEAR, GAP_BF_BATTLE_FAIRY, GAP_PARTICULAR_ATTRIBUTE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
 const FAIRY_SPECIAL_POSITION: u32 = 13;

@@ -1,6 +1,6 @@
 # Запуск и жизненный цикл процесса
 
-Один Rust-пакет собирает шесть программ: Auth, Login, World, Game, Billing и Misc. Их входы объявлены в [Cargo.toml](../../server/rust/Cargo.toml).
+Существующий пакет `nebokrai-server` собирает шесть программ: Auth, Login, World, Game, Billing и Misc. Он использует выделенную библиотеку `nebokrai-shared`; обе части входят в workspace [Cargo.toml](../../server/rust/Cargo.toml). Выделение Shared не меняет число процессов и их жизненный цикл.
 
 ```mermaid
 flowchart LR

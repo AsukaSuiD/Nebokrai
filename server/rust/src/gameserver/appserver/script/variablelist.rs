@@ -1,4 +1,5 @@
-//! Хранилище общих переменных GameServer.
+//! Персональные переменные и копия общих переменных GameServer.
+//! Объявления разбирает Shared scripting/variablelist.rs; состояние и wire остаются здесь.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/script/variablelist.cpp`. Startup сначала
@@ -13,7 +14,8 @@
 //! Повреждённый wire возвращает типизированную ошибку вместо чтения за границей;
 //! остальные операции над выражениями сохранены только в локальном исследовательском корпусе.
 
-use super::super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
+use nebokrai_shared::scripting::{VariableDefault, VariableListError, VariableListRecords};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +57,10 @@ pub(crate) enum GameVariableMutationOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GameVariableSnapshotError {
+    #[error("отказ объявлений VariableList: {0:?}")]
+    Definitions(VariableListError),
+    #[error("не удалось выделить массив из {length} элементов для объявления в {offset}")]
+    DefinitionAllocation { offset: usize, length: usize },
     #[error("variable snapshot обрывается в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
@@ -72,12 +78,6 @@ pub(crate) enum GameVariableSnapshotError {
 }
 
 impl CVariableList {
-    pub(crate) fn from_definitions(definitions: Option<&[u8]>) -> Self {
-        let mut variables = Self::default();
-        variables.load_definitions(definitions);
-        variables
-    }
-
     pub(crate) fn variables(&self) -> &[GameVariable] {
         &self.variables
     }
@@ -213,7 +213,7 @@ impl CVariableList {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<(), GameVariableSnapshotError> {
-        self.load_definitions(definitions);
+        self.load_definitions(definitions)?;
         let declared_variables = self.variables.len();
         let start = *cursor;
         let count = read_i32(source, cursor)?;
@@ -294,23 +294,34 @@ impl CVariableList {
         true
     }
 
-    fn load_definitions(&mut self, definitions: Option<&[u8]>) {
+    pub(crate) fn load_definitions(
+        &mut self,
+        definitions: Option<&[u8]>,
+    ) -> Result<(), GameVariableSnapshotError> {
         self.variables.clear();
         let Some(definitions) = definitions else {
-            return;
+            return Ok(());
         };
-        for (name, value) in section_records(definitions, b"VariableList") {
-            let (name, array_length) = split_array_name(name);
-            let value = trim_ascii(value);
-            let variable = if let Some(length) = array_length {
-                GameVariableValue::IntegerArray(vec![legacy_atoi(value); length])
-            } else if name.first() == Some(&b'#') || value.first() == Some(&b'\"') {
-                GameVariableValue::String(unquote(value))
-            } else {
-                GameVariableValue::Integer(legacy_atoi(value))
+        let records = VariableListRecords::new(definitions)
+            .map_err(GameVariableSnapshotError::Definitions)?;
+        for record in records {
+            let record = record.map_err(GameVariableSnapshotError::Definitions)?;
+            let value = match record.value {
+                VariableDefault::Integer(value) => GameVariableValue::Integer(value),
+                VariableDefault::String(value) => GameVariableValue::String(value.to_vec()),
+                VariableDefault::IntegerArray { length, value } => {
+                    let mut values = Vec::new();
+                    values.try_reserve_exact(length).map_err(|_| {
+                        GameVariableSnapshotError::DefinitionAllocation { offset: record.offset, length }
+                    })?;
+                    values.resize(length, value);
+                    GameVariableValue::IntegerArray(values)
+                }
             };
-            self.insert_or_update(name.to_vec(), variable);
+            // LoadVarList заполняет отдельную запись каждой строки, включая повторы имён.
+            self.variables.push(GameVariable { name: record.name.to_vec(), value });
         }
+        Ok(())
     }
 
     fn insert_or_update(&mut self, name: Vec<u8>, value: GameVariableValue) {
@@ -358,98 +369,6 @@ fn read_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, GameVaria
         })?;
     *cursor = reader.position();
     Ok(value.to_vec())
-}
-
-pub(crate) fn section_records<'a>(source: &'a [u8], section: &[u8]) -> Vec<(&'a [u8], &'a [u8])> {
-    let bracketed = [b"[".as_slice(), section, b"]".as_slice()].concat();
-    let Some(start) = source
-        .split(|byte| *byte == b'\n')
-        .position(|line| {
-            let line = trim_ascii(line.strip_suffix(b"\r").unwrap_or(line));
-            line == section || line == bracketed
-        })
-        .map(|line| line + 1)
-    else {
-        return Vec::new();
-    };
-    source
-        .split(|byte| *byte == b'\n')
-        .skip(start)
-        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
-        .take_while(|line| {
-            !matches!(
-                line.first(),
-                None | Some(b' ') | Some(b'\t') | Some(b'/') | Some(b'\r')
-            ) && !trim_ascii(line).starts_with(b"[")
-        })
-        .filter_map(|line| {
-            let line = trim_ascii(line);
-            let separator = line.iter().position(|byte| *byte == b'=')?;
-            Some((
-                trim_ascii(&line[..separator]),
-                trim_ascii(&line[separator + 1..]),
-            ))
-        })
-        .collect()
-}
-
-fn split_array_name(name: &[u8]) -> (&[u8], Option<usize>) {
-    let Some(open) = name.iter().rposition(|byte| *byte == b'[') else {
-        return (name, None);
-    };
-    let Some(close) = name[open..].iter().position(|byte| *byte == b']') else {
-        return (name, None);
-    };
-    if open + close + 1 != name.len() {
-        return (name, None);
-    }
-    let length = usize::try_from(legacy_atoi(&name[open + 1..open + close]))
-        .ok()
-        .filter(|length| *length > 0);
-    (&name[..open], length)
-}
-
-fn trim_ascii(value: &[u8]) -> &[u8] {
-    let start = value
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(value.len());
-    let end = value
-        .iter()
-        .rposition(|byte| !byte.is_ascii_whitespace())
-        .map_or(start, |index| index + 1);
-    &value[start..end]
-}
-
-fn legacy_atoi(value: &[u8]) -> i32 {
-    let value = trim_ascii(value);
-    let (negative, digits) = match value.first() {
-        Some(b'-') => (true, &value[1..]),
-        Some(b'+') => (false, &value[1..]),
-        _ => (false, value),
-    };
-    let magnitude =
-        digits
-            .iter()
-            .take_while(|byte| byte.is_ascii_digit())
-            .fold(0_i64, |current, byte| {
-                current
-                    .saturating_mul(10)
-                    .saturating_add(i64::from(*byte - b'0'))
-            });
-    let value = if negative { -magnitude } else { magnitude };
-    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
-}
-
-fn unquote(value: &[u8]) -> Vec<u8> {
-    if value.first() == Some(&b'\"') {
-        value
-            .get(1..value.len().saturating_sub(1))
-            .unwrap_or_default()
-            .to_vec()
-    } else {
-        value.to_vec()
-    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

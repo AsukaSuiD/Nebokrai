@@ -19,7 +19,7 @@ use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, end_base_applied_state, resolve_state_move_shape,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 

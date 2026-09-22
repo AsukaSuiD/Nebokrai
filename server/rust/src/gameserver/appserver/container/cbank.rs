@@ -18,7 +18,7 @@ use super::cwallet::{
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[must_use = "locked bank и wallet add имеют разные последующие эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]

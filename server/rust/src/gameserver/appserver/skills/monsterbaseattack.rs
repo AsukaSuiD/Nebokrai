@@ -371,7 +371,7 @@ use crate::gameserver::appserver::states::attackpower::{
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
 

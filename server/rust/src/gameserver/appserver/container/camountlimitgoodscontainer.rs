@@ -22,9 +22,9 @@ use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode, GoodsStackMergeOutcome};
 use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use indexmap::IndexMap;
 use thiserror::Error;
 

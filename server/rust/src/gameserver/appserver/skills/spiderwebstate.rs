@@ -13,7 +13,7 @@
 //! перегрузок Begin (0x005EA7D0/0x005EA8B0) сохранён отдельно от объектного пути.
 
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;

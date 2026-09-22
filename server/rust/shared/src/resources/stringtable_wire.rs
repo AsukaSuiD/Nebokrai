@@ -1,48 +1,36 @@
-//! Byte-array adapter исходного `MyStringTable`.
-//!
-//! WorldServer `toByteArray` и GameServer `fromByteArray` RVA `0x0002A910`
-//! подтверждают общий wire: signed 32-bit count, затем каждая ordered-map пара
-//! как две NUL-terminated byte-строки. Точные пары:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb` и
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходный owner
-//! `public/mystringtable.cpp` с объявлением в `public/stringtable.h`.
-//!
-//! Encoder дописывает в destination и не очищает его. Decoder не очищает
-//! таблицу, принимает non-positive count как пустой prefix и публикует пары по
-//! мере чтения; duplicate ID заменяет прежнее значение. Безграничное чтение
-//! C-строк из EXE заменено проверкой конца slice с сохранением уже применённого
-//! prefix. `BTreeMap`-order предоставляет базовый `StringTable`, а `Vec`
-//! заменяет только MSVC vector/string plumbing.
+//! Передача таблицы по public/mystringtable.cpp и public/stringtable.h.
+//! World toByteArray / Game fromByteArray (RVA 0x0002A910); очистка и журнал — у роли.
+//! Формат и ограничения: docs/architecture/resources-and-configuration.md.
 
 use std::error::Error;
 use std::fmt;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use crate::protocol::LegacyReader;
 
 use super::stringtable::StringTable;
 
 #[derive(Default)]
-pub(crate) struct MyStringTable {
+pub struct MyStringTable {
     table: StringTable,
 }
 
 impl MyStringTable {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             table: StringTable::new(),
         }
     }
 
-    pub(crate) const fn table(&self) -> &StringTable {
+    pub const fn table(&self) -> &StringTable {
         &self.table
     }
 
-    pub(crate) const fn table_mut(&mut self) -> &mut StringTable {
+    pub const fn table_mut(&mut self) -> &mut StringTable {
         &mut self.table
     }
 
-    /// Дописывает оригинал World string-table wire в существующий buffer.
-    pub(crate) fn to_byte_array(&self, destination: &mut Vec<u8>) -> Result<(), usize> {
+    /// Дописывает представление World в существующий буфер.
+    pub fn to_byte_array(&self, destination: &mut Vec<u8>) -> Result<(), usize> {
         let count =
             i32::try_from(self.table.entries().len()).map_err(|_| self.table.entries().len())?;
         destination.extend_from_slice(&count.to_le_bytes());
@@ -53,8 +41,8 @@ impl MyStringTable {
         Ok(())
     }
 
-    /// Декодирует Game string-table payload и возвращает exact consumed length.
-    pub(crate) fn from_byte_array(
+    /// Применяет пары последовательно, без очистки и отката при позднем отказе.
+    pub fn from_byte_array(
         &mut self,
         source: &[u8],
     ) -> Result<MyStringTableDecodeOutcome, MyStringTableDecodeError> {
@@ -81,33 +69,33 @@ impl MyStringTable {
         }
 
         let unique_entries = self.table.entries().len();
-        tracing::trace!(
+        Ok(MyStringTableDecodeOutcome {
+            empty: unique_entries == 0,
+            consumed: cursor,
             declared_entries,
             decoded_entries,
             replaced_entries,
             unique_entries,
-            consumed = cursor,
-            "таблица строк декодирована"
-        );
-        Ok(MyStringTableDecodeOutcome {
-            empty: unique_entries == 0,
-            consumed: cursor,
         })
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MyStringTableDecodeOutcome {
-    pub(crate) empty: bool,
-    pub(crate) consumed: usize,
+pub struct MyStringTableDecodeOutcome {
+    pub empty: bool,
+    pub consumed: usize,
+    pub declared_entries: i32,
+    pub decoded_entries: usize,
+    pub replaced_entries: usize,
+    pub unique_entries: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MyStringTableDecodeError {
-    pub(crate) field: &'static str,
-    pub(crate) entry_index: Option<i32>,
-    pub(crate) offset: usize,
-    pub(crate) available: usize,
+pub struct MyStringTableDecodeError {
+    pub field: &'static str,
+    pub entry_index: Option<i32>,
+    pub offset: usize,
+    pub available: usize,
 }
 
 impl fmt::Display for MyStringTableDecodeError {

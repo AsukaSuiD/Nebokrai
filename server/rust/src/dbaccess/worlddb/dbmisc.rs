@@ -32,7 +32,7 @@ use crate::public::auctionnode::{
     GoodsNodeSerializeError, GoodsState,
 };
 use crate::public::dakongxiangqian::CDaKongXiangQian;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::goods::cgoods::{
     CGoods, GoodsCodecError, GoodsDbSnapshotBlock, GoodsLoadedAddonBlock,
 };

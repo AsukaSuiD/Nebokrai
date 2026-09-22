@@ -29,8 +29,8 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_AUCTION_SCALE, GAP_PARTICULAR_ATTRIBUTE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
-use crate::public::guid::CGuid;
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
+use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
 const EXPANSION_BASE_CELL: usize = 48;

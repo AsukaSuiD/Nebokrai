@@ -40,7 +40,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CiQingMakeNode {

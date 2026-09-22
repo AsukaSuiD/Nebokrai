@@ -11,7 +11,7 @@
 use std::error::Error;
 use std::fmt;
 
-use super::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const LEGACY_STRING_CAPACITY: usize = 0x100;
 const AUCTION_INFO_SIZE: usize = 0x22c;

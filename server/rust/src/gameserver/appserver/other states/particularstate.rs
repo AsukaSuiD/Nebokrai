@@ -20,7 +20,7 @@
 //! Drop освобождает ресурс без End/пакетов; отказ native allocator не эмулируется.
 //! Координатный/typed-target Begin0x004F9540/0x004F9610 остаются только в локальном исследовательском корпусе.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -31,7 +31,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const PARTICULAR_STATE_ID: u32 = 0x186a5;
 pub(crate) const PARTICULAR_STATE_BYTES: usize = 8;

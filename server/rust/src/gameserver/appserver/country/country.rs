@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::nets::netserver::message::CMessage;
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CCountry {
@@ -291,7 +291,7 @@ fn country_reader<'source>(
 
 fn country_error(
     field: &'static str,
-    block: super::super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> CountryDecodeError {
     CountryDecodeError {
         field,

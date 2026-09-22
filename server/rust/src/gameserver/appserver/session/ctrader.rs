@@ -23,7 +23,7 @@ use crate::gameserver::appserver::container::cvolumelimitgoodsshadowcontainer::C
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const SESSION_OWNER_TYPE: i32 = 10;
 const TRADE_GOODS_CELLS: u32 = 32;

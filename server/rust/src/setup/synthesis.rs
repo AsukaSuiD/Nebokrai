@@ -22,7 +22,7 @@ use std::fmt;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SynthesisFormula {
@@ -800,7 +800,7 @@ fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, SynthesisDeco
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> SynthesisDecodeError {
     SynthesisDecodeError::UnexpectedEnd {
         offset: block.offset,

@@ -25,7 +25,7 @@ use crate::public::aucitionroom::{
 };
 use crate::public::auctionnode::{CGoodsNode, GoodsNodeSerializeError, GoodsNodeUnserializeError};
 use crate::public::auctionroom::PlayerOptNode;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const ADD_AUCTION_ITEM: i32 = 0x0014_ED01;
 const QUEUE_AUCTION_OPERATION: i32 = 0x0014_ED04;

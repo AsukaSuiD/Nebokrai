@@ -23,7 +23,7 @@ use std::path::Path;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CBattleFairyExpConfig {
     exp_lists: BTreeMap<u32, Vec<u32>>,

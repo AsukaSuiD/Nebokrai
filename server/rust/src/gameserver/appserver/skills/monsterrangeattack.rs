@@ -57,7 +57,7 @@ use crate::gameserver::appserver::ai::monsterai::MonsterSkillCallOutcome;
 use crate::gameserver::appserver::monster::{MonsterBaseAttackCast, MonsterBaseAttackDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::skills::kernel::SkillTermination;

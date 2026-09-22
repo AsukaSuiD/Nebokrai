@@ -32,7 +32,7 @@
 //! Точный x87 fmul читает float 0x3A83126F, затем fstp округляет аргумент
 //! конструктора до float; его биты становятся persisted_volume без clock.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;

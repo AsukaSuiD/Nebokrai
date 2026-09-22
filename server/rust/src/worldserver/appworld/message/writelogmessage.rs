@@ -21,7 +21,7 @@ use crate::dbaccess::worlddb::largess::LargessWriteLog;
 use crate::nets::networld::message::CMessage;
 use crate::public::auctionlog::{AuctionLogNode, AuctionLogSystemTime, CAuctionLog};
 use crate::public::date::TagTime;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::public::tools::put_string_to_file;
 use crate::worldserver::appworld::incrementlog::incrementlog::CIncrementLog;
 use crate::worldserver::worldserver::game::CGame;

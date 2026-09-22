@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TaoZhuangAddItem {

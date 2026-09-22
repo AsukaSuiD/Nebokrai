@@ -106,7 +106,6 @@ pub(crate) mod appserver {
     pub(crate) mod goodswarmember;
     pub(crate) mod gameeffectjournal;
     pub(crate) mod jjcsystem;
-    pub(crate) mod legacycodec;
     pub(crate) mod masterinfo;
     pub(crate) mod goods {
         pub(crate) mod cbattlefairyproperty;
@@ -114,6 +113,7 @@ pub(crate) mod appserver {
         pub(crate) mod cgoodsbaseproperties;
         pub(crate) mod cgoodsfactory;
         pub(crate) mod fairyproperties;
+        pub(crate) mod identity;
     }
     pub(crate) mod skills {
         pub(crate) mod agility;

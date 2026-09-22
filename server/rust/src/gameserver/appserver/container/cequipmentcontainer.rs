@@ -48,9 +48,9 @@ use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
 };
 use crate::gameserver::appserver::gameeffectjournal::GameEffectJournal;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
 pub(crate) const EQUIPMENT_COLUMN_LIMIT: u32 = 17;

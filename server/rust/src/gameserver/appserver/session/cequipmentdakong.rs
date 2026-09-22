@@ -130,7 +130,7 @@ impl CEquipmentDaKong {
         &mut self.upgrade_container
     }
 
-    pub(crate) const fn last_equipment_id(&self) -> crate::public::guid::CGuid {
+    pub(crate) const fn last_equipment_id(&self) -> nebokrai_shared::values::CGuid {
         self.upgrade_container.last_goods()
     }
 }
@@ -321,11 +321,7 @@ pub(crate) fn apply_embedded_gem_properties<Random>(
         let deluxe_condition_met = socket_color != 7
             || gem.color != 8
             || factory
-                .create_goods_core(
-                    gem_index,
-                    |maximum| random(maximum),
-                    || crate::public::guid::CGuid::GUID_INVALID,
-                )
+                .create_goods_template(gem_index, |maximum| random(maximum))
                 .is_some_and(|created| {
                     equipment_da_kong_condition(
                         EquipmentDaKongGemSnapshot::capture(&created, factory),

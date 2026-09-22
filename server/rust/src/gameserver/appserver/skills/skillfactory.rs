@@ -74,7 +74,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use super::skillbaseproperties::{CSkillBaseProperties, UNKNOWN_SKILL_TYPE};
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 pub(crate) const UNKNOWN_SKILL_ID: u32 = 0x7fff_ffff;
 const MAX_SKILL_NAME_LENGTH: usize = 255;
@@ -745,7 +745,7 @@ fn skill_reader<'source>(
 
 fn skill_read_error(
     field: &'static str,
-    block: super::super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> SkillFactoryDecodeError {
     SkillFactoryDecodeError::UnexpectedEnd {
         field,

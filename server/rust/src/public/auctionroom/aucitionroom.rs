@@ -21,7 +21,7 @@ use crate::nets::netmisc::message::{CMessage, MessageSender, SendMessageError};
 
 use super::auctionnode::{CGoodsNode, GoodsNodeSerializeError, GoodsState};
 use super::auctionroom::PlayerOptNode;
-use super::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 /// Неопределённая граница старого неинициализированного `m_btGoodsType`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

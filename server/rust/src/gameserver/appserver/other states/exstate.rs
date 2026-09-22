@@ -47,7 +47,7 @@
 //! 255 байт, NULL goods-name — пустой строкой, неверный non-player cast — нулём.
 //! Это безопасные границы для native UB, а не native-контракт этих случаев.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 
 pub(crate) const EX_STATE_ID: u32 = 0x32;

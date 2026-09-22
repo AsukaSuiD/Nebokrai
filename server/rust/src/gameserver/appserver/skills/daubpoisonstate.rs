@@ -18,7 +18,7 @@
 //! только игроку. После часов отдельно сохраняются стороны U/S; свежий S
 //! обслуживает visual. Player-only проверка переноса яда принадлежит ударам.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -29,7 +29,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const DAUB_POISON_STATE_ID: u32 = 0xdf;
 pub(crate) const DAUB_POISON_STATE_BYTES: usize = 8;

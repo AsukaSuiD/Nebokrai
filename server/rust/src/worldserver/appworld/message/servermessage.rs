@@ -71,7 +71,7 @@ use parking_lot::Mutex;
 
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::PrisonConfSerializeError;
-use crate::setup::questsystem::QuestSystemSerializationBlock;
+use nebokrai_shared::resources::QuestSystemSerializationBlock;
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};

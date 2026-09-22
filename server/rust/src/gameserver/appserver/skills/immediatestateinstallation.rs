@@ -32,7 +32,7 @@ use crate::gameserver::appserver::states::state::{
     end_and_destroy_state_at, resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 enum ImmediateStatePayload {
     TaiJi(TaiJiState), Origin(OriginState), FullMiss(EnlargeFullMissState),

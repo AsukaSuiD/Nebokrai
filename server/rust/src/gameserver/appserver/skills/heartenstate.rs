@@ -11,7 +11,7 @@
 //! Payload и DB-span принадлежат одной записи общей арены.
 
 use super::hearten::HEARTEN_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -21,7 +21,7 @@ use crate::gameserver::appserver::states::state::{
     update_player_state_properties, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const HEARTEN_STATE_BYTES: usize = 12;
 

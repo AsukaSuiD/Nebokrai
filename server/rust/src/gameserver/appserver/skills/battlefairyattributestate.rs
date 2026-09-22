@@ -17,7 +17,7 @@
 //! Begin(NULL, holder) после загрузки отказывает до базы: сохраняет timestamp,
 //! ended и visual. Пустой User не заменяется holder; общий Clear удаляет остаток.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{

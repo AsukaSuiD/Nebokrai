@@ -71,7 +71,7 @@ use super::super::serverregion::{
 };
 use super::super::serverwarregion::{WarRegionClearContext, WarRegionContext};
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameWarRegionHandle, LegacyFormatArgument,
     PlayerRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
@@ -1997,7 +1997,7 @@ impl GameOrganizingWarContext<'_> {
                 region.war.base.stage_delete_shape(ShapeIdentity {
                     object_type: 600,
                     id: monster_id,
-                    ex_id: crate::public::guid::CGuid::GUID_INVALID,
+                    ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
                 });
             }
         }

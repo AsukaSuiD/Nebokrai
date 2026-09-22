@@ -65,7 +65,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::build::{BuildBlockUpdate, BuildClientPublication, BuildClientUpdate};
 use super::citygate::{CCityGate, CityGateHurtOwnerUpdate, CityGateInit};
 use super::country::countryparam::CCountryParam;
-use super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use super::monster::CMonster;
 use super::npc::CNpc;
 use super::organizingsystem::attackcitysys::CAttackCitySys;

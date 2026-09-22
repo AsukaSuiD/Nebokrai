@@ -14,7 +14,7 @@ use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::camountlimitgoodscontainer::AmountContainerCodecError;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 
 const HATCH_TIME_COUNT: usize = 5;

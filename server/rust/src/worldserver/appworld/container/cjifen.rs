@@ -15,7 +15,7 @@ use super::super::listener::ccontainerlistener::{CContainerListener, TraversedCo
 use super::ccontainer::{ContainerGuidStorage, find_by_object_guid};
 use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) struct CJiFen {
     wallet_state: CWallet,

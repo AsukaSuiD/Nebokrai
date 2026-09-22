@@ -17,7 +17,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::states::visualeffect::CVisualEffect;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(super) enum AccumulationParticipant { User, Sufferer }
 

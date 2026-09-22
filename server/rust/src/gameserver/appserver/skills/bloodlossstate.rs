@@ -19,7 +19,7 @@
 //! Неустановленные координатные/typed Begin callers остаются только в локальном исследовательском корпусе.
 
 use super::bloodloss::BLOOD_LOSS_SKILL_ID;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;

@@ -46,7 +46,7 @@ use crate::gameserver::appserver::states::summonskill::{
     finish_summon_skill,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;

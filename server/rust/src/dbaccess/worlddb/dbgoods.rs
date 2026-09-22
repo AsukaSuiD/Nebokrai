@@ -22,7 +22,7 @@ use crate::dbaccess::worlddb::goodslistener::{
 use crate::dbaccess::worlddb::rssetup::{
     WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
 };
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::goods::cgoods::GoodsLoadedAddonBlock;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, create_goods_no_probability,

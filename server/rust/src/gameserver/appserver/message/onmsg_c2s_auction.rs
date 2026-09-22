@@ -153,7 +153,7 @@ where
     }
     if selector == CLIENT_AUCTION_CUT_MESSAGE {
         let goods_id = message.base_mut().get_guid().unwrap_or_default();
-        let cut_log_delivery = (goods_id != crate::public::guid::CGuid::GUID_INVALID).then(|| {
+        let cut_log_delivery = (goods_id != nebokrai_shared::values::CGuid::GUID_INVALID).then(|| {
             let mut audit = CMessage::new(WORLD_AUCTION_CUT_LOG_MESSAGE);
             audit.base_mut().add_long(player_id);
             audit.base_mut().add_guid(goods_id);
@@ -185,7 +185,7 @@ where
             .find_player_mut(player_id)
             .expect("auction buy player проверен перед throttle")
             .begin_auction_buy(|| tick_ms(runtime));
-        let mut goods_id = crate::public::guid::CGuid::GUID_INVALID;
+        let mut goods_id = nebokrai_shared::values::CGuid::GUID_INVALID;
         let world_delivery = if matches!(gate, AuctionBuyGate::Ready { .. }) {
             goods_id = message.base_mut().get_guid().unwrap_or_default();
             if game.auction_room().contains_goods(goods_id) {

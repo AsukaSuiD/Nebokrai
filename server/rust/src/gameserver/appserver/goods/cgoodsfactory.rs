@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use super::cgoodsbaseproperties::{
     CGoodsBaseProperties, GAP_ARMOR_CORRECTION, GAP_ARMOR_UPGRADE, GAP_ATTACK_SPEED_CORRECTION,
     GAP_ATTACK_SPEED_UPGRADE, GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW, GAP_BF_AGILITY_ADDON,
@@ -64,7 +64,7 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
     equipment_da_kong_condition,
 };
 use crate::public::dakongxiangqian::CDaKongXiangQian;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GoodsFactoryDecodeError {
@@ -371,11 +371,7 @@ impl CGoodsFactory {
             .cloned()
             .collect();
         let base_index = goods.base_properties_index();
-        let Some(recreated) = self.create_goods_core(
-            base_index,
-            |maximum| random(maximum),
-            || CGuid::GUID_INVALID,
-        ) else {
+        let Some(recreated) = self.create_goods_template(base_index, |maximum| random(maximum)) else {
             return;
         };
         goods.addon_properties_mut().clear();
@@ -628,17 +624,32 @@ impl CGoodsFactory {
         }
     }
 
-    /// Достигнутый object/addon prefix `CreateGoods` RVA `0x000682E0`.
-    /// Fairy/BattleFairy loaders остаются отдельной незамкнутой suffix-веткой.
+    /// Создание экземпляра по `CreateGoods` RVA `0x000682E0` до загрузки фей.
+    /// GUID запрашивается после бросков свойств; отказ не выдаёт экземпляр.
     pub(crate) fn create_goods_core<Random, Guid>(
         &self,
         goods_index: u32,
-        mut random: Random,
+        random: Random,
         mut create_guid: Guid,
     ) -> Option<CGoods>
     where
         Random: FnMut(i32) -> i32,
-        Guid: FnMut() -> CGuid,
+        Guid: FnMut() -> Option<CGuid>,
+    {
+        let mut goods = self.create_goods_template(goods_index, random)?;
+        goods.set_ex_id(create_guid().filter(|guid| !guid.is_invalid())?);
+        Some(goods)
+    }
+
+    /// Временные свойства без идентичности для пересчёта и проверки камней.
+    /// Шаблон нельзя публиковать или помещать в инвентарь как новый предмет.
+    pub(crate) fn create_goods_template<Random>(
+        &self,
+        goods_index: u32,
+        mut random: Random,
+    ) -> Option<CGoods>
+    where
+        Random: FnMut(i32) -> i32,
     {
         let properties = self.query_goods_base_properties(goods_index)?;
         let mut goods = CGoods::with_reached_constructor_defaults();
@@ -687,11 +698,10 @@ impl CGoodsFactory {
                 values,
             });
         }
-        goods.set_ex_id(create_guid());
         Some(goods)
     }
 
-    /// Полный exact overload `CreateGoods(goods_index)`: оба loader-а идут
+    /// `CreateGoods(goods_index)`: оба loader-а идут
     /// после GUID и вызываются даже для headgear без профильных addon-ов.
     pub(crate) fn create_goods<Random, Guid, FairyThreshold, BattleFairyThreshold>(
         &self,
@@ -703,7 +713,7 @@ impl CGoodsFactory {
     ) -> Option<CGoods>
     where
         Random: FnMut(i32) -> i32,
-        Guid: FnMut() -> CGuid,
+        Guid: FnMut() -> Option<CGuid>,
         FairyThreshold: FnMut(u32, u32) -> u32,
         BattleFairyThreshold: FnMut(u32, u32) -> u32,
     {
@@ -717,8 +727,9 @@ impl CGoodsFactory {
         Some(goods)
     }
 
-    /// Exact overload `CreateGoods(goods_index, amount, vector)`: stackable
-    /// типы дробятся по limit с `id == 1`, остальные создаются поштучно.
+    /// `CreateGoods(goods_index, amount, vector)`: stackable типы дробятся
+    /// по limit с `id == 1`, остальные создаются поштучно. Отказ GUID отменяет
+    /// подготовленный набор целиком: вызывающий не должен оплатить недостачу.
     pub(crate) fn create_goods_batch<Random, Guid, FairyThreshold, BattleFairyThreshold>(
         &self,
         goods_index: u32,
@@ -730,7 +741,7 @@ impl CGoodsFactory {
     ) -> Vec<CGoods>
     where
         Random: FnMut(i32) -> i32,
-        Guid: FnMut() -> CGuid,
+        Guid: FnMut() -> Option<CGuid>,
         FairyThreshold: FnMut(u32, u32) -> u32,
         BattleFairyThreshold: FnMut(u32, u32) -> u32,
     {
@@ -754,25 +765,24 @@ impl CGoodsFactory {
             1
         };
         while amount != 0 {
-            let created_goods = self.create_goods(
+            let Some(mut goods) = self.create_goods(
                 goods_index,
                 &mut random,
                 &mut create_guid,
                 &mut fairy_threshold_for_level,
                 &mut battle_fairy_threshold_for_level,
-            );
+            ) else {
+                // Набор ещё не передан владельцу инвентаря. Броски игрового
+                // RNG уже выполнены и не откатываются при отказе GUID.
+                return Vec::new();
+            };
             if stackable {
-                let Some(mut goods) = created_goods else {
-                    break;
-                };
                 let stack = amount.min(maximum);
                 goods.set_amount(stack);
                 amount = amount.wrapping_sub(stack);
                 created.push(goods);
             } else {
-                if let Some(goods) = created_goods {
-                    created.push(goods);
-                }
+                created.push(goods);
                 amount = amount.wrapping_sub(1);
             }
         }

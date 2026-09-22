@@ -20,7 +20,7 @@ use super::ccontainer::{ContainerListenerHandle, PreviousContainer};
 use super::cgoodscontainer::CGoodsContainer;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const PLAYER_CONTAINER_OWNER_TYPE: i32 = 400;
 const INVALID_GOODS_POSITION: u32 = u32::MAX;

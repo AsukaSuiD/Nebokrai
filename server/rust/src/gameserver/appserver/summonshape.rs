@@ -35,7 +35,7 @@ use crate::gameserver::appserver::skills::maskedelementphalanx::MaskedElementPha
 use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 

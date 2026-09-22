@@ -11,7 +11,7 @@
 //! Вход в регион восстанавливает visual и запреты без нового отсчёта.
 
 use super::blindstate::BlindStatePayload;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 
 pub(crate) const KNIGHT_CUT_STATE_ID: u32 = 0x67;

@@ -30,7 +30,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const DEPOT_BASE_CELLS: u32 = 96;
 const DEPOT_EXTENSION_WIDTH: u32 = 13;

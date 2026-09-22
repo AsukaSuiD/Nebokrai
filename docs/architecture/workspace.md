@@ -2,11 +2,14 @@
 
 Основная разработка идёт в [server/rust/](../../server/rust/). Каталоги разделены по назначению, чтобы код, данные запуска и старые реализации не зависели друг от друга.
 
-Эта страница показывает существующее дерево. Для рефакторинга принята [структура Realm, Zone и Shared](realm-and-zone.md#1-организация-проекта-и-сборки): три пакета, компоненты с именами по обязанности и плоские файлы внутри компонента. Её каталоги пока не созданы; текущие пути ниже нужны для поиска переносимого кода.
+Эта страница показывает существующее дерево. Для рефакторинга принята [структура Realm, Zone и Shared](realm-and-zone.md#1-организация-проекта-и-сборки): три целевых пакета, компоненты с именами по обязанности и плоские файлы внутри компонента. Уже выделены Shared и первые компоненты Realm и Zone. Остальные обязанности пока находятся в старом серверном пакете; его шесть бинарников используют выделенные библиотеки на время переноса.
 
 | Путь | Назначение |
 | --- | --- |
 | [server/rust/](../../server/rust/) | Основной Rust-сервер; пакет и шесть бинарников объявлены в [Cargo.toml](../../server/rust/Cargo.toml). |
+| [server/rust/realm/](../../server/rust/realm/) | Библиотека `nebokrai-realm`: `src/content/` владеет ресурсами сценариев, выбирает индексный или дисковый список и выполняет загрузку. Зависит от Shared и `walkdir`, не импортирует прежний серверный пакет. Собственного бинарного входа пока нет. |
+| [server/rust/zone/](../../server/rust/zone/) | Библиотека `nebokrai-zone`: `src/content/` владеет полученными текстами сценариев и списков функций/переменных и реестром команд. Зависит от Shared, не импортирует прежний серверный пакет; собственного бинарного входа нет. |
+| [server/rust/shared/](../../server/rust/shared/) | Самостоятельная библиотека `nebokrai-shared`: кодек в `src/protocol/`, GUID в `src/values/`, снимок `.pak` и распаковка в `src/resources/`. Использует `bytes`, `getrandom`, `uuid`, `flate2`, `lzo`; не импортирует серверных владельцев. |
 | [server/cpp/](../../server/cpp/) | Отдельная C++-реализация с [CMake](../../server/cpp/CMakeLists.txt) и [vcpkg](../../server/cpp/vcpkg.json). В Rust-пакет и гибридный стенд не входит. |
 | [deploy/hybrid/](../../deploy/hybrid/) | Образы, Compose и подготовка локального стенда. |
 | [deploy/check-rust.ps1](../../deploy/check-rust.ps1) | Проверка типов Rust и отдельный режим сборки бинарников в локальном Docker Desktop с отдельным ограничиваемым кэшем. |
@@ -21,6 +24,18 @@
 ## Внутри Rust
 
 [src/lib.rs](../../server/rust/src/lib.rs) собирает общий граф модулей и экспортирует функции запуска. Большинство модулей остаются внутренними для пакета.
+
+Существующий пакет `nebokrai-server` зависит от `nebokrai-shared`, `nebokrai-realm` и `nebokrai-zone`. В [shared/src/protocol/](../../server/rust/shared/src/protocol/) находятся `reader.rs`, `writer.rs` и `errors.rs`; публичные типы доступны через `nebokrai_shared::protocol`. В [shared/src/values/](../../server/rust/shared/src/values/) находится `guid.rs`; `CGuid` и `NULL_GUID` доступны через `nebokrai_shared::values`. Все прежние потребители переключены на Shared, модули `gameserver/appserver/legacycodec.rs` и `public/guid.rs` удалены. Контракт кодека — в [общих механизмах](shared-mechanisms.md), представление и границы GUID — в [значениях](values-and-compatibility.md#guid).
+
+Первые компоненты ролей — [realm/src/content/](../../server/rust/realm/src/content/) и [zone/src/content/](../../server/rust/zone/src/content/). Realm выбирает источник, загружает и хранит тексты для передачи. Zone устанавливает полученные тексты и владеет реестром функций в `content/functions.rs`. Формат FunctionList разбирает [shared/src/scripting/functionlist.rs](../../server/rust/shared/src/scripting/functionlist.rs): он возвращает объявления или ошибку со смещением, не хранит реестр и не пишет журнал. Интерпретатор пока остаётся в прежнем Game. World/Game содержат переходные адаптеры, без второй копии перенесённых буферов, карты сценариев и реестра функций. Правила — в [сценариях](../gameplay/scripting.md#от-файла-до-ресурса-game).
+
+В `shared/src/scripting/` общий проход `ini.rs` обслуживает FunctionList и [variablelist.rs](../../server/rust/shared/src/scripting/variablelist.rs). Последний возвращает объявления VariableList без выделения массивов и доступа к состоянию персонажа. Старый Game `CVariableList` применяет их к своему списку; его wire-кодек и мутации пока остаются на месте. Поддержанные размеры и явная граница выражений описаны в [объявлениях переменных](../gameplay/scripting.md#объявления-variablelist).
+
+В [shared/src/resources/](../../server/rust/shared/src/resources/) находятся `catalog.rs` (связь индекса с пакетами и отчёт загрузки), `source.rs` (выбор и открытие источника), `filesinfo.rs` (индекс `.ril`), `package.rs` (снимок пакета и распаковка), `rfile.rs` (курсор/передача буфера) и `path.rs` (нормализация и разрешение регистра на диске). Прежние `public/filesinfo.rs`, `public/package.rs` и `public/rfile.rs` удалены. Серверный `public/clientresource.rs` хранит установленный корень и каталог, управляет их заменой и пишет диагностику; порядок reload и игровые таблицы остаются у серверных владельцев. Границы и причины — в [ресурсах](resources-and-configuration.md#каталог-и-его-установка).
+
+В том же компоненте `resources/` находятся `stringtable.rs` (таблица байтовых текстов и текстовый parser) и `stringtable_wire.rs` (передача World → Game). Обе стороны используют Shared напрямую; `public/stringtable.rs` и `public/mystringtable.rs` удалены. Момент очистки, применение, рассылка и журналирование принадлежат серверным владельцам; [правила и частичные эффекты](resources-and-configuration.md#таблица-текстов) описаны отдельно.
+
+Определения заданий также выделены в Shared: `resources/quest.rs` хранит каталог, `quest_text.rs` читает два текстовых ресурса, `quest_wire.rs` обслуживает передачу World → Game. Прежний `setup/questsystem.rs` удалён; World, Game и клиентский снимок персонажа используют общий тип. Владение прогрессом и игровые операции остаются у серверов; [разделение и отказы](../gameplay/quests.md#каталог-и-состояние-персонажа) описаны на странице заданий.
 
 | Каталог в `server/rust/src/` | Где проходит граница |
 | --- | --- |

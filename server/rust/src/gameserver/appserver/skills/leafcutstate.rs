@@ -7,7 +7,7 @@
 //! Параметры урона фиксируются при наложении, критический шанс берётся у
 //! фактического Sufferer при ударе. Состояние не извлекается ради вызова AI.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::{AppliedState, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;

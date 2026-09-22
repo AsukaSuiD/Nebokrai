@@ -26,7 +26,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -297,7 +297,7 @@ fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PrisonConfDec
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> PrisonConfDecodeError {
     PrisonConfDecodeError {
         offset: block.offset,

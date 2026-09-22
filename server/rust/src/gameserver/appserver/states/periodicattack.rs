@@ -11,7 +11,7 @@
 //! timestamp до конца записи. Save не изменяет payload,
 //! а техническая запись при установке состояния не читает часы.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::{AppliedState, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -24,7 +24,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const MONSTER_TYPE: i32 = 600;

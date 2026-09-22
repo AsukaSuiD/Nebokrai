@@ -28,7 +28,7 @@ use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_STACKING_LIMIT;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use thiserror::Error;
 
 pub(crate) trait CurrencyKind {

@@ -16,7 +16,7 @@
 //! GetTeamatesAmount (0x00507590) обслуживает CSessionFactory: каждый ID
 //! списка учитывается при успешном QueryPlugByID, без ended/owner-фильтра.
 
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::session::cplug::CPlug;
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;

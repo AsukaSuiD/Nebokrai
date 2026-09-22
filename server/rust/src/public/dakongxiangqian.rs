@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DaKongInfo {
@@ -539,7 +539,7 @@ fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, DaKongDecodeE
 }
 
 fn map_read_block(
-    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> DaKongDecodeError {
     DaKongDecodeError {
         offset: block.offset,

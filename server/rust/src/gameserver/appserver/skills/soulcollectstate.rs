@@ -22,7 +22,7 @@
 use super::accumulatedstate::{
     AccumulatedState, AccumulationParticipant, add_accumulated_state, update_accumulated_visual,
 };
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
     begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at, end_move_shape_state,

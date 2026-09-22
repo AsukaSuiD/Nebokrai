@@ -170,7 +170,7 @@ use super::build::BuildBlockUpdate;
 use super::country::countryparam::CCountryParam;
 use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
 use super::goods::cgoods::CGoods;
-use super::legacycodec::{LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
 use super::moveshape::{
@@ -190,7 +190,7 @@ use super::shape::{
 };
 use super::summonshape::{SUMMON_SHAPE_TYPE, SummonedSkillShape};
 use crate::nets::netserver::message::GameServerAroundRuntime;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::public::netsession::{
     NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
@@ -4781,7 +4781,7 @@ fn server_region_reader<'source>(
 
 fn server_region_error(
     field: &'static str,
-    block: super::legacycodec::LegacyReadBlock,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
 ) -> ServerRegionDecodeInputBlock {
     ServerRegionDecodeInputBlock {
         field,

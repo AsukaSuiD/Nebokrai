@@ -40,7 +40,7 @@ use super::usegoodsenlargeelmdefstate::{self, USE_GOODS_ENLARGE_ELM_DEF_STATE_ID
 use super::usegoodsenlargefullmissstate::{self, USE_GOODS_ENLARGE_FULL_MISS_STATE_ID};
 use super::usegoodsenlargemaxhpstate::{self, USE_GOODS_ENLARGE_MAX_HP_STATE_ID};
 use super::usegoodsenlargemaxmpstate::{self, USE_GOODS_ENLARGE_MAX_MP_STATE_ID};
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
@@ -49,7 +49,7 @@ use crate::gameserver::appserver::states::state::{
     update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const SCRIPT_STATE_TIMED_BYTES: usize = 12;
 pub(crate) const AUTO_PROTECT_STATE_BYTES: usize = 8;

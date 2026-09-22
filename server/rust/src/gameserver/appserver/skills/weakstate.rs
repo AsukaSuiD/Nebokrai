@@ -13,7 +13,7 @@
 //! проверке прямоугольника, а не сохраняет состояние ранним отказом.
 //! Load читает часы после типа, Save — после ID и типа, не меняя live-состояние.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -24,7 +24,7 @@ use crate::gameserver::appserver::states::state::{
     StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const WEAK_STATE_ID: u32 = 0x12e;
 pub(crate) const WEAK_STATE_BYTES: usize = 16;

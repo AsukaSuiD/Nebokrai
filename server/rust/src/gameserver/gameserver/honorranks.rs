@@ -26,7 +26,7 @@
 
 use thiserror::Error;
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 const RANK_TYPE_COUNT: usize = 4;
 const COUNTRY_COUNT: usize = 4;

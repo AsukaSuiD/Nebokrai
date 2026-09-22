@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use super::country::{CCountry, CountryDecodeError};
-use super::super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CCountryHandler {

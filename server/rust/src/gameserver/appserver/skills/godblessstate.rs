@@ -27,7 +27,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::moveshape::StateKey;
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time};
 use crate::gameserver::gameserver::game::CGame;

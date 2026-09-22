@@ -37,7 +37,7 @@ use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::date::{TagTime, TagTimeArithmeticBlock};
 use crate::public::dupliregionsetup::CDupliRegionSetup;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use crate::setup::leitingsetup::{CThingSetup, LeiTingDailyThing, LeiTingLocalTime};
 use crate::setup::playerlist::{

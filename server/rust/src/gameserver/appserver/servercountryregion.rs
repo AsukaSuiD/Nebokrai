@@ -79,7 +79,7 @@ use super::build::{
 };
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
-use super::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::region::{

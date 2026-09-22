@@ -17,7 +17,7 @@ use crate::public::auctionlog::{
     AuctionLogTimeBlock, AuctionNoticeCollection, AuctionNoticeWriteQueue, CAuctionLog,
 };
 use crate::public::auctionnode::{GoodsNodeSerializeError, GoodsNodeUnserializeError, GoodsState};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;

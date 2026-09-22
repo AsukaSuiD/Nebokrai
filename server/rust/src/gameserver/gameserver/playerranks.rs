@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, TryReserveError};
 use thiserror::Error;
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::mynetserver::CMyNetServer;
 

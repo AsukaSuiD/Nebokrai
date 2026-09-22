@@ -14,12 +14,6 @@ pub(crate) mod crc32static;
 
 #[allow(
     dead_code,
-    reason = "GUID подключён к сборке до восстановления сообщений, БД и игровых владельцев"
-)]
-pub(crate) mod guid;
-
-#[allow(
-    dead_code,
     reason = "auction rooms подключены к MiscServer M2M и GameServer World reconciliation"
 )]
 #[path = "auctionroom/aucitionroom.rs"]
@@ -49,8 +43,6 @@ pub(crate) mod auctionroom;
 )]
 pub(crate) mod char_code_filter;
 pub(crate) mod md5;
-pub(crate) mod mystringtable;
-pub(crate) mod stringtable;
 #[allow(
     dead_code,
     reason = "CWordsFilter подключён к CGame до reload и initial-config consumers"
@@ -104,25 +96,6 @@ pub(crate) mod taozhuangsetup;
 )]
 pub(crate) mod timer;
 
-#[allow(
-    dead_code,
-    reason = "CClientResource read-side подключён перед exact LoadEx disk owner-ом"
-)]
 pub(crate) mod clientresource;
-#[allow(
-    dead_code,
-    reason = "FilesInfo подключён перед materialization CClientResource и package-opening"
-)]
-pub(crate) mod filesinfo;
-#[allow(
-    dead_code,
-    reason = "read-side CPackage подключён перед CClientResource и rfOpen package-ветвью"
-)]
-pub(crate) mod package;
 pub(crate) mod readwrite;
-#[allow(
-    dead_code,
-    reason = "CRFile подключён перед восстановлением CClientResource/package-opening"
-)]
-pub(crate) mod rfile;
 pub(crate) mod tools;

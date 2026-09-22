@@ -42,7 +42,7 @@ use crate::gameserver::appserver::country::countrywarsys::{
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
 use crate::gameserver::appserver::goods::cgoodsfactory::GoodsFactoryDecodeError;
-use crate::gameserver::appserver::legacycodec::LegacyReader;
+use nebokrai_shared::protocol::LegacyReader;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
@@ -83,7 +83,7 @@ use crate::public::ciqing::{CiQingDecodeError, CiQingSerializationBlock};
 use crate::public::dakongxiangqian::DaKongDecodeError;
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::public::equipmentcomposelist::EquipmentComposeDecodeError;
-use crate::public::mystringtable::MyStringTableDecodeError;
+use nebokrai_shared::resources::MyStringTableDecodeError;
 use crate::public::taozhuangsetup::{TaoZhuangDecodeError, TaoZhuangSerializationBlock};
 use crate::public::tools::add_game_log_text;
 use crate::public::wordsfilter::WordsFilterDecodeError;
@@ -106,7 +106,7 @@ use crate::setup::newskillmonsterlist::NewSkillMonsterDecodeError;
 use crate::setup::playerlist::PlayerListDecodeError;
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
 use crate::setup::prisonconf::PrisonConfDecodeError;
-use crate::setup::questsystem::QuestSystemDecodeError;
+use nebokrai_shared::resources::QuestSystemDecodeError;
 use crate::setup::regionsetup::RegionSetupDecodeError;
 use crate::setup::synthesis::SynthesisDecodeError;
 use crate::setup::tradelist::TradeListDecodeError;
@@ -578,6 +578,7 @@ pub(crate) enum GameHonorStartupError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameScriptStartupError {
     Resource(GameScriptResourceDecodeError),
+    FunctionList(nebokrai_shared::scripting::FunctionListError),
     GeneralVariables(GameVariableSnapshotError),
 }
 
@@ -1577,7 +1578,10 @@ fn decode_script_startup(
                 Err(error) => return Some(Err(GameScriptStartupError::Resource(error))),
             };
             if selector == FUNCTION_LIST_SELECTOR {
-                let publication = game.set_function_file_data(data);
+                let publication = match game.set_function_file_data(data) {
+                    Ok(publication) => publication,
+                    Err(error) => return Some(Err(GameScriptStartupError::FunctionList(error))),
+                };
                 add_log_text(b"FunctionList...OK!");
                 tracing::trace!(declared_length, ?publication, "список функций загружен");
                 Some(Ok(()))
@@ -2119,7 +2123,11 @@ fn decode_player_rule_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_QUEST...OK!");
             }
-            Some(report.map(|()| tracing::trace!("система заданий загружена")))
+            Some(report.map(|outcome| {
+                tracing::trace!(declared = outcome.declared, decoded = outcome.decoded,
+                    retained = outcome.retained, "система заданий декодирована");
+                tracing::trace!("система заданий загружена");
+            }))
         }
         _ => None,
     }
@@ -2948,7 +2956,7 @@ fn script_resource_reader<'source>(source: &'source [u8], cursor: usize, field: 
     LegacyReader::at(source, cursor).map_err(|block| GameScriptResourceDecodeError::UnexpectedEnd { field, offset: block.offset, required, available: block.available })
 }
 
-fn script_resource_error(field: &'static str, block: crate::gameserver::appserver::legacycodec::LegacyReadBlock) -> GameScriptResourceDecodeError {
+fn script_resource_error(field: &'static str, block: nebokrai_shared::protocol::LegacyReadBlock) -> GameScriptResourceDecodeError {
     GameScriptResourceDecodeError::UnexpectedEnd { field, offset: block.offset, required: block.needed, available: block.available }
 }
 

@@ -39,7 +39,9 @@ use parking_lot::Mutex;
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tiberius::Query;
-use walkdir::WalkDir;
+use nebokrai_realm::content::{
+    ScriptLoadContext, ScriptResources, find_script_files, normalize_script_path,
+};
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
 use crate::dbaccess::worlddb::dbgoods::DbGoodsOwner;
@@ -124,11 +126,11 @@ use crate::setup::incrementshoplist::{
     IncrementShopSerializeError,
 };
 use crate::setup::prisonconf::{PrisonConf, PrisonConfFormatError, PrisonConfSerializeError};
-use crate::setup::questsystem::{
-    CQuestSystem, QuestSystemLoadReport, QuestSystemSerializationBlock,
+use nebokrai_shared::resources::{
+    CQuestSystem, QuestSystemLoadCompletion, QuestSystemLoadReport, QuestSystemSerializationBlock,
 };
 use crate::setup::tradelist::{CTradeList, TradeListFormatError, TradeListSerializeError};
-use crate::public::mystringtable::MyStringTable;
+use nebokrai_shared::resources::MyStringTable;
 use crate::public::netsessionmanager::{CNetSessionManager, NetSessionRunReport};
 use crate::public::wordsfilter::CWordsFilter;
 use crate::public::readwrite::read_to;
@@ -4239,16 +4241,50 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     fn add_log_text(&mut self, payload: &[u8]);
     fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
 
- /// Возвращает script paths в порядке конкретного resource-owner-а.
- ///
- /// Пока package-resource ещё не создан, default является безопасной
- /// host-filesystem заменой Win32 `FindScriptFile`. Связанный resource owner
- /// может переопределить метод, не меняя script-loading контракт `CGame`.
+    /// Собирает дисковые сценарии относительно того же корня, что и read_resource.
     fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
-        find_script_files(pattern, extension)
+        let root = self
+            .default_client_resource()
+            .root_directory()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let report = find_script_files(&root, pattern, extension);
+        for error in &report.errors {
+            tracing::warn!(root = %root.display(), ?error,
+                "Ошибка поиска файлов сценариев");
+        }
+        if !report.errors.is_empty() {
+            tracing::warn!(files = report.files.len(), errors = report.errors.len(),
+                "Список файлов сценариев получен с ошибками");
+        }
+        report.files
     }
     fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
     fn region_object_counts(&mut self) -> (i32, i32);
+}
+
+struct WorldScriptLoadContext<'a, C: ?Sized>(&'a mut C);
+
+impl<C: WorldReloadContext + ?Sized> ScriptLoadContext for WorldScriptLoadContext<'_, C> {
+    fn read_resource(&mut self, path: &[u8]) -> Option<Vec<u8>> {
+        self.0.read_resource(path)
+    }
+
+    fn indexed_files(&mut self, root: &[u8], extension: &[u8]) -> Option<Vec<Vec<u8>>> {
+        self.0
+            .default_client_resource()
+            .find_file_list(root, extension)
+    }
+
+    fn loose_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
+        self.0.script_files(pattern, extension)
+    }
+
+    fn missing_resource(&mut self, path: &[u8]) {
+        let mut message = b"Can't found ".to_vec();
+        message.extend_from_slice(legacy_c_string_prefix(path));
+        message.push(b'!');
+        self.0.notify_reload_operator(b"Message", &message);
+    }
 }
 
 /// Опубликованная неизменяемая проекция setup-владельцев одного runtime turn.
@@ -4273,100 +4309,6 @@ pub(crate) trait WorldMainLoopResourceContext: WorldReloadContext {
     fn main_loop_resource_snapshot(&self) -> WorldMainLoopResourceSnapshot;
 }
 
-/// Рекурсивно собирает host-файлы старого `FindScriptFile`.
-///
-/// `walkdir` заменяет `FindFirstFileA/FindNextFileA/FindClose` и ручную
-/// рекурсию. Symlink-каталоги не обходятся: циклическая ссылка была внутренним
-/// дефектом неограниченной C++-рекурсии, а не Miracle-контрактом. Фильтр
-/// расширения остаётся ASCII case-insensitive, полный возвращаемый путь —
-/// lowercase с `/`, как `_strlwr` плюс последующая нормализация map-key.
-pub(crate) fn find_script_files(pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
-    let pattern = legacy_c_string_prefix(pattern)
-        .iter()
-        .map(|byte| if *byte == b'\\' { b'/' } else { *byte })
-        .collect::<Vec<_>>();
-    let root = script_search_root(&pattern);
-    let requested_extension = legacy_c_string_prefix(extension)
-        .strip_prefix(b".")
-        .unwrap_or_else(|| legacy_c_string_prefix(extension));
-
-    let mut files = WalkDir::new(legacy_path_from_bytes(root))
-        .min_depth(1)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(|entry| {
-            let extension = entry.path().extension()?;
-            let extension = legacy_path_component_bytes(extension);
-            if !extension.eq_ignore_ascii_case(requested_extension) {
-                return None;
-            }
-            let mut path = legacy_path_bytes(entry.path());
-            for byte in &mut path {
-                if *byte == b'\\' {
-                    *byte = b'/';
-                } else {
-                    byte.make_ascii_lowercase();
-                }
-            }
-            Some(path)
-        })
-        .collect::<Vec<_>>();
- // Win32 не обещал directory order. Стабильная сортировка устраняет только
- // внутреннюю зависимость от host FS; wire всё равно публикуется из BTreeMap.
-    files.sort_unstable();
-    files
-}
-
-fn script_search_root(pattern: &[u8]) -> &[u8] {
-    let wildcard = pattern.iter().position(|byte| matches!(*byte, b'*' | b'?'));
-    let parent_end = wildcard
-        .and_then(|position| pattern[..position].iter().rposition(|byte| *byte == b'/'))
-        .or_else(|| pattern.iter().rposition(|byte| *byte == b'/'));
-    match parent_end {
-        Some(0) => b"/",
-        Some(end) => &pattern[..end],
-        None => b".",
-    }
-}
-
-#[cfg(unix)]
-fn legacy_path_from_bytes(bytes: &[u8]) -> PathBuf {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-
-    PathBuf::from(OsString::from_vec(bytes.to_vec()))
-}
-
-#[cfg(not(unix))]
-fn legacy_path_from_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
-}
-
-#[cfg(unix)]
-fn legacy_path_component_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
-    use std::os::unix::ffi::OsStrExt;
-
-    value.as_bytes().to_vec()
-}
-
-#[cfg(not(unix))]
-fn legacy_path_component_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
-    value.to_string_lossy().as_bytes().to_vec()
-}
-
-#[cfg(unix)]
-fn legacy_path_bytes(path: &Path) -> Vec<u8> {
-    use std::os::unix::ffi::OsStrExt;
-
-    path.as_os_str().as_bytes().to_vec()
-}
-
-#[cfg(not(unix))]
-fn legacy_path_bytes(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().as_bytes().to_vec()
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldReloadProfile {
@@ -6720,9 +6662,7 @@ pub(crate) struct CGame {
     net_client: Option<CMyNetClient>,
     net_server: Option<CMyNetServer>,
     regions: BTreeMap<i32, WorldRegionAssignment>,
-    function_list_file_data: Option<Vec<u8>>,
-    variable_list_file_data: Option<Vec<u8>>,
-    script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
+    script_resources: ScriptResources,
     game_servers: BTreeMap<u32, WorldGameServerEntry>,
     system_broadcasts: VecDeque<WorldSystemBroadcast>,
     goods_links: VecDeque<WorldGoodsLink>,
@@ -6855,9 +6795,7 @@ impl CGame {
             net_client: None,
             net_server: None,
             regions: BTreeMap::new(),
-            function_list_file_data: None,
-            variable_list_file_data: None,
-            script_file_data: BTreeMap::new(),
+            script_resources: ScriptResources::default(),
             game_servers: BTreeMap::new(),
             system_broadcasts: VecDeque::new(),
             goods_links: std::iter::repeat_with(WorldGoodsLink::placeholder)
@@ -6945,7 +6883,21 @@ impl CGame {
                 .reject_empty_resource_name();
             false
         } else if let Some(source) = source {
-            self.string_table.table_mut().load_bytes(source)
+            match self.string_table.table_mut().load_bytes(source) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %String::from_utf8_lossy(package),
+                        offset = error.offset,
+                        record_offset = error.record_offset,
+                        kind = ?error.kind,
+                        id = %String::from_utf8_lossy(&error.id),
+                        retained_entries = self.string_table.table().entries().len(),
+                        "Ошибка разбора таблицы текстов; ранее применённые записи сохранены"
+                    );
+                    false
+                }
+            }
         } else {
             self.string_table
                 .table_mut()
@@ -7018,15 +6970,36 @@ impl CGame {
             quest_ex_source.as_deref(),
             &mut |string_id| string_table.get_string_by_id(string_id).map(ToOwned::to_owned),
         );
+        for (path, error) in [
+            (QUEST_PATH, report.primary_error),
+            (QUEST_EX_PATH, report.extension_error),
+        ] {
+            if let Some(error) = error {
+                tracing::warn!(
+                    path = %String::from_utf8_lossy(path),
+                    field = error.field,
+                    offset = error.offset,
+                    record_offset = error.record_offset,
+                    kind = ?error.kind,
+                    "Разбор каталога заданий остановлен; ранее применённые данные сохранены"
+                );
+            }
+        }
         match report.completion {
-            crate::setup::questsystem::QuestSystemLoadCompletion::QuestFileMissing => {
+            QuestSystemLoadCompletion::QuestFileMissing => {
                 context.add_log_text(b"Data/Quest.ini can't found!");
             }
-            crate::setup::questsystem::QuestSystemLoadCompletion::QuestExFileMissing => {
- // EXE разыменовывал null CRFile; не добавляем новый внешний log.
+            QuestSystemLoadCompletion::QuestExFileMissing => {
+                tracing::warn!(path = %String::from_utf8_lossy(QUEST_EX_PATH),
+                    "Расширение каталога заданий недоступно; основной список сохранён");
             }
-            crate::setup::questsystem::QuestSystemLoadCompletion::PrimaryFormatStopped => {}
-            crate::setup::questsystem::QuestSystemLoadCompletion::Loaded => {
+            QuestSystemLoadCompletion::PrimaryFormatStopped => {}
+            QuestSystemLoadCompletion::Partial => {
+                tracing::warn!(primary_records = report.primary_records,
+                    extension_records = report.extension_records,
+                    "Каталог заданий загружен частично");
+            }
+            QuestSystemLoadCompletion::Loaded => {
                 context.add_log_text(b"Load Quest List Data/Quest.ini, OK!");
                 context.add_log_text(b"Load Quest List Data/QuestEx.ini, OK!");
             }
@@ -7255,9 +7228,7 @@ impl CGame {
     }
 
     pub(crate) fn get_script_file_data(&self, path: &[u8]) -> Option<&[u8]> {
-        self.script_file_data
-            .get(legacy_c_string_prefix(path))
-            .map(Vec::as_slice)
+        self.script_resources.get(path)
     }
 
     pub(crate) const fn thing_setup(&self) -> &CThingSetup {
@@ -7269,15 +7240,15 @@ impl CGame {
     }
 
     pub(crate) fn function_list_file_data(&self) -> Option<&[u8]> {
-        self.function_list_file_data.as_deref()
+        self.script_resources.functions()
     }
 
     pub(crate) fn variable_list_file_data(&self) -> Option<&[u8]> {
-        self.variable_list_file_data.as_deref()
+        self.script_resources.variables()
     }
 
     pub(crate) fn initial_script_files(&self) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
-        self.script_file_data.iter().map(|(path, data)| {
+        self.script_resources.iter().map(|(path, data)| {
             (
                 legacy_c_string_prefix(path),
                 legacy_c_string_prefix(data),
@@ -7290,25 +7261,8 @@ impl CGame {
         context: &mut Context,
         path: &[u8],
     ) -> bool {
-        let path = legacy_c_string_prefix(path);
-        let Some(data) = context.read_resource(path) else {
-            let mut message = b"Can't found ".to_vec();
-            message.extend_from_slice(path);
-            message.push(b'!');
-            context.notify_reload_operator(b"Message", &message);
-            return false;
-        };
-
-        let mut normalized = path;
-        if normalized.first() == Some(&b'\\') {
-            normalized = &normalized[1..];
-        }
-        let normalized = normalized
-            .iter()
-            .map(|byte| if *byte == b'\\' { b'/' } else { *byte })
-            .collect::<Vec<_>>();
-        self.script_file_data.insert(normalized, data);
-        true
+        self.script_resources
+            .load_one(&mut WorldScriptLoadContext(context), path)
     }
 
     pub(crate) fn load_script_file_data<Context: WorldReloadContext + ?Sized>(
@@ -7319,37 +7273,24 @@ impl CGame {
         variable_file: &[u8],
         _general_variable_data_file: &[u8],
     ) -> bool {
-        self.function_list_file_data = None;
-        self.variable_list_file_data = None;
-        self.script_file_data.clear();
-
-        let Some(function_data) = context.read_resource(function_file) else {
-            Self::notify_missing_reload_file(context, function_file);
-            return false;
-        };
-        self.function_list_file_data = Some(function_data);
-
-        let Some(variable_data) = context.read_resource(variable_file) else {
-            Self::notify_missing_reload_file(context, variable_file);
-            return false;
-        };
-        self.variable_list_file_data = Some(variable_data);
-
- // Исходный использует literal, а не `script_directory`.
-        for path in context.script_files(b"scripts/*.*", b".script") {
-            let _ = self.load_one_script(context, &path);
+        match self.script_resources.load(
+            &mut WorldScriptLoadContext(context),
+            function_file,
+            variable_file,
+        ) {
+            Ok(report) => {
+                if report.failed != 0 {
+                    tracing::warn!(?report, "Сценарии загружены частично");
+                } else {
+                    tracing::info!(?report, "Загрузка ресурсов сценариев завершена");
+                }
+                true
+            }
+            Err(file) => {
+                tracing::warn!(?file, "Загрузка сценариев остановлена на обязательном файле");
+                false
+            }
         }
-        true
-    }
-
-    fn notify_missing_reload_file<Context: WorldReloadContext + ?Sized>(
-        context: &mut Context,
-        path: &[u8],
-    ) {
-        let mut message = b"Can't found ".to_vec();
-        message.extend_from_slice(legacy_c_string_prefix(path));
-        message.push(b'!');
-        context.notify_reload_operator(b"Message", &message);
     }
 
     pub(crate) fn reload_one_script<Context: WorldReloadContext + ?Sized>(
@@ -9394,8 +9335,8 @@ impl CGame {
     fn send_script_reload_data(&self) {
         let sender = self.current_game_server_sender();
         for (subcode, data) in [
-            (0x0A, self.function_list_file_data.as_deref()),
-            (0x0B, self.variable_list_file_data.as_deref()),
+            (0x0A, self.script_resources.functions()),
+            (0x0B, self.script_resources.variables()),
         ] {
             let Some(data) = data else { continue };
             let data = legacy_c_string_prefix(data);
@@ -9405,7 +9346,7 @@ impl CGame {
             add_legacy_c_string(message.base_mut(), data);
             let _ = message.send_all(sender.as_ref());
         }
-        for (path, data) in &self.script_file_data {
+        for (path, data) in self.script_resources.iter() {
             let data = legacy_c_string_prefix(data);
             let mut message = CMessage::new(0x0007_F801);
             message.base_mut().add_long(0x0D);
@@ -11752,23 +11693,23 @@ impl CGame {
  // пустых Rust map-node до немедленного `DeleteGame`.
         self.regions.clear();
 
+        let scripts_released = self.script_resources.clear();
         for (owner, released) in [
             (
                 WorldGameReleaseOptionalOwner::FunctionListFileData,
-                self.function_list_file_data.take().is_some(),
+                scripts_released.functions,
             ),
             (
                 WorldGameReleaseOptionalOwner::VariableListFileData,
-                self.variable_list_file_data.take().is_some(),
+                scripts_released.variables,
             ),
             (
                 WorldGameReleaseOptionalOwner::ScriptFileData,
-                !self.script_file_data.is_empty(),
+                scripts_released.scripts,
             ),
         ] {
             events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
         }
-        self.script_file_data.clear();
  // После этого места нет ни одного team lookup до немедленного
  // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
  // меняя session ID, routing либо внешний порядок.
@@ -22010,18 +21951,6 @@ fn resolve_login_endpoint(raw_host: &[u8], port: u32) -> Result<SocketAddrV4, Lo
 fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
     message.add(legacy_c_string_prefix(value));
     message.add_byte(0);
-}
-
-fn normalize_script_path(path: &[u8]) -> Vec<u8> {
-    let path = legacy_c_string_prefix(path);
-    let path = if path.first() == Some(&b'\\') {
-        &path[1..]
-    } else {
-        path
-    };
-    path.iter()
-        .map(|byte| if *byte == b'\\' { b'/' } else { *byte })
-        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

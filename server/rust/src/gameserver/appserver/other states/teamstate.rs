@@ -22,7 +22,7 @@
 //! default-ctor stamp безопасно равен0 до Begin; отказ allocator не эмулируется.
 //! Координатные Begin0x005BF800/0x005BF8D0 остаются только в локальном исследовательском корпусе.
 
-use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -33,7 +33,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
 const TEAM_STATE_STRING_CAPACITY: usize = 256;

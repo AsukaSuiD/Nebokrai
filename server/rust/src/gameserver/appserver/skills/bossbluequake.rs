@@ -68,7 +68,7 @@ use crate::gameserver::appserver::skills::kernel::{
     skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, ServerRegionOwner, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,

@@ -26,7 +26,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::listener::cupgradepricelistener::UpgradePriceListener;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 pub(crate) const EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON: u8 = 1;
 pub(crate) const EQUIPMENT_UPGRADE_FAILURE_LOG_REASON: u8 = 2;

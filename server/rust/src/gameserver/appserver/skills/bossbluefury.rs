@@ -44,7 +44,7 @@ use crate::gameserver::gameserver::game::{
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
 const MONSTER_TYPE: i32 = 600;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;

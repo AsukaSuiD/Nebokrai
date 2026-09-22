@@ -1,10 +1,5 @@
-//! Реестр сценарных ресурсов GameServer.
-//!
-//! `CScript::LoadFunction(nullptr, data)` из точной пары EXE/PDB читает
-//! непрерывный `FunctionList`, преобразует подпись через `atoi` и сохраняет
-//! соответствие текста числовому идентификатору в упорядоченном `std::map`.
-//! `BTreeMap` сохраняет наблюдаемые правила поиска и порядка. Принадлежащий
-//! среде экземпляр `ActiveScript` хранит исходный текст, позицию, контекст
+//! Исполнитель сценариев GameServer; реестр команд находится в zone/content.
+//! Принадлежащий среде экземпляр `ActiveScript` хранит исходный текст, позицию, контекст
 //! игрока, NPC и региона, а также переменные между стадиями главного цикла.
 //! `call` создаёт отдельный экземпляр, а `TalkBox` возобновляется ответом
 //! клиента через тот же идентификатор сценария. Поиск и удаление по пути или
@@ -51,9 +46,7 @@
 
 use std::collections::BTreeMap;
 
-use super::buffskillfunc::{
-    SCRIPT_FUNCTION_ADD_JING_JIE_BUFF, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME,
-};
+use super::buffskillfunc::SCRIPT_FUNCTION_ADD_JING_JIE_BUFF;
 use super::function::{
     SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG,
     SCRIPT_FUNCTION_ADD_INCREMENT_LOG, SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG,
@@ -79,55 +72,9 @@ use super::function::{
 };
 use super::jjcfunc::{JjcScriptFunctionOutcome, dispatch_jjc_script_function};
 use super::parser;
-use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CScriptFunctionRegistry {
-    functions: BTreeMap<Vec<u8>, i32>,
-}
-
-impl CScriptFunctionRegistry {
-    pub(crate) fn load(&mut self, source: &[u8]) {
-        self.functions.clear();
-        let mut declared_functions = 0usize;
-        let mut replaced_names = 0usize;
-        for (caption, name) in section_records(source, b"FunctionList") {
-            let id = legacy_atoi(caption);
-            if self.functions.insert(name.to_vec(), id).is_some() {
-                replaced_names += 1;
-            }
-            declared_functions += 1;
-        }
-        if self
-            .functions
-            .insert(
-                SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME.to_vec(),
-                SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
-            )
-            .is_some()
-        {
-            replaced_names += 1;
-        }
-        tracing::debug!(
-            declared_functions,
-            replaced_names,
-            registered_functions = self.functions.len(),
-            "загружен реестр сценарных функций"
-        );
-    }
-
-    pub(crate) fn query(&self, name: &[u8]) -> Option<i32> {
-        self.functions.get(visible_c_string(name)).copied()
-    }
-
-    pub(crate) fn release(&mut self) -> usize {
-        let count = self.functions.len();
-        self.functions.clear();
-        count
-    }
-}
 
 fn visible_c_string(value: &[u8]) -> &[u8] {
     value.split(|byte| *byte == 0).next().unwrap_or_default()
@@ -1913,7 +1860,7 @@ fn split_variable_reference(value: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
 //
 //
 
-// IMPLEMENTED: `CScript::LoadFunction` материализован выше как `CScriptFunctionRegistry::load`.
+// LoadFunction: zone/content/functions.rs; разбор данных — shared/scripting/functionlist.rs.
 
 // ============================================================================
 // FUNCTION: CVariableList::`scalar_deleting_destructor'

@@ -14,7 +14,7 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::public::guid::CGuid;
+use nebokrai_shared::values::CGuid;
 use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
 
 pub(crate) type SharedContainerListener = Arc<Mutex<dyn CContainerListener>>;
