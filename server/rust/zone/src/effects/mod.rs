@@ -2,6 +2,7 @@
 
 mod automaticrestore;
 mod bloodloss;
+mod leafcut;
 mod periodicattack;
 mod poison;
 mod time;
@@ -15,6 +16,10 @@ pub use automaticrestore::{
 };
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
+};
+pub use leafcut::{
+    LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,
+    LeafCutAttackSeed, LeafCutState,
 };
 pub use periodicattack::{
     PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state,

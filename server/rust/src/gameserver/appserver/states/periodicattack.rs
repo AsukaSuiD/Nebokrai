@@ -27,8 +27,7 @@ const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const MONSTER_TYPE: i32 = 600;
 
 pub(crate) use nebokrai_zone::effects::{
-    PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state,
-    encode_periodic_state_for_install,
+    PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state_for_install,
 };
 
 pub(crate) trait PeriodicAttackState: AppliedState + PeriodicAttackRecord {

@@ -4,4 +4,4 @@
 //! Общие Begin/Check/AI/visual принадлежат leafcut/leafcutvisual,
 //! различия наложения — leafcutapply; периодическое состояние — leafcutstate2.
 
-pub(crate) const LEAF_CUT_2_SKILL_ID: u32 = 0x80;
+pub(crate) use nebokrai_zone::effects::LEAF_CUT_2_STATE_ID as LEAF_CUT_2_SKILL_ID;

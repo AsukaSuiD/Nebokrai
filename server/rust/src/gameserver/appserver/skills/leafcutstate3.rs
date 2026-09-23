@@ -2,7 +2,7 @@
 //! appserver/skills/leafcutstate3.cpp. Общий layout, формула и lifecycle
 //! семейства LeafCut сохраняют отдельную идентичность состояния 0x8F.
 
-pub(crate) const LEAF_CUT_3_STATE_ID: u32 = 0x8f;
+pub(crate) use nebokrai_zone::effects::LEAF_CUT_3_STATE_ID;
 pub(crate) use super::leafcutstate::LEAF_CUT_STATE_BYTES as LEAF_CUT_3_STATE_BYTES;
 pub(crate) type LeafCutState3 = super::leafcutstate::LeafCutState<LEAF_CUT_3_STATE_ID>;
 
