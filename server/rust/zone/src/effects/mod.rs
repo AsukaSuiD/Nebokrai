@@ -3,6 +3,7 @@
 mod automaticrestore;
 mod bloodloss;
 mod leafcut;
+mod maxresource;
 mod meteorarrow;
 mod periodicattack;
 mod poison;
@@ -22,6 +23,10 @@ pub use bloodloss::{
 pub use leafcut::{
     LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,
     LeafCutAttackSeed, LeafCutState,
+};
+pub use maxresource::{
+    ENLARGE_MAX_HP_STATE_ID, ENLARGE_MAX_MP_STATE_ID, EnlargeMaxHpState, EnlargeMaxMpState,
+    MAX_RESOURCE_STATE_BYTES, MaxResourceState,
 };
 pub use meteorarrow::{METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES, MeteorArrowState};
 pub use periodicattack::{
