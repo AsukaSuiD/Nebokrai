@@ -18,6 +18,7 @@ mod pillar;
 mod roar;
 mod godbless;
 mod hearten;
+mod wangsheng;
 mod directelement;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
@@ -44,4 +45,5 @@ pub use pillar::{PILLAR_SKILL_ID, pillar_state_parameters};
 pub use roar::{ROAR_SKILL_ID, RoarBounds, roar_bounds};
 pub use godbless::GodBlessGains;
 pub use hearten::hearten_state;
+pub use wangsheng::{WANGSHENG_SKILL_ID, wangsheng_restored_health};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};

@@ -31,10 +31,10 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
+use nebokrai_zone::skills::wangsheng_restored_health;
 
-pub(crate) const WANGSHENG_SKILL_ID: u32 = 0x221;
+pub(crate) use nebokrai_zone::skills::WANGSHENG_SKILL_ID;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
-const SKILL_USAGE_TARGET_HP_GAIN: u32 = 31;
 
 fn fail_mana(
     game: &mut CGame, instance: RegisteredSkill, player_id: i32,
@@ -165,9 +165,9 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     let Some(current) = game.find_player(source.id).map(|player| player.health()) else {
         return state_skill_outcome(QueuedSkillExecutionState::Rejected);
     };
-    let gain = properties.query_property(SKILL_USAGE_TARGET_HP_GAIN);
+    let restored = wangsheng_restored_health(current, |key| properties.query_property(key));
     if let Some(player) = game.find_player_mut(source.id) {
-        player.set_health(current.wrapping_add(gain));
+        player.set_health(restored);
     }
     let _ = game.publish_player_states(source.id);
     state_skill_outcome(QueuedSkillExecutionState::Completed)

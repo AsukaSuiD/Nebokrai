@@ -2,6 +2,8 @@
 
 ## Проверки переноса навыков 23 сентября 2026
 
+После переноса DWORD-правила лечения Wangsheng в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. ID, связь vtable с AI и участок GetHP → свойство `31` → сложение → SetHP/OnChangeStates сверены по совпадающей Game EXE/PDB. Живое лечение и клиентский сценарий не запускались.
+
 После переноса создания состояния Hearten в `zone/skills` и исправления момента чтения часов в `zone/effects` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Порядок двух запросов и конструктора сверен по `CHearten::AI`, вызов часов после ID — по reader совпадающей Game EXE/PDB. Полный lifecycle и клиентский сценарий не запускались.
 
 После переноса расчёта прибавок GodBless/GodBless2 в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Порядок шести запросов свойств, два округления до `f32` для каждой прибавки, поздний запрос срока и усечение трёх значений сверены по `CGodBless::AI` и `CGodBless2::AI` совпадающей Game EXE/PDB. Живое наложение и клиентский сценарий не запускались.
