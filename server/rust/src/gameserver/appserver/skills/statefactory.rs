@@ -369,7 +369,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         },
         WANGSHENG_STATE_ID => StateRecordLayout::typed(
             WANGSHENG_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::wangshengstate::WangshengState::decode(payload, offset, _now()).ok().map(StateData::Wangsheng)
+                super::wangshengstate::WangshengState::decode(payload, offset, _now).ok().map(StateData::Wangsheng)
             },
         ),
         POISON_ARROW_SKILL_ID => StateRecordLayout::typed(

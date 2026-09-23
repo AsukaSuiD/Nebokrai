@@ -24,6 +24,7 @@ mod soulcollect;
 mod swordship;
 mod time;
 mod visualeffect;
+mod wangsheng;
 mod weak;
 mod wuxing;
 
@@ -82,6 +83,7 @@ pub use swordship::{
 };
 pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
+pub use wangsheng::{WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID, WangshengState};
 pub use weak::{WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState};
 pub use wuxing::{
     WUXING_EARTH_STATE_ID, WUXING_FIRE_STATE_ID, WUXING_METAL_STATE_ID, WUXING_STATE_BYTES,
