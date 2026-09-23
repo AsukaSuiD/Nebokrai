@@ -34,7 +34,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
-pub(crate) const LIFE_SHIELD_SKILL_ID: u32 = 544;
+pub(crate) use nebokrai_zone::effects::LIFE_SHIELD_SKILL_ID;
 pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
 pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;

@@ -9,6 +9,7 @@ mod energyholding;
 mod fullmiss;
 mod hearten;
 mod leafcut;
+mod lifeshield;
 mod machineshield;
 mod manashield;
 mod maxresource;
@@ -53,6 +54,7 @@ pub use leafcut::{
     LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,
     LeafCutAttackSeed, LeafCutState,
 };
+pub use lifeshield::{LIFE_SHIELD_SKILL_ID, LIFE_SHIELD_STATE_BYTES, LifeShieldState};
 pub use machineshield::{MACHINE_SHIELD_SKILL_ID, MACHINE_SHIELD_STATE_BYTES, MachineShieldState};
 pub use manashield::{MANA_SHIELD_SKILL_ID, MANA_SHIELD_STATE_BYTES, ManaShieldState};
 pub use maxresource::{
