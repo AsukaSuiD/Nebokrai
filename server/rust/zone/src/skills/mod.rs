@@ -12,6 +12,7 @@ mod elementphalanx;
 mod godthunder;
 mod chaossphere;
 mod soulmirror;
+mod directelement;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
@@ -31,3 +32,4 @@ pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
     ChaosSphereSummonParameters, chaos_sphere_path_length};
 pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorArea, SoulMirrorSummonParameters,
     soul_mirror_scope_size, soul_mirror_scope_cell};
+pub use directelement::{DirectElementProfile, DirectElementLiveField};
