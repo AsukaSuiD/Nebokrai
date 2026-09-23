@@ -3,6 +3,7 @@
 pub mod combat;
 pub mod content;
 pub mod effects;
+pub mod regions;
 pub mod scripts;
 pub mod sessions;
 pub mod skills;

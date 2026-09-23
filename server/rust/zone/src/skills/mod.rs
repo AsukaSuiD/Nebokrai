@@ -1,6 +1,7 @@
 //! Данные живых навыков Zone, которыми временно управляет прежний Game.
 
 mod visualeffect;
+mod lifecycle;
 mod weak;
 mod poisonfog;
 mod spidermist;
@@ -22,6 +23,7 @@ mod wangsheng;
 mod directelement;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
+pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
 pub use poisonfog::{PoisonFogPhalanx, PoisonFogPhalanxTick};
 pub use spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistPhalanx, SpiderMistPhalanxTick};

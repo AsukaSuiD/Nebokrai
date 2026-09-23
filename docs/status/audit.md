@@ -2,6 +2,8 @@
 
 ## Проверки переноса навыков 23 сентября 2026
 
+После переноса идентичности фигуры в `zone/regions`, а `SkillLifecycle`, стадий и kernel в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Базовые Begin/End и конструктор сверены по совпадающей Game EXE/PDB; Rust-стадии и диагностическая причина завершения остаются внутренней моделью. Конкретные каталоги исполнений и вызовы Game не переносились; клиентский сценарий не запускался.
+
 После переноса DWORD-правила лечения Wangsheng в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. ID, связь vtable с AI и участок GetHP → свойство `31` → сложение → SetHP/OnChangeStates сверены по совпадающей Game EXE/PDB. Живое лечение и клиентский сценарий не запускались.
 
 После переноса создания состояния Hearten в `zone/skills` и исправления момента чтения часов в `zone/effects` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Порядок двух запросов и конструктора сверен по `CHearten::AI`, вызов часов после ID — по reader совпадающей Game EXE/PDB. Полный lifecycle и клиентский сценарий не запускались.

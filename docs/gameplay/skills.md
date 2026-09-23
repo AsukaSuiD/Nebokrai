@@ -28,7 +28,7 @@
 
 ## Общая база и конкретные стадии
 
-[`SkillLifecycle`](../../server/rust/src/gameserver/appserver/skills/kernel.rs) хранит `user`, `sufferer`, координатную цель, время старта, `ended`, `available`, `prepared` и причину завершения. `SkillExecutionKernel` добавляет dispatch и стадию. При установке конкретного payload база переносится внутрь его kernel; источник, цель и часы не создаются второй раз.
+[`SkillLifecycle`](../../server/rust/zone/src/skills/lifecycle.rs) в Zone хранит `user`, `sufferer`, координатную цель, время старта, `ended`, `available`, `prepared` и причину завершения. `SkillExecutionKernel` добавляет dispatch и стадию. Идентичность фигуры принадлежит [Zone regions](../../server/rust/zone/src/regions/identity.rs): прежний `shape.rs` только переэкспортирует её. При установке конкретного payload база переносится внутрь его kernel; источник, цель и часы не создаются второй раз. Каталог конкретных исполнений и End-hooks пока находится в [адаптере Game](../../server/rust/src/gameserver/appserver/skills/kernel.rs).
 
 `SkillStage` содержит Idle, Begin, Check, Calculate, Attack, Apply. Это общий словарь стадий и проверяемых переходов, а не планировщик: конкретный навык сам вызывает `advance` и может пройти несколько стадий за один AI-вызов. `Pending` означает продолжение ожидания, а не автоматический повтор Begin. `ended` нельзя выводить только из наличия payload: после End данные исполнения могут ещё существовать до отдельного освобождения.
 

@@ -224,12 +224,7 @@ pub(crate) const SHAPE_CHANGE_REMOVE: i32 = 2;
 pub(crate) const SHAPE_CHANGE_AREA: i32 = 3;
 pub(crate) const SHAPE_CHANGE_REGION: i32 = 4;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct ShapeIdentity {
-    pub(crate) object_type: i32,
-    pub(crate) id: i32,
-    pub(crate) ex_id: CGuid,
-}
+pub(crate) use nebokrai_zone::regions::ShapeIdentity;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ShapeFigure {
