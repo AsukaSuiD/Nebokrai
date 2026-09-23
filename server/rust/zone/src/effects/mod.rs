@@ -3,6 +3,7 @@
 mod automaticrestore;
 mod bloodloss;
 mod leafcut;
+mod meteorarrow;
 mod periodicattack;
 mod poison;
 mod time;
@@ -21,6 +22,7 @@ pub use leafcut::{
     LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,
     LeafCutAttackSeed, LeafCutState,
 };
+pub use meteorarrow::{METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES, MeteorArrowState};
 pub use periodicattack::{
     PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state,
     encode_periodic_state_for_install,

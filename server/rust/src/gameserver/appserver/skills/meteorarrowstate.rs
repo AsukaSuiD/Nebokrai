@@ -1,32 +1,12 @@
-//! Запас метеорных стрел CMeteorArrowState (0xCC).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/meteorarrowstate.cpp
-//! и meteorarrowstate.h; накопление/расход — meteorarrowmass.cpp/meteorarrow.cpp.
-//!
-//! Состояние хранит LONG количества и DWORD предела. Add требует живого GetS,
-//! сравнивает оба значения как signed, складывает с DWORD wrapping и применяет
-//! только верхнюю signed-границу. Нулевое добавление ниже предела тоже обновляет
-//! visual; отрицательный сохранённый запас не нормализуется.
-//!
-//! Накопление выбирает первый непустой IDCC. Совпавший тип сохраняет старый
-//! предел; несовпадение RTTI создаёт новый экземпляр, не удаляя прежний.
-//! Новый Begin(U,U) читает одни базовые часы, создаёт loop1 и выполняет
-//! одноаргументный visual без пакета. Затем Add публикует BFE03 до append.
-//! Ни накопление, ни расход не добавляют UpdateProperty/OnChangeStates.
-//!
-//! Visual заново разрешает S; BFE03 передаёт ID/0/количество, BFE04 — ID.
-//! End публикует снятие, затем базовый End помечает ended и удаляет через
-//! свежий U. Деструктор самостоятельно повторяет visual снятия: loop1 и
-//! state.ended не подавляют его. Расход вызывает только этот деструктор,
-//! без End и обновления свойств; сохранённое signed количество возвращается
-//! и для отрицательного значения. Удаление и DB-span принадлежат общей арене.
-//!
-//! DB — три little-endian DWORD: ID, количество, предел; часов нет.
-//! AI и property callback пусты, клиентский срок нулевой. Restart с NULL U
-//! сохраняет источник, обновляет S и loop1 без пополнения; SetRegion меняет U.
-//! Безопасные значения и общая SlotMap заменяют native указатели/контейнеры.
+//! Живое накопление, расход и visual метеорных стрел в переходном Game.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/meteorarrowstate.cpp` и `meteorarrowstate.h`,
+//! `meteorarrowmass.cpp` и `meteorarrowmass.h`, `meteorarrow.cpp` и
+//! `meteorarrow.h`. Данные и запись состояния находятся в Zone.
+//! Поиск первого ID `0xCC`, проверка живого S и публикация visual требуют
+//! доступа к арене; расход удаляет найденное состояние через деструктор.
 
 use super::skillbaseproperties::CSkillBaseProperties;
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -40,48 +20,11 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const METEOR_ARROW_MASS_SKILL_ID: u32 = 0xCC;
-pub(crate) const METEOR_ARROW_STATE_BYTES: usize = 12;
+pub(crate) use nebokrai_zone::effects::{
+    METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES, MeteorArrowState,
+};
 const AMOUNT: u32 = 20_016;
 const AMOUNT_LIMIT: u32 = 20_017;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MeteorArrowState {
-    arrows: i32,
-    maximum_arrows: u32,
-}
-
-impl MeteorArrowState {
-    pub(crate) const fn new(maximum_arrows: u32) -> Self {
-        Self { arrows: 0, maximum_arrows }
-    }
-    pub(crate) const fn skill_id(self) -> u32 { METEOR_ARROW_MASS_SKILL_ID }
-    pub(crate) const fn arrows(self) -> i32 { self.arrows }
-    pub(crate) const fn additional_data(self) -> i32 { self.arrows }
-
-    fn add_arrows(&mut self, amount: u32) -> bool {
-        let maximum = self.maximum_arrows as i32;
-        if self.arrows >= maximum { return false; }
-        self.arrows = self.arrows.wrapping_add(amount as i32).min(maximum);
-        true
-    }
-
-    pub(crate) fn encoded(self) -> [u8; METEOR_ARROW_STATE_BYTES] {
-        let mut bytes = [0; METEOR_ARROW_STATE_BYTES];
-        bytes[..4].copy_from_slice(&METEOR_ARROW_MASS_SKILL_ID.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.arrows.to_le_bytes());
-        bytes[8..].copy_from_slice(&self.maximum_arrows.to_le_bytes());
-        bytes
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != METEOR_ARROW_MASS_SKILL_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        Ok(Self { arrows: reader.read_i32()?, maximum_arrows: reader.read_u32()? })
-    }
-}
 
 fn first_meteor_arrow_slot(game: &CGame, source: (i32, ShapeIdentity)) -> Option<StateKey> {
     resolve_state_move_shape(game, source.0, source.1)?
