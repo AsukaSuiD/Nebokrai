@@ -1,7 +1,8 @@
 //! Данные области CSnowStormPhalanx и окна выбранных клеток.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
-//! appserver/skills/snowstormphalanx.cpp/.h.
-//! Конструктор VA 0x005F9040, Initialize 0x005F8D70,
+//! appserver/skills/snowstorm.cpp и snowstormphalanx.cpp/.h.
+//! Summon VA 0x00584060, конструктор VA 0x005F9040,
+//! Initialize 0x005F8D70,
 //! EncodeToByteArray 0x005F8ED0, CalculateAttackPower 0x005F92D0,
 //! Attack 0x005F93B0, AI 0x005F94B0.
 
@@ -12,6 +13,41 @@ use crate::effects::timed_client_state_time;
 pub const SNOW_STORM_SKILL_ID: u32 = 0x193;
 pub const SNOW_STORM_SCOPE_AREA: u32 = 25;
 const SCOPE_SIDE: i32 = 5;
+const TARGET_COUNT_PROPERTY: u32 = 20_010;
+const MAXIMUM_ATTACK_PROPERTY: u32 = 20_009;
+const MINIMUM_ATTACK_PROPERTY: u32 = 20_008;
+const FREQUENCY_PROPERTY: u32 = 6_001;
+const LIFETIME_PROPERTY: u32 = 30_001;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnowStormSummonParameters {
+    pub target_count: u32,
+    pub maximum_attack: i32,
+    pub minimum_attack: i32,
+    pub frequency_ms: u32,
+    pub skill_level: i32,
+    pub lifetime_ms: u32,
+}
+
+impl SnowStormSummonParameters {
+    /// Порядок запросов в CSnowStorm::Summon сохраняет чтение живого уровня
+    /// между частотой и временем жизни.
+    pub fn read(
+        mut query_property: impl FnMut(u32) -> u32,
+        current_level: impl FnOnce() -> Option<i32>,
+    ) -> Option<Self> {
+        let target_count = query_property(TARGET_COUNT_PROPERTY);
+        let maximum_attack = query_property(MAXIMUM_ATTACK_PROPERTY) as i32;
+        let minimum_attack = query_property(MINIMUM_ATTACK_PROPERTY) as i32;
+        let frequency_ms = query_property(FREQUENCY_PROPERTY);
+        let skill_level = current_level()?;
+        let lifetime_ms = query_property(LIFETIME_PROPERTY);
+        Some(Self {
+            target_count, maximum_attack, minimum_attack, frequency_ms,
+            skill_level, lifetime_ms,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SnowStormParametersError { ZeroFrequency, TooManyTargets, CellArrayTooLarge }

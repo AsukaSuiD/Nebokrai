@@ -17,6 +17,7 @@ use nebokrai_shared::values::CGuid;
 use nebokrai_zone::skills::SnowStormPhalanx;
 
 pub(crate) use nebokrai_zone::skills::{SNOW_STORM_SCOPE_AREA, SnowStormAttack, SnowStormParametersError};
+use nebokrai_zone::skills::SnowStormSummonParameters;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CSnowStormPhalanx {
@@ -25,14 +26,19 @@ pub(crate) struct CSnowStormPhalanx {
 }
 
 impl CSnowStormPhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля конструктора исходной области")]
     pub(crate) fn new(
-        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
-        skill_level: i32, frequency_ms: u32, minimum_attack: i32,
-        maximum_attack: i32, element_modifier: i32, target_count: u32,
+        id: i32, master: MasterInfo, started_at_ms: u32, element_modifier: i32,
+        parameters: SnowStormSummonParameters,
     ) -> Result<Self, SnowStormParametersError> {
-        let attack = SnowStormAttack { master, skill_level, minimum_attack, maximum_attack, element_modifier };
-        let rule = SnowStormPhalanx::new(attack, started_at_ms, lifetime_ms, frequency_ms, target_count)?;
+        let attack = SnowStormAttack {
+            master, skill_level: parameters.skill_level,
+            minimum_attack: parameters.minimum_attack,
+            maximum_attack: parameters.maximum_attack, element_modifier,
+        };
+        let rule = SnowStormPhalanx::new(
+            attack, started_at_ms, parameters.lifetime_ms,
+            parameters.frequency_ms, parameters.target_count,
+        )?;
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity {
             object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,

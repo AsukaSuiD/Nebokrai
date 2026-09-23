@@ -1,8 +1,9 @@
 //! Призыв снежной бури CSnowStorm.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/snowstorm.cpp.
 //! Общий player/monster cast находится в zonalcast. Summon сохраняет Master
-//! с country0 и Player EM либо0 до свежей таблицы. Порядок запросов:
-//! CONST→MAX→MIN→FREQUENCY→свежий уровень→LIFETIME→ctor(clock→ID).
+//! с country0 и Player EM либо0 до свежей таблицы. Порядок запросов
+//! хранится в zone/skills/snowstorm.rs; здесь остаются запросы к CGame.
+//! После свойств ctor получает часы и ID.
 //! SetTile→Initialize с RNG выполняются до повторного чтения actual region U;
 //! Add→encode/BF502 не зависят от результата регистрации области.
 //! Некорректные параметры, вызывающие native деление на ноль или выход из
@@ -15,13 +16,9 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::SnowStormSummonParameters;
 
 pub(crate) use nebokrai_zone::skills::SNOW_STORM_SKILL_ID;
-const TARGET_COUNT: u32 = 20_010;
-const MINIMUM_ATTACK: u32 = 20_008;
-const MAXIMUM_ATTACK: u32 = 20_009;
-const FREQUENCY: u32 = 6_001;
-const LIFETIME: u32 = 30_001;
 
 pub(super) fn summon_snow_storm<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
@@ -34,16 +31,14 @@ pub(super) fn summon_snow_storm<Runtime: GameMainLoopRuntime>(
     } else { 0 };
     let Some(skill) = game.registered_skill(instance) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
-    let count = properties.query_property(TARGET_COUNT);
-    let maximum = properties.query_property(MAXIMUM_ATTACK) as i32;
-    let minimum = properties.query_property(MINIMUM_ATTACK) as i32;
-    let frequency = properties.query_property(FREQUENCY);
-    let Some(level) = game.registered_skill(instance).map(|skill| skill.level()) else { return; };
-    let lifetime = properties.query_property(LIFETIME);
+    let Some(parameters) = SnowStormSummonParameters::read(
+        |property| properties.query_property(property),
+        || game.registered_skill(instance).map(|skill| skill.level()),
+    ) else { return; };
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
     let mut phalanx = match CSnowStormPhalanx::new(
-        id, master, started, lifetime, level, frequency, minimum, maximum, element, count,
+        id, master, started, element, parameters,
     ) {
         Ok(phalanx) => phalanx,
         Err(error) => {
