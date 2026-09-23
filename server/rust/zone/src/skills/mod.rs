@@ -13,6 +13,7 @@ mod godthunder;
 mod chaossphere;
 mod soulmirror;
 mod cure;
+mod fury;
 mod directelement;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
@@ -34,4 +35,5 @@ pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
 pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorArea, SoulMirrorSummonParameters,
     soul_mirror_scope_size, soul_mirror_scope_cell};
 pub use cure::{cure_threshold, is_cure_removable_state_id};
+pub use fury::is_fury_conflicting_state_id;
 pub use directelement::{DirectElementProfile, DirectElementLiveField};

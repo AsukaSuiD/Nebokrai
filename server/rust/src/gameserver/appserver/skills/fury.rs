@@ -15,6 +15,7 @@
 //! Полный End принадлежит захваченному экземпляру навыка.
 
 use std::ops::ControlFlow;
+use nebokrai_zone::skills::is_fury_conflicting_state_id;
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::curestate::{CureState, begin_primary_cure_state};
@@ -47,9 +48,6 @@ const RP_LOSS: u32 = 3;
 const CAN_BREAK: u32 = 10_006;
 const PERSIST: u32 = 10_002;
 const ATTACK_GAIN: u32 = 105;
-const CONFLICTING_STATES: [u32; 9] = [
-    0x138, 0xd2, 0xc9, 0x67, 0x192, 0x191, 0x198, 0x199, 0x1a6,
-];
 
 fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
     let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
@@ -63,7 +61,7 @@ pub(crate) fn remove_reached_conflict_states(
     loop {
         let Some(shape) = resolve_state_move_shape(game, region_id, holder) else { return; };
         if position >= shape.state_slot_count() { break; }
-        if shape.state_at(position).is_some_and(|(_, state)| CONFLICTING_STATES.contains(&state.state_id())) {
+        if shape.state_at(position).is_some_and(|(_, state)| is_fury_conflicting_state_id(state.state_id())) {
             let _ = end_and_destroy_state_at(game, region_id, holder, position);
         }
         position += 1;
