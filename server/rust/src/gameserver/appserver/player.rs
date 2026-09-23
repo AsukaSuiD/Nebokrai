@@ -497,9 +497,10 @@ use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use nebokrai_zone::skills::{
-    BattleFairyResetItemChange, BattleFairyResetItemLookup, BattleFairySkillProperty,
+    BattleFairyResetItemChange, BattleFairyResetItemLookup, BattleFairyResetPreflight,
+    BattleFairySkillProperty,
     EQUIPPED_SKILL_PROPERTIES, battle_fairy_reset_item, battle_fairy_reset_item_change,
-    battle_fairy_skill_entry, battle_fairy_reset_slot,
+    battle_fairy_reset_preflight, battle_fairy_skill_entry, battle_fairy_reset_slot,
     battle_fairy_skill_id, battle_fairy_skill_level,
     select_battle_fairy_reset_skill,
     write_battle_fairy_reset_skill,
@@ -12141,23 +12142,28 @@ impl CPlayer {
             outcome: BattleFairySkillResetOutcome::MissingHeadgear,
             effects: GameEffectJournal::default(),
         };
-        if !battle_fairy_enabled {
-            report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;
-            report
-                .effects
-                .push(BattleFairySkillResetEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0008",
-                    color: 0xffff_0000,
-                });
-            return report;
-        }
-        let Some(headgear) = self.equipment.get_goods(10) else {
-            return report;
-        };
-        if headgear.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            report.outcome = BattleFairySkillResetOutcome::InvalidHeadgear;
-            return report;
+        match battle_fairy_reset_preflight(battle_fairy_enabled, || {
+            self.equipment
+                .get_goods(10)
+                .map(|goods| goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1))
+        }) {
+            BattleFairyResetPreflight::FeatureDisabled => {
+                report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;
+                report
+                    .effects
+                    .push(BattleFairySkillResetEffect::Notification {
+                        player_id,
+                        string_id: "ZHGS0008",
+                        color: 0xffff_0000,
+                    });
+                return report;
+            }
+            BattleFairyResetPreflight::MissingHeadgear => return report,
+            BattleFairyResetPreflight::InvalidHeadgear => {
+                report.outcome = BattleFairySkillResetOutcome::InvalidHeadgear;
+                return report;
+            }
+            BattleFairyResetPreflight::Ready => {}
         }
 
         if consume_item {

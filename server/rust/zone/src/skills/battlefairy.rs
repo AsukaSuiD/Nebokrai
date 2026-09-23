@@ -6,7 +6,8 @@
 //! constructor `CBattleFairyContainer` (пары несовместимых навыков
 //! VA 0x00504052–0x00504149),
 //! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
-//! VA 0x00501815–0x00501A8D, поиск VA 0x00501663–0x0050178A,
+//! VA 0x00501815–0x00501A8D, допуск VA 0x00501599–0x00501645,
+//! поиск VA 0x00501663–0x0050178A,
 //! чтение VA 0x005017B4–0x00501806,
 //! запись VA 0x00501892–0x00501AC7 и стоимость уведомления
 //! VA 0x00501B6B–0x00501B8D),
@@ -88,6 +89,30 @@ pub fn write_battle_fairy_reset_skill(selected_skill: u32, mut write_value: impl
     write_value(2, 0);
     write_value(1, 1);
     write_value(2, selected_skill as i32);
+}
+
+/// Проверки ResetSkill до обращения к предмету сброса.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BattleFairyResetPreflight {
+    FeatureDisabled,
+    MissingHeadgear,
+    InvalidHeadgear,
+    Ready,
+}
+
+/// Флаг проверяется до чтения головного предмета; свойство требуется ровно 1.
+pub fn battle_fairy_reset_preflight(
+    enabled: bool,
+    read_headgear_flag: impl FnOnce() -> Option<i32>,
+) -> BattleFairyResetPreflight {
+    if !enabled {
+        return BattleFairyResetPreflight::FeatureDisabled;
+    }
+    match read_headgear_flag() {
+        None => BattleFairyResetPreflight::MissingHeadgear,
+        Some(1) => BattleFairyResetPreflight::Ready,
+        Some(_) => BattleFairyResetPreflight::InvalidHeadgear,
+    }
 }
 
 /// При расходе одного предмета количество 0 или 1 ведёт к попытке удаления.
