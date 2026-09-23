@@ -55,6 +55,6 @@ pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
 pub use wuxing::{
     WUXING_EARTH_STATE_ID, WUXING_FIRE_STATE_ID, WUXING_METAL_STATE_ID, WUXING_STATE_BYTES,
-    WUXING_WATER_STATE_ID, WUXING_WOOD_STATE_ID, WuXingKind, WuXingState, WuXingStateParameters,
-    kind_for_skill_id,
+    WUXING_WATER_STATE_ID, WUXING_WOOD_STATE_ID, WuXingCoefficients, WuXingKind, WuXingProperties,
+    WuXingState, WuXingStateParameters, apply_wuxing_to_properties, kind_for_skill_id,
 };

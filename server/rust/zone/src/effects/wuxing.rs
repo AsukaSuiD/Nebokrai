@@ -4,6 +4,8 @@
 //! Vtable пяти вариантов направляют writer на VA `0x005E0030`, reader
 //! на VA `0x005E0880`: ID DWORD и 0x5c сырых байт с `[this+0x38]`.
 //! Два байта между WORD и DWORD сохраняются без интерпретации.
+//! Property callbacks: Metal VA `0x005E08C0`, остальные VA `0x005E0080`.
+//! Порядок и ветви сверены; точность промежуточных x87-вычислений остаётся PARTIAL.
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
@@ -186,5 +188,216 @@ pub const fn kind_for_skill_id(skill_id: u32) -> Option<WuXingKind> {
         WUXING_FIRE_STATE_ID => Some(WuXingKind::Fire),
         WUXING_EARTH_STATE_ID => Some(WuXingKind::Earth),
         _ => None,
+    }
+}
+
+/// Только поля действующих свойств, которые меняет WuXing callback.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WuXingProperties {
+    pub blast_attack_scale_bits: u32,
+    pub blast_defense_scale_bits: u32,
+    pub constitution: u32,
+    pub critical_rate_bits: u32,
+    pub defense: u32,
+    pub dexterity: u32,
+    pub element_blast_attack_scale_bits: u32,
+    pub element_blast_defense_scale_bits: u32,
+    pub element_modify: i32,
+    pub element_resistance: u32,
+    pub full_miss_scale_bits: u32,
+    pub intelligence: u32,
+    pub maximum_attack: u32,
+    pub maximum_hp: u32,
+    pub maximum_mp: u32,
+    pub minimum_attack: u32,
+    pub restored_hp_fight: i32,
+    pub restored_hp_peace: i32,
+    pub restored_mp_fight: i32,
+    pub restored_mp_peace: i32,
+    pub resume_hp_fight: i32,
+    pub resume_hp_peace: i32,
+    pub resume_mp_fight: i32,
+    pub resume_mp_peace: i32,
+    pub strength: u32,
+}
+
+/// Коэффициенты текущей профессии из установленного GlobeSetup.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WuXingCoefficients {
+    pub str_to_max_attack: f32,
+    pub dex_to_min_attack: f32,
+    pub con_to_max_hp: f32,
+    pub con_to_defense: f32,
+    pub int_to_max_mp: f32,
+    pub int_to_resistant: f32,
+    pub int_to_element: f32,
+}
+
+pub fn apply_wuxing_to_properties(
+    state: WuXingState,
+    mut properties: WuXingProperties,
+    coefficients: WuXingCoefficients,
+) -> WuXingProperties {
+    let parameters = state.parameters();
+    properties.element_modify = properties
+        .element_modify
+        .wrapping_add(i32::from(parameters.element_modify));
+    properties.maximum_attack = capped_add_nonzero(
+        properties.maximum_attack,
+        i32::from(parameters.maximum_attack),
+    );
+    properties.minimum_attack = capped_add_nonzero(
+        properties.minimum_attack,
+        i32::from(parameters.minimum_attack),
+    );
+    properties.defense = capped_add_nonzero(properties.defense, i32::from(parameters.defense));
+    properties.element_resistance = capped_add_nonzero(
+        properties.element_resistance,
+        i32::from(parameters.element_resistance),
+    );
+
+    if parameters.strength > 0 {
+        properties.strength = capped_add(properties.strength, parameters.strength);
+        properties.maximum_attack = capped_add(
+            properties.maximum_attack,
+            derived(parameters.strength, coefficients.str_to_max_attack),
+        );
+    }
+    if parameters.dexterity > 0 {
+        properties.dexterity = capped_add(properties.dexterity, parameters.dexterity);
+        properties.minimum_attack = capped_add(
+            properties.minimum_attack,
+            derived(parameters.dexterity, coefficients.dex_to_min_attack),
+        );
+    }
+    if parameters.constitution > 0 {
+        properties.constitution = capped_add(properties.constitution, parameters.constitution);
+        properties.maximum_hp = capped_add(
+            properties.maximum_hp,
+            derived(parameters.constitution, coefficients.con_to_max_hp),
+        );
+        properties.defense = capped_add(
+            properties.defense,
+            derived(parameters.constitution, coefficients.con_to_defense),
+        );
+    }
+    if parameters.intelligence > 0 {
+        properties.intelligence = capped_add(properties.intelligence, parameters.intelligence);
+        properties.maximum_mp = capped_add(
+            properties.maximum_mp,
+            derived(parameters.intelligence, coefficients.int_to_max_mp),
+        );
+        properties.element_resistance = capped_add(
+            properties.element_resistance,
+            derived(parameters.intelligence, coefficients.int_to_resistant),
+        );
+        properties.element_modify = properties.element_modify.wrapping_add(derived(
+            parameters.intelligence,
+            coefficients.int_to_element,
+        ));
+    }
+    if parameters.maximum_hp > 0 {
+        properties.maximum_hp = capped_add(properties.maximum_hp, parameters.maximum_hp);
+    }
+    if state.kind() == WuXingKind::Metal && parameters.maximum_mp != 0 {
+        properties.maximum_mp = properties
+            .maximum_mp
+            .wrapping_add(parameters.maximum_mp)
+            .min(i32::MAX as u32);
+    }
+
+    apply_scale(
+        &mut properties.blast_attack_scale_bits,
+        parameters.blast_attack_scale_bits,
+        1.0,
+    );
+    apply_scale(
+        &mut properties.blast_defense_scale_bits,
+        parameters.blast_defense_scale_bits,
+        0.01,
+    );
+    apply_scale(
+        &mut properties.critical_rate_bits,
+        parameters.critical_rate_bits,
+        1.0,
+    );
+    apply_scale(
+        &mut properties.element_blast_attack_scale_bits,
+        parameters.element_blast_attack_scale_bits,
+        1.0,
+    );
+    apply_scale(
+        &mut properties.element_blast_defense_scale_bits,
+        parameters.element_blast_defense_scale_bits,
+        0.01,
+    );
+    apply_scale(
+        &mut properties.full_miss_scale_bits,
+        parameters.full_miss_scale_bits,
+        0.01,
+    );
+
+    properties.resume_hp_peace =
+        add_with_floor(properties.resume_hp_peace, parameters.resume_hp_peace, 1000);
+    properties.resume_mp_peace =
+        add_with_floor(properties.resume_mp_peace, parameters.resume_mp_peace, 1000);
+    properties.resume_hp_fight =
+        add_with_floor(properties.resume_hp_fight, parameters.resume_hp_fight, 1000);
+    properties.resume_mp_fight =
+        add_with_floor(properties.resume_mp_fight, parameters.resume_mp_fight, 1000);
+    properties.restored_hp_peace = add_with_floor(
+        properties.restored_hp_peace,
+        parameters.restored_hp_peace,
+        0,
+    );
+    properties.restored_mp_peace = add_with_floor(
+        properties.restored_mp_peace,
+        parameters.restored_mp_peace,
+        0,
+    );
+    properties.restored_hp_fight = add_with_floor(
+        properties.restored_hp_fight,
+        parameters.restored_hp_fight,
+        0,
+    );
+    properties.restored_mp_fight = add_with_floor(
+        properties.restored_mp_fight,
+        parameters.restored_mp_fight,
+        0,
+    );
+    properties
+}
+
+fn capped_add(value: u32, delta: i32) -> u32 {
+    value.wrapping_add(delta as u32).min(i32::MAX as u32)
+}
+
+fn capped_add_nonzero(value: u32, delta: i32) -> u32 {
+    if delta == 0 {
+        value
+    } else {
+        capped_add(value, delta)
+    }
+}
+
+fn derived(value: i32, coefficient: f32) -> i32 {
+    crate::combat::truncate_original(f64::from(value) * f64::from(coefficient))
+}
+
+fn apply_scale(bits: &mut u32, percent_bits: u32, minimum: f32) {
+    let percent = f32::from_bits(percent_bits);
+    if percent == 0.0 {
+        return;
+    }
+    let value =
+        (f64::from(f32::from_bits(*bits)) + f64::from(percent) * f64::from(0.01_f32)) as f32;
+    *bits = if value < minimum { minimum } else { value }.to_bits();
+}
+
+fn add_with_floor(value: i32, delta: i32, floor: i32) -> i32 {
+    if delta == 0 {
+        value
+    } else {
+        value.wrapping_add(delta).max(floor)
     }
 }
