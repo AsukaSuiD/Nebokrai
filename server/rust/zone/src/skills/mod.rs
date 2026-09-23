@@ -7,6 +7,7 @@ mod spidermist;
 mod snowstorm;
 mod firewall;
 mod masked_area;
+mod yinyang;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
@@ -16,3 +17,5 @@ pub use snowstorm::{SNOW_STORM_SKILL_ID, SNOW_STORM_SCOPE_AREA, SnowStormAttack,
     SnowStormParametersError, SnowStormPhalanx, SnowStormSummonParameters};
 pub use firewall::{FIRE_WALL_SKILL_ID, fire_wall_lifetime, fire_wall_scope};
 pub use masked_area::{MaskedArea, MaskedAreaPulse};
+pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
+    YinYangSummonParameters, yin_yang_scope};

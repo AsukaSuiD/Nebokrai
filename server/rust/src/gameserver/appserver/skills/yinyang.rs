@@ -2,11 +2,11 @@
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/yinyang.cpp и
 //! yinyang2.cpp. Общий Begin/Check/AI/visual/End находится в zonalcast.
 //! Summon: Master(country0)/Player EM→свежая таблица→usage20015/FISTP→CCH WORD
-//! →GetAddElementAttack→MAX20009→MIN20008→свежий уровень→LIFETIME→ctor(clock→ID).
+//! →GetAddElementAttack; ключи и порядок дальнейших свойств — в zone/skills/yinyang.rs.
 //! SetTile выполняется до свежего actual region captured U. Затем Add и
 //! inherited encode/BF502 выполняются независимо от результата регистрации.
 //! В Summon нет обхода прежних областей и вызова ReplaceAffectRegion.
-//! Разные маски и атаки остаются у общего владельца формы с исходным skill ID.
+//! Разные маски выбирает Zone по исходному skill ID.
 
 use super::weaponattack::{SourceProperty, source_property};
 use super::yinyangphalanx::new_yin_yang_phalanx;
@@ -15,8 +15,9 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::YinYangSummonParameters;
 
-pub(crate) const YIN_YANG_SKILL_ID: u32 = 0x139;
+pub(crate) use nebokrai_zone::skills::YIN_YANG_SKILL_ID;
 
 pub(super) fn summon_yin_yang<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
@@ -27,16 +28,14 @@ pub(super) fn summon_yin_yang<Runtime: GameMainLoopRuntime>(
     let cch = i32::from(cch as u16);
     let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
     let element = (element as i32).wrapping_add(scaled_element);
-    let maximum = properties.query_property(20_009) as i32;
-    let minimum = properties.query_property(20_008) as i32;
-    let Some(skill) = game.registered_skill(instance) else { return; };
-    let skill_id = skill.id();
-    let level = i32::from(skill.level());
-    let lifetime = properties.query_property(30_001);
+    let Some(parameters) = YinYangSummonParameters::read(
+        |property| properties.query_property(property),
+        || game.registered_skill(instance).map(|skill| (skill.id(), i32::from(skill.level()))),
+    ) else { return; };
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
     let mut phalanx = new_yin_yang_phalanx(
-        skill_id, id, master, started, lifetime, level, minimum, maximum, element, cch,
+        id, master, started, element, cch, parameters,
     );
     phalanx.shape_mut().set_pos_xy_base(
         (f64::from(destination.0) + 0.5) as f32, (f64::from(destination.1) + 0.5) as f32,

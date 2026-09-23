@@ -56,7 +56,7 @@ use super::stateskill::{
 use super::weak::{WEAK_SKILL_ID, summon_weak};
 use super::weaponattack::source_master;
 use super::yinyang::{YIN_YANG_SKILL_ID, summon_yin_yang};
-use super::yinyang2::YIN_YANG_2_SKILL_ID;
+use nebokrai_zone::skills::YIN_YANG_2_SKILL_ID;
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;

@@ -59,7 +59,7 @@ impl MaskedElementPhalanx {
     pub(crate) fn replace_affect_region(&mut self, level: i32, tile_x: i32, tile_y: i32) {
         let incoming = if self.is_periodic() {
             nebokrai_zone::skills::fire_wall_scope(level)
-        } else { super::yinyangphalanx::scope_for_skill(self.skill_id()) };
+        } else { nebokrai_zone::skills::yin_yang_scope(self.skill_id()) };
         let center = (self.shape.get_tile_x().unwrap_or(i32::MIN),
             self.shape.get_tile_y().unwrap_or(i32::MIN));
         self.scope.replace_affect_region(center, (tile_x, tile_y), incoming);

@@ -299,7 +299,7 @@ use super::lightning::{LIGHTNING_SKILL_ID, execute_owned_monster_lightning};
 use super::chainlightning::{CHAIN_LIGHTNING_SKILL_ID, execute_owned_monster_chain_lightning};
 use super::infernol::{INFERNOL_SKILL_ID, execute_owned_monster_infernol};
 use super::yinyang::YIN_YANG_SKILL_ID;
-use super::yinyang2::YIN_YANG_2_SKILL_ID;
+use nebokrai_zone::skills::YIN_YANG_2_SKILL_ID;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
 use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
