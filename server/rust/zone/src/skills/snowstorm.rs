@@ -2,9 +2,12 @@
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/snowstormphalanx.cpp/.h.
 //! Конструктор VA 0x005F9040, Initialize 0x005F8D70,
-//! CalculateAttackPower 0x005F92D0, Attack 0x005F93B0, AI 0x005F94B0.
+//! EncodeToByteArray 0x005F8ED0, CalculateAttackPower 0x005F92D0,
+//! Attack 0x005F93B0, AI 0x005F94B0.
 
+use nebokrai_shared::protocol::LegacyWriter;
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo};
+use crate::effects::timed_client_state_time;
 
 pub const SNOW_STORM_SKILL_ID: u32 = 0x193;
 pub const SNOW_STORM_SCOPE_AREA: u32 = 25;
@@ -94,6 +97,27 @@ impl SnowStormPhalanx {
     pub const fn lifetime_ms(&self) -> u32 { self.lifetime_ms }
     pub const fn frequency_ms(&self) -> u32 { self.frequency_ms }
     pub fn cells(&self) -> &[(i32, i32)] { &self.cells }
+
+    /// Пишет поля области до базового CShape, который добавляет адаптер Game.
+    pub fn write_client_snapshot_fields(
+        &self, payload: &mut Vec<u8>, now_milliseconds: impl FnMut() -> u32,
+    ) {
+        let mut writer = LegacyWriter::new(payload);
+        writer.write_u32(SNOW_STORM_SKILL_ID);
+        writer.write_i32(self.attack.skill_level);
+        writer.write_i32(self.attack.master.master_type);
+        writer.write_i32(self.attack.master.master_id);
+        writer.write_u32(timed_client_state_time(
+            self.started_at_ms, self.lifetime_ms, now_milliseconds,
+        ));
+        writer.write_u32(self.lifetime_ms);
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.cells.len() as u32);
+        for &(x, y) in &self.cells {
+            writer.write_i32(x);
+            writer.write_i32(y);
+        }
+    }
 
     pub fn initialize(
         &mut self, center_x: i32, center_y: i32,

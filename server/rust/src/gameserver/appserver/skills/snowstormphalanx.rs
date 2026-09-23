@@ -9,14 +9,12 @@
 //! Нулевая частота, число целей >25 и невозможный размер массива отклоняются
 //! явно: исходные деление на ноль и выход за массив не воспроизводятся.
 
-use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use nebokrai_shared::values::CGuid;
-use nebokrai_zone::skills::{SNOW_STORM_SKILL_ID, SnowStormPhalanx};
+use nebokrai_zone::skills::SnowStormPhalanx;
 
 pub(crate) use nebokrai_zone::skills::{SNOW_STORM_SCOPE_AREA, SnowStormAttack, SnowStormParametersError};
 
@@ -70,16 +68,7 @@ impl CSnowStormPhalanx {
 
     pub(crate) fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u32(SNOW_STORM_SKILL_ID);
-        writer.write_i32(self.rule.skill_level());
-        writer.write_i32(self.rule.master().master_type);
-        writer.write_i32(self.rule.master().master_id);
-        writer.write_u32(timed_client_state_time(self.rule.started_at_ms(), self.rule.lifetime_ms(), now));
-        writer.write_u32(self.rule.lifetime_ms());
-        writer.write_u32(self.rule.frequency_ms());
-        writer.write_u32(self.rule.cells().len() as u32);
-        for &(x, y) in self.rule.cells() { writer.write_i32(x); writer.write_i32(y); }
+        self.rule.write_client_snapshot_fields(&mut payload, now);
         self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }
