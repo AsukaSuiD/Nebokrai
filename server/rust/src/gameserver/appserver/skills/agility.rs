@@ -17,7 +17,7 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-pub(crate) const AGILITY_SKILL_ID: u32 = 0xda;
+pub(crate) use nebokrai_zone::effects::AGILITY_SKILL_ID;
 const TARGET_FULL_MISS_GAIN: u32 = 127;
 const STATE_PERSIST_TIME: u32 = 10_002;
 

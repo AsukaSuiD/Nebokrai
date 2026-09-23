@@ -1,5 +1,6 @@
 //! Наложенные состояния Zone; живой владелец фигуры подключается переходным Game.
 
+mod agility;
 mod automaticrestore;
 mod bloodloss;
 mod element;
@@ -16,6 +17,10 @@ mod time;
 mod visualeffect;
 mod wuxing;
 
+pub use agility::{
+    AGILITY_SKILL_ID, NATURAL_SKILL_ID, PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
+    PersistentAgilityFamilyState, PersistentAgilityProperties, RAPTURE_SKILL_ID,
+};
 pub use automaticrestore::{
     AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_HP_PEACE_STATE_ID,
     AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,

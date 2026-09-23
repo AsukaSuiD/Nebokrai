@@ -1,11 +1,7 @@
-//! Постоянные состояния Agility/Natural/Rapture (0xda/0xdc/0xdb).
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/agilitystate.cpp,
-//! naturalstate.cpp и `rapturestate .cpp`. Типизированные варианты сохраняют разные
-//! игровые величины: WORD full-miss, WORD прирост сопротивления стихиям и WORD
-//! blast_attack. У Agility/Rapture сложение WORD с
-//! переполнением; Natural складывает DWORD с переполнением, затем ограничивает
-//! результат INT_MAX. OnUpdateProperties только разрешает S и применяет
-//! player-формулу: visual, ended-gate и чтения часов отсутствуют.
+//! Живой путь постоянных состояний Agility/Natural/Rapture (0xda/0xdc/0xdb).
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/agilitystate.cpp`, `naturalstate.cpp`, `rapturestate .cpp` и `.h`.
+//! Данные, запись и три формулы принадлежат `zone/effects/agility.rs`.
 //!
 //! Наложение обходит живые слоты и удаляет все ID этого постоянного семейства,
 //! не затрагивая временную Agility2. После каждого End уничтожается свежий
@@ -15,18 +11,13 @@
 //! после попытки Begin независимо от результата. Ненужный постоянному
 //! состоянию timestamp не дублируется в payload.
 //!
-//! AI пустой; DB состоит из DWORD ID и WORD величины, без часов. Клиентские
-//! время и дополнительные данные нулевые. End не пишет ended: существующий
+//! AI пустой; клиентские время и дополнительные данные нулевые.
+//! End не пишет ended: существующий
 //! visual получает Update(1) с базовым tail, затем свежий S удаляет именно
 //! этот экземпляр. Чужой/NULL S не подменяется держателем арены. SetRegion
 //! меняет только регион U; restart Begin(NULL, holder) сохраняет U и меняет S.
-//! Общая арена, безопасный enum и шестибайтный массив заменяют указатели,
-//! дублирующие классы и промежуточный вектор сериализации.
+//! Общая арена заменяет исходные указатели.
 
-use super::agility::AGILITY_SKILL_ID;
-use super::natural::NATURAL_SKILL_ID;
-use super::rapture::RAPTURE_SKILL_ID;
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -40,72 +31,10 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const PERSISTENT_AGILITY_FAMILY_STATE_BYTES: usize = 6;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PersistentAgilityFamilyState {
-    Agility { full_miss: u16 },
-    Natural { element_resistance_gain: u16 },
-    Rapture { blast_attack_gain: u16 },
-}
-
-impl PersistentAgilityFamilyState {
-    pub(crate) const fn skill_id(self) -> u32 {
-        match self {
-            Self::Agility { .. } => AGILITY_SKILL_ID,
-            Self::Natural { .. } => NATURAL_SKILL_ID,
-            Self::Rapture { .. } => RAPTURE_SKILL_ID,
-        }
-    }
-
-    pub(crate) const fn is_known_skill(skill_id: u32) -> bool {
-        matches!(skill_id, AGILITY_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID)
-    }
-
-    pub(crate) fn apply_to_player(
-        self, mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        match self {
-            Self::Agility { full_miss } => {
-                properties.full_miss = properties.full_miss.wrapping_add(full_miss);
-            }
-            Self::Natural { element_resistance_gain } => {
-                properties.element_resistance = properties.element_resistance
-                    .wrapping_add(u32::from(element_resistance_gain)).min(i32::MAX as u32);
-            }
-            Self::Rapture { blast_attack_gain } => {
-                properties.blast_attack = properties.blast_attack.wrapping_add(blast_attack_gain);
-            }
-        }
-        properties
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        let skill_id = reader.read_u32()?;
-        let value = reader.read_u16()?;
-        match skill_id {
-            AGILITY_SKILL_ID => Ok(Self::Agility { full_miss: value }),
-            NATURAL_SKILL_ID => Ok(Self::Natural { element_resistance_gain: value }),
-            RAPTURE_SKILL_ID => Ok(Self::Rapture { blast_attack_gain: value }),
-            _ => Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
-            }),
-        }
-    }
-
-    pub(crate) fn encoded(self) -> [u8; PERSISTENT_AGILITY_FAMILY_STATE_BYTES] {
-        let value = match self {
-            Self::Agility { full_miss } => full_miss,
-            Self::Natural { element_resistance_gain } => element_resistance_gain,
-            Self::Rapture { blast_attack_gain } => blast_attack_gain,
-        };
-        let mut bytes = [0; PERSISTENT_AGILITY_FAMILY_STATE_BYTES];
-        bytes[..4].copy_from_slice(&self.skill_id().to_le_bytes());
-        bytes[4..].copy_from_slice(&value.to_le_bytes());
-        bytes
-    }
-}
+pub(crate) use nebokrai_zone::effects::{
+    PERSISTENT_AGILITY_FAMILY_STATE_BYTES, PersistentAgilityFamilyState,
+    PersistentAgilityProperties,
+};
 
 fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
     let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
@@ -164,7 +93,20 @@ pub(crate) fn update_persistent_agility_state_properties(
 ) -> bool {
     update_player_state_properties::<PersistentAgilityFamilyState>(
         game, region_id, holder, key, |state, player| {
-            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+            player.update_state_combat_properties(|properties| {
+                let projection = PersistentAgilityProperties {
+                    full_miss: properties.full_miss,
+                    element_resistance: properties.element_resistance,
+                    blast_attack: properties.blast_attack,
+                };
+                let updated = state.apply_to_properties(projection);
+                PlayerCombatProperties {
+                    full_miss: updated.full_miss,
+                    element_resistance: updated.element_resistance,
+                    blast_attack: updated.blast_attack,
+                    ..properties
+                }
+            });
         },
     )
 }
