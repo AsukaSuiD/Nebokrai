@@ -58,6 +58,10 @@ impl PoisonFogState {
         POISON_FOG_STATE_ID
     }
 
+    pub const fn skill_level(&self) -> i32 {
+        self.skill_level
+    }
+
     pub fn begin_at(&mut self, started_at_ms: u32) {
         self.started_at_ms = started_at_ms;
     }
