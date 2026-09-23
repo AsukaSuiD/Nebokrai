@@ -9,6 +9,7 @@ mod cure;
 mod element;
 mod energyholding;
 mod fullmiss;
+mod godbless;
 mod hearten;
 mod leafcut;
 mod lifeshield;
@@ -59,6 +60,7 @@ pub use element::{
 pub use fullmiss::{
     ENLARGE_FULL_MISS_STATE_BYTES, ENLARGE_FULL_MISS_STATE_ID, EnlargeFullMissState,
 };
+pub use godbless::{GOD_BLESS_STATE_2_ID, GOD_BLESS_STATE_BYTES, GOD_BLESS_STATE_ID, GodBlessState};
 pub use hearten::{HEARTEN_STATE_BYTES, HEARTEN_STATE_ID, HeartenState};
 pub use leafcut::{
     LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,

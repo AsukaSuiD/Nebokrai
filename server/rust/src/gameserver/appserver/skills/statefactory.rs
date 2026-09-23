@@ -211,7 +211,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => StateRecordLayout::typed(
             GOD_BLESS_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::godblessstate::GodBlessState::decode(payload, offset, _now()).ok().map(StateData::GodBless)
+                super::godblessstate::GodBlessState::decode(payload, offset, _now).ok().map(StateData::GodBless)
             },
         ),
         WEAK_STATE_ID => StateRecordLayout::typed(
