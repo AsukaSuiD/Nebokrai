@@ -19,6 +19,7 @@ mod meteorarrow;
 mod periodicattack;
 mod poison;
 mod poisonfog;
+mod roar;
 mod shieldabsorption;
 mod soulcollect;
 mod swordship;
@@ -76,6 +77,7 @@ pub use periodicattack::{
 };
 pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
+pub use roar::{ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState};
 pub use soulcollect::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState};
 pub use swordship::{
     SWORDSHIP_2_STATE_ID, SWORDSHIP_3_STATE_ID, SWORDSHIP_4_STATE_ID, SWORDSHIP_STATE_BYTES,
