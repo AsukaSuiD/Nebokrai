@@ -1,23 +1,10 @@
-//! Состояние очищения CCureState (0x131), gameserver.exe + GameServer.pdb,
-//! appserver/skills/curestate.cpp. Срок задаётся конструктором; нулевой срок
-//! истекает только при started < now. DB-запись содержит ID и remaining,
-//! без базовых identities. Load читает часы перед remaining.
-//! Primary Begin проверяет S до часов, сохраняет U/S и публикует visual
-//! до регистрации. Cure заменяет первый прежний экземпляр после нового Begin;
-//! остальные producers сами определяют End прежнего состояния и добавляют новый в хвост.
-//! End отправляет visual, заново разрешает S и удаляет только этот экземпляр
-//! с обычным UpdateProperty.
-//! Повторный Begin(NULL,S) не меняет timestamp.
-
-pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
-pub(crate) const CURE_STATE_BYTES: usize = 8;
+//! Живые Begin, restart и End CCureState в переходном Game.
+//! Источник поведения: appserver/skills/curestate.cpp/.h.
 
 use super::manashieldstate::MANA_SHIELD_STATE_BEGIN_MESSAGE;
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    timed_client_state_time,
     resolve_state_move_shape, resolve_state_move_shape_mut, resolve_applied_state_sufferer,
     end_and_destroy_state_at, remove_applied_state_from, update_applied_state_end_visual,
     update_property_state_visual, StatePropertyTarget,
@@ -25,56 +12,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CureState {
-    started_at_ms: u32,
-    keep_time_ms: u32,
-}
-
-impl CureState {
-    pub(crate) const fn new(keep_time_ms: u32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms }
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 {
-        CURE_STATE_SKILL_ID
-    }
-
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn client_state_time(self, now: impl FnMut() -> u32) -> u32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now)
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != CURE_STATE_SKILL_ID {
-            return Err(LegacyReadBlock {
-                offset,
-                needed: 4,
-                available: payload.len().saturating_sub(offset),
-            });
-        }
-        Ok(Self { started_at_ms: now_ms, keep_time_ms: reader.read_u32()? })
-    }
-
-    pub(crate) fn encoded(self, now: impl FnMut() -> u32) -> [u8; CURE_STATE_BYTES] {
-        self.encoded_with_remaining(self.client_state_time(now))
-    }
-
-    pub(crate) fn encoded_for_install(self) -> [u8; CURE_STATE_BYTES] {
-        self.encoded_with_remaining(self.keep_time_ms)
-    }
-
-    fn encoded_with_remaining(self, remaining: u32) -> [u8; CURE_STATE_BYTES] {
-        let mut bytes = [0; CURE_STATE_BYTES];
-        bytes[..4].copy_from_slice(&CURE_STATE_SKILL_ID.to_le_bytes());
-        bytes[4..].copy_from_slice(&remaining.to_le_bytes());
-        bytes
-    }
-}
+pub(crate) use nebokrai_zone::effects::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID, CureState};
 
 /// Здесь Begin нового состояния предшествует поиску и End старого:
 /// во время его visual новый экземпляр ещё не принадлежит вектору состояний.
@@ -104,7 +42,7 @@ fn begin_cure_state(
     let sufferer = sufferer?;
     resolve_state_move_shape(game, holder_region, holder)?;
     resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
-    if user.is_some() { state.started_at_ms = now(); }
+    if user.is_some() { state.begin_at(now()); }
     let participant = |(region, identity)| {
         let shape = resolve_state_move_shape(game, region, identity)?.shape();
         Some((shape.get_region_id(), ShapeIdentity {

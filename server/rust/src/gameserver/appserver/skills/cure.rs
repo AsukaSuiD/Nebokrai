@@ -33,7 +33,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::public::tools::get_line_direction;
 
-pub(crate) const CURE_SKILL_ID: u32 = 0x131;
+pub(crate) use nebokrai_zone::effects::CURE_STATE_SKILL_ID as CURE_SKILL_ID;
 const PLAYER_TYPE: i32 = 400;
 const MP_LOSS: u32 = 2;
 const MAX_DISTANCE: u32 = 5_003;
