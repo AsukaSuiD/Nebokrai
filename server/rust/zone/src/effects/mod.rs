@@ -14,6 +14,7 @@ mod poisonfog;
 mod swordship;
 mod time;
 mod visualeffect;
+mod wuxing;
 
 pub use automaticrestore::{
     AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_HP_PEACE_STATE_ID,
@@ -52,3 +53,8 @@ pub use swordship::{
 };
 pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
+pub use wuxing::{
+    WUXING_EARTH_STATE_ID, WUXING_FIRE_STATE_ID, WUXING_METAL_STATE_ID, WUXING_STATE_BYTES,
+    WUXING_WATER_STATE_ID, WUXING_WOOD_STATE_ID, WuXingKind, WuXingState, WuXingStateParameters,
+    kind_for_skill_id,
+};

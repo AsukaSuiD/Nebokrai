@@ -1,4 +1,5 @@
-//! Идентификатор CWuXingFire; исполнение общее с семейством immediatestate,
-//! параметры и постоянный payload находятся в wuxing и wuxingstate.
+//! Идентификатор CWuXingFire; установка — в `wuxing.rs`, данные — в Zone.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/wuxingfire.cpp/.h`.
 
-pub(crate) const WUXING_FIRE_SKILL_ID: u32 = 0x356;
+pub(crate) use nebokrai_zone::effects::WUXING_FIRE_STATE_ID as WUXING_FIRE_SKILL_ID;

@@ -1,4 +1,5 @@
-//! Идентификатор CWuXingWood; исполнение общее с семейством immediatestate,
-//! параметры и постоянный payload находятся в wuxing и wuxingstate.
+//! Идентификатор CWuXingWood; установка — в `wuxing.rs`, данные — в Zone.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/wuxingwood.cpp/.h`.
 
-pub(crate) const WUXING_WOOD_SKILL_ID: u32 = 0x354;
+pub(crate) use nebokrai_zone::effects::WUXING_WOOD_STATE_ID as WUXING_WOOD_SKILL_ID;
