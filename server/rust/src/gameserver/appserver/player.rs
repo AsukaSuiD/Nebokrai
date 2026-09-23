@@ -618,7 +618,6 @@ const SKILL_REJECT_WAR_SOUL_REASON: u32 = 4;
 const SKILL_REJECT_CODE: u8 = 0x0c;
 const SKILL_POJIA: u32 = 530;
 const SKILL_LEIMING: u32 = 543;
-const SKILL_ID_MASK: u32 = i32::MAX as u32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyObjectMoveOperation {
@@ -1106,56 +1105,12 @@ pub(crate) struct BattleFairySkillResetReport {
     pub(crate) effects: GameEffectJournal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSkillRequest {
-    pub(crate) raw_skill_id: i32,
-    pub(crate) target_type: i32,
-    pub(crate) target_id: i32,
-    pub(crate) target_x: i32,
-    pub(crate) target_y: i32,
-}
 
-impl PlayerSkillRequest {
-    pub(crate) const fn skill_id(self) -> u32 {
-        self.raw_skill_id as u32 & SKILL_ID_MASK
-    }
-}
+pub(crate) use nebokrai_zone::skills::{
+    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts,
+};
 
-/// Facts reached `CGame` owner-а: region virtual и canonical AI разрешаются
-/// непосредственно, unknown polymorphic target остаётся process-границей.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerSkillRequestFacts {
-    pub(crate) symbol_attackable: bool,
-    pub(crate) player_ai_available: bool,
-    pub(crate) object_target_available: bool,
-}
-
-pub(crate) use nebokrai_zone::skills::{BattleFairySkillDispatch, PlayerSkillDispatch};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairySkillRequest {
-    pub(crate) raw_skill_id: i32,
-    pub(crate) target_type: i32,
-    pub(crate) target_id: i32,
-    pub(crate) property_offset: i32,
-    pub(crate) target_x: i32,
-    pub(crate) target_y: i32,
-}
-
-impl BattleFairySkillRequest {
-    pub(crate) const fn skill_id(self) -> u32 {
-        self.raw_skill_id as u32 & SKILL_ID_MASK
-    }
-}
-
-/// Facts reached `CGame` owner-а: region virtual и canonical AI разрешаются
-/// непосредственно, unknown polymorphic target остаётся process-границей.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BattleFairySkillRequestFacts {
-    pub(crate) symbol_attackable: bool,
-    pub(crate) player_ai_available: bool,
-    pub(crate) object_target_available: bool,
-}
 
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

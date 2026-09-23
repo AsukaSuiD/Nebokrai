@@ -28,7 +28,9 @@ pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
 pub use lifecycle::skill_is_restored;
 pub use battlefairy::battle_fairy_mana_text_cost;
-pub use dispatch::{BattleFairySkillDispatch, PlayerSkillDispatch};
+pub use dispatch::{BattleFairySkillDispatch, BattleFairySkillRequest,
+    BattleFairySkillRequestFacts, PlayerSkillDispatch, PlayerSkillRequest,
+    PlayerSkillRequestFacts};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
 pub use poisonfog::{PoisonFogPhalanx, PoisonFogPhalanxTick};
 pub use spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistPhalanx, SpiderMistPhalanxTick};

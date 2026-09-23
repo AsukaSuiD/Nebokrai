@@ -3,6 +3,8 @@
 //! appserver/ai/baseai.cpp/.h и appserver/ai/playerai.cpp/.h.
 //! HasTarget VA 0x004C7DD0; сравнение object/point в CPlayerAI
 //! VA 0x0050A13A–0x0050A15C и 0x0050A349–0x0050A367.
+//! Чтение ID команды и очистка старшего бита: VA 0x00488BAD–0x00488BE4
+//! и 0x00488E73–0x00488EAE.
 //! Enum и полный Eq — внутренняя модель Rust; ключ ожидающего запроса
 //! не включает уровень боевого духа и GUID цели.
 
@@ -10,6 +12,54 @@ use crate::regions::ShapeIdentity;
 use nebokrai_shared::values::CGuid;
 
 const PLAYER_TYPE: i32 = 400;
+const SKILL_ID_MASK: u32 = i32::MAX as u32;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlayerSkillRequest {
+    pub raw_skill_id: i32,
+    pub target_type: i32,
+    pub target_id: i32,
+    pub target_x: i32,
+    pub target_y: i32,
+}
+
+impl PlayerSkillRequest {
+    pub const fn skill_id(self) -> u32 {
+        self.raw_skill_id as u32 & SKILL_ID_MASK
+    }
+}
+
+/// Вычисленные Game признаки доступности цели, а не поля клиентской команды.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PlayerSkillRequestFacts {
+    pub symbol_attackable: bool,
+    pub player_ai_available: bool,
+    pub object_target_available: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BattleFairySkillRequest {
+    pub raw_skill_id: i32,
+    pub target_type: i32,
+    pub target_id: i32,
+    pub property_offset: i32,
+    pub target_x: i32,
+    pub target_y: i32,
+}
+
+impl BattleFairySkillRequest {
+    pub const fn skill_id(self) -> u32 {
+        self.raw_skill_id as u32 & SKILL_ID_MASK
+    }
+}
+
+/// Вычисленные Game признаки доступности цели, а не поля клиентской команды.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BattleFairySkillRequestFacts {
+    pub symbol_attackable: bool,
+    pub player_ai_available: bool,
+    pub object_target_available: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerSkillDispatch {

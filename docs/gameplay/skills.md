@@ -18,6 +18,8 @@
 
 ## От запроса до первого Begin
 
+[`PlayerSkillRequest` и `BattleFairySkillRequest`](../../server/rust/zone/src/skills/dispatch.rs) хранят прочитанные поля команды в Zone. `skill_id()` очищает старший бит исходного DWORD; обе ветви чтения оригинального Game делают это сразу после первого поля, до чтения цели (совпадающая Game EXE/PDB, VA `0x00488BAD–0x00488BE4` и `0x00488E73–0x00488EAE`, `VERIFIED`). `CGame` отдельно вычисляет признаки доступности цели по текущему игроку и региону и передаёт их как `PlayerSkillRequestFacts` либо `BattleFairySkillRequestFacts`. Эти признаки — внутренняя модель Rust, не поля пакета.
+
 [`CPlayer::request_player_skill_core`](../../server/rust/src/gameserver/appserver/player.rs) очищает эмоцию, проверяет уровень зарегистрированного либо предметного навыка и выбирает форму цели. Свойство self-target подставляет самого игрока. Если type или ID цели равен нулю, нулевой X **или** Y выбирает `SelfTarget`, иначе получается `Point`; при ненулевых type/ID получается `Object`, требующий доступной цели в регионе. Поэтому координатная цель с одной нулевой координатой не эквивалентна обычной point-команде.
 
 Результат — `GameEffectJournal` с `QueuePlayerSkill` и предшествующими уведомлениями. [`CGame::apply_skill_effect_journal`](../../server/rust/src/gameserver/gameserver/game.rs) применяет его и передаёт команду каноническому `CPlayerAI`. Здесь ещё нет универсальной оплаты или попадания.
