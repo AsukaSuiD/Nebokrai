@@ -496,6 +496,7 @@ use super::moveshape::{
 use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
+use nebokrai_zone::skills::{BattleFairySkillProperty, battle_fairy_skill_level};
 use super::serverregion::CServerRegion;
 use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
@@ -12619,7 +12620,14 @@ impl CPlayer {
         }
 
         let skill_level =
-            check_battle_fairy_skill(goods, goods_factory, request.property_offset, skill_id);
+            battle_fairy_skill_level(request.property_offset, skill_id, |property, index| {
+                let key = match property {
+                    BattleFairySkillProperty::RequestedOffset(offset) => GAP_BF_MAN.wrapping_add(offset),
+                    BattleFairySkillProperty::Huoxieshu => GAP_BF_HUOXIESHU_SKILL,
+                    BattleFairySkillProperty::Lingzhishu => GAP_BF_LINGZHISHU_SKILL,
+                };
+                goods.addon_property_value(goods_factory, key, index)
+            });
         if skill_level == 0 {
             push_battle_fairy_skill_reject(&mut journal, socket_id);
             trace!(
@@ -13722,27 +13730,6 @@ fn war_soul_skill_entries_from_goods(goods: &CGoods, factory: &CGoodsFactory) ->
     entries[7].1 = 1;
     entries[8].1 = 1;
     entries
-}
-
-fn check_battle_fairy_skill(
-    goods: &CGoods,
-    factory: &CGoodsFactory,
-    property_offset: i32,
-    requested_skill: u32,
-) -> i32 {
-    if property_offset == 0 {
-        return 1;
-    }
-    let property = GAP_BF_MAN.wrapping_add(property_offset);
-    if goods.addon_property_value(factory, property, 2) as u32 == requested_skill {
-        return goods.addon_property_value(factory, property, 1);
-    }
-    if goods.addon_property_value(factory, GAP_BF_HUOXIESHU_SKILL, 2) == 0x222
-        || goods.addon_property_value(factory, GAP_BF_LINGZHISHU_SKILL, 2) == 0x223
-    {
-        return 1;
-    }
-    0
 }
 
 fn push_battle_fairy_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {
