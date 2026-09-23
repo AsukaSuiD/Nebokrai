@@ -9,6 +9,8 @@
 //! VA 0x00501815–0x00501A8D, чтение VA 0x005017B4–0x00501806
 //! запись VA 0x00501892–0x00501AC7 и стоимость уведомления
 //! VA 0x00501B6B–0x00501B8D),
+//! appserver/player.cpp/.h (расход одного предмета: количество
+//! VA 0x004315E9–0x00431615, удаление VA 0x0043169C–0x00431702),
 //! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
@@ -85,6 +87,22 @@ pub fn write_battle_fairy_reset_skill(selected_skill: u32, mut write_value: impl
     write_value(2, 0);
     write_value(1, 1);
     write_value(2, selected_skill as i32);
+}
+
+/// При расходе одного предмета количество 0 или 1 ведёт к попытке удаления.
+/// Фактическую операцию над рюкзаком выполняет игрок.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BattleFairyResetItemChange {
+    Remove,
+    SetAmount(u32),
+}
+
+pub const fn battle_fairy_reset_item_change(amount: u32) -> BattleFairyResetItemChange {
+    if amount > 1 {
+        BattleFairyResetItemChange::SetAmount(amount - 1)
+    } else {
+        BattleFairyResetItemChange::Remove
+    }
 }
 
 /// Какое свойство предмета запрашивает правило; числовой ключ и чтение

@@ -497,8 +497,9 @@ use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use nebokrai_zone::skills::{
-    BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
-    battle_fairy_reset_slot, battle_fairy_skill_id, battle_fairy_skill_level,
+    BattleFairyResetItemChange, BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES,
+    battle_fairy_reset_item_change, battle_fairy_skill_entry, battle_fairy_reset_slot,
+    battle_fairy_skill_id, battle_fairy_skill_level,
     select_battle_fairy_reset_skill,
     write_battle_fairy_reset_skill,
 };
@@ -12184,29 +12185,30 @@ impl CPlayer {
                     return report;
                 };
                 let reset_position = self.packet.query_goods_position(reset_identity.ex_id);
-                let (remaining_amount, consumed, removal) = if reset_amount == 0 {
-                    (0, false, None)
-                } else if reset_amount == 1 {
-                    let removal = self.packet.remove_goods(reset_identity.ex_id);
-                    (
-                        if removal.is_some() { 0 } else { reset_amount },
-                        removal.is_some(),
-                        removal,
-                    )
-                } else {
-                    let remaining = reset_amount.wrapping_sub(1);
-                    let mut consumed = false;
-                    if let Some(reset_position) = reset_position
-                        && let Some(goods) = self.packet.get_goods_mut(reset_position)
-                    {
-                        goods.set_amount(remaining);
-                        consumed = true;
+                let change = battle_fairy_reset_item_change(reset_amount);
+                let (remaining_amount, consumed, removal) = match change {
+                    BattleFairyResetItemChange::Remove => {
+                        let removal = self.packet.remove_goods(reset_identity.ex_id);
+                        (
+                            if removal.is_some() { 0 } else { reset_amount },
+                            removal.is_some(),
+                            removal,
+                        )
                     }
-                    (
-                        if consumed { remaining } else { reset_amount },
-                        consumed,
-                        None,
-                    )
+                    BattleFairyResetItemChange::SetAmount(remaining) => {
+                        let mut consumed = false;
+                        if let Some(reset_position) = reset_position
+                            && let Some(goods) = self.packet.get_goods_mut(reset_position)
+                        {
+                            goods.set_amount(remaining);
+                            consumed = true;
+                        }
+                        (
+                            if consumed { remaining } else { reset_amount },
+                            consumed,
+                            None,
+                        )
+                    }
                 };
                 report
                     .effects
