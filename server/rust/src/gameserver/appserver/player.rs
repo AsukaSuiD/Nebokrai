@@ -39,13 +39,8 @@
 //! вызывает virtual +0x78 в 0x00488E20, item — в 0x00489109/0x00489547,
 //! WarSoul — в 0x0048953D/0x00489547. Он имеет ту же цель type=400/id игрока,
 //! что явный Object на себя; Point использует другую перегрузку +0x74.
-//! Сравнение ожидающего запроса не равно равенству исполнения:
-//! Attack point (0x0050A349..0x0050A367) сравнивает ID/x/y, object
-//! (0x0050A13A..0x0050A15C) — ID/type/target ID. Снимок уровня и GUID
-//! не заменяют ожидающую команду; полный Eq dispatch остаётся для lifecycle.
-//! Обычная object-очередь повторяет ID/type/target ID guard в
-//! 0x0050A1B5..0x0050A1D7. Обе типизированные формы используют одно правило
-//! проекции запроса; контейнеры и полное равенство исполнений независимы.
+//! Формы команды и сравнение ожидающего запроса принадлежат
+//! `zone/skills/dispatch.rs`; Player собирает их из живого запроса.
 //! OnChangeSkill (0x00508E6A..0x00508E7E) выбирает GetDefaultAttackSkillID
 //! через обычный SetCurrentSkill. Выбранный ID сохраняется после End;
 //! живое исполнение отдельно принадлежит CPlayerAI, дополнительного idle-ID нет.
@@ -1135,22 +1130,7 @@ pub(crate) struct PlayerSkillRequestFacts {
     pub(crate) object_target_available: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillDispatch {
-    SelfTarget {
-        skill_id: u32,
-        player_id: i32,
-    },
-    Point {
-        skill_id: u32,
-        x: i32,
-        y: i32,
-    },
-    Object {
-        skill_id: u32,
-        target: super::shape::ShapeIdentity,
-    },
-}
+pub(crate) use nebokrai_zone::skills::{BattleFairySkillDispatch, PlayerSkillDispatch};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequest {
@@ -1177,97 +1157,6 @@ pub(crate) struct BattleFairySkillRequestFacts {
     pub(crate) object_target_available: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillDispatch {
-    SelfTarget {
-        skill_id: u32,
-        skill_level: i32,
-        player_id: i32,
-    },
-    Point {
-        skill_id: u32,
-        skill_level: i32,
-        x: i32,
-        y: i32,
-    },
-    Object {
-        skill_id: u32,
-        skill_level: i32,
-        target: super::shape::ShapeIdentity,
-    },
-}
-
-macro_rules! skill_dispatch_request {
-    ($($dispatch:ty),+ $(,)?) => {$(
-        impl $dispatch {
-            const fn pending_request_key(self) -> (u32, u8, i32, i32) {
-                match self {
-                    Self::SelfTarget { skill_id, player_id, .. } => (skill_id, 2, PLAYER_TYPE, player_id),
-                    Self::Point { skill_id, x, y, .. } => (skill_id, 1, x, y),
-                    Self::Object { skill_id, target, .. } =>
-                        (skill_id, 2, target.object_type, target.id),
-                }
-            }
-
-            pub(crate) const fn skill_id(self) -> u32 {
-                self.pending_request_key().0
-            }
-
-            pub(crate) fn same_pending_request(self, other: Self) -> bool {
-                self.pending_request_key() == other.pending_request_key()
-            }
-
-            pub(crate) const fn object_target(self) -> Option<ShapeIdentity> {
-                match self {
-                    Self::SelfTarget { player_id, .. } => Some(ShapeIdentity {
-                        object_type: PLAYER_TYPE,
-                        id: player_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    }),
-                    Self::Object { target, .. } => Some(target),
-                    Self::Point { .. } => None,
-                }
-            }
-
-            /// CBaseAI::HasTarget (0x004C7DD0): знак важен для type/id,
-            /// координаты проверяются только на ноль, не на границы региона.
-            pub(crate) const fn has_target(self) -> bool {
-                match self {
-                    Self::Point { x, y, .. } => x != 0 && y != 0,
-                    _ => match self.object_target() {
-                        Some(target) => target.object_type > 0 && target.id > 0,
-                        None => false,
-                    },
-                }
-            }
-        }
-    )+};
-}
-
-skill_dispatch_request!(PlayerSkillDispatch, BattleFairySkillDispatch);
-
-impl PlayerSkillDispatch {
-    /// При отсутствии текущего CSkill OnSchedule выбирает default owner,
-    /// но сохраняет уже извлечённую цель; ожидающий FIFO не меняется.
-    pub(crate) const fn with_skill_id(mut self, selected: u32) -> Self {
-        match &mut self {
-            Self::SelfTarget { skill_id, .. }
-            | Self::Point { skill_id, .. }
-            | Self::Object { skill_id, .. } => *skill_id = selected,
-        }
-        self
-    }
-}
-
-impl BattleFairySkillDispatch {
-    pub(crate) const fn skill_level(self) -> i32 {
-        match self {
-            Self::SelfTarget { skill_level, .. }
-            | Self::Point { skill_level, .. }
-            | Self::Object { skill_level, .. } => skill_level,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct BattleFairyGearAddons {
