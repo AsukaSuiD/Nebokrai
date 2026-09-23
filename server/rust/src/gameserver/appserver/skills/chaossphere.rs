@@ -19,7 +19,7 @@ use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-pub(crate) const CHAOS_SPHERE_SKILL_ID: u32 = 0x137;
+pub(crate) use nebokrai_zone::skills::CHAOS_SPHERE_SKILL_ID;
 
 pub(super) fn summon_chaos_sphere<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity), runtime: &mut Runtime,
