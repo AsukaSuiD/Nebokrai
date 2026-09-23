@@ -14,7 +14,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use nebokrai_zone::skills::{FireWallLiveField, FireWallSummonParameters};
+use nebokrai_zone::skills::{ElementSummonLiveField, FireWallSummonParameters};
 
 pub(crate) use nebokrai_zone::skills::FIRE_WALL_SKILL_ID;
 
@@ -26,10 +26,10 @@ pub(super) fn summon_fire_wall<Runtime: GameMainLoopRuntime>(
     let Some(parameters) = FireWallSummonParameters::read(
         |property| properties.query_property(property),
         |field| match field {
-            FireWallLiveField::CriticalChance => source_property(game, source, SourceProperty::CriticalChance).map(|value| value as i32),
-            FireWallLiveField::AddElementAttack => source_property(game, source, SourceProperty::Element).map(|value| value as i32),
-            FireWallLiveField::SkillLevel => game.registered_skill(instance).map(|skill| skill.level()),
+            ElementSummonLiveField::CriticalChance => source_property(game, source, SourceProperty::CriticalChance).map(|value| value as i32),
+            ElementSummonLiveField::AddElementAttack => source_property(game, source, SourceProperty::Element).map(|value| value as i32),
         },
+        || game.registered_skill(instance).map(|skill| skill.level()),
         scaled_element,
     ) else { return; };
     let started = runtime.now_milliseconds();

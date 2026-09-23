@@ -244,7 +244,7 @@ fn run_zonal_cast_ai<Runtime: GameMainLoopRuntime>(
         }
         SNOW_STORM_SKILL_ID => summon_snow_storm(game, instance, source, destination, runtime),
         YIN_YANG_SKILL_ID | YIN_YANG_2_SKILL_ID => summon_yin_yang(game, instance, source, destination, runtime),
-        GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID => summon_god_thunder(game, instance, source, destination, runtime),
+        GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID => summon_god_thunder(game, instance, id, source, destination, runtime),
         FIRE_WALL_SKILL_ID => summon_fire_wall(game, instance, source, destination, runtime),
         CHAOS_SPHERE_SKILL_ID => summon_chaos_sphere(game, instance, source, runtime),
         SOUL_MIRROR_SKILL_ID => apply_soul_mirror_area(game, instance, source, &properties, runtime),

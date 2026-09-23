@@ -3,11 +3,12 @@
 //! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
 //! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
 //! Конструкторы VA 0x005F5B50/0x005EF190, Initialize 0x005F59C0/0x005EEF30,
-//! общий AddToByteArray 0x005EF0C0, AI 0x005F6150/0x005EF6B0.
+//! общий AddToByteArray 0x005EF0C0, AI 0x005F6150/0x005EF6B0,
+//! Summon 0x00573840/0x00553A80 (appserver/skills/godthunder{,2}.cpp).
 
 use nebokrai_shared::protocol::LegacyWriter;
 use crate::effects::timed_client_state_time;
-use super::ElementPhalanxAttack;
+use super::{ElementPhalanxAttack, ElementSummonLiveField};
 
 pub const GOD_THUNDER_SKILL_ID: u32 = 0x140;
 pub const GOD_THUNDER_2_SKILL_ID: u32 = 0x143;
@@ -21,6 +22,48 @@ pub const ROUNDED_THUNDER_SCOPE: [u8; 49] = [
     0, 1, 1, 1, 1, 1, 0,
     0, 0, 1, 1, 1, 0, 0,
 ];
+
+const TARGET_COUNT_PROPERTY: u32 = 20_010;
+const MAXIMUM_ATTACK_PROPERTY: u32 = 20_009;
+const MINIMUM_ATTACK_PROPERTY: u32 = 20_008;
+const FREQUENCY_PROPERTY: u32 = 6_001;
+const LIFETIME_PROPERTY: u32 = 30_001;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GodThunderSummonParameters {
+    pub skill_id: u32,
+    pub skill_level: i32,
+    pub critical_chance: i32,
+    pub target_count: u32,
+    pub element_attack: i32,
+    pub maximum_attack: i32,
+    pub minimum_attack: i32,
+    pub frequency_ms: u32,
+    pub lifetime_ms: u32,
+}
+
+impl GodThunderSummonParameters {
+    /// После общего масштабирования элемента сохраняет порядок обоих Summon.
+    pub fn read(
+        skill_id: u32,
+        mut query_property: impl FnMut(u32) -> u32,
+        mut read_live: impl FnMut(ElementSummonLiveField) -> Option<i32>,
+        current_level: impl FnOnce() -> Option<i32>,
+        scaled_element: i32,
+    ) -> Option<Self> {
+        let critical_chance = (read_live(ElementSummonLiveField::CriticalChance)? as u16) as i32;
+        let target_count = query_property(TARGET_COUNT_PROPERTY);
+        let element_attack = read_live(ElementSummonLiveField::AddElementAttack)?
+            .wrapping_add(scaled_element);
+        let maximum_attack = query_property(MAXIMUM_ATTACK_PROPERTY) as i32;
+        let minimum_attack = query_property(MINIMUM_ATTACK_PROPERTY) as i32;
+        let frequency_ms = query_property(FREQUENCY_PROPERTY);
+        let skill_level = current_level()?;
+        let lifetime_ms = query_property(LIFETIME_PROPERTY);
+        Some(Self { skill_id, skill_level, critical_chance, target_count, element_attack,
+            maximum_attack, minimum_attack, frequency_ms, lifetime_ms })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GodThunderParametersError {

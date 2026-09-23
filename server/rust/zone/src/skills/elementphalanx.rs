@@ -10,6 +10,10 @@
 
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo, truncate_original};
 
+/// Живые свойства источника, которые читает призыв элементальной области.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElementSummonLiveField { CriticalChance, AddElementAttack }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ElementPhalanxAttack {
     pub master: MasterInfo,

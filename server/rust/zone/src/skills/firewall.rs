@@ -4,6 +4,7 @@
 //! Summon VA 0x005ABC70, конструктор области VA 0x005FFF30.
 
 use crate::combat::truncate_original;
+use super::ElementSummonLiveField;
 
 pub const FIRE_WALL_SKILL_ID: u32 = 0x134;
 const LIFETIME_SCALE_PROPERTY: u32 = 20_010;
@@ -13,9 +14,6 @@ const MINIMUM_ATTACK_PROPERTY: u32 = 20_008;
 const FREQUENCY_PROPERTY: u32 = 6_001;
 const CROSS: [bool; 9] = [false, true, false, true, true, true, false, true, false];
 const FULL: [bool; 9] = [true; 9];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FireWallLiveField { CriticalChance, AddElementAttack, SkillLevel }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FireWallSummonParameters {
@@ -32,17 +30,18 @@ impl FireWallSummonParameters {
     /// Порядок Summon: срок → живые CCH и элемент → диапазон → частота → уровень.
     pub fn read(
         mut query_property: impl FnMut(u32) -> u32,
-        mut read_live: impl FnMut(FireWallLiveField) -> Option<i32>,
+        mut read_live: impl FnMut(ElementSummonLiveField) -> Option<i32>,
+        current_level: impl FnOnce() -> Option<i32>,
         scaled_element: i32,
     ) -> Option<Self> {
         let lifetime_ms = fire_wall_lifetime(&mut query_property, scaled_element);
-        let critical_chance = (read_live(FireWallLiveField::CriticalChance)? as u16) as i32;
-        let element_attack = read_live(FireWallLiveField::AddElementAttack)?
+        let critical_chance = (read_live(ElementSummonLiveField::CriticalChance)? as u16) as i32;
+        let element_attack = read_live(ElementSummonLiveField::AddElementAttack)?
             .wrapping_add(scaled_element);
         let maximum_attack = query_property(MAXIMUM_ATTACK_PROPERTY) as i32;
         let minimum_attack = query_property(MINIMUM_ATTACK_PROPERTY) as i32;
         let frequency_ms = query_property(FREQUENCY_PROPERTY);
-        let skill_level = read_live(FireWallLiveField::SkillLevel)?;
+        let skill_level = current_level()?;
         Some(Self { lifetime_ms, critical_chance, element_attack, maximum_attack,
             minimum_attack, frequency_ms, skill_level })
     }

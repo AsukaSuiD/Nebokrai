@@ -1,9 +1,9 @@
 //! Призыв областей CGodThunder и CGodThunder2.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/godthunder.cpp и
 //! godthunder2.cpp. Общий Begin/Check/AI/visual/End находится в zonalcast.
-//! Summon: Master(country0)/Player EM→свежая таблица→usage20015/FISTP→CCH WORD
-//! →CONST→GetAddElementAttack→MAX20009→MIN20008→FREQUENCY→свежий уровень
-//! →LIFETIME→ctor(clock→ID). SetTile→Initialize/RNG предшествуют повторному
+//! Summon: Master(country0)/Player EM→свежая таблица→usage20015/FISTP;
+//! ключи и дальнейший порядок живых чтений принадлежат zone/skills/godthunder.rs.
+//! SetTile→Initialize/RNG предшествуют повторному
 //! чтению actual region captured U; Add→encode/BF502 не зависят от успеха Add.
 //! Конструктор явно отклоняет параметры с native делением на ноль или выходом
 //! из массива; валидный порядок запросов и RNG не меняется. Маски, окна и
@@ -16,34 +16,32 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::{ElementSummonLiveField, GodThunderSummonParameters};
 
 pub(crate) use nebokrai_zone::skills::GOD_THUNDER_SKILL_ID;
 
 pub(super) fn summon_god_thunder<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
+    game: &mut CGame, instance: RegisteredSkill, skill_id: u32,
+    source: (i32, ShapeIdentity),
     destination: (i32, i32), runtime: &mut Runtime,
 ) {
     let Some((master, properties, scaled_element)) = prepare_element_summon(game, instance, source) else { return; };
-    let Some(cch) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
-    let cch = i32::from(cch as u16);
-    let count = properties.query_property(20_010);
-    let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
-    let element = (element as i32).wrapping_add(scaled_element);
-    let maximum = properties.query_property(20_009) as i32;
-    let minimum = properties.query_property(20_008) as i32;
-    let frequency = properties.query_property(6_001);
-    let Some(skill) = game.registered_skill(instance) else { return; };
-    let skill_id = skill.id();
-    let level = i32::from(skill.level());
-    let lifetime = properties.query_property(30_001);
+    let Some(parameters) = GodThunderSummonParameters::read(
+        skill_id,
+        |property| properties.query_property(property),
+        |field| match field {
+            ElementSummonLiveField::CriticalChance => source_property(game, source, SourceProperty::CriticalChance).map(|value| value as i32),
+            ElementSummonLiveField::AddElementAttack => source_property(game, source, SourceProperty::Element).map(|value| value as i32),
+        },
+        || game.registered_skill(instance).map(|skill| skill.level()),
+        scaled_element,
+    ) else { return; };
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
-    let mut phalanx = match CGodThunderPhalanx::new_for_skill(
-        skill_id, id, master, started, lifetime, level, frequency, minimum, maximum, element, count, cch,
-    ) {
+    let mut phalanx = match CGodThunderPhalanx::new(id, master, started, parameters) {
         Ok(phalanx) => phalanx,
         Err(error) => {
-            tracing::error!(skill_id, ?error, "некорректные параметры божественного грома");
+            tracing::error!(skill_id = parameters.skill_id, ?error, "некорректные параметры божественного грома");
             return;
         }
     };

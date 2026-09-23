@@ -7,7 +7,8 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use nebokrai_shared::values::CGuid;
-use nebokrai_zone::skills::{ElementPhalanxAttack, GodThunderParametersError, GodThunderPhalanx};
+use nebokrai_zone::skills::{ElementPhalanxAttack, GodThunderParametersError,
+    GodThunderPhalanx, GodThunderSummonParameters};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CGodThunderPhalanx {
@@ -16,18 +17,18 @@ pub(crate) struct CGodThunderPhalanx {
 }
 
 impl CGodThunderPhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля исходного конструктора области")]
-    pub(crate) fn new_for_skill(
-        skill_id: u32, id: i32, master: MasterInfo, started_at_ms: u32,
-        lifetime_ms: u32, skill_level: i32, frequency_ms: u32,
-        minimum: i32, maximum: i32, element: i32, target_count: u32,
-        critical_chance: i32,
+    pub(crate) fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32,
+        parameters: GodThunderSummonParameters,
     ) -> Result<Self, GodThunderParametersError> {
         let area = GodThunderPhalanx::new(
             ElementPhalanxAttack {
-                master, skill_id, skill_level, minimum, maximum, element, critical_chance,
+                master, skill_id: parameters.skill_id, skill_level: parameters.skill_level,
+                minimum: parameters.minimum_attack, maximum: parameters.maximum_attack,
+                element: parameters.element_attack, critical_chance: parameters.critical_chance,
             },
-            started_at_ms, lifetime_ms, frequency_ms, target_count,
+            started_at_ms, parameters.lifetime_ms, parameters.frequency_ms,
+            parameters.target_count,
         )?;
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity {
