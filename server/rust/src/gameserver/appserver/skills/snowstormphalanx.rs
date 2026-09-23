@@ -12,7 +12,6 @@
 use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -91,13 +90,6 @@ pub(crate) fn apply_snow_storm_attack<Runtime: GameMainLoopRuntime>(
 ) {
     if game.move_shape_health(region, target).is_none_or(|hp| hp == 0) { return; }
     let master = snapshot.attack_master();
-    let mut attack = AttackInformation::for_master(master);
-    attack.skill_id = SNOW_STORM_SKILL_ID;
-    attack.skill_level = snapshot.skill_level as u8;
-    attack.damage_modifier = 0;
-    attack.damage_factor = 1.0;
-    attack.hit_modifier = 100;
-    let damage = snapshot.element_damage(|width| game.skill_random_below(width));
-    attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 });
+    let attack = snapshot.attack_information(|width| game.skill_random_below(width));
     game.apply_owned_skill_contact(master, target, region, attack, runtime);
 }

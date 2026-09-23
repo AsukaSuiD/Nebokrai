@@ -2,9 +2,9 @@
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/snowstormphalanx.cpp/.h.
 //! Конструктор VA 0x005F9040, Initialize 0x005F8D70,
-//! элементальная формула 0x005F934B, AI 0x005F94B0.
+//! CalculateAttackPower 0x005F92D0, Attack 0x005F93B0, AI 0x005F94B0.
 
-use crate::combat::MasterInfo;
+use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo};
 
 pub const SNOW_STORM_SKILL_ID: u32 = 0x193;
 pub const SNOW_STORM_SCOPE_AREA: u32 = 25;
@@ -31,11 +31,26 @@ impl SnowStormAttack {
         }
     }
 
-    pub fn element_damage(self, random_below: impl FnOnce(i32) -> i32) -> i32 {
+    fn element_damage(self, random_below: impl FnOnce(i32) -> i32) -> i32 {
         let width = self.maximum_attack.wrapping_sub(self.minimum_attack)
             .wrapping_abs().wrapping_add(1);
         random_below(width).wrapping_add(self.minimum_attack)
             .wrapping_add(self.element_modifier).max(0)
+    }
+
+    pub fn attack_information(self, random_below: impl FnOnce(i32) -> i32) -> AttackInformation {
+        let mut attack = AttackInformation::for_master(self.attack_master());
+        attack.skill_id = SNOW_STORM_SKILL_ID;
+        attack.skill_level = self.skill_level as u8;
+        attack.damage_modifier = 0;
+        attack.damage_factor = 1.0;
+        attack.hit_modifier = 100;
+        attack.damages.push(AttackPower {
+            kind: AttackPowerType::Element,
+            hp_damage: self.element_damage(random_below),
+            mp_damage: 0,
+        });
+        attack
     }
 }
 
