@@ -271,7 +271,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         PILLAR_STATE_ID => StateRecordLayout::typed(
             PILLAR_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::pillarstate::PillarState::decode(payload, offset, _now()).ok().map(StateData::Pillar)
+                super::pillarstate::PillarState::decode(payload, offset, _now).ok().map(StateData::Pillar)
             },
         ),
         RAGE_BREAK_STATE_ID => StateRecordLayout::typed(

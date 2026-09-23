@@ -1,73 +1,21 @@
-//! Защитная стойка CPillarState и её переключение повторным применением.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/pillarstate.cpp.
-//!
-//! Первый непустой ID74 снимается через End и destructor свежего остатка
-//! той же позиции; новый экземпляр при этом не создаётся. Без такого слота
-//! Begin(U,U) публикует loop1 visual, запрещает движение и лишь затем
-//! передаёт состояние общей SlotMap-арене. После попытки нового Begin
-//! вызывается UpdateProperty, но ветвь снятия не добавляет второй вызов.
-//! Само состояние не меняет свойства: коэффициент читает поздний PostDefense.
-//!
-//! End публикует снятие, заново разрешает S, снимает один запрет движения и
-//! удаляет именно этот объект из арены S. Он не записывает ended: чужой либо
-//! отсутствующий S оставляет запись до внешнего destructor. AI сравнивает
-//! unsigned wrapping start+keep строго с now, без особой ветви keep=0.
-//! NULL-user restart сохраняет начало срока и источник, создаёт новый visual
-//! и запрещает движение исходному S после публикации, не заменяя запись.
-//!
-//! DB: ID/remaining/IEEE-754 factor (12 байт). Load читает часы до двух полей,
-//! restart их не обновляет. Клиентский срок читает часы один либо два раза;
-//! additional равен нулю. SetRegion меняет только регион сохранённого U.
+//! Живое переключение, visual и End защитной стойки CPillarState.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/pillarstate.cpp/.h;
+//! данные, срок и сохраняемая запись находятся в Zone effects.
+//! Повторный каст снимает первый ID74; Begin запрещает движение после visual.
+//! End ищет фактического Sufferer и снимает его запрет движения перед удалением.
 
-use crate::gameserver::appserver::states::state::{
-    StatePropertyTarget, begin_base_applied_state, begin_applied_state_visual,
-    end_and_destroy_state_at, remove_applied_state_from, resolve_applied_state_sufferer,
-    update_applied_state_end_visual, update_property_state_visual,
-};
 use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::states::state::{resolve_state_move_shape, resolve_state_move_shape_mut};
-
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
+    end_and_destroy_state_at, remove_applied_state_from, resolve_applied_state_sufferer,
+    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_end_visual,
+    update_property_state_visual,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
-
-pub(crate) const PILLAR_STATE_ID: u32 = 0x74;
-pub(crate) const PILLAR_STATE_BYTES: usize = 12;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PillarState { started_at_ms: u32, keep_time_ms: u32, damage_factor_bits: u32 }
-
-impl PillarState {
-    pub(crate) const fn new(keep_time_ms: u32, damage_factor: f32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
-    }
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != PILLAR_STATE_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        let remaining = reader.read_u32()?;
-        Ok(Self { started_at_ms: now_ms, keep_time_ms: remaining, damage_factor_bits: reader.read_u32()? })
-    }
-
-    pub(crate) fn encoded_for_install(self) -> [u8; PILLAR_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
-    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; PILLAR_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
-    fn encoded_with_remaining(self, remaining: u32) -> [u8; PILLAR_STATE_BYTES] {
-        let mut bytes = [0; PILLAR_STATE_BYTES];
-        bytes[..4].copy_from_slice(&PILLAR_STATE_ID.to_le_bytes());
-        bytes[4..8].copy_from_slice(&remaining.to_le_bytes());
-        bytes[8..].copy_from_slice(&self.damage_factor_bits.to_le_bytes());
-        bytes
-    }
-    pub(crate) const fn skill_id(self) -> u32 { PILLAR_STATE_ID }
-    pub(crate) const fn damage_factor(self) -> f32 { f32::from_bits(self.damage_factor_bits) }
-    pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
-}
-
+pub(crate) use nebokrai_zone::effects::{PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState};
 pub(crate) fn toggle_pillar_state(
     game: &mut CGame, source: (i32, ShapeIdentity),
     create: impl FnOnce(&CGame) -> Option<PillarState>, now: &mut dyn FnMut() -> u32,
@@ -80,7 +28,7 @@ pub(crate) fn toggle_pillar_state(
     let Some(mut state) = create(game) else { return false; };
     let begun = (|| {
         resolve_state_move_shape(game, source.0, source.1)?;
-        state.started_at_ms = now();
+        state.begin_at(now());
         let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
         let participant = (shape.get_region_id(), ShapeIdentity {
             ex_id: CGuid::GUID_INVALID, ..shape.identity()

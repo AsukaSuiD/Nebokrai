@@ -17,6 +17,7 @@ mod manashield;
 mod maxresource;
 mod meteorarrow;
 mod periodicattack;
+mod pillar;
 mod poison;
 mod poisonfog;
 mod roar;
@@ -75,6 +76,7 @@ pub use periodicattack::{
     PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state,
     encode_periodic_state_for_install,
 };
+pub use pillar::{PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState};
 pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
 pub use roar::{ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState};
