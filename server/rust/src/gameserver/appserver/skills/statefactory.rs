@@ -321,7 +321,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         HEARTEN_SKILL_ID => StateRecordLayout::typed(
             HEARTEN_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::heartenstate::HeartenState::decode(payload, offset, _now()).ok().map(StateData::Hearten)
+                super::heartenstate::HeartenState::decode(payload, offset, _now).ok().map(StateData::Hearten)
             },
         ),
         super::agility::AGILITY_SKILL_ID | super::natural::NATURAL_SKILL_ID | super::rapture::RAPTURE_SKILL_ID => StateRecordLayout::typed(

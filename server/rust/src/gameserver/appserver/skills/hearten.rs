@@ -14,7 +14,7 @@
 //! затем создаётся новый: Begin(U,S) → append → UpdateProperty цели → End(1).
 //! Отказ и отмена используют полный End того же зарегистрированного экземпляра.
 
-use super::heartenstate::{HeartenState, begin_primary_hearten_state};
+use super::heartenstate::begin_primary_hearten_state;
 use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
@@ -37,12 +37,11 @@ use crate::gameserver::gameserver::game::{
     ServerRegionOwner,
 };
 use crate::public::tools::get_line_direction;
+use nebokrai_zone::skills::hearten_state;
 
 pub(crate) use nebokrai_zone::effects::HEARTEN_STATE_ID as HEARTEN_SKILL_ID;
 const PLAYER_TYPE: i32 = 400;
 const MP_LOSS: u32 = 2;
-const MAX_HP_GAIN: u32 = 118;
-const PERSIST: u32 = 10_002;
 const MAX_DISTANCE: u32 = 5_003;
 const REUSE: u32 = 10_005;
 const CAN_BREAK: u32 = 10_006;
@@ -199,9 +198,7 @@ impl RegisteredStateSkill for Hearten {
         {
             let _ = end_and_destroy_state_at(game, target.0, target.1, position);
         }
-        let gain = properties.query_property(MAX_HP_GAIN) as i32;
-        let keep = properties.query_property(PERSIST);
-        let state = HeartenState::new(0, keep, gain);
+        let state = hearten_state(|key| properties.query_property(key));
         let _ = begin_primary_hearten_state(
             game, Some(source), target, state, &mut || runtime.now_milliseconds(),
         );
