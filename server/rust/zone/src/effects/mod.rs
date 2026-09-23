@@ -9,6 +9,7 @@ mod energyholding;
 mod fullmiss;
 mod hearten;
 mod leafcut;
+mod machineshield;
 mod maxresource;
 mod meteorarrow;
 mod periodicattack;
@@ -50,6 +51,7 @@ pub use leafcut::{
     LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,
     LeafCutAttackSeed, LeafCutState,
 };
+pub use machineshield::{MACHINE_SHIELD_SKILL_ID, MACHINE_SHIELD_STATE_BYTES, MachineShieldState};
 pub use maxresource::{
     ENLARGE_MAX_HP_STATE_ID, ENLARGE_MAX_MP_STATE_ID, EnlargeMaxHpState, EnlargeMaxMpState,
     MAX_RESOURCE_STATE_BYTES, MaxResourceState,
