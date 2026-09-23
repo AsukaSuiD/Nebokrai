@@ -11,7 +11,7 @@
 //! синхронный контакт меняет следующий снимок. Любой разрешённый CMoveShape
 //! делает клетку занятой; допуск, дедупликация и raw Attack относятся только
 //! к подходящим целям. Пустая проходимая клетка создаёт CSummonedCreature с
-//! fresh Master(country0), lifetime, направлением и picture. Формулу и raw
+//! fresh Master(country0) и параметрами Zone. Формулу и raw
 //! контакт сохраняет directelementattack: weapon factor, Player-only EM и
 //! единственный RNG без damage modifier, RP, CCH и второго RNG.
 
@@ -24,42 +24,13 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::{SoulMirrorSummonParameters,
+    soul_mirror_scope_size, soul_mirror_scope_cell};
 
-pub(crate) const SOUL_MIRROR_SKILL_ID: u32 = 0x13c;
-
-const SUMMONED_LIFETIME: u32 = 30_001;
-const SUMMONED_CREATURE_ID: u32 = 30_003;
-
-const SCOPE_DIRECTIONS: [((i32, i32), (i32, i32)); 8] = [
-    ((0, -1), (1, 0)), ((1, -1), (1, 1)), ((1, 0), (0, 1)), ((1, 1), (-1, 1)),
-    ((0, 1), (1, 0)), ((-1, 1), (1, 1)), ((-1, 0), (0, 1)), ((-1, -1), (-1, 1)),
-];
-
-fn scope_size(level: i32) -> Option<i32> {
-    match level {
-        1 => Some(3),
-        2 => Some(5),
-        3 => Some(7),
-        _ => None,
-    }
-}
+pub(crate) use nebokrai_zone::skills::SOUL_MIRROR_SKILL_ID;
 
 fn current_scope_size(game: &CGame, instance: RegisteredSkill) -> Option<i32> {
-    game.registered_skill(instance).and_then(|skill| scope_size(skill.level()))
-}
-
-fn scope_cell(level: i32, direction: i32, x: i32, y: i32) -> bool {
-    let Some(size) = scope_size(level) else { return false; };
-    if !(0..size).contains(&x) || !(0..size).contains(&y) { return false; }
-    let Some(&(forward, tangent)) = SCOPE_DIRECTIONS.get(direction as usize) else {
-        return false;
-    };
-    let center = level;
-    let radius = center.wrapping_sub(1);
-    (-radius..=radius).any(|offset| {
-        x == center.wrapping_add(forward.0).wrapping_add(tangent.0.wrapping_mul(offset))
-            && y == center.wrapping_add(forward.1).wrapping_add(tangent.1.wrapping_mul(offset))
-    })
+    game.registered_skill(instance).and_then(|skill| soul_mirror_scope_size(skill.level()))
 }
 
 fn summon_empty_cell(
@@ -79,19 +50,18 @@ fn summon_empty_cell(
 
     let Some(mut master) = source_master(game, source) else { return; };
     master.master_country_id = 0;
-    let lifetime = properties.query_property(SUMMONED_LIFETIME);
-    let Some(direction) = resolve_state_move_shape(game, source.0, source.1)
-        .map(|source| source.shape().get_direction())
-    else {
-        return;
-    };
-    let picture = properties.query_property(SUMMONED_CREATURE_ID);
-    let Some(property) = game.find_monster_property_by_picture_id(picture).cloned() else {
+    let Some(parameters) = SoulMirrorSummonParameters::read(
+        |property| properties.query_property(property),
+        || resolve_state_move_shape(game, source.0, source.1)
+            .map(|source| source.shape().get_direction()),
+    ) else { return; };
+    let Some(property) = game.find_monster_property_by_picture_id(parameters.creature_picture_id).cloned() else {
         return;
     };
     let Some(mut owner) = game.take_region_owner(region_id) else { return; };
     let _ = game.add_summoned_creature_owned(
-        owner.base_mut(), &property, master, x, y, direction, lifetime,
+        owner.base_mut(), &property, master, x, y,
+        parameters.direction, parameters.lifetime_ms,
     );
     game.restore_region_owner(owner);
 }
@@ -139,7 +109,7 @@ pub(super) fn apply_soul_mirror_area<Runtime: GameMainLoopRuntime>(
             };
             let cell_x = start_x.wrapping_add(column);
             let cell_y = start_y.wrapping_add(row);
-            if scope_cell(level, direction, column, row) {
+            if soul_mirror_scope_cell(level, direction, column, row) {
                 // Один resolver-снимок на клетку; следующий создаётся только
                 // после всех callbacks текущей клетки.
                 let mut occupied = false;

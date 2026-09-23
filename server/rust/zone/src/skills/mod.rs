@@ -11,6 +11,7 @@ mod yinyang;
 mod elementphalanx;
 mod godthunder;
 mod chaossphere;
+mod soulmirror;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
@@ -28,3 +29,5 @@ pub use godthunder::{GOD_THUNDER_SKILL_ID, GOD_THUNDER_2_SKILL_ID,
     GodThunderParametersError, GodThunderPhalanx, GodThunderSummonParameters};
 pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
     ChaosSphereSummonParameters, chaos_sphere_path_length};
+pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorSummonParameters,
+    soul_mirror_scope_size, soul_mirror_scope_cell};
