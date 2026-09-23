@@ -498,7 +498,8 @@ use nebokrai_zone::scripts::{
 };
 use nebokrai_zone::skills::{
     BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
-    battle_fairy_skill_id, battle_fairy_skill_level, unpaired_battle_fairy_skill,
+    battle_fairy_skill_id, battle_fairy_skill_level, battle_fairy_reset_candidate_allowed,
+    battle_fairy_all_skill_candidate_allowed,
 };
 use super::serverregion::CServerRegion;
 use super::shape::{
@@ -12297,22 +12298,13 @@ impl CPlayer {
         let selected_skill = match replaced {
             Some(replaced) => loop {
                 let candidate = SKILL_POJIA.wrapping_add(random(13) as u32);
-                if current_skills.contains(&candidate) {
-                    continue;
-                }
-                let conflicts = unpaired_battle_fairy_skill(candidate).is_some_and(|paired| {
-                    current_skills
-                        .iter()
-                        .enumerate()
-                        .any(|(index, &skill)| index != replaced && skill == paired)
-                });
-                if !conflicts {
+                if battle_fairy_reset_candidate_allowed(candidate, current_skills, replaced) {
                     break candidate;
                 }
             },
             None => loop {
                 let candidate = SKILL_LEIMING.wrapping_add(random(3) as u32);
-                if candidate != current_all_skill {
+                if battle_fairy_all_skill_candidate_allowed(candidate, current_all_skill) {
                     break candidate;
                 }
             },

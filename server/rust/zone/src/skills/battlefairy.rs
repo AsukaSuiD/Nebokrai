@@ -5,6 +5,8 @@
 //! VA 0x00430610–0x00430756 и 0x00430760–0x00430921),
 //! constructor `CBattleFairyContainer` (пары несовместимых навыков
 //! VA 0x00504052–0x00504149),
+//! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
+//! VA 0x00501815–0x00501A8D),
 //! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
@@ -22,6 +24,32 @@ pub const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {
         537 => 533,
         _ => return None,
     })
+}
+
+/// Проверка новой попытки для одного из трёх слотов стихии. Ноль после
+/// DWORD-сложения принимается до сравнения с текущими навыками.
+pub fn battle_fairy_reset_candidate_allowed(
+    candidate: u32,
+    current_skills: [u32; 3],
+    replaced: usize,
+) -> bool {
+    if candidate == 0 {
+        return true;
+    }
+    if current_skills.contains(&candidate) {
+        return false;
+    }
+    !unpaired_battle_fairy_skill(candidate).is_some_and(|paired| {
+        current_skills
+            .iter()
+            .enumerate()
+            .any(|(index, &skill)| index != replaced && skill == paired)
+    })
+}
+
+/// Общий слот отвергает только прежний ID; ноль принимается раньше сравнения.
+pub const fn battle_fairy_all_skill_candidate_allowed(candidate: u32, current: u32) -> bool {
+    candidate == 0 || candidate != current
 }
 
 /// Какое свойство предмета запрашивает правило; числовой ключ и чтение
