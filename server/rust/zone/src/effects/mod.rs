@@ -2,6 +2,7 @@
 
 mod automaticrestore;
 mod bloodloss;
+mod hearten;
 mod leafcut;
 mod maxresource;
 mod meteorarrow;
@@ -20,6 +21,7 @@ pub use automaticrestore::{
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
 };
+pub use hearten::{HEARTEN_STATE_BYTES, HEARTEN_STATE_ID, HeartenState};
 pub use leafcut::{
     LEAF_CUT_2_STATE_ID, LEAF_CUT_3_STATE_ID, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID,
     LeafCutAttackSeed, LeafCutState,

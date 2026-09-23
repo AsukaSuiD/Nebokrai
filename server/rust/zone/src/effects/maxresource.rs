@@ -19,6 +19,15 @@ pub struct MaxResourceState<const ID: u32> {
 pub type EnlargeMaxHpState = MaxResourceState<ENLARGE_MAX_HP_STATE_ID>;
 pub type EnlargeMaxMpState = MaxResourceState<ENLARGE_MAX_MP_STATE_ID>;
 
+pub(super) const fn apply_max_resource_gain(value: u32, gain: i32) -> u32 {
+    let result = value.wrapping_add(gain as u32);
+    if result > i32::MAX as u32 {
+        i32::MAX as u32
+    } else {
+        result
+    }
+}
+
 impl<const ID: u32> MaxResourceState<ID> {
     pub const fn new(gain: i32) -> Self {
         Self { gain }
@@ -49,11 +58,6 @@ impl<const ID: u32> MaxResourceState<ID> {
 
     /// Оригинальные callbacks HP и MP используют одинаковое сложение DWORD.
     pub const fn apply(self, value: u32) -> u32 {
-        let result = value.wrapping_add(self.gain as u32);
-        if result > i32::MAX as u32 {
-            i32::MAX as u32
-        } else {
-            result
-        }
+        apply_max_resource_gain(value, self.gain)
     }
 }

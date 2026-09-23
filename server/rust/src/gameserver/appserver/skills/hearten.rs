@@ -38,7 +38,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::public::tools::get_line_direction;
 
-pub(crate) const HEARTEN_SKILL_ID: u32 = 0x144;
+pub(crate) use nebokrai_zone::effects::HEARTEN_STATE_ID as HEARTEN_SKILL_ID;
 const PLAYER_TYPE: i32 = 400;
 const MP_LOSS: u32 = 2;
 const MAX_HP_GAIN: u32 = 118;

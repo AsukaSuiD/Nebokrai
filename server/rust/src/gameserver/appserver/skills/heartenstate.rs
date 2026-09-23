@@ -1,89 +1,21 @@
-//! CHeartenState (0x144), gameserver.exe/GameServer.pdb,
-//! appserver/skills/heartenstate.cpp.
-//!
-//! Первичный Begin записывает часы только при ненулевом U и создаёт loop1
-//! visual без пакета. Пакет начала отправляется при каждом пересчёте свойств
-//! actual S; лишь игрок получает wrapping-прибавку maximum HP с пределом
-//! INT_MAX. После End visual цель разрешается заново для RemoveState.
-//! Перезапуск с NULL U сохраняет часы и прежнего пользователя.
-//! DB-запись содержит ID, остаток срока и знаковую прибавку HP; загрузка
-//! читает часы перед полями, клиентский остаток — два живых чтения часов.
-//! Payload и DB-span принадлежат одной записи общей арены.
+//! Применение и снятие Hearten у живой фигуры Game.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/heartenstate.cpp` и `heartenstate.h`.
+//! Данные, срок и формула прибавки находятся в `zone/effects/hearten.rs`;
+//! участники, visual и запись результата игроку остаются здесь.
 
-use super::hearten::HEARTEN_SKILL_ID;
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
     remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
-    resolve_state_move_shape_mut, timed_client_state_time, update_applied_state_end_visual,
+    resolve_state_move_shape_mut, update_applied_state_end_visual,
     update_player_state_properties, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const HEARTEN_STATE_BYTES: usize = 12;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct HeartenState {
-    started_at_ms: u32,
-    keep_time_ms: u32,
-    max_hp_gain: i32,
-}
-
-impl HeartenState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, max_hp_gain: i32) -> Self {
-        Self { started_at_ms, keep_time_ms, max_hp_gain }
-    }
-
-    pub(crate) const fn skill_id(&self) -> u32 { HEARTEN_SKILL_ID }
-
-    pub(crate) const fn expired(&self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn client_time(&self, now_milliseconds: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
-    }
-
-    pub(crate) const fn apply(&self, value: u32) -> u32 {
-        let result = value.wrapping_add(self.max_hp_gain as u32);
-        if result > i32::MAX as u32 { i32::MAX as u32 } else { result }
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != HEARTEN_SKILL_ID {
-            return Err(LegacyReadBlock {
-                offset,
-                needed: 4,
-                available: payload.len().saturating_sub(offset),
-            });
-        }
-        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?))
-    }
-
-    pub(crate) fn encoded(
-        &self, now_milliseconds: impl FnMut() -> u32,
-    ) -> [u8; HEARTEN_STATE_BYTES] {
-        let mut bytes = Vec::with_capacity(HEARTEN_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(HEARTEN_SKILL_ID);
-        writer.write_u32(self.client_time(now_milliseconds) as u32);
-        writer.write_i32(self.max_hp_gain);
-        bytes.try_into().expect("размер состояния воодушевления фиксирован")
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> [u8; HEARTEN_STATE_BYTES] {
-        let mut bytes = Vec::with_capacity(HEARTEN_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(HEARTEN_SKILL_ID);
-        writer.write_u32(self.keep_time_ms);
-        writer.write_i32(self.max_hp_gain);
-        bytes.try_into().expect("размер состояния воодушевления фиксирован")
-    }
-}
+pub(crate) use nebokrai_zone::effects::{HEARTEN_STATE_BYTES, HeartenState};
 
 pub(crate) fn begin_primary_hearten_state(
     game: &mut CGame,
@@ -92,7 +24,7 @@ pub(crate) fn begin_primary_hearten_state(
     mut state: HeartenState,
     now: &mut dyn FnMut() -> u32,
 ) -> Option<StateKey> {
-    if user.is_some() { state.started_at_ms = now(); }
+    if user.is_some() { state.begin_at(now()); }
     let participant = |(region, identity)| {
         let shape = resolve_state_move_shape(game, region, identity)?.shape();
         Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
