@@ -49,16 +49,7 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
 pub(super) const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 
-pub(super) fn truncate_original_i64_low(value: f64) -> i32 {
-    if !value.is_finite()
-        || value < -9_223_372_036_854_775_808.0
-        || value >= 9_223_372_036_854_775_808.0
-    {
-        i64::MIN as i32
-    } else {
-        (value as i64) as i32
-    }
-}
+pub(super) use nebokrai_zone::combat::truncate_original_i64_low;
 
 pub(super) fn scaled_battle_fairy_sprite(sprite: i32) -> i32 {
     truncate_original_i64_low(f64::from(sprite) * 0.0001)

@@ -1,173 +1,21 @@
-//! Ослабление защиты и сопротивления ядовитым туманом (0xC9).
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/poisonfogstate.cpp.
-//!
-//! Общая арена владеет экземпляром, visual и DB-span. Begin требует S,
-//! создаёт loop1 visual без Update; перезапуск с NULL U сохраняет timestamp.
-//! End выполняет visual, затем удаляет тот же экземпляр у заново найденного S.
-//! Неиспользуемые координаты и CScope состояния не материализованы: срок
-//! определяется только часами, а геометрия принадлежит создающей области.
-//! Поле dodge_loss сохраняется в 36-байтовой записи, но формулы его не читают.
-//! Load читает часы после уровня и до remaining; Save не меняет payload.
+//! Наложение, обновление и снятие ядовитого тумана у живой фигуры Game.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/poisonfogstate.cpp` и `poisonfogstate.h`.
+//! Данные, запись и расчёт потерь находятся в Zone; здесь остаются участники,
+//! visual, поиск фигуры и запись рассчитанных свойств.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::appserver::states::state::{
     begin_applied_state_visual, begin_base_applied_state, remove_applied_state_from,
     resolve_applied_state_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
-    timed_client_state_time, update_applied_state_end_visual, update_property_state_visual,
+    update_applied_state_end_visual, update_property_state_visual,
     StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const POISON_FOG_STATE_ID: u32 = 0xc9;
-pub(crate) const POISON_FOG_STATE_BYTES: usize = 36;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PoisonFogState {
-    skill_level: i32,
-    started_at_ms: u32,
-    keep_time_ms: u32,
-    defense_loss: u32,
-    defense_loss_coefficient: u32,
-    dodge_loss: u32,
-    element_resistance_loss: u32,
-    element_resistance_loss_coefficient: u32,
-    weapon_damage_level: u32,
-}
-
-impl PoisonFogState {
-    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют состоянию EXE")]
-    pub(crate) const fn new(
-        skill_level: i32,
-        keep_time_ms: u32,
-        defense_loss: u32,
-        defense_loss_coefficient: u32,
-        dodge_loss: u32,
-        element_resistance_loss: u32,
-        element_resistance_loss_coefficient: u32,
-        weapon_damage_level: u32,
-    ) -> Self {
-        Self {
-            skill_level, started_at_ms: 0, keep_time_ms,
-            defense_loss, defense_loss_coefficient, dodge_loss,
-            element_resistance_loss, element_resistance_loss_coefficient,
-            weapon_damage_level,
-        }
-    }
-
-    pub(crate) const fn skill_id(&self) -> u32 { POISON_FOG_STATE_ID }
-
-    pub(crate) const fn expired(&self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn client_time(&self, now: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now) as i32
-    }
-
-    // У игрока разница уровней остаётся в x87; произведение и ограничение
-    // текущим свойством проходят через float, затем усечение до младшего WORD.
-    fn player_loss(&self, target_level: u8, coefficient: u32, maximum: u32, current: u32) -> u32 {
-        let scaled = if coefficient == 0 {
-            0.0
-        } else {
-            let difference = f64::from(self.weapon_damage_level) - f64::from(target_level);
-            let ratio = (difference / f64::from(coefficient)).clamp(0.0, 1.0);
-            (f64::from(maximum) * ratio) as f32
-        };
-        let capped = if f64::from(current) < f64::from(scaled) {
-            f64::from(current) as f32
-        } else {
-            scaled
-        };
-        truncate_original(f64::from(capped)) as u32 & 0xffff
-    }
-
-    // У монстра сама разница уже float. Произведение защиты остаётся в x87,
-    // а произведение сопротивления сначала записывается во float.
-    fn monster_losses(&self, target_level: u8) -> (u32, u32) {
-        let difference = (f64::from(self.weapon_damage_level) - f64::from(target_level)) as f32;
-        let ratio = |coefficient: u32| {
-            if coefficient == 0 {
-                0.0
-            } else {
-                (f64::from(difference) / f64::from(coefficient)).clamp(0.0, 1.0)
-            }
-        };
-        let defense = truncate_original(
-            f64::from(self.defense_loss) * ratio(self.defense_loss_coefficient),
-        ) as u32;
-        let resistance = (f64::from(self.element_resistance_loss)
-            * ratio(self.element_resistance_loss_coefficient)) as f32;
-        (defense, truncate_original(f64::from(resistance)) as u32)
-    }
-
-    pub(crate) fn apply_to_player(&self, target_level: u8, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
-        let defense = self.player_loss(
-            target_level,
-            self.defense_loss_coefficient,
-            self.defense_loss,
-            properties.defense,
-        );
-        let resistance = self.player_loss(
-            target_level,
-            self.element_resistance_loss_coefficient,
-            self.element_resistance_loss,
-            properties.element_resistance,
-        );
-        properties.defense = properties.defense.wrapping_sub(defense).min(i32::MAX as u32);
-        properties.element_resistance = properties.element_resistance.wrapping_sub(resistance).min(i32::MAX as u32);
-        properties
-    }
-
-    pub(crate) fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
-    ) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != POISON_FOG_STATE_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        let skill_level = reader.read_i32()?;
-        let started_at_ms = now();
-        Ok(Self {
-            skill_level, started_at_ms,
-            keep_time_ms: reader.read_u32()?,
-            defense_loss: reader.read_u32()?,
-            defense_loss_coefficient: reader.read_u32()?,
-            dodge_loss: reader.read_u32()?,
-            element_resistance_loss: reader.read_u32()?,
-            element_resistance_loss_coefficient: reader.read_u32()?,
-            weapon_damage_level: reader.read_u32()?,
-        })
-    }
-
-    pub(crate) fn encoded(&self, now: impl FnMut() -> u32) -> [u8; POISON_FOG_STATE_BYTES] {
-        self.encode_record(|| self.client_time(now) as u32)
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> [u8; POISON_FOG_STATE_BYTES] {
-        self.encode_record(|| self.keep_time_ms)
-    }
-
-    fn encode_record(&self, remaining: impl FnOnce() -> u32) -> [u8; POISON_FOG_STATE_BYTES] {
-        let mut record = Vec::with_capacity(POISON_FOG_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut record);
-        writer.write_u32(POISON_FOG_STATE_ID);
-        writer.write_i32(self.skill_level);
-        writer.write_u32(remaining());
-        writer.write_u32(self.defense_loss);
-        writer.write_u32(self.defense_loss_coefficient);
-        writer.write_u32(self.dodge_loss);
-        writer.write_u32(self.element_resistance_loss);
-        writer.write_u32(self.element_resistance_loss_coefficient);
-        writer.write_u32(self.weapon_damage_level);
-        record.try_into().expect("размер записи ядовитого тумана фиксирован")
-    }
-}
+pub(crate) use nebokrai_zone::effects::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
 
 #[allow(clippy::too_many_arguments, reason = "User, Sufferer и держатель арены независимы")]
 pub(crate) fn begin_primary_poison_fog_state(
@@ -182,7 +30,7 @@ pub(crate) fn begin_primary_poison_fog_state(
     let sufferer = sufferer?;
     resolve_state_move_shape(game, holder_region, holder)?;
     resolve_state_move_shape(game, sufferer.0, sufferer.1)?;
-    if user.is_some() { state.started_at_ms = now(); }
+    if user.is_some() { state.begin_at(now()); }
     let participant = |(region, identity)| {
         let shape = resolve_state_move_shape(game, region, identity)?.shape();
         Some((shape.get_region_id(), ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..shape.identity() }))
@@ -242,7 +90,12 @@ pub(crate) fn update_poison_fog_state_properties(
         400 => {
             let Some(properties) = game.find_player(target.id).map(|player| player.combat_properties())
             else { return false };
-            let updated = state.apply_to_player(target_level, properties);
+            let (defense, element_resistance) = state.player_properties(
+                target_level, properties.defense, properties.element_resistance,
+            );
+            let mut updated = properties;
+            updated.defense = defense;
+            updated.element_resistance = element_resistance;
             let Some(player) = game.find_player_mut(target.id) else { return false };
             player.update_state_combat_properties(|_| updated);
         }

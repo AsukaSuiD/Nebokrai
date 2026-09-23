@@ -35,14 +35,7 @@ use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
-pub(crate) fn truncate_original(value: f64) -> i32 {
-    let value = value.trunc();
-    if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
-        i32::MIN
-    } else {
-        value as i32
-    }
-}
+pub(crate) use nebokrai_zone::combat::truncate_original;
 
 fn avoid_damage(damage: i32, avoid: u16) -> i32 {
     let passed = 100i32.wrapping_sub(i32::from(avoid));

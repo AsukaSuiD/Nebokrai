@@ -14,7 +14,7 @@ use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-pub(crate) const POISON_FOG_SKILL_ID: u32 = 0xc9;
+pub(crate) use nebokrai_zone::effects::POISON_FOG_STATE_ID as POISON_FOG_SKILL_ID;
 const STATE_TIME: u32 = 10_002;
 const DEF_LOSS: u32 = 209;
 const DODGE_LOSS: u32 = 210;

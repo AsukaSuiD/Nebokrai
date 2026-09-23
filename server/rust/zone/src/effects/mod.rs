@@ -6,6 +6,7 @@ mod leafcut;
 mod meteorarrow;
 mod periodicattack;
 mod poison;
+mod poisonfog;
 mod time;
 mod visualeffect;
 
@@ -28,5 +29,6 @@ pub use periodicattack::{
     encode_periodic_state_for_install,
 };
 pub use poison::{POISON_STATE_BYTES, PoisonState};
+pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
 pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
