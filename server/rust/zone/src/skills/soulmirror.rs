@@ -37,6 +37,62 @@ pub fn soul_mirror_scope_cell(level: i32, direction: i32, x: i32, y: i32) -> boo
     })
 }
 
+/// Обходит маску по столбцам и строкам, не сохраняя живые level/direction.
+/// После выданной клетки следующий вызов заново читает состояние владельца.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SoulMirrorArea {
+    origin_x: i32,
+    origin_y: i32,
+    column: i32,
+    row: i32,
+    new_column: bool,
+    advance_row: bool,
+}
+
+impl SoulMirrorArea {
+    pub fn new(center: (i32, i32), initial_level: i32) -> Option<Self> {
+        let size = soul_mirror_scope_size(initial_level)?;
+        Some(Self { origin_x: center.0.wrapping_sub(size >> 1),
+            origin_y: center.1.wrapping_sub(size >> 1),
+            column: 0, row: 0, new_column: true, advance_row: false })
+    }
+
+    pub fn next_cell(
+        &mut self,
+        mut current_level: impl FnMut() -> Option<i32>,
+        mut current_direction: impl FnMut() -> Option<i32>,
+    ) -> Option<(i32, i32)> {
+        loop {
+            if self.advance_row {
+                self.row = self.row.wrapping_add(1);
+                self.advance_row = false;
+            }
+            if self.new_column {
+                let width = soul_mirror_scope_size(current_level()?)?;
+                if self.column >= width { return None; }
+                self.new_column = false;
+            }
+            let height = soul_mirror_scope_size(current_level()?)?;
+            if self.row >= height {
+                self.column = self.column.wrapping_add(1);
+                self.row = 0;
+                self.new_column = true;
+                continue;
+            }
+            let level = current_level()?;
+            let direction = current_direction()?;
+            let column = self.column;
+            let row = self.row;
+            if soul_mirror_scope_cell(level, direction, column, row) {
+                self.advance_row = true;
+                return Some((self.origin_x.wrapping_add(column),
+                    self.origin_y.wrapping_add(row)));
+            }
+            self.row = self.row.wrapping_add(1);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SoulMirrorSummonParameters {
     pub lifetime_ms: u32,

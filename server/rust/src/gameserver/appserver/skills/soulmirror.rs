@@ -24,14 +24,9 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use nebokrai_zone::skills::{SoulMirrorSummonParameters,
-    soul_mirror_scope_size, soul_mirror_scope_cell};
+use nebokrai_zone::skills::{SoulMirrorArea, SoulMirrorSummonParameters};
 
 pub(crate) use nebokrai_zone::skills::SOUL_MIRROR_SKILL_ID;
-
-fn current_scope_size(game: &CGame, instance: RegisteredSkill) -> Option<i32> {
-    game.registered_skill(instance).and_then(|skill| soul_mirror_scope_size(skill.level()))
-}
 
 fn summon_empty_cell(
     game: &mut CGame,
@@ -81,58 +76,36 @@ pub(super) fn apply_soul_mirror_area<Runtime: GameMainLoopRuntime>(
     let user = user.shape();
     if !user.is_assigned_to_server_region() { return; }
     let region_id = user.get_region_id();
-    let Some(initial_size) = current_scope_size(game, instance) else { return; };
+    let Some(initial_level) = game.registered_skill(instance).map(|skill| skill.level()) else { return; };
     let center_x = user.get_tile_x().unwrap_or(i32::MIN);
     let center_y = user.get_tile_y().unwrap_or(i32::MIN);
-    let start_x = center_x.wrapping_sub(initial_size >> 1);
-    let start_y = center_y.wrapping_sub(initial_size >> 1);
+    let Some(mut area) = SoulMirrorArea::new((center_x, center_y), initial_level) else { return; };
     let mut attacked = Vec::<ArrowTargetIdentity>::new();
-    let mut column = 0_i32;
 
-    loop {
-        // Условие внешнего цикла повторно читает this->level.
-        let Some(width) = current_scope_size(game, instance) else { return; };
-        if column >= width { break; }
-        let mut row = 0_i32;
-        loop {
-            // Высота и GetScope не используют кэшированный level: callback
-            // предыдущей клетки может завершить регистрацию или изменить его.
-            let Some(height) = current_scope_size(game, instance) else { return; };
-            if row >= height { break; }
-            let Some(level) = game.registered_skill(instance).map(|skill| skill.level()) else {
-                return;
+    while let Some((cell_x, cell_y)) = area.next_cell(
+        || game.registered_skill(instance).map(|skill| skill.level()),
+        || resolve_state_move_shape(game, source.0, source.1)
+            .map(|source| source.shape().get_direction()),
+    ) {
+        // Один resolver-снимок на клетку; следующий создаётся только
+        // после всех callbacks текущей клетки.
+        let mut occupied = false;
+        for view in cell_views(game, region_id, cell_x, cell_y) {
+            let Some(target) = resolve_state_move_shape(game, region_id, view.identity) else {
+                continue;
             };
-            let Some(direction) = resolve_state_move_shape(game, source.0, source.1)
-                .map(|source| source.shape().get_direction())
-            else {
-                return;
-            };
-            let cell_x = start_x.wrapping_add(column);
-            let cell_y = start_y.wrapping_add(row);
-            if soul_mirror_scope_cell(level, direction, column, row) {
-                // Один resolver-снимок на клетку; следующий создаётся только
-                // после всех callbacks текущей клетки.
-                let mut occupied = false;
-                for view in cell_views(game, region_id, cell_x, cell_y) {
-                    let Some(target) = resolve_state_move_shape(game, region_id, view.identity) else {
-                        continue;
-                    };
-                    occupied = true;
-                    let target = (target.shape().get_region_id(), target.shape().identity());
-                    if !game.live_skill_target_attackable_between(source, target) { continue; }
-                    let target_key = ArrowTargetIdentity::new(target.0, target.1);
-                    if attacked.contains(&target_key) { continue; }
-                    apply_direct_element_attack(game, instance, source, target, runtime);
-                    // Raw Attack может сам пропустить U==S; список всё равно
-                    // получает достигнутую цель только после этого вызова.
-                    attacked.push(target_key);
-                }
-                if !occupied {
-                    summon_empty_cell(game, source, region_id, cell_x, cell_y, properties);
-                }
-            }
-            row = row.wrapping_add(1);
+            occupied = true;
+            let target = (target.shape().get_region_id(), target.shape().identity());
+            if !game.live_skill_target_attackable_between(source, target) { continue; }
+            let target_key = ArrowTargetIdentity::new(target.0, target.1);
+            if attacked.contains(&target_key) { continue; }
+            apply_direct_element_attack(game, instance, source, target, runtime);
+            // Raw Attack может сам пропустить U==S; список всё равно
+            // получает достигнутую цель только после этого вызова.
+            attacked.push(target_key);
         }
-        column = column.wrapping_add(1);
+        if !occupied {
+            summon_empty_cell(game, source, region_id, cell_x, cell_y, properties);
+        }
     }
 }
