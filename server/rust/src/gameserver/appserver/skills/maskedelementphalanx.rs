@@ -71,7 +71,7 @@ impl MaskedElementPhalanx {
     pub(crate) fn replace_affect_region(&mut self, level: i32, tile_x: i32, tile_y: i32) {
         let (left, top) = self.origin();
         let (new_length, new_height, mask) = if self.is_periodic() {
-            super::firewallphalanx::scope_for_level(level)
+            nebokrai_zone::skills::fire_wall_scope(level)
         } else { super::yinyangphalanx::scope_for_skill(self.skill_id()) };
         let new_left = tile_x.wrapping_sub(new_length >> 1);
         let new_top = tile_y.wrapping_sub(new_height >> 1);

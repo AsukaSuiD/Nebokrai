@@ -1,21 +1,14 @@
 //! Параметры огненной стены.
 //! Источник: gameserver.exe/GameServer.pdb, firewallphalanx.cpp.
-//! Уровень 1 выбирает 1×1, уровень 2 — крест 3×3, любой другой — квадрат 3×3.
-//! Общие маска, inherited wire и независимые часы находятся в maskedelementphalanx;
+//! Выбор маски по уровню находится в zone/skills/firewall.rs.
+//! Inherited wire и независимые часы находятся в maskedelementphalanx;
 //! попадание использует общий элементальный расчёт без RP.
 
 use super::elementphalanxattack::ElementPhalanxAttack;
 use super::firewall::FIRE_WALL_SKILL_ID;
 use super::maskedelementphalanx::{MaskedAreaPulse, MaskedElementPhalanx};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-
-pub(super) fn scope_for_level(level: i32) -> (i32, i32, &'static [bool]) {
-    match level {
-        1 => (1, 1, &[true]),
-        2 => (3, 3, &[false, true, false, true, true, true, false, true, false]),
-        _ => (3, 3, &[true; 9]),
-    }
-}
+use nebokrai_zone::skills::fire_wall_scope;
 
 #[allow(clippy::too_many_arguments, reason = "параметры исходного конструктора стены")]
 pub(super) fn new_fire_wall_phalanx(
@@ -24,6 +17,6 @@ pub(super) fn new_fire_wall_phalanx(
 ) -> MaskedElementPhalanx {
     MaskedElementPhalanx::new(
         id, ElementPhalanxAttack { master, skill_id: FIRE_WALL_SKILL_ID, skill_level, minimum, maximum, element, critical_chance },
-        started, lifetime, MaskedAreaPulse::Periodic { frequency_ms, last_attack_ms: 0 }, scope_for_level(skill_level),
+        started, lifetime, MaskedAreaPulse::Periodic { frequency_ms, last_attack_ms: 0 }, fire_wall_scope(skill_level),
     )
 }

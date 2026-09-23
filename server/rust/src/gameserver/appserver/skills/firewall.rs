@@ -2,14 +2,12 @@
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/firewall.cpp.
 //! Begin/Check/AI/visual/End общие в zonalcast; Check запрещает BLOCK1|2.
 //! Summon сохраняет Master(country0)/Player EM, затем читает свежую таблицу.
-//! После usage20015/FISTP: CONST×scaledEM+100 с DWORD wrapping→unsigned
-//! коэффициент×0.01f→отдельный f32→LIFETIME/FISTP. Оба усечения предшествуют
-//! CCH WORD→GetAddElementAttack→MAX→MIN→FREQUENCY→свежему уровню→ctor(clock→ID).
+//! Ключи и формула срока принадлежат zone/skills/firewall.rs; после них
+//! читаются CCH WORD→GetAddElementAttack→MAX→MIN→FREQUENCY→свежий уровень.
 //! SetTile→свежий actual region U→Add→FindAroundObject(SUMMON_SHAPE_TYPE)
 //! →Replace каждой стены со свежим уровнем навыка и исходными X/Y→encode/BF502.
 //! Результат Add не отменяет публикацию, а Summon не определяет аргумент End.
 
-use super::fightdefense::truncate_original;
 use super::firewallphalanx::new_fire_wall_phalanx;
 use super::weaponattack::{SourceProperty, source_property};
 use super::zonalcast::prepare_element_summon;
@@ -17,19 +15,16 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::fire_wall_lifetime;
 
-pub(crate) const FIRE_WALL_SKILL_ID: u32 = 0x134;
+pub(crate) use nebokrai_zone::skills::FIRE_WALL_SKILL_ID;
 
 pub(super) fn summon_fire_wall<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),
     destination: (i32, i32), runtime: &mut Runtime,
 ) {
     let Some((master, properties, scaled_element)) = prepare_element_summon(game, instance, source) else { return; };
-    let constant = properties.query_property(20_010);
-    let scale = constant.wrapping_mul(scaled_element as u32).wrapping_add(100);
-    let factor = (f64::from(scale) * f64::from(0.01_f32)) as f32;
-    let lifetime = properties.query_property(30_001);
-    let lifetime = truncate_original(f64::from(lifetime) * f64::from(factor)) as u32;
+    let lifetime = fire_wall_lifetime(|property| properties.query_property(property), scaled_element);
     let Some(cch) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
     let cch = i32::from(cch as u16);
     let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
