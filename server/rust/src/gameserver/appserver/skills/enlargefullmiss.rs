@@ -6,5 +6,5 @@
 //! состояния и добавляет новое в конец.
 //! После установки — UpdateProperty и End1. Формула и DB8 остаются у состояния.
 
-pub(crate) const ENLARGE_FULL_MISS_SKILL_ID: u32 = 603;
+pub(crate) use nebokrai_zone::effects::ENLARGE_FULL_MISS_STATE_ID as ENLARGE_FULL_MISS_SKILL_ID;
 pub(crate) const SKILL_USAGE_FULL_MISS_GAIN: u32 = 115;

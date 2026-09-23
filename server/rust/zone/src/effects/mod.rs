@@ -2,6 +2,7 @@
 
 mod automaticrestore;
 mod bloodloss;
+mod fullmiss;
 mod hearten;
 mod leafcut;
 mod maxresource;
@@ -20,6 +21,9 @@ pub use automaticrestore::{
 };
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
+};
+pub use fullmiss::{
+    ENLARGE_FULL_MISS_STATE_BYTES, ENLARGE_FULL_MISS_STATE_ID, EnlargeFullMissState,
 };
 pub use hearten::{HEARTEN_STATE_BYTES, HEARTEN_STATE_ID, HeartenState};
 pub use leafcut::{
