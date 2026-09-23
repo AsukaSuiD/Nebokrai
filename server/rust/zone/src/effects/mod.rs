@@ -2,6 +2,7 @@
 
 mod automaticrestore;
 mod periodicattack;
+mod poison;
 mod time;
 mod visualeffect;
 
@@ -15,5 +16,6 @@ pub use periodicattack::{
     PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state,
     encode_periodic_state_for_install,
 };
+pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
