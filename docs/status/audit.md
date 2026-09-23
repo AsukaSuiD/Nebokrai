@@ -321,6 +321,10 @@
 
 23 сентября 2026 года данные, 12-байтная запись и формулы игрока четырёх вариантов Swordship перенесены в [`zone/effects/swordship.rs`](../../server/rust/zone/src/effects/swordship.rs). Game оставляет доступ к живым фигурам и Begin/End. По совпадающей Game EXE/PDB сверены ID, четыре vtable, общий writer/reader, property callback и порядок MIN → MAX; адреса и граница проверки приведены в [описании состояний](../gameplay/attributes-and-states.md#сценарий-постоянное-увеличение-максимумов-hp-и-mp). Полный `cargo check --locked --workspace --lib --bins` в Linux/Docker прошёл за 37,83 секунды; `rustfmt --check` и `git diff --check` прошли. Клиентский сценарий и серверы не запускались, автоматические тесты не создавались.
 
+## Исследование записи WuXing
+
+23 сентября 2026 года по сопоставленной паре Game EXE/PDB проверены ID и vtable пяти WuXing-состояний, общий writer/reader и сырая длина записи 96 байт. [Описание границы](../gameplay/attributes-and-states.md#wuxing-граница-сохраняемой-записи) отделяет подтверждённый размер блока от ещё не проверенных полей и формул текущего Rust-кода. Реализация в Game этим шагом не менялась; компиляция, серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone effects: временная прибавка Hearten
 
 23 сентября 2026 года данные, срок и 12-байтная запись Hearten перенесены в [`zone/effects/hearten.rs`](../../server/rust/zone/src/effects/hearten.rs). Формула прибавки максимума HP использует общий с постоянными Enlarge механизм Zone; Game сохраняет участников, visual, применение к живому игроку и End. По совпадающей паре Game EXE/PDB сверены конструкторы навыка и состояния, vtable, общий writer/reader, getter срока, строгая проверка истечения и property callback. Адреса и пределы вывода указаны в [описании Hearten](../gameplay/attributes-and-states.md#hearten-временная-прибавка-максимума-hp). Полный `cargo check --locked --workspace --lib --bins` в Linux/Docker прошёл за 38,49 секунды; `rustfmt --check` и `git diff --check` прошли. Клиентский результат и полный lifecycle не проверялись; автоматические тесты и серверы не запускались.

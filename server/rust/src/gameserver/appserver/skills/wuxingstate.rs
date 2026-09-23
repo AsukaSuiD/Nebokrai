@@ -1,16 +1,12 @@
 //! Постоянные состояния CWuXingMetal/Wood/Water/Fire/EarthState.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/wuxing*state.cpp.
-//! Свежий GetSufferer задаёт получателя свойств: NULL возвращает false,
-//! другой тип не меняется. Только Metal применяет дополнительный MAX_MP.
-//! Целые прибавки сохраняют wrapping и unsigned cap; производные параметры
-//! усекаются к нулю до сложения. Проценты используют f32-коэффициент 0.01,
-//! но произведение округляется до f32 только вместе с окончательной суммой.
-//! Сравнение с нижним пределом сохраняет NaN, как исходные setters.
-//! DB-запись — ID и 0x5c байт tagWuXingState, включая два непрозрачных байта
-//! выравнивания. CriticalRate идёт после FullMiss, не в порядке QueryProperty.
-//! Общий primary Begin сохраняет U/S после часов; перезапуск Begin(NULL,S)
-//! не подменяет U держателем и не читает часы. End сначала ставит ended,
-//! затем удаляет состояние через свежий U; visual и собственных таймеров нет.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/wuxing*state.cpp/.h`.
+//! Writer VA `0x005E0030` пишет ID и сырой блок 0x5c байт из `[this+0x38]`;
+//! reader VA `0x005E0880` копирует обратно 0x5c байт. Обе функции стоят
+//! в vtable всех пяти вариантов; детали — в `docs/gameplay/attributes-and-states.md`.
+//! Ниже остаются типизированная раскладка и формулы текущего Rust-кода.
+//! Значение отдельных полей, включая два байта после пяти WORD, и полные
+//! property callbacks оригинала ещё требуют прямой проверки.
 
 use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::moveshape::StateKey;
