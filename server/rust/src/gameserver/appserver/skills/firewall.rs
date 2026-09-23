@@ -2,8 +2,7 @@
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/firewall.cpp.
 //! Begin/Check/AI/visual/End общие в zonalcast; Check запрещает BLOCK1|2.
 //! Summon сохраняет Master(country0)/Player EM, затем читает свежую таблицу.
-//! Ключи и формула срока принадлежат zone/skills/firewall.rs; после них
-//! читаются CCH WORD→GetAddElementAttack→MAX→MIN→FREQUENCY→свежий уровень.
+//! Ключи, формула срока и порядок живых чтений принадлежат zone/skills/firewall.rs.
 //! SetTile→свежий actual region U→Add→FindAroundObject(SUMMON_SHAPE_TYPE)
 //! →Replace каждой стены со свежим уровнем навыка и исходными X/Y→encode/BF502.
 //! Результат Add не отменяет публикацию, а Summon не определяет аргумент End.
@@ -15,7 +14,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
-use nebokrai_zone::skills::fire_wall_lifetime;
+use nebokrai_zone::skills::{FireWallLiveField, FireWallSummonParameters};
 
 pub(crate) use nebokrai_zone::skills::FIRE_WALL_SKILL_ID;
 
@@ -24,19 +23,21 @@ pub(super) fn summon_fire_wall<Runtime: GameMainLoopRuntime>(
     destination: (i32, i32), runtime: &mut Runtime,
 ) {
     let Some((master, properties, scaled_element)) = prepare_element_summon(game, instance, source) else { return; };
-    let lifetime = fire_wall_lifetime(|property| properties.query_property(property), scaled_element);
-    let Some(cch) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
-    let cch = i32::from(cch as u16);
-    let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
-    let element = (element as i32).wrapping_add(scaled_element);
-    let maximum = properties.query_property(20_009) as i32;
-    let minimum = properties.query_property(20_008) as i32;
-    let frequency = properties.query_property(6_001);
-    let Some(level) = game.registered_skill(instance).map(|skill| i32::from(skill.level())) else { return; };
+    let Some(parameters) = FireWallSummonParameters::read(
+        |property| properties.query_property(property),
+        |field| match field {
+            FireWallLiveField::CriticalChance => source_property(game, source, SourceProperty::CriticalChance).map(|value| value as i32),
+            FireWallLiveField::AddElementAttack => source_property(game, source, SourceProperty::Element).map(|value| value as i32),
+            FireWallLiveField::SkillLevel => game.registered_skill(instance).map(|skill| skill.level()),
+        },
+        scaled_element,
+    ) else { return; };
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
     let mut phalanx = new_fire_wall_phalanx(
-        id, master, started, lifetime, level, frequency, minimum, maximum, element, cch,
+        id, master, started, parameters.lifetime_ms, parameters.skill_level,
+        parameters.frequency_ms, parameters.minimum_attack, parameters.maximum_attack,
+        parameters.element_attack, parameters.critical_chance,
     );
     phalanx.shape_mut().set_pos_xy_base(
         (f64::from(destination.0) + 0.5) as f32, (f64::from(destination.1) + 0.5) as f32,
