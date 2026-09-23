@@ -16,7 +16,7 @@ use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-pub(crate) const SNOW_STORM_SKILL_ID: u32 = 0x193;
+pub(crate) use nebokrai_zone::skills::SNOW_STORM_SKILL_ID;
 const TARGET_COUNT: u32 = 20_010;
 const MINIMUM_ATTACK: u32 = 20_008;
 const MAXIMUM_ATTACK: u32 = 20_009;
