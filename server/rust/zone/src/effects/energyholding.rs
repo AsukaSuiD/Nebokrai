@@ -27,6 +27,12 @@ impl EnergyHoldingState {
     pub const fn energy_count(self) -> u32 { self.energy_count }
     pub const fn parameter_percent(self) -> u32 { self.parameter_percent }
 
+    /// CInverseChopped::CalculateAttackPower: unsigned поля переходят в double
+    /// до умножения на коэффициент 0.01 и прибавления единицы.
+    pub fn attack_multiplier(self) -> f64 {
+        (f64::from(self.parameter_percent) * 0.01) * f64::from(self.energy_count) + 1.0
+    }
+
     /// Game предварительно разрешает живого User; число меняется до visual.
     pub fn add_energy(&mut self) -> bool {
         if self.energy_count >= self.skill_level { return false; }

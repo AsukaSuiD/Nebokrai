@@ -63,7 +63,7 @@ pub(crate) fn consume_energy_holding_multiplier(game: &mut CGame, source: (i32, 
     let Some((position, key)) = first_energy_slot(game, source) else { return 1.0; };
     let multiplier = resolve_state_move_shape(game, source.0, source.1)
         .and_then(|shape| shape.applied_state::<EnergyHoldingState>(key))
-        .map_or(1.0, |state| f64::from(state.energy_count()) * f64::from(state.parameter_percent()) * 0.01 + 1.0);
+        .map_or(1.0, |state| state.attack_multiplier());
     let _ = end_and_destroy_state_at(game, source.0, source.1, position);
     multiplier
 }
