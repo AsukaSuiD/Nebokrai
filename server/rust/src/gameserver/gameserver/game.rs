@@ -754,6 +754,7 @@ pub(crate) mod baseattackruntime;
 
 use std::collections::{BTreeMap, BTreeSet};
 use nebokrai_zone::content::{ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
+use nebokrai_zone::skills::battle_fairy_reset_notice_cost;
 use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
 use std::ffi::CString;
@@ -35687,7 +35688,7 @@ impl CGame {
                     }
                 }
                 BattleFairySkillResetEffect::SelectedSkillLearned(skill) => {
-                    if let Some(message) = player_skill_learned_message(
+                    if let Some(message) = player_skill_learned_message_with_cost_rule(
                         skill.message_type,
                         skill.skill_id,
                         skill.skill_level,
@@ -35695,6 +35696,7 @@ impl CGame {
                         self.skill_name_or_fallback(skill.skill_name.as_deref()),
                         &self.skill_factory,
                         false,
+                        battle_fairy_reset_notice_cost,
                     ) {
                         let delivery = message.send_to_player(self.net_server(), skill.player_id);
                         tracing::trace!(
@@ -46604,6 +46606,28 @@ pub(crate) fn player_skill_learned_message(
     factory: &CSkillFactory,
     player_tell_client: bool,
 ) -> Option<CMessage> {
+    player_skill_learned_message_with_cost_rule(
+        message_type,
+        skill_id,
+        skill_level,
+        wire_skill_level,
+        skill_name,
+        factory,
+        player_tell_client,
+        |cost| (f64::from(cost) * 0.0001_f64).trunc() as i32,
+    )
+}
+
+fn player_skill_learned_message_with_cost_rule(
+    message_type: u32,
+    skill_id: u32,
+    skill_level: i32,
+    wire_skill_level: i32,
+    skill_name: &[u8],
+    factory: &CSkillFactory,
+    player_tell_client: bool,
+    scaled_cost: fn(u32) -> i32,
+) -> Option<CMessage> {
     const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
     const SKILL_USAGE_TARGET_MAX_DISTANT: u32 = 5003;
     const SKILL_USAGE_TARGET_MIN_DISTANT: u32 = 5004;
@@ -46620,7 +46644,7 @@ pub(crate) fn player_skill_learned_message(
     let raw_cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
     let scale_cost = !player_tell_client || CSkillFactory::is_need_float(skill_id);
     let cost = if scale_cost {
-        (f64::from(raw_cost) * 0.0001_f64).trunc() as i32
+        scaled_cost(raw_cost)
     } else {
         raw_cost as i32
     };

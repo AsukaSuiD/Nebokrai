@@ -7,7 +7,8 @@
 //! VA 0x00504052–0x00504149),
 //! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
 //! VA 0x00501815–0x00501A8D, чтение VA 0x005017B4–0x00501806
-//! и запись VA 0x00501892–0x00501AC7),
+//! запись VA 0x00501892–0x00501AC7 и стоимость уведомления
+//! VA 0x00501B6B–0x00501B8D),
 //! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
@@ -206,4 +207,10 @@ pub fn battle_fairy_skill_level(
 /// Unsigned DWORD → double 0.0001 → усечение в QWORD → младший DWORD.
 pub fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
     (f64::from(cost) * 0.0001_f64).trunc() as i64 as u32
+}
+
+/// Уведомление выбранного ResetSkill трактует DWORD стоимости как знаковый
+/// перед double-масштабированием и записью младшего WORD.
+pub fn battle_fairy_reset_notice_cost(cost: u32) -> i32 {
+    (f64::from(cost as i32) * 0.0001_f64).trunc() as i32
 }
