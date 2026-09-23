@@ -4,4 +4,4 @@
 //! отдельные свойства, восстановление и вид состояния. Общий caller находится
 //! в callosity, взаимное замещение и канонические записи — в callositystate.
 
-pub(crate) const CALLOSITY_2_SKILL_ID: u32 = 0x7d;
+pub(crate) use nebokrai_zone::effects::CALLOSITY_2_SKILL_ID;

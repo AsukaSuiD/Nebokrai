@@ -3,6 +3,7 @@
 mod agility;
 mod automaticrestore;
 mod bloodloss;
+mod callosity;
 mod element;
 mod fullmiss;
 mod hearten;
@@ -30,6 +31,9 @@ pub use automaticrestore::{
 };
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
+};
+pub use callosity::{
+    CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID, CALLOSITY_STATE_BYTES, CallosityFamilyState,
 };
 pub use element::{
     ELEMENT_STATE_BYTES, ElementState, ORIGIN_STATE_ID, OriginState, TAIJI_STATE_ID, TaiJiState,

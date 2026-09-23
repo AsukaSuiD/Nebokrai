@@ -1,113 +1,26 @@
-//! Состояния закалки CCallosityState/CCallosityState2 (0x75/0x7d).
-//! Источник: gameserver.exe + GameServer.pdb, appserver/skills/callositystate.cpp
-//! и callositystate2.cpp. Оба варианта имеют одинаковые поля, lifecycle,
-//! формулу и wire; различается только ID. Одна структура и общая арена
-//! заменяют дублирующие владельцы, не схлопывая загруженные экземпляры.
-//!
-//! Наложение находит первый непустой слот с любым из двух ID без RTTI/ended-фильтра,
-//! вызывает End и уничтожает свежий остаток той же позиции. Только затем caller
-//! вычисляет длительность и WORD-коэффициент. Объектный Begin читает часы,
-//! сохраняет U/S и запускает visual до append; UpdateProperty вызывается после
-//! попытки Begin независимо от её результата. OnUpdateProperties сначала
-//! захватывает S, вызывает существующий visual и прибавляет WORD blast_attack именно
-//! захваченному игроку, даже если сам visual завершён.
-//!
-//! AI проверяет строгий абсолютный unsigned wrapping deadline без death-gate.
-//! End не записывает ended: visual Update(1) с базовым tail, затем свежий GetS
-//! и RemoveState того же указателя. Удаление чужого либо отсутствующего S
-//! не подменяется удалением записи из арены держателя. SetRegion меняет только
-//! регион U; restart Begin(NULL, holder) сохраняет timestamp/U и заменяет S.
-//!
-//! DB: DWORD ID, DWORD remaining, WORD factor. GetRemainedTime выполняет
-//! одно либо два чтения часов; Unserialize читает часы после внешнего ID, до полей
-//! remaining/factor. Начальный visual и property-update передают BFE03
-//! (S type/id, state ID, remaining, ноль), завершение — BFE04 (S type/id, ID).
-//! Границы чтения и записи задают общий codec и безопасные массивы байтов.
+//! Живой путь CCallosityState/CCallosityState2 (0x75/0x7d).
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/callositystate.cpp/.h` и `callositystate2.cpp/.h`.
+//! Данные, срок, запись и формула находятся в `zone/effects/callosity.rs`.
+//! Здесь остаются замена первого состояния семейства, участники, visual,
+//! restart/End и вызов общего пересчёта. Begin берёт часы до публикации visual;
+//! UpdateProperty выполняется после попытки Begin независимо от результата.
 
 use super::callosity::CALLOSITY_SKILL_ID;
 use super::callosity2::CALLOSITY_2_SKILL_ID;
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
-    default_additional_data, end_and_destroy_state_at, remove_applied_state_from,
+    end_and_destroy_state_at, remove_applied_state_from,
     resolve_applied_state_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
-    timed_client_state_time, update_applied_state_end_visual, update_property_state_visual,
+    update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const CALLOSITY_STATE_BYTES: usize = 10;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CallosityFamilyState {
-    skill_id: u32,
-    blast_factor: u16,
-    started_at_ms: u32,
-    time_to_keep: i32,
-}
-
-impl CallosityFamilyState {
-    pub(crate) const fn new(
-        skill_id: u32, blast_factor: u16, started_at_ms: u32, time_to_keep: i32,
-    ) -> Self {
-        Self { skill_id, blast_factor, started_at_ms, time_to_keep }
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
-    pub(crate) const fn blast_factor(self) -> u16 { self.blast_factor }
-    pub(crate) const fn time_to_keep(self) -> i32 { self.time_to_keep }
-    pub(crate) const fn additional_data(self) -> u32 { default_additional_data() }
-
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.time_to_keep as u32) < now_ms
-    }
-
-    pub(crate) fn client_state_time(self, now: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.time_to_keep as u32, now) as i32
-    }
-
-    pub(crate) fn decode(
-        payload: &[u8], offset: usize, now_ms: u32,
-    ) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        let skill_id = reader.read_u32()?;
-        if !matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID) {
-            return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
-            });
-        }
-        let time_to_keep = reader.read_i32()?;
-        let blast_factor = reader.read_u16()?;
-        Ok(Self::new(skill_id, blast_factor, now_ms, time_to_keep))
-    }
-
-    pub(crate) fn encoded(self, now: impl FnMut() -> u32) -> [u8; CALLOSITY_STATE_BYTES] {
-        let mut bytes = [0; CALLOSITY_STATE_BYTES];
-        bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.client_state_time(now).to_le_bytes());
-        bytes[8..].copy_from_slice(&self.blast_factor.to_le_bytes());
-        bytes
-    }
-
-    pub(crate) fn encoded_for_install(self) -> [u8; CALLOSITY_STATE_BYTES] {
-        let mut bytes = [0; CALLOSITY_STATE_BYTES];
-        bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.time_to_keep.to_le_bytes());
-        bytes[8..].copy_from_slice(&self.blast_factor.to_le_bytes());
-        bytes
-    }
-
-    pub(crate) const fn apply_to_player(
-        self, mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        properties.blast_attack = properties.blast_attack.wrapping_add(self.blast_factor);
-        properties
-    }
-}
+pub(crate) use nebokrai_zone::effects::{CALLOSITY_STATE_BYTES, CallosityFamilyState};
 
 fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
     let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
@@ -130,14 +43,14 @@ pub(crate) fn replace_callosity_state(
     let mut state = create();
     let begun = (|| {
         resolve_state_move_shape(game, source.0, source.1)?;
-        state.started_at_ms = now();
+        state.start_at(now());
         let user = participant(game, source)?;
         let sufferer = participant(game, source)?;
         if resolve_state_move_shape(game, sufferer.0, sufferer.1).is_some() {
             let mut message = CMessage::new(0x000b_fe03);
             message.add_long(sufferer.1.object_type);
             message.add_long(sufferer.1.id);
-            message.add_ulong(state.skill_id);
+            message.add_ulong(state.skill_id());
             message.add_long(state.client_state_time(&mut *now));
             message.add_ulong(0);
             let _ = game.send_move_shape_around(sufferer.0, sufferer.1, &message);
@@ -183,7 +96,10 @@ pub(crate) fn update_callosity_state_properties(
             .and_then(|shape| shape.applied_state::<CallosityFamilyState>(key)).copied()
         else { return false; };
         if let Some(player) = game.find_player_mut(target.id) {
-            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+            player.update_state_combat_properties(|mut properties| {
+                properties.blast_attack = state.apply_to_blast_attack(properties.blast_attack);
+                properties
+            });
         }
     }
     true

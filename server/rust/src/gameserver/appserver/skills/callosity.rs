@@ -35,7 +35,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
-pub(crate) const CALLOSITY_SKILL_ID: u32 = 0x75;
+pub(crate) use nebokrai_zone::effects::CALLOSITY_SKILL_ID;
 pub(crate) const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
