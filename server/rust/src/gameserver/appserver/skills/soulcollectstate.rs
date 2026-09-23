@@ -1,9 +1,9 @@
-//! Каноническое состояние сбора душ `CSoulCollectState` (`0x13B`).
+//! Живой цикл состояния сбора душ `CSoulCollectState` (`0x13B`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/soulcollectstate.cpp`. Состояние без таймера хранит
-//! коэффициент и не более `skill_level` душ. Каждое успешное пополнение
-//! публикует окончание прежнего снимка до нового снимка. Создание visual в Begin не отправляет
+//! `appserver/skills/soulcollectstate.cpp`. Число душ, предел и формат записи
+//! находятся в Zone. Успешное пополнение публикует окончание прежнего снимка
+//! до нового снимка. Создание visual в Begin не отправляет
 //! обновление; пакеты пары End→Begin принадлежат AddSoul. Запись в БД содержит
 //! ID, уровень и число душ, но теряет `variable_percent`; после загрузки он нулевой.
 //! Клиент получает нулевой remaining и число душ, не внутренний коэффициент.
@@ -22,7 +22,6 @@
 use super::accumulatedstate::{
     AccumulatedState, AccumulationParticipant, add_accumulated_state, update_accumulated_visual,
 };
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
     begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at, end_move_shape_state,
@@ -32,8 +31,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
 
-pub(crate) const SOUL_COLLECT_STATE_ID: u32 = 0x13b;
-pub(crate) const SOUL_COLLECT_STATE_BYTES: usize = 12;
+pub(crate) use nebokrai_zone::effects::{SOUL_COLLECT_STATE_ID, SOUL_COLLECT_STATE_BYTES, SoulCollectState};
 
 pub(crate) fn add_soul_collect(
     game: &mut CGame, source: (i32, ShapeIdentity),
@@ -111,49 +109,14 @@ pub(crate) fn destroy_soul_collect_state_visual(
     update_accumulated_visual::<SoulCollectState>(game, (region_id, holder), key, 2);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SoulCollectState {
-    skill_level: i32,
-    variable_percent: u32,
-    souls: i32,
-}
-
-impl SoulCollectState {
-    pub(crate) const fn new(skill_level: i32, variable_percent: u32) -> Self {
-        Self { skill_level, variable_percent, souls: 0 }
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != SOUL_COLLECT_STATE_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        Ok(Self { skill_level: reader.read_i32()?, variable_percent: 0, souls: reader.read_i32()? })
-    }
-
-    pub(crate) fn encoded(self) -> [u8; SOUL_COLLECT_STATE_BYTES] {
-        let mut bytes = [0; SOUL_COLLECT_STATE_BYTES];
-        for (index, value) in [SOUL_COLLECT_STATE_ID as i32, self.skill_level, self.souls].into_iter().enumerate() {
-            bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        bytes
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 { SOUL_COLLECT_STATE_ID }
-    pub(crate) const fn variable_percent(self) -> u32 { self.variable_percent }
-    pub(crate) const fn souls(self) -> i32 { self.souls }
-}
-
 impl AccumulatedState for SoulCollectState {
     const ID: u32 = SOUL_COLLECT_STATE_ID;
     const PARTICIPANT: AccumulationParticipant = AccumulationParticipant::Sufferer;
 
     fn increment(&mut self) -> bool {
-        if self.souls >= self.skill_level { return false; }
-        self.souls = self.souls.wrapping_add(1);
-        true
+        SoulCollectState::increment(self)
     }
 
     fn record(self) -> [u8; SOUL_COLLECT_STATE_BYTES] { self.encoded() }
-    fn client_fields(self) -> (u32, u32) { (0, self.souls as u32) }
+    fn client_fields(self) -> (u32, u32) { SoulCollectState::client_fields(self) }
 }

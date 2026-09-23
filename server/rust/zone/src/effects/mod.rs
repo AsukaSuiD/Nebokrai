@@ -13,6 +13,7 @@ mod meteorarrow;
 mod periodicattack;
 mod poison;
 mod poisonfog;
+mod soulcollect;
 mod swordship;
 mod time;
 mod visualeffect;
@@ -58,6 +59,7 @@ pub use periodicattack::{
 };
 pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
+pub use soulcollect::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState};
 pub use swordship::{
     SWORDSHIP_2_STATE_ID, SWORDSHIP_3_STATE_ID, SWORDSHIP_4_STATE_ID, SWORDSHIP_STATE_BYTES,
     SWORDSHIP_STATE_ID, SwordshipState, is_swordship_state_id,
