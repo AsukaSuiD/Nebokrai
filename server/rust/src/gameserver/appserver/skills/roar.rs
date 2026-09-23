@@ -26,6 +26,8 @@ use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::roarstate::replace_roar_state;
 use super::skillbaseproperties::CSkillBaseProperties;
+use nebokrai_zone::skills::roar_bounds;
+pub(crate) use nebokrai_zone::skills::ROAR_SKILL_ID;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::region::RegionSecurity;
@@ -38,7 +40,6 @@ use crate::gameserver::gameserver::game::{
     RegionShapeResolver,
 };
 
-pub(crate) const ROAR_SKILL_ID: u32 = 0x83;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
 
@@ -175,12 +176,9 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     let Some(region) = game.find_region(region_id) else { return terminal(QueuedSkillExecutionState::Pending); };
     let source_x = user.shape().get_tile_x().unwrap_or(i32::MIN);
     let source_y = user.shape().get_tile_y().unwrap_or(i32::MIN);
-    let minimum_x = source_x.wrapping_sub(2).max(0);
-    let minimum_y = source_y.wrapping_sub(2).max(0);
-    let maximum_x = source_x.wrapping_add(2).min(region.base().region.width);
-    let maximum_y = source_y.wrapping_add(2).min(region.base().region.height);
-    for x in minimum_x..=maximum_x {
-        for y in minimum_y..=maximum_y {
+    let bounds = roar_bounds(source_x, source_y, region.base().region.width, region.base().region.height);
+    for x in bounds.minimum_x..=bounds.maximum_x {
+        for y in bounds.minimum_y..=bounds.maximum_y {
             apply_cell(game, source, region_id, (x, y), &properties, runtime);
         }
     }
