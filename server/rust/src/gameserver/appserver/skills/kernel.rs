@@ -7,8 +7,8 @@
 //! BF End(int) VA 0x00516FB0/0x0051A700/0x005222A0 очищает DWORD-фазу
 //! перед visual и AfterUse; End(bool) VA 0x0051BE50/0x005246C0
 //! очищает BYTE-флаги, но не заменяет End(int). Конкретный владелец
-//! выбирает соответствующий пролог. Формат текста стоимости MP и проверка
-//! повторного применения остаются здесь до переноса их потребителей.
+//! выбирает соответствующий пролог. Числовые правила текста стоимости MP
+//! и повторного применения теперь находятся в Zone.
 
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
 
@@ -230,20 +230,7 @@ battle_fairy_skill_states! {
     FatalBlow(FatalBlowExecutionState) prepare(prepare_derived_end),
 }
 
-pub(crate) fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
-    (f64::from(cost) * 0.0001_f64).trunc() as i64 as u32
-}
-
-/// Точная беззнаковая проверка `CSkill::IsRestored`: сложение выполняется в
-/// `u32`, после чего результат сравнивается с текущими миллисекундами. Это не
-/// устойчивый к переполнению срок и потому намеренно отличается от
-/// периодических часов.
-pub(crate) const fn skill_is_restored(
-    last_used_ms: u32,
-    reuse_delay_ms: u32,
-    now_ms: u32,
-) -> bool {
-    last_used_ms.wrapping_add(reuse_delay_ms) <= now_ms
-}
-
-pub(crate) use nebokrai_zone::skills::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
+pub(crate) use nebokrai_zone::skills::{
+    SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination,
+    battle_fairy_mana_text_cost, skill_is_restored,
+};

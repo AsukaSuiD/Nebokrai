@@ -11,6 +11,12 @@
 use crate::regions::ShapeIdentity;
 use nebokrai_shared::values::CGuid;
 
+/// CSkill::IsRestored VA 0x004D8220–0x004D825F: уже прочитанный delay
+/// складывается с последним временем по DWORD, затем сравнивается unsigned.
+pub const fn skill_is_restored(last_used_ms: u32, reuse_delay_ms: u32, now_ms: u32) -> bool {
+    last_used_ms.wrapping_add(reuse_delay_ms) <= now_ms
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SkillStage {
     Idle,

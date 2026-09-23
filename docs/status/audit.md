@@ -2,6 +2,8 @@
 
 ## Проверки переноса навыков 23 сентября 2026
 
+После переноса правила reuse и числового представления стоимости MP боевого духа в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Сложение DWORD и unsigned-сравнение сверены по `CSkill::IsRestored`, а double-масштаб и усечение QWORD — по ветви ошибки `CWangsheng::AI` совпадающей Game EXE/PDB. Конкретные вызовы и клиентская диагностика не запускались.
+
 После переноса идентичности фигуры в `zone/regions`, а `SkillLifecycle`, стадий и kernel в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Базовые Begin/End и конструктор сверены по совпадающей Game EXE/PDB; Rust-стадии и диагностическая причина завершения остаются внутренней моделью. Конкретные каталоги исполнений и вызовы Game не переносились; клиентский сценарий не запускался.
 
 После переноса DWORD-правила лечения Wangsheng в `zone/skills` Linux `cargo check --locked --workspace --lib --bins` завершился успешно. ID, связь vtable с AI и участок GetHP → свойство `31` → сложение → SetHP/OnChangeStates сверены по совпадающей Game EXE/PDB. Живое лечение и клиентский сценарий не запускались.
