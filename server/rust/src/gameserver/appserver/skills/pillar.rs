@@ -26,6 +26,8 @@ use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::pillarstate::{PillarState, toggle_pillar_state};
 use super::playercast::execute_registered_player_cast;
 use super::skillbaseproperties::CSkillBaseProperties;
+use nebokrai_zone::skills::pillar_state_parameters;
+pub(crate) use nebokrai_zone::skills::PILLAR_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
@@ -35,11 +37,8 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
-pub(crate) const PILLAR_SKILL_ID: u32 = 0x74;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
-const STATE_PERSIST_TIME: u32 = 10_002;
-const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false }
@@ -116,8 +115,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     }
     game.update_registered_skill_visual(instance, 1);
     let _ = toggle_pillar_state(game, source, |_game| {
-        let factor = (f64::from(properties.query_property(TARGET_DAMAGE_FACTOR)) * f64::from(0.001_f32)) as f32;
-        let keep = properties.query_property(STATE_PERSIST_TIME);
+        let (keep, factor) = pillar_state_parameters(|key| properties.query_property(key));
         Some(PillarState::new(keep, factor))
     }, &mut || runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)

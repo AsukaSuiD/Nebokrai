@@ -14,6 +14,7 @@ mod chaossphere;
 mod soulmirror;
 mod cure;
 mod fury;
+mod pillar;
 mod roar;
 mod directelement;
 
@@ -37,5 +38,6 @@ pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorArea, SoulMirrorSummonParam
     soul_mirror_scope_size, soul_mirror_scope_cell};
 pub use cure::{cure_threshold, is_cure_removable_state_id};
 pub use fury::is_fury_conflicting_state_id;
+pub use pillar::{PILLAR_SKILL_ID, pillar_state_parameters};
 pub use roar::{ROAR_SKILL_ID, RoarBounds, roar_bounds};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
