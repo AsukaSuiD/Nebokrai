@@ -7,7 +7,7 @@
 //! Replace транспонирует координаты записи, AI читает обычный X/Y.
 //! У стены отклонённая допуском цель тоже входит в дедупликацию окна.
 
-use super::elementphalanxattack::ElementPhalanxAttack;
+use nebokrai_zone::skills::ElementPhalanxAttack;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};

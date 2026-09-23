@@ -10,7 +10,7 @@
 //! Для server decode 0x005FED20 подтверждённого вызывающего пути нет.
 
 use super::chaossphere::CHAOS_SPHERE_SKILL_ID;
-use super::elementphalanxattack::ElementPhalanxAttack;
+use nebokrai_zone::skills::ElementPhalanxAttack;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};

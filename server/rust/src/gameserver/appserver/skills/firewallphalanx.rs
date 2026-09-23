@@ -4,7 +4,7 @@
 //! Inherited wire и независимые часы находятся в maskedelementphalanx;
 //! попадание использует общий элементальный расчёт без RP.
 
-use super::elementphalanxattack::ElementPhalanxAttack;
+use nebokrai_zone::skills::ElementPhalanxAttack;
 use super::firewall::FIRE_WALL_SKILL_ID;
 use super::maskedelementphalanx::{MaskedAreaPulse, MaskedElementPhalanx};
 use crate::gameserver::appserver::masterinfo::MasterInfo;

@@ -8,6 +8,7 @@ mod snowstorm;
 mod firewall;
 mod masked_area;
 mod yinyang;
+mod elementphalanx;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
@@ -19,3 +20,4 @@ pub use firewall::{FIRE_WALL_SKILL_ID, FireWallLiveField, FireWallSummonParamete
 pub use masked_area::{MaskedArea, MaskedAreaPulse};
 pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
     YinYangSummonParameters, yin_yang_scope};
+pub use elementphalanx::ElementPhalanxAttack;

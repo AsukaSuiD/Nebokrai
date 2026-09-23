@@ -5,7 +5,7 @@
 //! При создании инь-ян не заменяет маски соседей; отклонённые допуском цели
 //! не входят в дедупликацию, в отличие от периодической огненной стены.
 
-use super::elementphalanxattack::ElementPhalanxAttack;
+use nebokrai_zone::skills::ElementPhalanxAttack;
 use super::maskedelementphalanx::{MaskedAreaPulse, MaskedElementPhalanx};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use nebokrai_zone::skills::{YinYangSummonParameters, yin_yang_scope};

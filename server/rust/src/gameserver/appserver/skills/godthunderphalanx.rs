@@ -10,7 +10,7 @@
 //! Для server decode 0x005F5D90 подтверждённого вызывающего пути нет;
 //! отдельный runtime API для него не создаётся.
 
-use super::elementphalanxattack::ElementPhalanxAttack;
+use nebokrai_zone::skills::ElementPhalanxAttack;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
 use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
 use super::godthunderphalanx2::{GOD_THUNDER_2_SCOPE, GOD_THUNDER_2_SCOPE_SIDE};
