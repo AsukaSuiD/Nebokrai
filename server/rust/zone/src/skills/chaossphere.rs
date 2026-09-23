@@ -2,14 +2,67 @@
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
 //! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
-//! Ctor VA 0x005FEE80, AddToByteArray VA 0x005FECB0, AI VA 0x005FF270
-//! (appserver/skills/chaosspherephalanx.cpp/.h).
+//! Summon VA 0x005A8290, ctor VA 0x005FEE80, AddToByteArray VA 0x005FECB0,
+//! AI VA 0x005FF270 (appserver/skills/chaossphere.cpp и chaosspherephalanx.cpp/.h).
 
 use nebokrai_shared::protocol::LegacyWriter;
 use crate::effects::timed_client_state_time;
-use super::ElementPhalanxAttack;
+use crate::combat::truncate_original;
+use super::{ElementPhalanxAttack, ElementSummonLiveField};
 
 pub const CHAOS_SPHERE_SKILL_ID: u32 = 0x137;
+const SPEED_PROPERTY: u32 = 30_002;
+const LIFETIME_PROPERTY: u32 = 30_001;
+const ELEMENT_SCALE_PROPERTY: u32 = 20_015;
+const MAXIMUM_ATTACK_PROPERTY: u32 = 20_009;
+const MINIMUM_ATTACK_PROPERTY: u32 = 20_008;
+const FREQUENCY_PROPERTY: u32 = 6_001;
+
+/// Читает SPEED дважды только в ненулевой ветке, затем LIFETIME.
+pub fn chaos_sphere_path_length(mut query_property: impl FnMut(u32) -> u32) -> u32 {
+    if query_property(SPEED_PROPERTY) == 0 { return 0; }
+    let speed = query_property(SPEED_PROPERTY);
+    let lifetime = query_property(LIFETIME_PROPERTY);
+    lifetime / speed
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChaosSphereSummonParameters {
+    pub skill_level: i32,
+    pub critical_chance: i32,
+    pub speed_ms: u32,
+    pub element_attack: i32,
+    pub maximum_attack: i32,
+    pub minimum_attack: i32,
+    pub frequency_ms: u32,
+    pub lifetime_ms: u32,
+}
+
+impl ChaosSphereSummonParameters {
+    /// Вызывается после построения и обрезки пути и чтения живого модификатора элемента.
+    pub fn read(
+        mut query_property: impl FnMut(u32) -> u32,
+        mut read_live: impl FnMut(ElementSummonLiveField) -> Option<i32>,
+        current_level: impl FnOnce() -> Option<i32>,
+        element_modifier: i32,
+    ) -> Option<Self> {
+        let scale = query_property(ELEMENT_SCALE_PROPERTY);
+        let scaled_element = truncate_original(
+            f64::from(scale) * f64::from(0.01_f32) * f64::from(element_modifier),
+        );
+        let critical_chance = (read_live(ElementSummonLiveField::CriticalChance)? as u16) as i32;
+        let speed_ms = query_property(SPEED_PROPERTY);
+        let element_attack = read_live(ElementSummonLiveField::AddElementAttack)?
+            .wrapping_add(scaled_element);
+        let maximum_attack = query_property(MAXIMUM_ATTACK_PROPERTY) as i32;
+        let minimum_attack = query_property(MINIMUM_ATTACK_PROPERTY) as i32;
+        let frequency_ms = query_property(FREQUENCY_PROPERTY);
+        let skill_level = current_level()?;
+        let lifetime_ms = query_property(LIFETIME_PROPERTY);
+        Some(Self { skill_level, critical_chance, speed_ms, element_attack,
+            maximum_attack, minimum_attack, frequency_ms, lifetime_ms })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChaosSpherePhalanx {

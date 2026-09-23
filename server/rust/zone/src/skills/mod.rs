@@ -26,4 +26,5 @@ pub use elementphalanx::{ElementPhalanxAttack, ElementSummonLiveField};
 pub use godthunder::{GOD_THUNDER_SKILL_ID, GOD_THUNDER_2_SKILL_ID,
     ROUNDED_THUNDER_SCOPE, ROUNDED_THUNDER_SCOPE_SIDE,
     GodThunderParametersError, GodThunderPhalanx, GodThunderSummonParameters};
-pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx};
+pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
+    ChaosSphereSummonParameters, chaos_sphere_path_length};

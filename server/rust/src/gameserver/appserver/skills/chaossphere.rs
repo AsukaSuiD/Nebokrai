@@ -5,19 +5,19 @@
 //! SPEED, при ненулевом значении ещё SPEED→LIFETIME/div→GetAttackPath(length).
 //! Исходный пустой путь прекращает Summon. Иначе identity S очищается, BLOCK2
 //! обрезает остаток; получившийся пустой путь всё ещё допускает форму.
-//! Затем Master(country0)/Player EM→usage20015/FISTP→CCH WORD→SPEED→
-//! GetAddElementAttack→MAX→MIN→FREQUENCY→свежий уровень→LIFETIME→ctor(clock→ID).
+//! Затем Master(country0)/Player EM→параметры Zone→ctor(clock→ID).
 //! SetTile использует path[0] либо свежие captured U Y/X, не аргументы AI.
 //! После свежего actual region U выполняются Add→encode/BF502 даже при отказе.
 //! Путь принадлежит Vec формы; отдельного payload или condition рядом с kernel нет.
 
 use super::chaosspherephalanx::CChaosSpherePhalanx;
-use super::fightdefense::truncate_original;
 use super::weaponattack::{SourceProperty, source_master, source_property};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::{ChaosSphereSummonParameters, ElementSummonLiveField,
+    chaos_sphere_path_length};
 
 pub(crate) use nebokrai_zone::skills::CHAOS_SPHERE_SKILL_ID;
 
@@ -27,11 +27,7 @@ pub(super) fn summon_chaos_sphere<Runtime: GameMainLoopRuntime>(
     if resolve_state_move_shape(game, source.0, source.1).is_none() { return; }
     let Some(skill) = game.registered_skill(instance) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
-    let length = if properties.query_property(30_002) == 0 { 0 } else {
-        let speed = properties.query_property(30_002);
-        let lifetime = properties.query_property(30_001);
-        lifetime / speed
-    };
+    let length = chaos_sphere_path_length(|property| properties.query_property(property));
     let mut path = game.skill_target_path_with_length(skill.lifecycle(), length);
     if path.is_empty() { return; }
     if let Some(skill) = game.registered_skill_mut(instance) {
@@ -45,23 +41,20 @@ pub(super) fn summon_chaos_sphere<Runtime: GameMainLoopRuntime>(
         let Some(player) = game.find_player(source.1.id) else { return; };
         player.combat_properties().element_modify
     } else { 0 };
-    let modifier = properties.query_property(20_015);
-    let scaled_element = truncate_original(f64::from(modifier) * f64::from(0.01_f32) * f64::from(element));
-    let Some(cch) = source_property(game, source, SourceProperty::CriticalChance) else { return; };
-    let cch = i32::from(cch as u16);
-    let speed = properties.query_property(30_002);
-    let Some(element) = source_property(game, source, SourceProperty::Element) else { return; };
-    let element = (element as i32).wrapping_add(scaled_element);
-    let maximum = properties.query_property(20_009) as i32;
-    let minimum = properties.query_property(20_008) as i32;
-    let frequency = properties.query_property(6_001);
-    let Some(level) = game.registered_skill(instance).map(|skill| i32::from(skill.level())) else { return; };
-    let lifetime = properties.query_property(30_001);
+    let Some(parameters) = ChaosSphereSummonParameters::read(
+        |property| properties.query_property(property),
+        |field| match field {
+            ElementSummonLiveField::CriticalChance => source_property(game, source, SourceProperty::CriticalChance).map(|value| value as i32),
+            ElementSummonLiveField::AddElementAttack => source_property(game, source, SourceProperty::Element).map(|value| value as i32),
+        },
+        || game.registered_skill(instance).map(|skill| i32::from(skill.level())),
+        element,
+    ) else { return; };
     let started = runtime.now_milliseconds();
     let id = game.allocate_summon_shape_id();
     let mut phalanx = CChaosSpherePhalanx::new(
-        id, master, started, lifetime, level, frequency, minimum, maximum, element,
-        path.iter().map(|&(x, y, _)| (x, y)).collect(), speed, cch,
+        id, master, started, parameters,
+        path.iter().map(|&(x, y, _)| (x, y)).collect(),
     );
     let (x, y) = if let Some(&(x, y, _)) = path.first() { (x, y) } else {
         let Some(user) = resolve_state_move_shape(game, source.0, source.1) else { return; };

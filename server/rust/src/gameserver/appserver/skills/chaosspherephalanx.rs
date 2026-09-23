@@ -3,7 +3,8 @@
 //! appserver/skills/chaosspherephalanx.cpp/.h, ctor VA 0x005FEE80,
 //! AddToByteArray VA 0x005FECB0, AI VA 0x005FF270.
 
-use nebokrai_zone::skills::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx, ElementPhalanxAttack};
+use nebokrai_zone::skills::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
+    ChaosSphereSummonParameters, ElementPhalanxAttack};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
@@ -16,23 +17,23 @@ pub(crate) struct CChaosSpherePhalanx {
 }
 
 impl CChaosSpherePhalanx {
-    #[allow(clippy::too_many_arguments, reason = "поля конструктора исходной области")]
     pub(crate) fn new(
-        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
-        skill_level: i32, frequency_ms: u32, minimum: i32, maximum: i32,
-        element: i32, path: Vec<(i32, i32)>, speed_ms: u32, critical_chance: i32,
+        id: i32, master: MasterInfo, started_at_ms: u32,
+        parameters: ChaosSphereSummonParameters, path: Vec<(i32, i32)>,
     ) -> Self {
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity {
             object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
         });
-        shape.set_speed((speed_ms as i32) as f32);
+        shape.set_speed((parameters.speed_ms as i32) as f32);
         let attack = ElementPhalanxAttack {
-            master, skill_id: CHAOS_SPHERE_SKILL_ID, skill_level,
-            minimum, maximum, element, critical_chance,
+            master, skill_id: CHAOS_SPHERE_SKILL_ID, skill_level: parameters.skill_level,
+            minimum: parameters.minimum_attack, maximum: parameters.maximum_attack,
+            element: parameters.element_attack, critical_chance: parameters.critical_chance,
         };
         let area = ChaosSpherePhalanx::new(
-            attack, started_at_ms, lifetime_ms, frequency_ms, path, speed_ms,
+            attack, started_at_ms, parameters.lifetime_ms,
+            parameters.frequency_ms, path, parameters.speed_ms,
         );
         Self { shape, area }
     }
