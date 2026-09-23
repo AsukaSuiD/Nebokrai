@@ -29,8 +29,7 @@ pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermi
 pub use lifecycle::skill_is_restored;
 pub use battlefairy::{BattleFairySkillProperty, battle_fairy_mana_text_cost,
     battle_fairy_skill_level, battle_fairy_skill_id, battle_fairy_skill_entry,
-    EQUIPPED_SKILL_PROPERTIES, battle_fairy_reset_candidate_allowed,
-    battle_fairy_all_skill_candidate_allowed};
+    EQUIPPED_SKILL_PROPERTIES, select_battle_fairy_reset_skill};
 pub use dispatch::{BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, PlayerSkillDispatch, PlayerSkillRequest,
     PlayerSkillRequestFacts, SkillTarget, SkillTargetForm};

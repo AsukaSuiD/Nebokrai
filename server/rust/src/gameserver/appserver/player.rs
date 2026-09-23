@@ -498,8 +498,7 @@ use nebokrai_zone::scripts::{
 };
 use nebokrai_zone::skills::{
     BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
-    battle_fairy_skill_id, battle_fairy_skill_level, battle_fairy_reset_candidate_allowed,
-    battle_fairy_all_skill_candidate_allowed,
+    battle_fairy_skill_id, battle_fairy_skill_level, select_battle_fairy_reset_skill,
 };
 use super::serverregion::CServerRegion;
 use super::shape::{
@@ -621,8 +620,6 @@ const SKILL_EFFECT_MESSAGE_TYPE: u32 = 0x0b_fe01;
 const SKILL_REJECT_REASON: u32 = 0;
 const SKILL_REJECT_WAR_SOUL_REASON: u32 = 4;
 const SKILL_REJECT_CODE: u8 = 0x0c;
-const SKILL_POJIA: u32 = 530;
-const SKILL_LEIMING: u32 = 543;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyObjectMoveOperation {
@@ -12295,20 +12292,8 @@ impl CPlayer {
             }
         }
 
-        let selected_skill = match replaced {
-            Some(replaced) => loop {
-                let candidate = SKILL_POJIA.wrapping_add(random(13) as u32);
-                if battle_fairy_reset_candidate_allowed(candidate, current_skills, replaced) {
-                    break candidate;
-                }
-            },
-            None => loop {
-                let candidate = SKILL_LEIMING.wrapping_add(random(3) as u32);
-                if battle_fairy_all_skill_candidate_allowed(candidate, current_all_skill) {
-                    break candidate;
-                }
-            },
-        };
+        let selected_skill =
+            select_battle_fairy_reset_skill(replaced, current_skills, current_all_skill, random);
         tracing::trace!(
             player_id,
             selected_skill,

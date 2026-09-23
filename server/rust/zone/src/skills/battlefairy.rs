@@ -11,8 +11,7 @@
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
 /// Пара, записанная в исходную `m_UnPairSkills` при создании контейнера.
-/// Порядок попыток и вызовов RNG остаётся в операции сброса у игрока.
-pub const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {
+const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {
     Some(match skill_id {
         530 => 534,
         531 => 535,
@@ -28,7 +27,7 @@ pub const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {
 
 /// Проверка новой попытки для одного из трёх слотов стихии. Ноль после
 /// DWORD-сложения принимается до сравнения с текущими навыками.
-pub fn battle_fairy_reset_candidate_allowed(
+fn battle_fairy_reset_candidate_allowed(
     candidate: u32,
     current_skills: [u32; 3],
     replaced: usize,
@@ -48,8 +47,32 @@ pub fn battle_fairy_reset_candidate_allowed(
 }
 
 /// Общий слот отвергает только прежний ID; ноль принимается раньше сравнения.
-pub const fn battle_fairy_all_skill_candidate_allowed(candidate: u32, current: u32) -> bool {
+const fn battle_fairy_all_skill_candidate_allowed(candidate: u32, current: u32) -> bool {
     candidate == 0 || candidate != current
+}
+
+/// Выбирает новый ID после снятия прежних навыков. Каждый повтор вызывает
+/// переданный общий игровой RNG ровно один раз; изменение предмета — у игрока.
+pub fn select_battle_fairy_reset_skill(
+    replaced: Option<usize>,
+    current_skills: [u32; 3],
+    current_all_skill: u32,
+    random: &mut dyn FnMut(i32) -> i32,
+) -> u32 {
+    match replaced {
+        Some(replaced) => loop {
+            let candidate = 530_u32.wrapping_add(random(13) as u32);
+            if battle_fairy_reset_candidate_allowed(candidate, current_skills, replaced) {
+                break candidate;
+            }
+        },
+        None => loop {
+            let candidate = 543_u32.wrapping_add(random(3) as u32);
+            if battle_fairy_all_skill_candidate_allowed(candidate, current_all_skill) {
+                break candidate;
+            }
+        },
+    }
 }
 
 /// Какое свойство предмета запрашивает правило; числовой ключ и чтение
