@@ -497,8 +497,9 @@ use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use nebokrai_zone::skills::{
-    BattleFairyResetItemChange, BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES,
-    battle_fairy_reset_item_change, battle_fairy_skill_entry, battle_fairy_reset_slot,
+    BattleFairyResetItemChange, BattleFairyResetItemLookup, BattleFairySkillProperty,
+    EQUIPPED_SKILL_PROPERTIES, battle_fairy_reset_item, battle_fairy_reset_item_change,
+    battle_fairy_skill_entry, battle_fairy_reset_slot,
     battle_fairy_skill_id, battle_fairy_skill_level,
     select_battle_fairy_reset_skill,
     write_battle_fairy_reset_skill,
@@ -12160,20 +12161,21 @@ impl CPlayer {
         }
 
         if consume_item {
-            let reset_name = match position {
-                3..=5 => Some(b"ZHJNS01".as_slice()),
-                6 => Some(b"ZHJNS02".as_slice()),
-                _ => None,
-            };
-            if let Some(reset_name) = reset_name {
-                let reset_index = factory.query_goods_id_by_original_name(Some(reset_name));
-                let reset_item = self
+            let reset_item = battle_fairy_reset_item(position, |name| {
+                let reset_index = factory.query_goods_id_by_original_name(Some(name));
+                if reset_index == 0 {
+                    return None;
+                }
+                self
                     .packet
                     .base()
                     .traversing_goods()
                     .find(|goods| goods.base_properties_index() == reset_index)
-                    .map(|goods| (goods.identity(), goods.amount()));
-                let Some((reset_identity, reset_amount)) = reset_item else {
+                    .map(|goods| (goods.identity(), goods.amount()))
+            });
+            let reset_item = match reset_item {
+                BattleFairyResetItemLookup::InvalidPosition => None,
+                BattleFairyResetItemLookup::MissingItem => {
                     report.outcome = BattleFairySkillResetOutcome::MissingResetItem;
                     report
                         .effects
@@ -12183,7 +12185,10 @@ impl CPlayer {
                             color: 0xffff_ffff,
                         });
                     return report;
-                };
+                }
+                BattleFairyResetItemLookup::Found(item) => Some(item),
+            };
+            if let Some((reset_identity, reset_amount)) = reset_item {
                 let reset_position = self.packet.query_goods_position(reset_identity.ex_id);
                 let change = battle_fairy_reset_item_change(reset_amount);
                 let (remaining_amount, consumed, removal) = match change {

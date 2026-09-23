@@ -6,7 +6,8 @@
 //! constructor `CBattleFairyContainer` (пары несовместимых навыков
 //! VA 0x00504052–0x00504149),
 //! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
-//! VA 0x00501815–0x00501A8D, чтение VA 0x005017B4–0x00501806
+//! VA 0x00501815–0x00501A8D, поиск VA 0x00501663–0x0050178A,
+//! чтение VA 0x005017B4–0x00501806,
 //! запись VA 0x00501892–0x00501AC7 и стоимость уведомления
 //! VA 0x00501B6B–0x00501B8D),
 //! appserver/player.cpp/.h (расход одного предмета: количество
@@ -103,6 +104,32 @@ pub const fn battle_fairy_reset_item_change(amount: u32) -> BattleFairyResetItem
     } else {
         BattleFairyResetItemChange::Remove
     }
+}
+
+/// Результат выбора предмета после двух запросов к рюкзаку.
+pub enum BattleFairyResetItemLookup<T> {
+    InvalidPosition,
+    MissingItem,
+    Found(T),
+}
+
+/// Оригинал запрашивает оба имени до проверки позиции; поиск живых предметов
+/// передаёт Game. Для неверной позиции предмет не расходуется.
+pub fn battle_fairy_reset_item<T>(
+    position: i32,
+    mut find_item: impl FnMut(&[u8]) -> Option<T>,
+) -> BattleFairyResetItemLookup<T> {
+    let elemental = find_item(b"ZHJNS01");
+    let all_skill = find_item(b"ZHJNS02");
+    let selected = match position {
+        3..=5 => elemental,
+        6 => all_skill,
+        _ => return BattleFairyResetItemLookup::InvalidPosition,
+    };
+    selected.map_or(
+        BattleFairyResetItemLookup::MissingItem,
+        BattleFairyResetItemLookup::Found,
+    )
 }
 
 /// Какое свойство предмета запрашивает правило; числовой ключ и чтение
