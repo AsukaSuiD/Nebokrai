@@ -1108,7 +1108,7 @@ pub(crate) struct BattleFairySkillResetReport {
 
 pub(crate) use nebokrai_zone::skills::{
     BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
-    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, SkillTarget, SkillTargetForm,
 };
 
 
@@ -12515,41 +12515,37 @@ impl CPlayer {
             return journal;
         }
 
-        let dispatch = if target_type == 0 || target_id == 0 {
-            if target_x == 0 || target_y == 0 {
-                PlayerSkillDispatch::SelfTarget {
-                    skill_id,
-                    player_id,
+        let dispatch = match (SkillTarget {
+            object_type: target_type,
+            object_id: target_id,
+            x: target_x,
+            y: target_y,
+        })
+        .form()
+        {
+            SkillTargetForm::SelfTarget => PlayerSkillDispatch::SelfTarget {
+                skill_id,
+                player_id,
+            },
+            SkillTargetForm::Point { x, y } => PlayerSkillDispatch::Point { skill_id, x, y },
+            SkillTargetForm::Object { target } => {
+                if self.server_region_id.is_none() {
+                    trace!(
+                        player_id,
+                        skill_id, "Запрос навыка отклонён: отсутствует регион"
+                    );
+                    return journal;
                 }
-            } else {
-                PlayerSkillDispatch::Point {
-                    skill_id,
-                    x: target_x,
-                    y: target_y,
+                if !facts.object_target_available {
+                    push_player_skill_reject(&mut journal, socket_id);
+                    trace!(
+                        player_id,
+                        skill_id, target_type, target_id, "Запрос навыка отклонён: цель отсутствует"
+                    );
+                    return journal;
                 }
+                PlayerSkillDispatch::Object { skill_id, target }
             }
-        } else {
-            if self.server_region_id.is_none() {
-                trace!(
-                    player_id,
-                    skill_id, "Запрос навыка отклонён: отсутствует регион"
-                );
-                return journal;
-            }
-            let target = ShapeIdentity {
-                object_type: target_type,
-                id: target_id,
-                ex_id: CGuid::GUID_INVALID,
-            };
-            if !facts.object_target_available {
-                push_player_skill_reject(&mut journal, socket_id);
-                trace!(
-                    player_id,
-                    skill_id, target_type, target_id, "Запрос навыка отклонён: цель отсутствует"
-                );
-                return journal;
-            }
-            PlayerSkillDispatch::Object { skill_id, target }
         };
         if item_skill_level.is_some() {
             self.move_shape.set_item_skill(skill_id);
@@ -12663,49 +12659,49 @@ impl CPlayer {
             return journal;
         }
 
-        let dispatch = if target_type == 0 || target_id == 0 {
-            if target_x == 0 || target_y == 0 {
-                BattleFairySkillDispatch::SelfTarget {
-                    skill_id,
-                    skill_level,
-                    player_id,
-                }
-            } else {
-                BattleFairySkillDispatch::Point {
-                    skill_id,
-                    skill_level,
-                    x: target_x,
-                    y: target_y,
-                }
-            }
-        } else {
-            if self.server_region_id.is_none() {
-                trace!(
-                    player_id,
-                    skill_id, "Запрос навыка боевой феи отклонён: отсутствует регион"
-                );
-                return journal;
-            }
-            let target = ShapeIdentity {
-                object_type: target_type,
-                id: target_id,
-                ex_id: CGuid::GUID_INVALID,
-            };
-            if !facts.object_target_available {
-                push_battle_fairy_skill_reject(&mut journal, socket_id);
-                trace!(
-                    player_id,
-                    skill_id,
-                    target_type,
-                    target_id,
-                    "Запрос навыка боевой феи отклонён: цель отсутствует"
-                );
-                return journal;
-            }
-            BattleFairySkillDispatch::Object {
+        let dispatch = match (SkillTarget {
+            object_type: target_type,
+            object_id: target_id,
+            x: target_x,
+            y: target_y,
+        })
+        .form()
+        {
+            SkillTargetForm::SelfTarget => BattleFairySkillDispatch::SelfTarget {
                 skill_id,
                 skill_level,
-                target,
+                player_id,
+            },
+            SkillTargetForm::Point { x, y } => BattleFairySkillDispatch::Point {
+                skill_id,
+                skill_level,
+                x,
+                y,
+            },
+            SkillTargetForm::Object { target } => {
+                if self.server_region_id.is_none() {
+                    trace!(
+                        player_id,
+                        skill_id, "Запрос навыка боевой феи отклонён: отсутствует регион"
+                    );
+                    return journal;
+                }
+                if !facts.object_target_available {
+                    push_battle_fairy_skill_reject(&mut journal, socket_id);
+                    trace!(
+                        player_id,
+                        skill_id,
+                        target_type,
+                        target_id,
+                        "Запрос навыка боевой феи отклонён: цель отсутствует"
+                    );
+                    return journal;
+                }
+                BattleFairySkillDispatch::Object {
+                    skill_id,
+                    skill_level,
+                    target,
+                }
             }
         };
         journal.push(GameEffect::QueueBattleFairySkill {

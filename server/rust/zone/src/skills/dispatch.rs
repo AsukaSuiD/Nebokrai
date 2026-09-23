@@ -5,6 +5,8 @@
 //! VA 0x0050A13A–0x0050A15C и 0x0050A349–0x0050A367.
 //! Чтение ID команды и очистка старшего бита: VA 0x00488BAD–0x00488BE4
 //! и 0x00488E73–0x00488EAE.
+//! Выбор формы цели: VA 0x00488D20–0x00488E20,
+//! 0x00488FE6–0x00489109 и 0x0048949D–0x00489547.
 //! Enum и полный Eq — внутренняя модель Rust; ключ ожидающего запроса
 //! не включает уровень боевого духа и GUID цели.
 
@@ -59,6 +61,47 @@ pub struct BattleFairySkillRequestFacts {
     pub symbol_attackable: bool,
     pub player_ai_available: bool,
     pub object_target_available: bool,
+}
+
+/// Поля цели после возможной подстановки self-target из определения навыка.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SkillTarget {
+    pub object_type: i32,
+    pub object_id: i32,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkillTargetForm {
+    SelfTarget,
+    Point { x: i32, y: i32 },
+    Object { target: ShapeIdentity },
+}
+
+impl SkillTarget {
+    /// Нулевые type/id ведут к координатной перегрузке только при двух
+    /// ненулевых координатах; иначе вызывается объектная перегрузка на себя.
+    pub const fn form(self) -> SkillTargetForm {
+        if self.object_type == 0 || self.object_id == 0 {
+            if self.x == 0 || self.y == 0 {
+                SkillTargetForm::SelfTarget
+            } else {
+                SkillTargetForm::Point {
+                    x: self.x,
+                    y: self.y,
+                }
+            }
+        } else {
+            SkillTargetForm::Object {
+                target: ShapeIdentity {
+                    object_type: self.object_type,
+                    id: self.object_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

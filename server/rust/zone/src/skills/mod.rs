@@ -30,7 +30,7 @@ pub use lifecycle::skill_is_restored;
 pub use battlefairy::battle_fairy_mana_text_cost;
 pub use dispatch::{BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, PlayerSkillDispatch, PlayerSkillRequest,
-    PlayerSkillRequestFacts};
+    PlayerSkillRequestFacts, SkillTarget, SkillTargetForm};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
 pub use poisonfog::{PoisonFogPhalanx, PoisonFogPhalanxTick};
 pub use spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistPhalanx, SpiderMistPhalanxTick};
