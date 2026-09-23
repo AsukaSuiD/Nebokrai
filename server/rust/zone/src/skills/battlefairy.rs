@@ -6,7 +6,7 @@
 //! constructor `CBattleFairyContainer` (пары несовместимых навыков
 //! VA 0x00504052–0x00504149),
 //! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
-//! VA 0x00501815–0x00501A8D),
+//! VA 0x00501815–0x00501A8D и запись VA 0x00501892–0x00501AC7),
 //! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
@@ -73,6 +73,16 @@ pub fn select_battle_fairy_reset_skill(
             }
         },
     }
+}
+
+/// После выбора ID четыре раза меняет выбранное свойство головного предмета.
+/// Порядок и промежуточные значения сохраняются даже при отказе одной записи;
+/// доступ к живому предмету и числовой ключ предоставляет Game.
+pub fn write_battle_fairy_reset_skill(selected_skill: u32, mut write_value: impl FnMut(u32, i32)) {
+    write_value(1, 0);
+    write_value(2, 0);
+    write_value(1, 1);
+    write_value(2, selected_skill as i32);
 }
 
 /// Какое свойство предмета запрашивает правило; числовой ключ и чтение

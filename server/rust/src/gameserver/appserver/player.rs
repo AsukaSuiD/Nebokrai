@@ -499,6 +499,7 @@ use nebokrai_zone::scripts::{
 use nebokrai_zone::skills::{
     BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
     battle_fairy_skill_id, battle_fairy_skill_level, select_battle_fairy_reset_skill,
+    write_battle_fairy_reset_skill,
 };
 use super::serverregion::CServerRegion;
 use super::shape::{
@@ -12305,11 +12306,9 @@ impl CPlayer {
                 .equipment
                 .get_goods_mut(10)
                 .expect("skill detach не отделяет equipped headgear");
-            let _level_cleared = goods.set_addon_property_value_core(property, 1, 0);
-            let _skill_cleared = goods.set_addon_property_value_core(property, 2, 0);
-            let _level_stored = goods.set_addon_property_value_core(property, 1, 1);
-            let _skill_stored =
-                goods.set_addon_property_value_core(property, 2, selected_skill as i32);
+            write_battle_fairy_reset_skill(selected_skill, |index, value| {
+                let _ = goods.set_addon_property_value_core(property, index, value);
+            });
         }
 
         for property in EQUIPPED_SKILL_PROPERTIES {
