@@ -16,6 +16,7 @@ mod poisonfog;
 mod swordship;
 mod time;
 mod visualeffect;
+mod weak;
 mod wuxing;
 
 pub use agility::{
@@ -63,6 +64,7 @@ pub use swordship::{
 };
 pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
+pub use weak::{WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState};
 pub use wuxing::{
     WUXING_EARTH_STATE_ID, WUXING_FIRE_STATE_ID, WUXING_METAL_STATE_ID, WUXING_STATE_BYTES,
     WUXING_WATER_STATE_ID, WUXING_WOOD_STATE_ID, WuXingCoefficients, WuXingKind, WuXingProperties,
