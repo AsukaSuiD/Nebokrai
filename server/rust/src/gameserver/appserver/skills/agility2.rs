@@ -5,4 +5,4 @@
 //! после его End читаются WORD full-miss и persist. Создание, Begin(U,U),
 //! публикация и срок экземпляра принадлежат agilitystate2.
 
-pub(crate) const AGILITY_2_SKILL_ID: u32 = 0x81;
+pub(crate) use nebokrai_zone::effects::AGILITY_2_SKILL_ID;

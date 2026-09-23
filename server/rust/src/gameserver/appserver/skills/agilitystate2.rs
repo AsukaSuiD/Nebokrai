@@ -1,105 +1,25 @@
-//! Временная ловкость CAgilityState2 (0x81).
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/agilitystate2.cpp
-//! и первичное наложение agility2.cpp. Постоянные DA/DB/DC — другое семейство.
-//!
-//! Наложение завершает первый непустой ID81 без RTTI/ended-фильтра и уничтожает
-//! свежий остаток той же позиции. Только затем caller читает WORD full_miss
-//! и длительность. Begin(U,U) читает часы и отправляет BFE03 до append;
-//! loop=0 завершает visual после этого единственного сообщения. UpdateProperty
-//! выполняется после попытки Begin независимо от результата.
-//!
-//! AI использует строгий абсолютный unsigned wrapping deadline, без death-gate.
-//! End разрешает фактического S и удаляет тот же указатель: без visual и записи
-//! ended. Отсутствующий либо чужой S не заменяется держателем арены.
-//! Restart Begin(NULL, holder) сохраняет U/timestamp и заменяет S; SetRegion
-//! меняет только регион U. OnUpdateProperties прибавляет WORD full_miss игроку
-//! с переполнением, не вызывает visual и не читает часы.
-//!
-//! DB хранит DWORD ID, DWORD remaining и WORD full_miss. Getter остатка читает
-//! одни либо двое часов; Unserialize — часы после внешнего ID, до remaining/WORD.
-//! Общая арена сохраняет независимые записи и их позиции; безопасный массив
-//! байтов заменяет исходный vector без изменения десятибайтового формата.
+//! Живое наложение временной Agility2 (0x81).
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! `appserver/skills/agilitystate2.cpp/.h` и `agility2.cpp`.
+//! Данные, запись и расчёт срока принадлежат `zone/effects/agility.rs`.
+//! Здесь остаются замена первого ID81, участники, visual, restart и End.
+//! Begin читает часы и публикует BFE03 до append; общий пересчёт выполняется
+//! после попытки Begin независимо от результата.
 
 use super::agility2::AGILITY_2_SKILL_ID;
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
-use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
     end_and_destroy_state_at, remove_applied_state_from, resolve_applied_state_sufferer,
-    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
     update_player_state_properties, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const AGILITY_STATE_2_BYTES: usize = 10;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AgilityState2 {
-    full_miss: u16,
-    started_at_ms: u32,
-    keep_time_ms: i32,
-}
-
-impl AgilityState2 {
-    pub(crate) const fn new(full_miss: u16, started_at_ms: u32, keep_time_ms: i32) -> Self {
-        Self {
-            full_miss,
-            started_at_ms,
-            keep_time_ms,
-        }
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 { AGILITY_2_SKILL_ID }
-
-    pub(crate) fn apply_to_player(
-        self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        properties.full_miss = properties.full_miss.wrapping_add(self.full_miss);
-        properties
-    }
-
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms as u32) < now_ms
-    }
-
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(
-            self.started_at_ms,
-            self.keep_time_ms as u32,
-            now_milliseconds,
-        ) as i32
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != AGILITY_2_SKILL_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        let keep_time_ms = reader.read_i32()?;
-        Ok(Self::new(reader.read_u16()?, now_ms, keep_time_ms))
-    }
-
-    pub(crate) fn encoded(self, now: impl FnMut() -> u32) -> [u8; AGILITY_STATE_2_BYTES] {
-        let mut bytes = [0; AGILITY_STATE_2_BYTES];
-        bytes[..4].copy_from_slice(&AGILITY_2_SKILL_ID.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.client_time(now).to_le_bytes());
-        bytes[8..].copy_from_slice(&self.full_miss.to_le_bytes());
-        bytes
-    }
-
-    pub(crate) fn encoded_for_install(self) -> [u8; AGILITY_STATE_2_BYTES] {
-        let mut bytes = [0; AGILITY_STATE_2_BYTES];
-        bytes[..4].copy_from_slice(&AGILITY_2_SKILL_ID.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.keep_time_ms.to_le_bytes());
-        bytes[8..].copy_from_slice(&self.full_miss.to_le_bytes());
-        bytes
-    }
-}
+pub(crate) use nebokrai_zone::effects::{AGILITY_STATE_2_BYTES, AgilityState2};
 
 fn participant(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(i32, ShapeIdentity)> {
     let shape = resolve_state_move_shape(game, source.0, source.1)?.shape();
@@ -120,7 +40,7 @@ pub(crate) fn replace_agility_state_2(
     let mut state = create();
     let begun = (|| {
         resolve_state_move_shape(game, source.0, source.1)?;
-        state.started_at_ms = now();
+        state.start_at(now());
         let user = participant(game, source)?;
         let sufferer = participant(game, source)?;
         if resolve_state_move_shape(game, sufferer.0, sufferer.1).is_some() {
@@ -154,7 +74,10 @@ pub(crate) fn update_agility_state_2_properties(
     _now: &mut dyn FnMut() -> u32,
 ) -> bool {
     update_player_state_properties::<AgilityState2>(game, region_id, holder, key, |state, player| {
-        player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+        player.update_state_combat_properties(|mut properties| {
+            properties.full_miss = state.apply_to_full_miss(properties.full_miss);
+            properties
+        });
     })
 }
 

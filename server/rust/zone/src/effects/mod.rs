@@ -18,8 +18,9 @@ mod visualeffect;
 mod wuxing;
 
 pub use agility::{
-    AGILITY_SKILL_ID, NATURAL_SKILL_ID, PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
-    PersistentAgilityFamilyState, PersistentAgilityProperties, RAPTURE_SKILL_ID,
+    AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AGILITY_STATE_2_BYTES, AgilityState2, NATURAL_SKILL_ID,
+    PERSISTENT_AGILITY_FAMILY_STATE_BYTES, PersistentAgilityFamilyState,
+    PersistentAgilityProperties, RAPTURE_SKILL_ID,
 };
 pub use automaticrestore::{
     AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_HP_PEACE_STATE_ID,
