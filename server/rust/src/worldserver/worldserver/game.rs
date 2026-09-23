@@ -40,7 +40,8 @@ use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tiberius::Query;
 use nebokrai_realm::content::{
-    ScriptLoadContext, ScriptResources, find_script_files, normalize_script_path,
+    QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
+    find_script_files, normalize_script_path,
 };
 
 use crate::dbaccess::worlddb::dbcountry::{CountrySaveSnapshot, DbCountryOwner};
@@ -6655,7 +6656,7 @@ pub(crate) struct CGame {
     increment_shop_list: CIncrementShopList,
     prison_conf: PrisonConf,
     contribute_setup: CContributeSetup,
-    quest_system: CQuestSystem,
+    quest_system: QuestCatalog,
     connect_login_worker: Option<WorldLoginReconnectWorker>,
     write_log_worker: Option<WorldWriteLogWorker>,
     player_load_workers: WorldPlayerLoadWorkerPool,
@@ -6761,7 +6762,7 @@ impl CGame {
     }
 
     pub(crate) fn quest_system(&self) -> &CQuestSystem {
-        &self.quest_system
+        self.quest_system.system()
     }
 
     pub(crate) fn dupli_region_setup(&self) -> &CDupliRegionSetup {
@@ -6788,7 +6789,7 @@ impl CGame {
             increment_shop_list: CIncrementShopList::default(),
             prison_conf: PrisonConf::default(),
             contribute_setup: CContributeSetup::default(),
-            quest_system: CQuestSystem::default(),
+            quest_system: QuestCatalog::default(),
             connect_login_worker: None,
             write_log_worker: None,
             player_load_workers: WorldPlayerLoadWorkerPool::new(),
@@ -6957,17 +6958,9 @@ impl CGame {
         &mut self,
         context: &mut Context,
     ) -> QuestSystemLoadReport {
-        const QUEST_PATH: &[u8] = b"Data/Quest.ini";
-        const QUEST_EX_PATH: &[u8] = b"Data/QuestEx.ini";
-
-        let quest_source = context.read_resource(QUEST_PATH);
-        let quest_ex_source = quest_source
-            .as_ref()
-            .and_then(|_| context.read_resource(QUEST_EX_PATH));
         let string_table = self.string_table.table();
-        let report = self.quest_system.load_from_resources(
-            quest_source.as_deref(),
-            quest_ex_source.as_deref(),
+        let report = self.quest_system.load(
+            |path| context.read_resource(path),
             &mut |string_id| string_table.get_string_by_id(string_id).map(ToOwned::to_owned),
         );
         for (path, error) in [
@@ -8734,17 +8727,38 @@ impl CGame {
             }
             WorldReloadProfile::GeneralVariableList => {}
             WorldReloadProfile::Quest => {
-                let quest_source = context.read_resource(b"Data/Quest.ini");
-                let quest_ex_source = context.read_resource(b"Data/QuestEx.ini");
                 let string_table = self.string_table.table();
-                let _ = self.quest_system.load_from_resources(
-                    quest_source.as_deref(),
-                    quest_ex_source.as_deref(),
+                let report = self.quest_system.load(
+                    |path| context.read_resource(path),
                     &mut |key| string_table.get_string_by_id(key).map(ToOwned::to_owned),
                 );
+                for (path, error) in [
+                    (QUEST_PATH, report.primary_error),
+                    (QUEST_EX_PATH, report.extension_error),
+                ] {
+                    if let Some(error) = error {
+                        tracing::warn!(
+                            path = %String::from_utf8_lossy(path),
+                            field = error.field,
+                            offset = error.offset,
+                            record_offset = error.record_offset,
+                            kind = ?error.kind,
+                            "Повторная загрузка каталога заданий остановлена; ранее применённые данные сохранены"
+                        );
+                    }
+                }
+                if report.completion != QuestSystemLoadCompletion::Loaded {
+                    tracing::warn!(
+                        completion = ?report.completion,
+                        primary_records = report.primary_records,
+                        extension_records = report.extension_records,
+                        "Каталог заданий после повторной загрузки неполон"
+                    );
+                }
                 context.add_log_text(b"Load QuestData...OK!");
                 let mut payload = Vec::new();
                 self.quest_system
+                    .system()
                     .add_to_byte_array(&mut payload)
                     .map_err(WorldReloadBlock::QuestSerialization)?;
                 legacy_result = payload.len() as u32 as i32;
@@ -11747,7 +11761,7 @@ impl CGame {
         events.push(WorldGameReleaseEvent::OrganizingParametersReleased(
             organizing_parameters,
         ));
-        self.quest_system = CQuestSystem::default();
+        self.quest_system.clear();
         events.push(WorldGameReleaseEvent::VoidOwner(
             WorldGameReleaseVoidOwner::ReleaseQuestSystem,
         ));

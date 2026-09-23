@@ -11,13 +11,15 @@ impl CQuestSystem {
     }
 
     /// Применяет ресурсы по порядку без отката уже прочитанных полей и записей.
-    pub fn load_from_resources<ResolveString>(
+    /// Realm открывает расширение через callback после разбора основного списка.
+    pub fn load_from_resources<ReadExtension, ResolveString>(
         &mut self,
         quest_source: Option<&[u8]>,
-        quest_ex_source: Option<&[u8]>,
+        read_extension: ReadExtension,
         resolve_string: &mut ResolveString,
     ) -> QuestSystemLoadReport
     where
+        ReadExtension: FnOnce() -> Option<Vec<u8>>,
         ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
     {
         self.clear_quests_for_load();
@@ -43,7 +45,7 @@ impl CQuestSystem {
         }
 
         let primary_records = self.load_primary_nodes(&mut primary, resolve_string);
-        let Some(quest_ex_source) = quest_ex_source else {
+        let Some(quest_ex_source) = read_extension() else {
             return QuestSystemLoadReport {
                 primary_records,
                 extension_records: 0,
@@ -53,7 +55,7 @@ impl CQuestSystem {
             };
         };
 
-        let mut extension = QuestInput::new(quest_ex_source);
+        let mut extension = QuestInput::new(&quest_ex_source);
         let extension_records = self.load_extension_nodes(&mut extension, resolve_string);
         QuestSystemLoadReport {
             primary_records,
