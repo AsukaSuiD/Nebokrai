@@ -46,6 +46,8 @@
 
 После переноса данных, предела и записи SoulCollect в Zone effects тот же Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Конструктор, AddSoul, Serialize/Unserialize и порядок End→Calculate трёх снарядов сверены с Game EXE/PDB; фактический расход душ, visual и попадание не запускались.
 
+После переноса данных, беззнакового предела и записи EnergyHolding в Zone effects тот же Linux `cargo check --locked --workspace --lib --bins` завершился успешно. Конструкторы, AddEnergy и общий с SoulCollect Serialize/Unserialize сверены с Game EXE/PDB; фактические пополнение, расход и восстановление состояния не запускались.
+
 ## Проверка публичного дерева 21 сентября 2026
 
 На коммите `714175bb5` повторно выполнен `cargo check --locked --offline --lib --bins` для библиотеки и шести серверных входов. Источники получены через `git archive`, без `.git`, исследовательских материалов, runtime, конфигов и БД. Использован Linux x86_64, Rust/Cargo 1.97.1 и образ `rust:1.97.1-bookworm` с digest `sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97`. Все 233 внешних архива зависимостей сверены по SHA-256 из Cargo.lock; target-кэш изначально пуст. Сеть контейнера отключена. Проверка завершилась успешно за 1 минуту 23 секунды.

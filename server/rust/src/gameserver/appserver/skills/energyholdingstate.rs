@@ -17,7 +17,6 @@
 use super::accumulatedstate::{
     AccumulatedState, AccumulationParticipant, add_accumulated_state, update_accumulated_visual,
 };
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -27,49 +26,9 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 
-pub(crate) const ENERGY_HOLDING_STATE_ID: u32 = 0x89;
-pub(crate) const ENERGY_HOLDING_STATE_BYTES: usize = 12;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EnergyHoldingState {
-    skill_level: u32,
-    energy_count: u32,
-    parameter_percent: u32,
-}
-
-impl EnergyHoldingState {
-    pub(crate) const fn new(skill_level: u32, parameter_percent: u32) -> Self {
-        Self { skill_level, energy_count: 0, parameter_percent }
-    }
-    pub(crate) const fn skill_id(self) -> u32 { ENERGY_HOLDING_STATE_ID }
-    pub(crate) const fn skill_level(self) -> u32 { self.skill_level }
-    pub(crate) const fn energy_count(self) -> u32 { self.energy_count }
-
-    fn add_energy(&mut self) -> bool {
-        if self.energy_count >= self.skill_level { return false; }
-        self.energy_count = self.energy_count.wrapping_add(1);
-        true
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != ENERGY_HOLDING_STATE_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        Ok(Self {
-            skill_level: reader.read_u32()?, energy_count: reader.read_u32()?, parameter_percent: 0,
-        })
-    }
-
-    pub(crate) fn encoded(self) -> [u8; ENERGY_HOLDING_STATE_BYTES] {
-        let mut bytes = Vec::with_capacity(ENERGY_HOLDING_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(ENERGY_HOLDING_STATE_ID);
-        writer.write_u32(self.skill_level);
-        writer.write_u32(self.energy_count);
-        bytes.try_into().expect("размер состояния накопления энергии фиксирован")
-    }
-}
+pub(crate) use nebokrai_zone::effects::{
+    ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID, EnergyHoldingState,
+};
 
 fn first_energy_slot(game: &CGame, source: (i32, ShapeIdentity)) -> Option<(usize, StateKey)> {
     resolve_state_move_shape(game, source.0, source.1)?
@@ -88,7 +47,7 @@ impl AccumulatedState for EnergyHoldingState {
     const PARTICIPANT: AccumulationParticipant = AccumulationParticipant::User;
     fn increment(&mut self) -> bool { self.add_energy() }
     fn record(self) -> [u8; ENERGY_HOLDING_STATE_BYTES] { self.encoded() }
-    fn client_fields(self) -> (u32, u32) { (0, 0) }
+    fn client_fields(self) -> (u32, u32) { EnergyHoldingState::client_fields(self) }
 }
 
 /// Параметры нового ctor запрашиваются только при отсутствии typed первого
@@ -104,7 +63,7 @@ pub(crate) fn consume_energy_holding_multiplier(game: &mut CGame, source: (i32, 
     let Some((position, key)) = first_energy_slot(game, source) else { return 1.0; };
     let multiplier = resolve_state_move_shape(game, source.0, source.1)
         .and_then(|shape| shape.applied_state::<EnergyHoldingState>(key))
-        .map_or(1.0, |state| f64::from(state.energy_count) * f64::from(state.parameter_percent) * 0.01 + 1.0);
+        .map_or(1.0, |state| f64::from(state.energy_count()) * f64::from(state.parameter_percent()) * 0.01 + 1.0);
     let _ = end_and_destroy_state_at(game, source.0, source.1, position);
     multiplier
 }

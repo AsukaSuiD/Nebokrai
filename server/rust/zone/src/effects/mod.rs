@@ -5,6 +5,7 @@ mod automaticrestore;
 mod bloodloss;
 mod callosity;
 mod element;
+mod energyholding;
 mod fullmiss;
 mod hearten;
 mod leafcut;
@@ -34,6 +35,7 @@ pub use automaticrestore::{
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
 };
+pub use energyholding::{ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID, EnergyHoldingState};
 pub use callosity::{
     CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID, CALLOSITY_STATE_BYTES, CallosityFamilyState,
 };
