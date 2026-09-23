@@ -9,6 +9,7 @@ mod firewall;
 mod masked_area;
 mod yinyang;
 mod elementphalanx;
+mod godthunder;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use weak::{WEAK_SKILL_ID, WeakPhalanx, WeakPhalanxTick, weak_lifetime};
@@ -21,3 +22,6 @@ pub use masked_area::{MaskedArea, MaskedAreaPulse};
 pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
     YinYangSummonParameters, yin_yang_scope};
 pub use elementphalanx::ElementPhalanxAttack;
+pub use godthunder::{GOD_THUNDER_SKILL_ID, GOD_THUNDER_2_SKILL_ID,
+    ROUNDED_THUNDER_SCOPE, ROUNDED_THUNDER_SCOPE_SIDE,
+    GodThunderParametersError, GodThunderPhalanx};

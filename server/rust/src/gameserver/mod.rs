@@ -177,7 +177,6 @@ pub(crate) mod appserver {
         pub(crate) mod directelementattack;
         pub(crate) mod maskedelementphalanx;
         pub(crate) mod godthunder2;
-        pub(crate) mod godthunderphalanx2;
         pub(crate) mod lightning;
         pub(crate) mod fury;
         pub(crate) mod furystate;

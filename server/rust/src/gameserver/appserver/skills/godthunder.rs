@@ -17,7 +17,7 @@ use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
-pub(crate) const GOD_THUNDER_SKILL_ID: u32 = 0x140;
+pub(crate) use nebokrai_zone::skills::GOD_THUNDER_SKILL_ID;
 
 pub(super) fn summon_god_thunder<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),

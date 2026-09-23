@@ -34,16 +34,10 @@ use crate::gameserver::appserver::summonshape::{SUMMON_SHAPE_TYPE, encode_relate
 use crate::gameserver::gameserver::game::CGame;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const THUNDER_SCOPE_SIDE: i32 = 7;
-pub(crate) const THUNDER_SCOPE: [u8; 49] = [
-    0, 0, 1, 1, 1, 0, 0,
-    0, 1, 1, 1, 1, 1, 0,
-    1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1,
-    0, 1, 1, 1, 1, 1, 0,
-    0, 0, 1, 1, 1, 0, 0,
-];
+pub(crate) use nebokrai_zone::skills::{
+    ROUNDED_THUNDER_SCOPE as THUNDER_SCOPE,
+    ROUNDED_THUNDER_SCOPE_SIDE as THUNDER_SCOPE_SIDE,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ThunderPhalanxTick {
