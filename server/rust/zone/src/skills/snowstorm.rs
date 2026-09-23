@@ -1,7 +1,8 @@
 //! Данные области CSnowStormPhalanx и окна выбранных клеток.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/snowstormphalanx.cpp/.h.
-//! Конструктор VA 0x005F9040, AI 0x005F94B0.
+//! Конструктор VA 0x005F9040, Initialize 0x005F8D70,
+//! элементальная формула 0x005F934B, AI 0x005F94B0.
 
 use crate::combat::MasterInfo;
 
@@ -28,6 +29,13 @@ impl SnowStormAttack {
             master_type: self.master.master_type, master_id: self.master.master_id,
             ..MasterInfo::default()
         }
+    }
+
+    pub fn element_damage(self, random_below: impl FnOnce(i32) -> i32) -> i32 {
+        let width = self.maximum_attack.wrapping_sub(self.minimum_attack)
+            .wrapping_abs().wrapping_add(1);
+        random_below(width).wrapping_add(self.minimum_attack)
+            .wrapping_add(self.element_modifier).max(0)
     }
 }
 

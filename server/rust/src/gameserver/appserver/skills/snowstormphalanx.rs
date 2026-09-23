@@ -97,10 +97,7 @@ pub(crate) fn apply_snow_storm_attack<Runtime: GameMainLoopRuntime>(
     attack.damage_modifier = 0;
     attack.damage_factor = 1.0;
     attack.hit_modifier = 100;
-    let width = snapshot.maximum_attack.wrapping_sub(snapshot.minimum_attack)
-        .wrapping_abs().wrapping_add(1);
-    let damage = game.skill_random_below(width).wrapping_add(snapshot.minimum_attack)
-        .wrapping_add(snapshot.element_modifier).max(0);
+    let damage = snapshot.element_damage(|width| game.skill_random_below(width));
     attack.damages.push(AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 });
     game.apply_owned_skill_contact(master, target, region, attack, runtime);
 }
