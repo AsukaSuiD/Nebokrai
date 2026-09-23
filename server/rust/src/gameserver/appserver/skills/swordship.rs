@@ -11,21 +11,14 @@
 
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::swordshipstate::SwordshipState;
-
-pub(crate) const SWORDSHIP_SKILL_ID: u32 = 0x6f;
-pub(crate) const SWORDSHIP_2_SKILL_ID: u32 = 0xe0;
-pub(crate) const SWORDSHIP_3_SKILL_ID: u32 = 0xe8;
-pub(crate) const SWORDSHIP_4_SKILL_ID: u32 = 0xe9;
+pub(crate) use nebokrai_zone::effects::{
+    SWORDSHIP_2_STATE_ID as SWORDSHIP_2_SKILL_ID, SWORDSHIP_3_STATE_ID as SWORDSHIP_3_SKILL_ID,
+    SWORDSHIP_4_STATE_ID as SWORDSHIP_4_SKILL_ID, SWORDSHIP_STATE_ID as SWORDSHIP_SKILL_ID,
+    is_swordship_state_id as is_swordship_skill,
+};
 
 const SKILL_USAGE_TARGET_MIN_ATK_GAIN: u32 = 0x74;
 const SKILL_USAGE_TARGET_MAX_ATK_GAIN: u32 = 0x75;
-
-pub(crate) const fn is_swordship_skill(skill_id: u32) -> bool {
-    matches!(
-        skill_id,
-        SWORDSHIP_SKILL_ID | SWORDSHIP_2_SKILL_ID | SWORDSHIP_3_SKILL_ID | SWORDSHIP_4_SKILL_ID
-    )
-}
 
 pub(super) fn state_from_properties(
     skill_id: u32,
