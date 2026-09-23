@@ -12163,9 +12163,6 @@ impl CPlayer {
         if consume_item {
             let reset_item = battle_fairy_reset_item(position, |name| {
                 let reset_index = factory.query_goods_id_by_original_name(Some(name));
-                if reset_index == 0 {
-                    return None;
-                }
                 self
                     .packet
                     .base()
