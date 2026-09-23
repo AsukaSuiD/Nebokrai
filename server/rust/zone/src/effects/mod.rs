@@ -1,6 +1,7 @@
 //! Наложенные состояния Zone; живой владелец фигуры подключается переходным Game.
 
 mod automaticrestore;
+mod bloodloss;
 mod periodicattack;
 mod poison;
 mod time;
@@ -11,6 +12,9 @@ pub use automaticrestore::{
     AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,
     AUTOMATIC_RESTORE_STATE_BYTES, AutomaticRestoreKind, AutomaticRestoreMutation,
     AutomaticRestoreProperties, AutomaticRestoreState, is_automatic_restore_state_id,
+};
+pub use bloodloss::{
+    BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
 };
 pub use periodicattack::{
     PeriodicAttackCore, PeriodicAttackRecord, encode_periodic_state,

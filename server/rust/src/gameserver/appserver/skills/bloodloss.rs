@@ -30,7 +30,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 
-pub(crate) const BLOOD_LOSS_SKILL_ID: u32 = 0x21d;
+pub(crate) use nebokrai_zone::effects::BLOOD_LOSS_STATE_ID as BLOOD_LOSS_SKILL_ID;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
