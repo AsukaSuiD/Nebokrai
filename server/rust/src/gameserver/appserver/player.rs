@@ -497,8 +497,8 @@ use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use nebokrai_zone::skills::{
-    BattleFairySkillProperty, battle_fairy_skill_entries, battle_fairy_skill_ids,
-    battle_fairy_skill_level,
+    BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
+    battle_fairy_skill_id, battle_fairy_skill_level,
 };
 use super::serverregion::CServerRegion;
 use super::shape::{
@@ -10108,7 +10108,8 @@ impl CPlayer {
                 });
             }
             if player_effects.delete_war_soul_skill {
-                for skill_id in war_soul_skill_ids_from_goods(&removed.goods, factory) {
+                for property in EQUIPPED_SKILL_PROPERTIES {
+                    let skill_id = war_soul_skill_id_from_goods(&removed.goods, factory, property);
                     let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
                     effects.push(PlayerEquipmentRemoveEffect::WarSoulSkillDetached { skill_id });
                     if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
@@ -10229,9 +10230,16 @@ impl CPlayer {
                     .set_expanded_package_num_snapshot(previous_expanded_package_num);
             }
             if player_effects.add_war_soul_skill
-                && let Some(goods) = self.equipment.get_goods(added.column.position())
+                && self.equipment.get_goods(added.column.position()).is_some()
             {
-                for (skill_id, level) in war_soul_skill_entries_from_goods(goods, factory) {
+                for property in EQUIPPED_SKILL_PROPERTIES {
+                    let (skill_id, level) = {
+                        let goods = self
+                            .equipment
+                            .get_goods(added.column.position())
+                            .expect("присоединение навыка не отделяет предмет экипировки");
+                        war_soul_skill_entry_from_goods(goods, factory, property)
+                    };
                     let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
                     publish_effect(
                         self,
@@ -12252,8 +12260,14 @@ impl CPlayer {
 
         // В каждом native switch-case полный detach расположен перед первым
         // random(), а не только перед addon mutation.
-        let old_skill_ids = self.war_soul_skill_ids(factory);
-        for skill_id in old_skill_ids {
+        for property in EQUIPPED_SKILL_PROPERTIES {
+            let skill_id = {
+                let goods = self
+                    .equipment
+                    .get_goods(10)
+                    .expect("снятие навыка не отделяет головной предмет");
+                war_soul_skill_id_from_goods(goods, factory, property)
+            };
             if skill_id == 0 {
                 continue;
             }
@@ -12321,8 +12335,14 @@ impl CPlayer {
                 goods.set_addon_property_value_core(property, 2, selected_skill as i32);
         }
 
-        let new_entries = self.war_soul_skill_entries(factory);
-        for (skill_id, level) in new_entries {
+        for property in EQUIPPED_SKILL_PROPERTIES {
+            let (skill_id, level) = {
+                let goods = self
+                    .equipment
+                    .get_goods(10)
+                    .expect("установка навыка не отделяет головной предмет");
+                war_soul_skill_entry_from_goods(goods, factory, property)
+            };
             let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
             if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
                 tracing::trace!(
@@ -12372,7 +12392,14 @@ impl CPlayer {
         skill_factory: &CSkillFactory,
     ) -> Vec<u32> {
         let mut detached = Vec::new();
-        for skill_id in self.war_soul_skill_ids(factory) {
+        if self.equipment.get_goods(10).is_none() {
+            return detached;
+        }
+        for property in EQUIPPED_SKILL_PROPERTIES {
+            let skill_id = {
+                let goods = self.equipment.get_goods(10).expect("снятие навыка сохраняет предмет");
+                war_soul_skill_id_from_goods(goods, factory, property)
+            };
             if skill_id == 0 {
                 continue;
             }
@@ -12392,7 +12419,14 @@ impl CPlayer {
     ) -> Vec<BattleFairySkillAdded> {
         let player_id = self.player_id();
         let mut attached = Vec::new();
-        for (skill_id, level) in self.war_soul_skill_entries(factory) {
+        if self.equipment.get_goods(10).is_none() {
+            return attached;
+        }
+        for property in EQUIPPED_SKILL_PROPERTIES {
+            let (skill_id, level) = {
+                let goods = self.equipment.get_goods(10).expect("установка навыка сохраняет предмет");
+                war_soul_skill_entry_from_goods(goods, factory, property)
+            };
             if skill_id == 0 {
                 continue;
             }
@@ -12402,20 +12436,6 @@ impl CPlayer {
             }
         }
         attached
-    }
-
-    fn war_soul_skill_entries(&self, factory: &CGoodsFactory) -> [(u32, i32); 9] {
-        let Some(goods) = self.equipment.get_goods(10) else {
-            return [(0, 0); 9];
-        };
-        war_soul_skill_entries_from_goods(goods, factory)
-    }
-
-    fn war_soul_skill_ids(&self, factory: &CGoodsFactory) -> [u32; 9] {
-        let Some(goods) = self.equipment.get_goods(10) else {
-            return [0; 9];
-        };
-        war_soul_skill_ids_from_goods(goods, factory)
     }
 
     /// Полный player-side `skillmessage 0x90001` после успешного decoder-а.
@@ -13714,14 +13734,22 @@ fn battle_fairy_skill_snapshot(
     }
 }
 
-fn war_soul_skill_entries_from_goods(goods: &CGoods, factory: &CGoodsFactory) -> [(u32, i32); 9] {
-    battle_fairy_skill_entries(|property, index| {
+fn war_soul_skill_entry_from_goods(
+    goods: &CGoods,
+    factory: &CGoodsFactory,
+    property: BattleFairySkillProperty,
+) -> (u32, i32) {
+    battle_fairy_skill_entry(property, |property, index| {
         battle_fairy_skill_property_value(goods, factory, property, index)
     })
 }
 
-fn war_soul_skill_ids_from_goods(goods: &CGoods, factory: &CGoodsFactory) -> [u32; 9] {
-    battle_fairy_skill_ids(|property, index| {
+fn war_soul_skill_id_from_goods(
+    goods: &CGoods,
+    factory: &CGoodsFactory,
+    property: BattleFairySkillProperty,
+) -> u32 {
+    battle_fairy_skill_id(property, |property, index| {
         battle_fairy_skill_property_value(goods, factory, property, index)
     })
 }

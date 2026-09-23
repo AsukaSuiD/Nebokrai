@@ -22,7 +22,8 @@ pub enum BattleFairySkillProperty {
     Lingzhishu,
 }
 
-const EQUIPPED_SKILL_PROPERTIES: [BattleFairySkillProperty; 9] = [
+/// Порядок слотов при снятии и установке навыков головного предмета.
+pub const EQUIPPED_SKILL_PROPERTIES: [BattleFairySkillProperty; 9] = [
     BattleFairySkillProperty::Sky,
     BattleFairySkillProperty::Earth,
     BattleFairySkillProperty::Man,
@@ -34,28 +35,29 @@ const EQUIPPED_SKILL_PROPERTIES: [BattleFairySkillProperty; 9] = [
     BattleFairySkillProperty::Lingzhishu,
 ];
 
-/// Снятие девяти навыков читает только ID в порядке свойств предмета.
-pub fn battle_fairy_skill_ids(
+/// Читает ID непосредственно перед снятием одного слота.
+pub fn battle_fairy_skill_id(
+    property: BattleFairySkillProperty,
     mut read_property: impl FnMut(BattleFairySkillProperty, u32) -> i32,
-) -> [u32; 9] {
-    std::array::from_fn(|index| read_property(EQUIPPED_SKILL_PROPERTIES[index], 2) as u32)
+) -> u32 {
+    read_property(property, 2) as u32
 }
 
 /// Установка первых семи навыков читает уровень перед ID. Для двух
 /// последних читается только ID, уровень передаётся как единица.
-pub fn battle_fairy_skill_entries(
+pub fn battle_fairy_skill_entry(
+    property: BattleFairySkillProperty,
     mut read_property: impl FnMut(BattleFairySkillProperty, u32) -> i32,
-) -> [(u32, i32); 9] {
-    std::array::from_fn(|index| {
-        let property = EQUIPPED_SKILL_PROPERTIES[index];
-        if index < 7 {
-            let level = read_property(property, 1);
-            let skill_id = read_property(property, 2) as u32;
-            (skill_id, level)
-        } else {
+) -> (u32, i32) {
+    match property {
+        BattleFairySkillProperty::Huoxieshu | BattleFairySkillProperty::Lingzhishu => {
             (read_property(property, 2) as u32, 1)
         }
-    })
+        _ => {
+            let level = read_property(property, 1);
+            (read_property(property, 2) as u32, level)
+        }
+    }
 }
 
 /// Нулевой offset разрешает уровень 1 без чтения предмета. При несовпадении
