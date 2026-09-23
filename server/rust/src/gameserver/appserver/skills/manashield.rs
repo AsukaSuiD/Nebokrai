@@ -7,7 +7,7 @@ use super::selfshield::SelfShieldOwner;
 use super::shieldstate::DefenseShieldState;
 use super::skillbaseproperties::CSkillBaseProperties;
 
-pub(crate) const MANA_SHIELD_SKILL_ID: u32 = 321;
+pub(crate) use nebokrai_zone::effects::MANA_SHIELD_SKILL_ID;
 
 pub(crate) struct ManaShieldOwner;
 

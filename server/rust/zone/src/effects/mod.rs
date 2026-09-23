@@ -10,11 +10,13 @@ mod fullmiss;
 mod hearten;
 mod leafcut;
 mod machineshield;
+mod manashield;
 mod maxresource;
 mod meteorarrow;
 mod periodicattack;
 mod poison;
 mod poisonfog;
+mod shieldabsorption;
 mod soulcollect;
 mod swordship;
 mod time;
@@ -52,6 +54,7 @@ pub use leafcut::{
     LeafCutAttackSeed, LeafCutState,
 };
 pub use machineshield::{MACHINE_SHIELD_SKILL_ID, MACHINE_SHIELD_STATE_BYTES, MachineShieldState};
+pub use manashield::{MANA_SHIELD_SKILL_ID, MANA_SHIELD_STATE_BYTES, ManaShieldState};
 pub use maxresource::{
     ENLARGE_MAX_HP_STATE_ID, ENLARGE_MAX_MP_STATE_ID, EnlargeMaxHpState, EnlargeMaxMpState,
     MAX_RESOURCE_STATE_BYTES, MaxResourceState,
