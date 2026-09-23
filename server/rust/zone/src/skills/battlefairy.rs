@@ -1,6 +1,8 @@
 //! Правила навыков боевого духа.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/player.cpp/.h
 //! (проверка уровня VA 0x0042E7A0–0x0042E81C) и
+//! appserver/player.cpp/.h (снятие/установка девяти навыков
+//! VA 0x00430610–0x00430756 и 0x00430760–0x00430921),
 //! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
@@ -9,8 +11,51 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BattleFairySkillProperty {
     RequestedOffset(i32),
+    Sky,
+    Earth,
+    Man,
+    SkySkill,
+    EarthSkill,
+    ManSkill,
+    AllSkill,
     Huoxieshu,
     Lingzhishu,
+}
+
+const EQUIPPED_SKILL_PROPERTIES: [BattleFairySkillProperty; 9] = [
+    BattleFairySkillProperty::Sky,
+    BattleFairySkillProperty::Earth,
+    BattleFairySkillProperty::Man,
+    BattleFairySkillProperty::SkySkill,
+    BattleFairySkillProperty::EarthSkill,
+    BattleFairySkillProperty::ManSkill,
+    BattleFairySkillProperty::AllSkill,
+    BattleFairySkillProperty::Huoxieshu,
+    BattleFairySkillProperty::Lingzhishu,
+];
+
+/// Снятие девяти навыков читает только ID в порядке свойств предмета.
+pub fn battle_fairy_skill_ids(
+    mut read_property: impl FnMut(BattleFairySkillProperty, u32) -> i32,
+) -> [u32; 9] {
+    std::array::from_fn(|index| read_property(EQUIPPED_SKILL_PROPERTIES[index], 2) as u32)
+}
+
+/// Установка первых семи навыков читает уровень перед ID. Для двух
+/// последних читается только ID, уровень передаётся как единица.
+pub fn battle_fairy_skill_entries(
+    mut read_property: impl FnMut(BattleFairySkillProperty, u32) -> i32,
+) -> [(u32, i32); 9] {
+    std::array::from_fn(|index| {
+        let property = EQUIPPED_SKILL_PROPERTIES[index];
+        if index < 7 {
+            let level = read_property(property, 1);
+            let skill_id = read_property(property, 2) as u32;
+            (skill_id, level)
+        } else {
+            (read_property(property, 2) as u32, 1)
+        }
+    })
 }
 
 /// Нулевой offset разрешает уровень 1 без чтения предмета. При несовпадении

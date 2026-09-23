@@ -496,7 +496,10 @@ use super::moveshape::{
 use nebokrai_zone::scripts::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
-use nebokrai_zone::skills::{BattleFairySkillProperty, battle_fairy_skill_level};
+use nebokrai_zone::skills::{
+    BattleFairySkillProperty, battle_fairy_skill_entries, battle_fairy_skill_ids,
+    battle_fairy_skill_level,
+};
 use super::serverregion::CServerRegion;
 use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
@@ -10105,7 +10108,7 @@ impl CPlayer {
                 });
             }
             if player_effects.delete_war_soul_skill {
-                for (skill_id, _) in war_soul_skill_entries_from_goods(&removed.goods, factory) {
+                for skill_id in war_soul_skill_ids_from_goods(&removed.goods, factory) {
                     let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
                     effects.push(PlayerEquipmentRemoveEffect::WarSoulSkillDetached { skill_id });
                     if let Some(skill) = self.move_shape.skill(skill_id, skill_factory) {
@@ -12249,8 +12252,8 @@ impl CPlayer {
 
         // В каждом native switch-case полный detach расположен перед первым
         // random(), а не только перед addon mutation.
-        let old_entries = self.war_soul_skill_entries(factory);
-        for (skill_id, _) in old_entries {
+        let old_skill_ids = self.war_soul_skill_ids(factory);
+        for skill_id in old_skill_ids {
             if skill_id == 0 {
                 continue;
             }
@@ -12369,7 +12372,7 @@ impl CPlayer {
         skill_factory: &CSkillFactory,
     ) -> Vec<u32> {
         let mut detached = Vec::new();
-        for (skill_id, _) in self.war_soul_skill_entries(factory) {
+        for skill_id in self.war_soul_skill_ids(factory) {
             if skill_id == 0 {
                 continue;
             }
@@ -12406,6 +12409,13 @@ impl CPlayer {
             return [(0, 0); 9];
         };
         war_soul_skill_entries_from_goods(goods, factory)
+    }
+
+    fn war_soul_skill_ids(&self, factory: &CGoodsFactory) -> [u32; 9] {
+        let Some(goods) = self.equipment.get_goods(10) else {
+            return [0; 9];
+        };
+        war_soul_skill_ids_from_goods(goods, factory)
     }
 
     /// Полный player-side `skillmessage 0x90001` после успешного decoder-а.
@@ -12621,12 +12631,7 @@ impl CPlayer {
 
         let skill_level =
             battle_fairy_skill_level(request.property_offset, skill_id, |property, index| {
-                let key = match property {
-                    BattleFairySkillProperty::RequestedOffset(offset) => GAP_BF_MAN.wrapping_add(offset),
-                    BattleFairySkillProperty::Huoxieshu => GAP_BF_HUOXIESHU_SKILL,
-                    BattleFairySkillProperty::Lingzhishu => GAP_BF_LINGZHISHU_SKILL,
-                };
-                goods.addon_property_value(goods_factory, key, index)
+                battle_fairy_skill_property_value(goods, goods_factory, property, index)
             });
         if skill_level == 0 {
             push_battle_fairy_skill_reject(&mut journal, socket_id);
@@ -13710,26 +13715,36 @@ fn battle_fairy_skill_snapshot(
 }
 
 fn war_soul_skill_entries_from_goods(goods: &CGoods, factory: &CGoodsFactory) -> [(u32, i32); 9] {
-    let entry = |property| {
-        (
-            goods.addon_property_value(factory, property, 2) as u32,
-            goods.addon_property_value(factory, property, 1),
-        )
+    battle_fairy_skill_entries(|property, index| {
+        battle_fairy_skill_property_value(goods, factory, property, index)
+    })
+}
+
+fn war_soul_skill_ids_from_goods(goods: &CGoods, factory: &CGoodsFactory) -> [u32; 9] {
+    battle_fairy_skill_ids(|property, index| {
+        battle_fairy_skill_property_value(goods, factory, property, index)
+    })
+}
+
+fn battle_fairy_skill_property_value(
+    goods: &CGoods,
+    factory: &CGoodsFactory,
+    property: BattleFairySkillProperty,
+    index: u32,
+) -> i32 {
+    let key = match property {
+        BattleFairySkillProperty::RequestedOffset(offset) => GAP_BF_MAN.wrapping_add(offset),
+        BattleFairySkillProperty::Sky => GAP_BF_SKY,
+        BattleFairySkillProperty::Earth => GAP_BF_EARTH,
+        BattleFairySkillProperty::Man => GAP_BF_MAN,
+        BattleFairySkillProperty::SkySkill => GAP_BF_SKY_SKILL,
+        BattleFairySkillProperty::EarthSkill => GAP_BF_EARTH_SKILL,
+        BattleFairySkillProperty::ManSkill => GAP_BF_MAN_SKILL,
+        BattleFairySkillProperty::AllSkill => GAP_BF_ALL_SKILL,
+        BattleFairySkillProperty::Huoxieshu => GAP_BF_HUOXIESHU_SKILL,
+        BattleFairySkillProperty::Lingzhishu => GAP_BF_LINGZHISHU_SKILL,
     };
-    let mut entries = [
-        entry(GAP_BF_SKY),
-        entry(GAP_BF_EARTH),
-        entry(GAP_BF_MAN),
-        entry(GAP_BF_SKY_SKILL),
-        entry(GAP_BF_EARTH_SKILL),
-        entry(GAP_BF_MAN_SKILL),
-        entry(GAP_BF_ALL_SKILL),
-        entry(GAP_BF_HUOXIESHU_SKILL),
-        entry(GAP_BF_LINGZHISHU_SKILL),
-    ];
-    entries[7].1 = 1;
-    entries[8].1 = 1;
-    entries
+    goods.addon_property_value(factory, key, index)
 }
 
 fn push_battle_fairy_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {

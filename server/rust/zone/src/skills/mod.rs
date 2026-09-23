@@ -28,7 +28,7 @@ pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
 pub use lifecycle::skill_is_restored;
 pub use battlefairy::{BattleFairySkillProperty, battle_fairy_mana_text_cost,
-    battle_fairy_skill_level};
+    battle_fairy_skill_level, battle_fairy_skill_ids, battle_fairy_skill_entries};
 pub use dispatch::{BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, PlayerSkillDispatch, PlayerSkillRequest,
     PlayerSkillRequestFacts, SkillTarget, SkillTargetForm};
