@@ -1,7 +1,7 @@
 //! CRageBreakState (0x6e), gameserver.exe/GameServer.pdb,
 //! appserver/skills/ragebreakstate.cpp.
 //!
-//! Общие с Fury payload, codec и формула находятся в furystate.rs; запись
+//! Общие с Fury payload, codec и формулы находятся в Zone effects; запись
 //! и визуальный ресурс принадлежат единственному ключу общей арены.
 //! Объектный Begin требует S, читает часы только при U и создаёт loop1
 //! без Update. End обновляет visual, заново разрешает actual S и удаляет
@@ -14,8 +14,7 @@
 //! часов или UpdateProperty сверх callbacks самого завершения.
 
 use super::furystate::{
-    AttackGainState, FURY_STATE_BYTES, begin_primary_attack_gain_state,
-    update_attack_gain_state_properties,
+    begin_primary_attack_gain_state, update_attack_gain_state_properties,
 };
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -26,9 +25,9 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::gameserver::game::CGame;
 
-pub(crate) const RAGE_BREAK_STATE_ID: u32 = 0x6e;
-pub(crate) const RAGE_BREAK_STATE_BYTES: usize = FURY_STATE_BYTES;
-pub(crate) type RageBreakState = AttackGainState<RAGE_BREAK_STATE_ID>;
+pub(crate) use nebokrai_zone::effects::{
+    ATTACK_GAIN_STATE_BYTES as RAGE_BREAK_STATE_BYTES, RAGE_BREAK_STATE_ID, RageBreakState,
+};
 
 #[allow(clippy::too_many_arguments, reason = "User, Sufferer и держатель арены независимы")]
 pub(crate) fn begin_primary_rage_break_state(

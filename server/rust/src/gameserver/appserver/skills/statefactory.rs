@@ -276,12 +276,12 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         RAGE_BREAK_STATE_ID => StateRecordLayout::typed(
             RAGE_BREAK_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::ragebreakstate::RageBreakState::decode(payload, offset, _now()).ok().map(StateData::RageBreak)
+                super::ragebreakstate::RageBreakState::decode(payload, offset, _now).ok().map(StateData::RageBreak)
             },
         ),
         FURY_STATE_SKILL_ID => StateRecordLayout::typed(
             FURY_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::furystate::FuryState::decode(payload, offset, _now()).ok().map(StateData::Fury)
+                super::furystate::FuryState::decode(payload, offset, _now).ok().map(StateData::Fury)
             },
         ),
         HEAL_SKILL_ID | HEAL_2_SKILL_ID | SUPER_HEAL_SKILL_ID | SUPER_HEAL_2_SKILL_ID => StateRecordLayout::typed(

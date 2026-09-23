@@ -1,6 +1,7 @@
 //! Наложенные состояния Zone; живой владелец фигуры подключается переходным Game.
 
 mod agility;
+mod attackgain;
 mod automaticrestore;
 mod bloodloss;
 mod callosity;
@@ -30,6 +31,10 @@ pub use agility::{
     AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AGILITY_STATE_2_BYTES, AgilityState2, NATURAL_SKILL_ID,
     PERSISTENT_AGILITY_FAMILY_STATE_BYTES, PersistentAgilityFamilyState,
     PersistentAgilityProperties, RAPTURE_SKILL_ID,
+};
+pub use attackgain::{
+    ATTACK_GAIN_STATE_BYTES, AttackGainState, FURY_STATE_SKILL_ID, FuryState,
+    RAGE_BREAK_STATE_ID, RageBreakState,
 };
 pub use automaticrestore::{
     AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_HP_PEACE_STATE_ID,
