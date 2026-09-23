@@ -2,6 +2,7 @@
 
 mod automaticrestore;
 mod bloodloss;
+mod element;
 mod fullmiss;
 mod hearten;
 mod leafcut;
@@ -21,6 +22,9 @@ pub use automaticrestore::{
 };
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
+};
+pub use element::{
+    ELEMENT_STATE_BYTES, ElementState, ORIGIN_STATE_ID, OriginState, TAIJI_STATE_ID, TaiJiState,
 };
 pub use fullmiss::{
     ENLARGE_FULL_MISS_STATE_BYTES, ENLARGE_FULL_MISS_STATE_ID, EnlargeFullMissState,

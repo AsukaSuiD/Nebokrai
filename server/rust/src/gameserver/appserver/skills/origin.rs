@@ -6,5 +6,5 @@
 //! прежнего ID и сохраняет его позицию.
 //! После установки — UpdateProperty и End1. Формула и DB8 остаются у состояния.
 
-pub(crate) const ORIGIN_SKILL_ID: u32 = 304;
+pub(crate) use nebokrai_zone::effects::ORIGIN_STATE_ID as ORIGIN_SKILL_ID;
 pub(crate) const SKILL_USAGE_ELEMENT_MODIFY_GAIN: u32 = 115;
