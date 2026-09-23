@@ -54,7 +54,7 @@ const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME: u32 = 30_001;
-pub(crate) const SPIDER_MIST_SKILL_ID: u32 = 0x198;
+pub(crate) use nebokrai_zone::skills::SPIDER_MIST_SKILL_ID;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerSpiderMistExecutionState {
