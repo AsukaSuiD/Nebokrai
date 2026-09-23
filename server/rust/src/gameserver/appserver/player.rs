@@ -498,7 +498,8 @@ use nebokrai_zone::scripts::{
 };
 use nebokrai_zone::skills::{
     BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
-    battle_fairy_skill_id, battle_fairy_skill_level, select_battle_fairy_reset_skill,
+    battle_fairy_reset_slot, battle_fairy_skill_id, battle_fairy_skill_level,
+    select_battle_fairy_reset_skill,
     write_battle_fairy_reset_skill,
 };
 use super::serverregion::CServerRegion;
@@ -12221,35 +12222,21 @@ impl CPlayer {
             }
         }
 
-        let (current_skills, current_all_skill) = {
+        let reset_slot = {
             let goods = self
                 .equipment
                 .get_goods(10)
                 .expect("headgear остаётся equipped после reset-item consumption");
-            (
-                [
-                    goods.addon_property_value(factory, GAP_BF_SKY_SKILL, 2) as u32,
-                    goods.addon_property_value(factory, GAP_BF_EARTH_SKILL, 2) as u32,
-                    goods.addon_property_value(factory, GAP_BF_MAN_SKILL, 2) as u32,
-                ],
-                goods.addon_property_value(factory, GAP_BF_ALL_SKILL, 2) as u32,
-            )
+            battle_fairy_reset_slot(position, |property, index| {
+                battle_fairy_skill_property_value(goods, factory, property, index)
+            })
         };
-        let (property, previous_skill, replaced) = match position {
-            3..=5 => {
-                let replaced = (position - 3) as usize;
-                (
-                    GAP_BF_SKY_SKILL + replaced as i32,
-                    current_skills[replaced],
-                    Some(replaced),
-                )
-            }
-            6 => (GAP_BF_ALL_SKILL, current_all_skill, None),
-            _ => {
-                report.outcome = BattleFairySkillResetOutcome::InvalidPosition;
-                return report;
-            }
+        let Some(reset_slot) = reset_slot else {
+            report.outcome = BattleFairySkillResetOutcome::InvalidPosition;
+            return report;
         };
+        let previous_skill = reset_slot.previous_skill();
+        let property = battle_fairy_skill_property_key(reset_slot.property);
         tracing::trace!(
             player_id,
             position,
@@ -12293,8 +12280,12 @@ impl CPlayer {
             }
         }
 
-        let selected_skill =
-            select_battle_fairy_reset_skill(replaced, current_skills, current_all_skill, random);
+        let selected_skill = select_battle_fairy_reset_skill(
+            reset_slot.replaced,
+            reset_slot.current_skills,
+            reset_slot.current_all_skill,
+            random,
+        );
         tracing::trace!(
             player_id,
             selected_skill,
@@ -13736,7 +13727,11 @@ fn battle_fairy_skill_property_value(
     property: BattleFairySkillProperty,
     index: u32,
 ) -> i32 {
-    let key = match property {
+    goods.addon_property_value(factory, battle_fairy_skill_property_key(property), index)
+}
+
+fn battle_fairy_skill_property_key(property: BattleFairySkillProperty) -> i32 {
+    match property {
         BattleFairySkillProperty::RequestedOffset(offset) => GAP_BF_MAN.wrapping_add(offset),
         BattleFairySkillProperty::Sky => GAP_BF_SKY,
         BattleFairySkillProperty::Earth => GAP_BF_EARTH,
@@ -13747,8 +13742,7 @@ fn battle_fairy_skill_property_value(
         BattleFairySkillProperty::AllSkill => GAP_BF_ALL_SKILL,
         BattleFairySkillProperty::Huoxieshu => GAP_BF_HUOXIESHU_SKILL,
         BattleFairySkillProperty::Lingzhishu => GAP_BF_LINGZHISHU_SKILL,
-    };
-    goods.addon_property_value(factory, key, index)
+    }
 }
 
 fn push_battle_fairy_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {

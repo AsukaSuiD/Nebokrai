@@ -6,7 +6,8 @@
 //! constructor `CBattleFairyContainer` (пары несовместимых навыков
 //! VA 0x00504052–0x00504149),
 //! container/cbattlefairycontainer.cpp/.h (проверка кандидата ResetSkill
-//! VA 0x00501815–0x00501A8D и запись VA 0x00501892–0x00501AC7),
+//! VA 0x00501815–0x00501A8D, чтение VA 0x005017B4–0x00501806
+//! и запись VA 0x00501892–0x00501AC7),
 //! appserver/skills/wangsheng.cpp/.h (стоимость текста MP
 //! CWangsheng::AI VA 0x0051E097–0x0051E0E7).
 
@@ -99,6 +100,47 @@ pub enum BattleFairySkillProperty {
     AllSkill,
     Huoxieshu,
     Lingzhishu,
+}
+
+/// Четыре ID головного предмета, прочитанные перед выбором ветви ResetSkill.
+pub struct BattleFairyResetSlot {
+    pub property: BattleFairySkillProperty,
+    pub replaced: Option<usize>,
+    pub current_skills: [u32; 3],
+    pub current_all_skill: u32,
+}
+
+impl BattleFairyResetSlot {
+    pub fn previous_skill(&self) -> u32 {
+        self.replaced
+            .map_or(self.current_all_skill, |index| self.current_skills[index])
+    }
+}
+
+/// Четыре getter-а вызываются до проверки позиции, включая неверную позицию.
+pub fn battle_fairy_reset_slot(
+    position: i32,
+    mut read_property: impl FnMut(BattleFairySkillProperty, u32) -> i32,
+) -> Option<BattleFairyResetSlot> {
+    let current_skills = [
+        read_property(BattleFairySkillProperty::SkySkill, 2) as u32,
+        read_property(BattleFairySkillProperty::EarthSkill, 2) as u32,
+        read_property(BattleFairySkillProperty::ManSkill, 2) as u32,
+    ];
+    let current_all_skill = read_property(BattleFairySkillProperty::AllSkill, 2) as u32;
+    let (property, replaced) = match position {
+        3 => (BattleFairySkillProperty::SkySkill, Some(0)),
+        4 => (BattleFairySkillProperty::EarthSkill, Some(1)),
+        5 => (BattleFairySkillProperty::ManSkill, Some(2)),
+        6 => (BattleFairySkillProperty::AllSkill, None),
+        _ => return None,
+    };
+    Some(BattleFairyResetSlot {
+        property,
+        replaced,
+        current_skills,
+        current_all_skill,
+    })
 }
 
 /// Порядок слотов при снятии и установке навыков головного предмета.

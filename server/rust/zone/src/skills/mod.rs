@@ -27,9 +27,9 @@ mod directelement;
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
 pub use lifecycle::skill_is_restored;
-pub use battlefairy::{BattleFairySkillProperty, battle_fairy_mana_text_cost,
+pub use battlefairy::{BattleFairyResetSlot, BattleFairySkillProperty, battle_fairy_mana_text_cost,
     battle_fairy_skill_level, battle_fairy_skill_id, battle_fairy_skill_entry,
-    EQUIPPED_SKILL_PROPERTIES, select_battle_fairy_reset_skill,
+    battle_fairy_reset_slot, EQUIPPED_SKILL_PROPERTIES, select_battle_fairy_reset_skill,
     write_battle_fairy_reset_skill};
 pub use dispatch::{BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, PlayerSkillDispatch, PlayerSkillRequest,
