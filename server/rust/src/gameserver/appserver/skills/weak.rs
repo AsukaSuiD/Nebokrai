@@ -3,13 +3,11 @@
 //! Общий Begin/Check/AI/visual/End находится в zonalcast. Summon сначала
 //! сохраняет actual region U и отвергает GetSecurity==SAFE, не GetBlock.
 //! Master(country0)/Player EM либо0 предшествуют свежей таблице.
-//! CONST×EM+100 — wrapping DWORD; коэффициент с 0.01f сохраняется в f32,
-//! затем LIFETIME×коэффициент усекается x87 FISTP к signed DWORD.
+//! Расчёт срока CONST×EM+100 и FISTP находится в zone/skills/weak.rs.
 //! ATTACK_LOSS→свежий уровень→ctor(clock→ID) создают область 1×1.
 //! SetTile→перекрытие старых областей→Add→encode/BF502 сохраняют ранний регион;
 //! отказ Add не отменяет сериализацию. Отказ Summon не меняет End1 навыка.
 
-use super::fightdefense::truncate_original;
 use super::weakphalanx::CWeakPhalanx;
 use super::weaponattack::source_master;
 use crate::gameserver::appserver::region::RegionSecurity;
@@ -17,8 +15,9 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
 use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::skills::weak_lifetime;
 
-pub(crate) const WEAK_SKILL_ID: u32 = 0x12e;
+pub(crate) use nebokrai_zone::skills::WEAK_SKILL_ID;
 const ATTACK_LOSS: u32 = 205;
 const LIFETIME_FACTOR: u32 = 20_010;
 const LIFETIME: u32 = 30_001;
@@ -39,9 +38,9 @@ pub(super) fn summon_weak<Runtime: GameMainLoopRuntime>(
     } else { 0 };
     let Some(skill) = game.registered_skill(instance) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
-    let factor = properties.query_property(LIFETIME_FACTOR).wrapping_mul(element).wrapping_add(100);
-    let factor = (f64::from(factor) * f64::from(0.01_f32)) as f32;
-    let lifetime = truncate_original(f64::from(properties.query_property(LIFETIME)) * f64::from(factor)) as u32;
+    let lifetime = weak_lifetime(
+        properties.query_property(LIFETIME_FACTOR), element, properties.query_property(LIFETIME),
+    );
     let attack_loss = properties.query_property(ATTACK_LOSS);
     let Some(level) = game.registered_skill(instance).map(|skill| skill.level()) else { return; };
     let started = runtime.now_milliseconds();
