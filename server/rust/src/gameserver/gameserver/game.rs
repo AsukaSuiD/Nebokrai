@@ -753,7 +753,7 @@ mod playerskillschedule;
 pub(crate) mod baseattackruntime;
 
 use std::collections::{BTreeMap, BTreeSet};
-use nebokrai_zone::content::{ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
+use nebokrai_zone::content::{QuestCatalog, ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
 use nebokrai_zone::skills::battle_fairy_reset_notice_cost;
 use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
@@ -1388,7 +1388,7 @@ use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use nebokrai_shared::resources::CPlayerList;
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxItem};
 use crate::setup::prisonconf::PrisonConf;
-use nebokrai_shared::resources::CQuestSystem;
+use nebokrai_shared::resources::{CQuestSystem, QuestSystemDecodeError, QuestSystemDecodeOutcome};
 use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
@@ -4700,7 +4700,7 @@ pub(crate) struct CGame {
     pending_faction_applications: BTreeMap<i64, PendingFactionApplication>,
     pending_faction_war_declarations: BTreeMap<i64, PendingFactionWarDeclaration>,
     string_table: MyStringTable,
-    quest_system: CQuestSystem,
+    quest_system: QuestCatalog,
     country_param: CCountryParam,
     country_handler: CCountryHandler,
     attack_city_sys: CAttackCitySys,
@@ -5592,7 +5592,7 @@ impl CGame {
             pending_faction_applications: BTreeMap::new(),
             pending_faction_war_declarations: BTreeMap::new(),
             string_table: MyStringTable::new(),
-            quest_system: CQuestSystem::default(),
+            quest_system: QuestCatalog::default(),
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
             attack_city_sys: CAttackCitySys::default(),
@@ -17424,7 +17424,7 @@ impl CGame {
             let _ = request.send(self, false);
             return;
         }
-        let Some(quest) = self.quest_system.quest_data_by_id(quest_id) else {
+        let Some(quest) = self.quest_system.system().quest_data_by_id(quest_id) else {
             return;
         };
         let player = self
@@ -17456,6 +17456,7 @@ impl CGame {
     pub(crate) fn complete_script_player_quest(&mut self, player_id: i32, quest_id: u16) {
         let Some(quest_name) = self
             .quest_system
+            .system()
             .quest_data_by_id(quest_id)
             .map(|quest| quest.name.clone())
         else {
@@ -17484,6 +17485,7 @@ impl CGame {
         }
         let Some(quest_name) = self
             .quest_system
+            .system()
             .quest_data_by_id(quest_id)
             .map(|quest| quest.name.clone())
         else {
@@ -17532,9 +17534,9 @@ impl CGame {
             return None;
         }
         let path = if complete {
-            self.quest_system.complete_script_by_id(quest_id)
+            self.quest_system.system().complete_script_by_id(quest_id)
         } else {
-            self.quest_system.disband_script_by_id(quest_id)
+            self.quest_system.system().disband_script_by_id(quest_id)
         }?
         .to_vec();
         self.queue_player_script(player_id, &path)
@@ -19474,11 +19476,15 @@ impl CGame {
     }
 
     pub(crate) const fn quest_system(&self) -> &CQuestSystem {
-        &self.quest_system
+        self.quest_system.system()
     }
 
-    pub(crate) const fn quest_system_mut(&mut self) -> &mut CQuestSystem {
-        &mut self.quest_system
+    pub(crate) fn install_quest_system(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<QuestSystemDecodeOutcome, QuestSystemDecodeError> {
+        self.quest_system.decode(source, cursor)
     }
 
     pub(crate) const fn country_param(&self) -> &CCountryParam {
@@ -29789,7 +29795,7 @@ impl CGame {
         let released_net_sessions = self.net_session_manager.release();
 
         self.increment_shop_list.release();
-        self.quest_system = CQuestSystem::default();
+        self.quest_system.clear();
         tracing::debug!(
             released_net_sessions,
             "освобождены сессии, магазин улучшений и система заданий"
@@ -30555,7 +30561,7 @@ impl CGame {
             .expect("login сохраняет player map owner")
             .mark_login_script_started();
         let login_script_id = if first_login {
-            let path = self.quest_system.player_login_script.clone();
+            let path = self.quest_system.system().player_login_script.clone();
             self.run_script_file(
                 &path,
                 ScriptExecutionContext {
@@ -30604,7 +30610,7 @@ impl CGame {
                 &mut self.players,
                 &self.goods_factory,
                 &self.skill_factory,
-                &self.quest_system,
+                self.quest_system.system(),
             );
             players
                 .get_mut(&expected_player_id)
@@ -30965,6 +30971,7 @@ impl CGame {
         self.find_player(player_id).map_or(-1, |player| {
             player.valid_script_quest_count(|quest_id| {
                 self.quest_system
+                    .system()
                     .quest_data_by_id(quest_id)
                     .is_some_and(|quest| quest.display)
             })
@@ -40944,7 +40951,7 @@ impl CGame {
         }
 
         let peace_entered = self.enter_player_peace_state(blow.victim_id).is_some();
-        let quest_path = self.quest_system.player_died_script.clone();
+        let quest_path = self.quest_system.system().player_died_script.clone();
         let quest_script_id = self.queue_script_file(
             &quest_path,
             ScriptExecutionContext {
@@ -42398,7 +42405,7 @@ impl CGame {
             let region_id = self
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id);
-            let level_script = self.quest_system.player_level_up_script.clone();
+            let level_script = self.quest_system.system().player_level_up_script.clone();
             let level_script_id = self.queue_script_file(
                 &level_script,
                 ScriptExecutionContext {

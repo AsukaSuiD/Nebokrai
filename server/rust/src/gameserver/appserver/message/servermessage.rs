@@ -2117,8 +2117,7 @@ fn decode_player_rule_startup(
         }
         QUEST_SYSTEM_SELECTOR => {
             let report = game
-                .quest_system_mut()
-                .decord_from_byte_array(source, cursor)
+                .install_quest_system(source, cursor)
                 .map_err(GamePlayerRuleStartupError::QuestSystem);
             if report.is_ok() {
                 add_log_text(b"Initial SI_QUEST...OK!");
