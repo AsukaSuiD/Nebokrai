@@ -17,7 +17,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::states::periodicattack::{
-    PeriodicAttackCore, PeriodicAttackState, encode_periodic_state,
+    PeriodicAttackCore, PeriodicAttackRecord, PeriodicAttackState, encode_periodic_state,
     encode_periodic_state_for_install, periodic_attack_information, update_periodic_attack_state,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -106,16 +106,11 @@ where Self: AppliedState,
     }
 }
 
-impl<const ID: u32> PeriodicAttackState for LeafCutState<ID>
-where Self: AppliedState,
-{
+impl<const ID: u32> PeriodicAttackRecord for LeafCutState<ID> {
     const STATE_ID: u32 = ID;
     const RECORD_BYTES: usize = LEAF_CUT_STATE_BYTES;
-    type AttackSeed = LeafCutAttackSeed;
 
     fn core(&self) -> &PeriodicAttackCore { &self.core }
-    fn core_mut(&mut self) -> &mut PeriodicAttackCore { &mut self.core }
-
     fn encode_attack(&self, writer: &mut LegacyWriter<'_>) {
         writer.write_u32(self.damage_factor_bits);
         writer.write_u32(self.damage_modifier_bits);
@@ -124,6 +119,14 @@ where Self: AppliedState,
         writer.write_u16(self.element_attack);
         writer.write_u16(self.soul_attack);
     }
+}
+
+impl<const ID: u32> PeriodicAttackState for LeafCutState<ID>
+where Self: AppliedState,
+{
+    type AttackSeed = LeafCutAttackSeed;
+
+    fn core_mut(&mut self) -> &mut PeriodicAttackCore { &mut self.core }
 
     fn attack_seed(&self) -> Self::AttackSeed {
         LeafCutAttackSeed {

@@ -10,7 +10,7 @@ use crate::gameserver::appserver::moveshape::{AppliedState, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::periodicattack::{
-    PeriodicAttackCore, PeriodicAttackState, encode_periodic_state,
+    PeriodicAttackCore, PeriodicAttackRecord, PeriodicAttackState, encode_periodic_state,
     encode_periodic_state_for_install, periodic_attack_information, update_periodic_attack_state,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -67,19 +67,23 @@ impl<const ID: u32> PoisonState<ID> {
     }
 }
 
+impl<const ID: u32> PeriodicAttackRecord for PoisonState<ID> {
+    const STATE_ID: u32 = ID;
+    const RECORD_BYTES: usize = POISON_STATE_BYTES;
+
+    fn core(&self) -> &PeriodicAttackCore { &self.core }
+    fn encode_attack(&self, writer: &mut LegacyWriter<'_>) { writer.write_u32(self.hp_loss); }
+}
+
 impl<const ID: u32> PeriodicAttackState for PoisonState<ID>
 where Self: AppliedState,
 {
-    const STATE_ID: u32 = ID;
-    const RECORD_BYTES: usize = POISON_STATE_BYTES;
     // SpriteBurn может ударить и после истечения срока: проверка времени
     // следует за попыткой атаки, даже когда частота пропускает удар.
     const CHECK_LIFETIME_AFTER_ATTACK: bool = ID == 0x1a6;
     type AttackSeed = u32;
 
-    fn core(&self) -> &PeriodicAttackCore { &self.core }
     fn core_mut(&mut self) -> &mut PeriodicAttackCore { &mut self.core }
-    fn encode_attack(&self, writer: &mut LegacyWriter<'_>) { writer.write_u32(self.hp_loss); }
     fn attack_seed(&self) -> u32 { self.hp_loss }
 }
 

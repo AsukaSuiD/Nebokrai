@@ -29,7 +29,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::states::periodicattack::{
-    PeriodicAttackCore, PeriodicAttackState, encode_periodic_state,
+    PeriodicAttackCore, PeriodicAttackRecord, PeriodicAttackState, encode_periodic_state,
     encode_periodic_state_for_install, periodic_attack_information, update_periodic_attack_state,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -102,20 +102,23 @@ impl BloodLossState {
     }
 }
 
-impl PeriodicAttackState for BloodLossState {
+impl PeriodicAttackRecord for BloodLossState {
     const STATE_ID: u32 = BLOOD_LOSS_SKILL_ID;
     const RECORD_BYTES: usize = BLOOD_LOSS_STATE_BYTES;
-    type AttackSeed = BloodLossAttackSeed;
 
     fn core(&self) -> &PeriodicAttackCore { &self.core }
-    fn core_mut(&mut self) -> &mut PeriodicAttackCore { &mut self.core }
-
     fn encode_attack(&self, writer: &mut LegacyWriter<'_>) {
         writer.write_u32(self.damage_factor_bits);
         writer.write_u32(self.damage_modifier_bits);
         writer.write_u16(self.minimum_attack);
         writer.write_u16(self.maximum_attack);
     }
+}
+
+impl PeriodicAttackState for BloodLossState {
+    type AttackSeed = BloodLossAttackSeed;
+
+    fn core_mut(&mut self) -> &mut PeriodicAttackCore { &mut self.core }
 
     fn attack_seed(&self) -> Self::AttackSeed {
         BloodLossAttackSeed {
