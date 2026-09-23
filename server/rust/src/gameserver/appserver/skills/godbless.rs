@@ -26,13 +26,10 @@
 //! Общий End сбрасывает фазу, разрешает свежий U либо S Move1 и сохраняет
 //! исходный аргумент. Общий kernel и SlotMap исключают отдельную копию исполнения.
 
-use super::fightdefense::truncate_original;
 use super::godbless2::GOD_BLESS_2_SKILL_ID;
-use super::godblessstate::GodBlessState;
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::{check_cast_mana, spend_cast_mana, terminal};
-use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
     execute_owned_state_skill, publish_state_skill_visual,
@@ -47,18 +44,12 @@ use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
+use nebokrai_zone::skills::GodBlessGains;
 
 pub(crate) const GOD_BLESS_SKILL_ID: u32 = 0x12f;
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
-const TARGET_ELEMENT_GAIN: u32 = 115;
-const TARGET_MINIMUM_GAIN: u32 = 116;
-const TARGET_MAXIMUM_GAIN: u32 = 117;
-const TARGET_ELEMENT_COEFFICIENT: u32 = 120;
-const TARGET_MINIMUM_COEFFICIENT: u32 = 121;
-const TARGET_MAXIMUM_COEFFICIENT: u32 = 122;
 const DELAY_TIME: u32 = 10_001;
-const STATE_PERSIST_TIME: u32 = 10_002;
 const REUSE_DELAY_TIME: u32 = 10_005;
 const CAN_BE_BREAKED: u32 = 10_006;
 
@@ -89,13 +80,6 @@ pub(crate) fn check_god_bless_cast<Runtime: GameMainLoopRuntime>(
         return false;
     }
     check_cast_mana(game, instance, source, &properties)
-}
-
-fn gain(properties: &CSkillBaseProperties, coefficient: u32, constant: u32, weapon: u32) -> f32 {
-    let coefficient = properties.query_property(coefficient);
-    let scaled = (f64::from(coefficient.wrapping_mul(weapon)) * f64::from(0.01_f32)) as f32;
-    let constant = properties.query_property(constant);
-    (f64::from(constant) + f64::from(scaled)) as f32
 }
 
 pub(crate) fn run_god_bless_ai<Runtime: GameMainLoopRuntime>(
@@ -158,15 +142,9 @@ pub(crate) fn run_god_bless_ai<Runtime: GameMainLoopRuntime>(
     game.update_registered_skill_visual(instance, 1);
     let weapon = player.and_then(|player| game.find_player(player))
         .map_or(0, |player| player.weapon_damage_level(game.goods_factory()) as u32);
-    let minimum = gain(&properties, TARGET_MINIMUM_COEFFICIENT, TARGET_MINIMUM_GAIN, weapon);
-    let maximum = gain(&properties, TARGET_MAXIMUM_COEFFICIENT, TARGET_MAXIMUM_GAIN, weapon);
-    let element = gain(&properties, TARGET_ELEMENT_COEFFICIENT, TARGET_ELEMENT_GAIN, weapon);
+    let gains = GodBlessGains::read(weapon, |key| properties.query_property(key));
     let _ = game.install_god_bless_state(source, target, skill_id, || {
-        let keep = properties.query_property(STATE_PERSIST_TIME);
-        let element = truncate_original(f64::from(element)) as u32;
-        let maximum = truncate_original(f64::from(maximum)) as u32;
-        let minimum = truncate_original(f64::from(minimum)) as u32;
-        GodBlessState::new(skill_id, keep, minimum, maximum, element)
+        gains.create_state(skill_id, |key| properties.query_property(key))
     }, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

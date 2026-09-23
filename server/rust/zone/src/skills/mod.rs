@@ -16,6 +16,7 @@ mod cure;
 mod fury;
 mod pillar;
 mod roar;
+mod godbless;
 mod directelement;
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
@@ -40,4 +41,5 @@ pub use cure::{cure_threshold, is_cure_removable_state_id};
 pub use fury::is_fury_conflicting_state_id;
 pub use pillar::{PILLAR_SKILL_ID, pillar_state_parameters};
 pub use roar::{ROAR_SKILL_ID, RoarBounds, roar_bounds};
+pub use godbless::GodBlessGains;
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
