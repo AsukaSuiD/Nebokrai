@@ -10,7 +10,6 @@
 //! после замены нет дополнительного UpdateProperty.
 
 use super::curestate::{CureState, begin_and_replace_cure_state};
-use super::fightdefense::truncate_original;
 use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::{
     RegisteredStateSkill, StateSkillBeginTarget, StateSkillVisualTarget, end_state_skill,
@@ -64,13 +63,6 @@ fn failure(
             game.send_skill_system_info_with_unsigned(source.1.id, text, amount);
         } else { game.send_skill_system_info(source.1.id, text); }
     }
-}
-
-fn cure_threshold(element_modify: i32, probability: u32, constant: u32, em_modifier: u32) -> i32 {
-    let scaled = truncate_original(
-        f64::from(em_modifier) * f64::from(0.01_f32) * f64::from(element_modify),
-    );
-    (scaled as u32).wrapping_mul(constant).wrapping_add(probability) as i32
 }
 
 fn cast_cure_states(game: &mut CGame, region_id: i32, target: ShapeIdentity, threshold: i32) {
@@ -222,7 +214,7 @@ impl RegisteredStateSkill for Cure {
             game.find_player(source.1.id).map_or(0, |player| player.combat_properties().element_modify)
         } else { 0 };
         if resolve_state_move_shape(game, source.0, source.1).is_some() {
-            cast_cure_states(game, target.0, target.1, cure_threshold(element_modify, probability, constant, em_modifier));
+            cast_cure_states(game, target.0, target.1, nebokrai_zone::skills::cure_threshold(element_modify, probability, constant, em_modifier));
         }
         let state = CureState::new(properties.query_property(PERSIST));
         let _ = begin_and_replace_cure_state(game, Some(source), Some(target), state, &mut || runtime.now_milliseconds());

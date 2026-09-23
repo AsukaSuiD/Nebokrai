@@ -219,10 +219,7 @@ impl AppliedStateInstance {
 
 impl StateData {
     pub(crate) fn is_curable(&self) -> bool {
-        matches!(self, Self::Seal(_) | Self::PoisonFog(_) | Self::SpiderPoison(_)
-            | Self::SpriteBurn(_) | Self::SpiderWeb(_) | Self::KnockOut(_)
-            | Self::BoaLock(_) | Self::Rush(_) | Self::Rush2(_)
-            | Self::BossBlueQuake(_) | Self::KnightCut(_))
+        nebokrai_zone::skills::is_cure_removable_state_id(self.state_id())
     }
 
     pub(crate) fn is_blind(&self) -> bool {
