@@ -498,7 +498,7 @@ use nebokrai_zone::scripts::{
 };
 use nebokrai_zone::skills::{
     BattleFairySkillProperty, EQUIPPED_SKILL_PROPERTIES, battle_fairy_skill_entry,
-    battle_fairy_skill_id, battle_fairy_skill_level,
+    battle_fairy_skill_id, battle_fairy_skill_level, unpaired_battle_fairy_skill,
 };
 use super::serverregion::CServerRegion;
 use super::shape::{
@@ -13791,22 +13791,6 @@ fn push_player_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {
         reason: SKILL_REJECT_REASON,
         code: SKILL_REJECT_CODE,
     });
-}
-
-/// Exact constructor map `m_UnPairSkills`, подтверждённый immediate-ами
-/// `gameserver.exe` по адресу `0x00504052..0x00504149`.
-const fn unpaired_battle_fairy_skill(skill_id: u32) -> Option<u32> {
-    Some(match skill_id {
-        530 => 534,
-        531 => 535,
-        532 => 536,
-        533 => 537,
-        534 => 530,
-        535 => 531,
-        536 => 532,
-        537 => 533,
-        _ => return None,
-    })
 }
 
 const fn is_battle_fairy_property_cell(cell: BattleFairyCell) -> bool {
