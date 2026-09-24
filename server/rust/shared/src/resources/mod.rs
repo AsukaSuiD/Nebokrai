@@ -12,6 +12,7 @@ mod honorelimilateconfig;
 mod incrementshoplist;
 mod leitingsetup;
 mod lingbao;
+mod logsystem;
 mod globesetup;
 mod gmlist;
 mod godsbattleconf;
@@ -63,6 +64,10 @@ pub use leitingsetup::{
     ThingSetupCodecError, ThingSetupEmptyFile, ThingSetupFileLoadError,
     ThingSetupLoadReport, ThingSetupTextCutoff, ThingSetupTextCutoffReason,
     ThingSetupTextField,
+};
+pub use logsystem::{
+    CLogSystem, LOG_SETTINGS_LENGTH, LogSystemDecodeError, LogSystemLoadError,
+    LogSystemLoadReport, LogSystemSerializeError,
 };
 pub use lingbao::{
     CLingBaoSetup, LingBaoDecodeError, LingBaoFirstNode, LingBaoLoadReport,
