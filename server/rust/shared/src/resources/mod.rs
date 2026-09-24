@@ -38,6 +38,7 @@ mod source;
 mod stringtable;
 mod stringtable_wire;
 mod synthesis;
+mod taozhuangsetup;
 mod tradelist;
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
@@ -170,6 +171,10 @@ pub use synthesis::{
     CSynthesis, SynthesisCount, SynthesisDecodeError, SynthesisDecodeField,
     SynthesisFormula, SynthesisLoadError, SynthesisLoadReport, SynthesisRecipe,
     SynthesisSerializeError, SynthesisString,
+};
+pub use taozhuangsetup::{
+    CTaoZhuangSetup, TaoZhuangAddItem, TaoZhuangCountSection, TaoZhuangDecodeError,
+    TaoZhuangItem, TaoZhuangSerializationBlock, TaoZhuangStringField,
 };
 pub use tradelist::{
     CTradeList, Trade, TradeGoods, TradeListDecodeError, TradeListFileLoadError,
