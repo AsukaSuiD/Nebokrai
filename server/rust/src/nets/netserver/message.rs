@@ -129,7 +129,12 @@ impl RegionMessageRecipients<'_> {
     fn is_in_around(&self, shape: &CShape, other: &CShape) -> bool {
         match self {
             Self::Live(region) => shape.is_in_around(other, region),
-            Self::Snapshot(region) => region.is_in_around(shape, other),
+            Self::Snapshot(region) => {
+                if shape.get_region_id() != other.get_region_id() {
+                    return false;
+                }
+                region.is_in_around(shape.area_index(), other.area_index())
+            }
         }
     }
 }

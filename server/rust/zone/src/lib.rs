@@ -5,6 +5,7 @@ pub mod combat;
 pub mod content;
 pub mod effects;
 pub mod regions;
+pub mod replication;
 pub mod quests;
 pub mod scripts;
 pub mod sessions;

@@ -1,5 +1,12 @@
 # Аудит готовности серверной реконструкции
 
+## Zone replication: spatial recipient-snapshot 24 сентября 2026
+
+Первый компонент `replication/` Zone — spatial recipient-snapshot принятых игроков Game region — перенесён из `src/gameserver/appserver/serverregion.rs` в [`zone/src/replication/recipients.rs`](../../server/rust/zone/src/replication/recipients.rs). Типам `ServerRegionRecipientArea` и `ServerRegionRecipientsSnapshot` сделан публичный builder `from_parts`, и та же индексная форма `is_in_around` (проверка `abs_diff < 2` по обеим осям сохранённых area-index, совпадающая с живой проверкой `CShape::IsInAround`: deep wrapper `SendToAround` RVA `0x14970` машинно подтверждён в уже перенесённом message-owner, дополнительной сверки этот срез не требует: тип является чистой owned-проекцией данных). Старый call-side — `serverregion.rs`, `nets/netserver/message.rs` (RegionMessageRecipients), обработчики `function.rs`, `servermessage.rs`, `organsysmessage.rs`, `game.rs`, `rush.rs` — использует тот же public re-export без изменения вызовов. Индекс области сохраняет row-major `area_x * y + x` и checked-границу общего поведения.
+
+Собранный набор владельцев направления Game в Zone (`app/game_message`, `app/game_server`, `app/game_server_client`, `app/game_client`, `replication/recipients`) укомплектован одним маршрутом; `GameServerAroundRuntime` остаётся в старом пакете и отправится в `zone/replication/` отдельным шагом одновременно со spatial выборкой.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,10 секунды без предупреждений; `rustfmt` новых файлов и `git diff --check` прошли. Документация скорректирована в [видимости игроков](../gameplay/regions-and-visibility.md) и [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
 ## Очистка публичного дерева от исследовательских дампов 24 сентября 2026
 
 Из `src/public/` удалён артефакт-остаток раннего массового прохода: 21 файл (`ini.rs`, `logging.rs`, `public.rs`, `debugnew.rs`, `multithmap.rs`, `crashdumper.rs`, четыре файла `common/`, семь файлов `crashrpt/`, три файла `tinyxml/`) раннего коммита `e812a30eb` («Перестроить Nebokrai и зафиксировать технические контракты»). Все они — чистые исследовательские записи вида `// STATUS: UNKNOWN (сохранены только метаданные исследования)` со ссылками `Полный декомпилят хранится локально и не входит в распространяемый код`: декомпилят-плейсхолдеры без единой строки исполняемого кода.

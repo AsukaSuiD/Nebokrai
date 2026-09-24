@@ -842,64 +842,9 @@ impl<Resolver: ShapeResolver> ShapeResolver for RegisteredShapeResolver<'_, Reso
     }
 }
 
-struct ServerRegionRecipientArea {
-    x: i32,
-    y: i32,
-    player_ids: Vec<i32>,
-}
-
-/// Только spatial/recipient данные для рассылок, пока region owner исполняет
-/// callback вне карты CGame; игровые объекты и ресурсы остаются у owner-а.
-pub(crate) struct ServerRegionRecipientsSnapshot {
-    region_id: i32,
-    area_x: i32,
-    area_y: i32,
-    areas: Vec<ServerRegionRecipientArea>,
-}
-
-impl ServerRegionRecipientsSnapshot {
-    pub(crate) const fn region_id(&self) -> i32 {
-        self.region_id
-    }
-
-    pub(crate) fn find_player_ids_in_area(
-        &self,
-        x: i32,
-        y: i32,
-        destination: &mut Vec<i32>,
-    ) {
-        if x < 0 || x >= self.area_x || y < 0 || y >= self.area_y {
-            return;
-        }
-        let index = usize::try_from(self.area_x * y + x).expect("положительный grid index");
-        if let Some(area) = self.areas.get(index) {
-            destination.extend_from_slice(&area.player_ids);
-        }
-    }
-
-    pub(crate) fn find_all_player_ids(&self, destination: &mut Vec<i32>) {
-        for area in &self.areas {
-            destination.extend_from_slice(&area.player_ids);
-        }
-    }
-
-    /// Та же проверка CShape::IsInAround по сохранённым area-index/coordinates;
-    /// текущие region ID и area index самих игроков по-прежнему читаются live.
-    pub(crate) fn is_in_around(&self, shape: &CShape, other: &CShape) -> bool {
-        if shape.get_region_id() != other.get_region_id() {
-            return false;
-        }
-        let (Some(shape_index), Some(other_index)) = (shape.area_index(), other.area_index()) else {
-            return false;
-        };
-        let (Some(shape_area), Some(other_area)) =
-            (self.areas.get(shape_index), self.areas.get(other_index))
-        else {
-            return false;
-        };
-        shape_area.x.abs_diff(other_area.x) < 2 && shape_area.y.abs_diff(other_area.y) < 2
-    }
-}
+pub(crate) use nebokrai_zone::replication::recipients::{
+    ServerRegionRecipientArea, ServerRegionRecipientsSnapshot,
+};
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerRegion {
@@ -3552,12 +3497,7 @@ impl CServerRegion {
                 }
             })
             .collect();
-        ServerRegionRecipientsSnapshot {
-            region_id: self.id,
-            area_x: self.area_x,
-            area_y: self.area_y,
-            areas,
-        }
+        ServerRegionRecipientsSnapshot::from_parts(self.id, self.area_x, self.area_y, areas)
     }
 
     /// Exact `m_vPlayers` storage order, который Nation kick обходит
