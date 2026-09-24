@@ -1,5 +1,12 @@
 # Аудит готовности серверной реконструкции
 
+## Shared protocol: CRC-32 helpers 25 сентября 2026
+
+CRC-32 helpers `data_crc32` и `file_crc32` перенесены из `src/public/crc32static.rs` в [`shared/src/protocol/crc32.rs`](../../server/rust/shared/src/protocol/crc32.rs); `crc32fast` добавлен зависимостью Shared с тем же constraint, что в основном пакете (`1.5.0`), lockfile отличается на одну запись. Все семь направлений (netserver/networld/netlogin/netauth/netbilling/netmisc и applogin/gasthread) продолжают пользоваться тонким реэкспортом прежнего файла; без состояния и собственного экземпляра.
+
+Перенос подтверждён прямыми машинными ссылками к уже заявленной головной претензии «все шесть тел совпадают»: тела `CCrc32Static::DataCrc32` дизассемблированы в трёх серверах и побайтово идентичны — World `RVA 0x4a43a0` (таблица по `0x56b6a8`), Game `RVA 0x47b0a0` (таблица по `0x69f838`) и Auth `RVA 0x415f80` (таблица по `0x435a30`): регистр `0xFFFF_FFFF`, цикл `movzx/xor and 0xff; shr eax,8; xor eax,[table]` — reflected IEEE CRC-32, затем инверсия. Цитируемые BillingServer `0x00013530`, MiscServer `0x00005730` и LoginServer `0x0007F050` в этом проходе не открывались; они остаются на прежнем основании заголовка и UnityIndex остатка вариантов. ServerUpdate-вариант с `GetFileSizeQW` и `FileCrc32Filemap` тела не открывались в этом проходе и представлены документированной потоковой заменой.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл (после одной разрешённой перезаписи lockfile локально). Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 1 минуту 21 секунду (холодный прогрев кеша после добавления crc32fast в Shared) без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
 ## Shared protocol: MessageDigest 25 сентября 2026
 
 MD5-помощник `message_digest(input, rounds)` перенесён из `src/public/md5.rs` в [`shared/src/protocol/md5.rs`](../../server/rust/shared/src/protocol/md5.rs); `md-5` добавлен зависимостью Shared с тем же constraint, что в основном пакете (`0.11.0`), lockfile отличается на одну запись. Потребитель Login Server `applogin/gasthread.rs` продолжает использовать тонкий реэкспорт прежнего файла; shared держит формат, экземпляр контекста создаётся на каждый вызов без глобального состояния.
