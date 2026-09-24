@@ -24,6 +24,7 @@ mod periodicattack;
 mod pillar;
 mod poison;
 mod poisonfog;
+mod promotion;
 mod roar;
 mod shieldabsorption;
 mod soulcollect;
@@ -91,6 +92,7 @@ pub use periodicattack::{
 pub use pillar::{PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState};
 pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
+pub use promotion::{PROMOTION_STATE_BYTES, PROMOTION_STATE_ID, PromotionState};
 pub use roar::{ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState};
 pub use soulcollect::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState};
 pub use swordship::{

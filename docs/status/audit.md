@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись Promotion 24 сентября 2026
+
+Данные, срок и 12-байтная запись `CPromotionState` (`0x142`) перенесены в [`zone/effects/promotion.rs`](../../server/rust/zone/src/effects/promotion.rs). Переходный Game сохраняет живой Begin/restart с visual и участниками; применение коэффициентов в бою и лечении не менялось.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) найдены оба конструктора VA `0x005F2BC0/0x005F2C40` (второй задаёт коэффициенты `1`) и vtable `0x006605F4`: общие с семейством AI `0x005D5BA0`, End `0x005FD420`, getter `0x005F2CD0`; собственные Serialize `0x005F2E90` (ID, остаток через getter, WORD `+0x3C`, WORD `+0x3E`), Unserialize `0x005F2FB0` (часы после внешнего ID, до полей срока) и Restart `0x005FD450` (только часы). Смещение `+0x3E` подтверждено и чтением WORD в AI Heal VA `0x005EEE64`. Исправление Rust: decode читает часы после проверки ID вместо расхода до входа. Основания — в [описании Promotion](../gameplay/attributes-and-states.md#promotion-усиление-атаки-и-лечения).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,96 секунды; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактический бафф и его влияние на удар/лечение не проверялись.
+
 ## Zone effects: данные, тик и запись периодического лечения 24 сентября 2026
 
 Данные, срок, правило тика и 16-байтная запись четырёх состояний лечения (`0xD3/0xE3/0xD9/0xE4`) перенесены в [`zone/effects/heal.rs`](../../server/rust/zone/src/effects/heal.rs). Переходный Game сохраняет живые Begin/restart/AI/End, чтение Promotion и публикацию HP.

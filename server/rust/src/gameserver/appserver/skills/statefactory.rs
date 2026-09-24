@@ -429,7 +429,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         PROMOTION_SKILL_ID => StateRecordLayout::typed(
             PROMOTION_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                PromotionState::decode(payload, offset, _now()).ok().map(|state| StateData::DefenseShield(DefenseShieldState::Promotion(state)))
+                PromotionState::decode(payload, offset, _now).ok().map(|state| StateData::DefenseShield(DefenseShieldState::Promotion(state)))
             },
         ),
         ENERGY_HOLDING_STATE_ID => StateRecordLayout::typed(
