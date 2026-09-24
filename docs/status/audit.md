@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: список операторов GM 25 сентября 2026
+
+Общие операторы `CGMList` (два map `name → GmInfo`, god passport, loader и wire-codec) перенесены из `src/setup/gmlist.rs` в [`shared/src/resources/gmlist.rs`](../../server/rust/shared/src/resources/gmlist.rs). Обе роли используют одну реализацию; прежний `src/setup/gmlist.rs` стал тонким реэкспортом. Исходный god passport `@^$^#SDFSDslfld/$dsl2a` и правила (signed count, внутренний NUL в строке блокирует append до изменения destination, byte-порядок ключей) сохранены без изменения.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `setup/gmlist.cpp`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка списка в работающий Game и загрузка World этим переносом не проверялись. Разбор GM-допуска в игровых обработчиках (`gmmessage`) остаётся в переходном Game.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: торговые списки NPC 25 сентября 2026
 
 Общие торговые списки `CTradeList` (записи NPC и товара, loader, wire-codec и lookup) перенесены из `src/setup/tradelist.rs` в [`shared/src/resources/tradelist.rs`](../../server/rust/shared/src/resources/tradelist.rs). Обе роли используют одну реализацию: World загружает и сериализует, Game принимает и ищет по имени NPC; прежний `src/setup/tradelist.rs` стал тонким реэкспортом. Алгоритм не менялся: очистка карты до разбора, duplicate NPC заменяет список, публикация NPC только после полного goods-list, сужение чисел до byte и byte-лексикографический порядок `BTreeMap`.

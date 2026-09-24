@@ -5,6 +5,7 @@ mod emotion;
 mod filesinfo;
 mod hitlevel;
 mod globesetup;
+mod gmlist;
 mod marker;
 mod monsterlist;
 mod regionrouter;
@@ -36,6 +37,10 @@ pub use monsterlist::{
     get_monster_property_by_origin_name, get_monster_property_by_origin_name_mut,
     get_monster_property_by_picture_id, load_drop_goods_list, load_monster_list,
     serialize_monster_list,
+};
+pub use gmlist::{
+    CGMList, GmInfo, GmListCollection, GmListDecodeError, GmListLoadError,
+    GmListSerializationBlock,
 };
 pub use globesetup::{
     GLOBE_SETUP_BLOB_LENGTH, GlobePlayerPropertyCoefficients, GlobeRpGainPolicy,
