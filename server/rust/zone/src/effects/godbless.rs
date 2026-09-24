@@ -22,38 +22,65 @@ pub struct GodBlessState {
 
 impl GodBlessState {
     pub const fn new(
-        skill_id: u32, keep_time_ms: u32, minimum_attack_gain: u32,
-        maximum_attack_gain: u32, element_gain: u32,
+        skill_id: u32,
+        keep_time_ms: u32,
+        minimum_attack_gain: u32,
+        maximum_attack_gain: u32,
+        element_gain: u32,
     ) -> Self {
-        debug_assert!(matches!(skill_id, GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID));
-        Self { skill_id, started_at_ms: 0, keep_time_ms, minimum_attack_gain,
-            maximum_attack_gain, element_gain }
+        debug_assert!(matches!(
+            skill_id,
+            GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID
+        ));
+        Self {
+            skill_id,
+            started_at_ms: 0,
+            keep_time_ms,
+            minimum_attack_gain,
+            maximum_attack_gain,
+            element_gain,
+        }
     }
 
     pub fn begin_for_install(
-        &mut self, user_exists: bool, sufferer_exists: bool,
+        &mut self,
+        user_exists: bool,
+        sufferer_exists: bool,
         now: &mut dyn FnMut() -> u32,
     ) -> bool {
-        let can_begin = if self.skill_id == GOD_BLESS_STATE_ID { sufferer_exists } else { user_exists };
-        if !can_begin { return false; }
-        if user_exists { self.started_at_ms = now(); }
+        let can_begin = if self.skill_id == GOD_BLESS_STATE_ID {
+            sufferer_exists
+        } else {
+            user_exists
+        };
+        if !can_begin {
+            return false;
+        }
+        if user_exists {
+            self.started_at_ms = now();
+        }
         true
     }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         let skill_id = reader.read_u32()?;
         if !matches!(skill_id, GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID) {
             return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
             });
         }
         // Unserialize читает часы до сохранённого срока и трёх прибавок.
         let started_at_ms = now();
         Ok(Self {
-            skill_id, started_at_ms,
+            skill_id,
+            started_at_ms,
             keep_time_ms: reader.read_u32()?,
             minimum_attack_gain: reader.read_u32()?,
             maximum_attack_gain: reader.read_u32()?,
@@ -61,7 +88,9 @@ impl GodBlessState {
         })
     }
 
-    pub const fn skill_id(self) -> u32 { self.skill_id }
+    pub const fn skill_id(self) -> u32 {
+        self.skill_id
+    }
     pub const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
@@ -74,7 +103,10 @@ impl GodBlessState {
     pub fn encoded(self, now: impl FnMut() -> u32) -> [u8; GOD_BLESS_STATE_BYTES] {
         self.encoded_with_remaining(|| self.client_time(now) as u32)
     }
-    fn encoded_with_remaining(self, remaining: impl FnOnce() -> u32) -> [u8; GOD_BLESS_STATE_BYTES] {
+    fn encoded_with_remaining(
+        self,
+        remaining: impl FnOnce() -> u32,
+    ) -> [u8; GOD_BLESS_STATE_BYTES] {
         let mut bytes = [0; GOD_BLESS_STATE_BYTES];
         bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes());
         // Serialize пишет ID перед вызовом GetRemainedTime.
@@ -87,13 +119,21 @@ impl GodBlessState {
 
     pub fn player_gains(self, minimum: u32, maximum: u32, element: i32) -> (u32, u32, i32) {
         (
-            minimum.wrapping_add(self.minimum_attack_gain as u16 as u32).min(i32::MAX as u32),
-            maximum.wrapping_add(self.maximum_attack_gain as u16 as u32).min(i32::MAX as u32),
+            minimum
+                .wrapping_add(self.minimum_attack_gain as u16 as u32)
+                .min(i32::MAX as u32),
+            maximum
+                .wrapping_add(self.maximum_attack_gain as u16 as u32)
+                .min(i32::MAX as u32),
             element.wrapping_add(self.element_gain as u16 as i32),
         )
     }
 
     pub fn monster_gains(self) -> (i32, i32, i32) {
-        (self.minimum_attack_gain as i32, self.maximum_attack_gain as i32, self.element_gain as i32)
+        (
+            self.minimum_attack_gain as i32,
+            self.maximum_attack_gain as i32,
+            self.element_gain as i32,
+        )
     }
 }

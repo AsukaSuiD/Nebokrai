@@ -22,18 +22,28 @@ pub struct AttackGainState<const ID: u32> {
 
 impl<const ID: u32> AttackGainState<ID> {
     pub const fn new(keep_time_ms: u32, attack_gain_percent: i32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms, attack_gain_percent }
+        Self {
+            started_at_ms: 0,
+            keep_time_ms,
+            attack_gain_percent,
+        }
     }
 
-    pub const fn skill_id(&self) -> u32 { ID }
+    pub const fn skill_id(&self) -> u32 {
+        ID
+    }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != ID {
             return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
             });
         }
         // Unserialize читает время перед двумя оставшимися DWORD.
@@ -53,7 +63,10 @@ impl<const ID: u32> AttackGainState<ID> {
         self.encoded_with_remaining(|| self.client_time(now) as u32)
     }
 
-    fn encoded_with_remaining(&self, remaining: impl FnOnce() -> u32) -> [u8; ATTACK_GAIN_STATE_BYTES] {
+    fn encoded_with_remaining(
+        &self,
+        remaining: impl FnOnce() -> u32,
+    ) -> [u8; ATTACK_GAIN_STATE_BYTES] {
         let mut bytes = [0; ATTACK_GAIN_STATE_BYTES];
         bytes[..4].copy_from_slice(&ID.to_le_bytes());
         bytes[4..8].copy_from_slice(&remaining().to_le_bytes());
@@ -75,9 +88,7 @@ impl<const ID: u32> AttackGainState<ID> {
 
     pub fn truncated_gain(&self, maximum: u32) -> i32 {
         truncate_original_i64_low(
-            f64::from(self.attack_gain_percent)
-                * f64::from(0.01_f32)
-                * f64::from(maximum),
+            f64::from(self.attack_gain_percent) * f64::from(0.01_f32) * f64::from(maximum),
         )
     }
 
@@ -86,6 +97,8 @@ impl<const ID: u32> AttackGainState<ID> {
         if maximum.wrapping_add(gain) > u16::MAX as u32 {
             gain = (u16::MAX as u32).wrapping_sub(maximum);
         }
-        maximum.wrapping_add(gain as u16 as u32).min(i32::MAX as u32)
+        maximum
+            .wrapping_add(gain as u16 as u32)
+            .min(i32::MAX as u32)
     }
 }

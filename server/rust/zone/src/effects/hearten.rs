@@ -48,7 +48,9 @@ impl HeartenState {
     }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != HEARTEN_STATE_ID {
@@ -60,7 +62,11 @@ impl HeartenState {
         }
         // Внешний factory уже считал ID до вызова оригинального reader-а.
         let started_at_ms = now();
-        Ok(Self::new(started_at_ms, reader.read_u32()?, reader.read_i32()?))
+        Ok(Self::new(
+            started_at_ms,
+            reader.read_u32()?,
+            reader.read_i32()?,
+        ))
     }
 
     pub fn encoded(&self, now: impl FnMut() -> u32) -> [u8; HEARTEN_STATE_BYTES] {

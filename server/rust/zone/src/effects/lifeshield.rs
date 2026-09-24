@@ -110,15 +110,13 @@ impl LifeShieldState {
         Ok(state)
     }
 
-    pub fn encoded(
-        &self,
-        now_milliseconds: impl FnMut() -> u32,
-    ) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+    pub fn encoded(&self, now_milliseconds: impl FnMut() -> u32) -> [u8; LIFE_SHIELD_STATE_BYTES] {
         self.encoded_with_remaining(|| self.client_time(now_milliseconds) as u32)
     }
 
     fn encoded_with_remaining(
-        &self, remaining_time: impl FnOnce() -> u32,
+        &self,
+        remaining_time: impl FnOnce() -> u32,
     ) -> [u8; LIFE_SHIELD_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(LIFE_SHIELD_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
@@ -143,9 +141,7 @@ impl LifeShieldState {
         war_soul_mana: Option<i32>,
         power: &mut AttackPower,
     ) {
-        power.hp_damage = truncate_original(
-            f64::from(power.hp_damage) * f64::from(damage_factor),
-        );
+        power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(damage_factor));
         let Some(war_soul_mana) = war_soul_mana else {
             return;
         };
@@ -153,8 +149,7 @@ impl LifeShieldState {
             let hp_factor = f64::from(self.hp_factor) * f64::from(0.01_f32);
             let mp_factor = self.mp_factor as f32 * 0.01_f32;
             let hp_shield = truncate_original(hp_factor * f64::from(power.hp_damage));
-            let mp_damage =
-                truncate_original(f64::from(mp_factor) * f64::from(power.hp_damage));
+            let mp_damage = truncate_original(f64::from(mp_factor) * f64::from(power.hp_damage));
             if self.life < hp_shield {
                 let old_life = self.life;
                 self.life = 0;
@@ -174,8 +169,6 @@ impl LifeShieldState {
                 power.mp_damage = mp_damage;
             }
         }
-        power.hp_damage = truncate_original(
-            f64::from(power.hp_damage) / f64::from(damage_factor),
-        );
+        power.hp_damage = truncate_original(f64::from(power.hp_damage) / f64::from(damage_factor));
     }
 }

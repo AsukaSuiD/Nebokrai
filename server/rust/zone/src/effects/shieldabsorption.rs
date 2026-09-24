@@ -13,9 +13,8 @@ pub(super) fn absorb_shield_damage(
     power: &mut AttackPower,
     defenses: Option<(i32, i32)>,
 ) {
-    power.hp_damage = truncate_original_i64_low(
-        f64::from(power.hp_damage) * f64::from(damage_factor),
-    );
+    power.hp_damage =
+        truncate_original_i64_low(f64::from(power.hp_damage) * f64::from(damage_factor));
     if *life > 0 && player_mana > 0 && power.hp_damage > 0 {
         if let Some((physical, element)) = defenses {
             let reduction = match power.kind {

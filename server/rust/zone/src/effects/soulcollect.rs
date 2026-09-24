@@ -20,38 +20,58 @@ pub struct SoulCollectState {
 
 impl SoulCollectState {
     pub const fn new(skill_level: i32, variable_percent: u32) -> Self {
-        Self { skill_level, variable_percent, souls: 0 }
+        Self {
+            skill_level,
+            variable_percent,
+            souls: 0,
+        }
     }
 
     pub fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != SOUL_COLLECT_STATE_ID {
             return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self { skill_level: reader.read_i32()?, variable_percent: 0,
-            souls: reader.read_i32()? })
+        Ok(Self {
+            skill_level: reader.read_i32()?,
+            variable_percent: 0,
+            souls: reader.read_i32()?,
+        })
     }
 
     pub fn encoded(self) -> [u8; SOUL_COLLECT_STATE_BYTES] {
         let mut bytes = [0; SOUL_COLLECT_STATE_BYTES];
         for (index, value) in [SOUL_COLLECT_STATE_ID as i32, self.skill_level, self.souls]
-            .into_iter().enumerate()
+            .into_iter()
+            .enumerate()
         {
             bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
         }
         bytes
     }
 
-    pub const fn skill_id(self) -> u32 { SOUL_COLLECT_STATE_ID }
-    pub const fn variable_percent(self) -> u32 { self.variable_percent }
-    pub const fn souls(self) -> i32 { self.souls }
-    pub const fn client_fields(self) -> (u32, u32) { (0, self.souls as u32) }
+    pub const fn skill_id(self) -> u32 {
+        SOUL_COLLECT_STATE_ID
+    }
+    pub const fn variable_percent(self) -> u32 {
+        self.variable_percent
+    }
+    pub const fn souls(self) -> i32 {
+        self.souls
+    }
+    pub const fn client_fields(self) -> (u32, u32) {
+        (0, self.souls as u32)
+    }
 
     /// Только после проверки живого Sufferer адаптер вызывает этот переход.
     pub fn increment(&mut self) -> bool {
-        if self.souls >= self.skill_level { return false; }
+        if self.souls >= self.skill_level {
+            return false;
+        }
         self.souls = self.souls.wrapping_add(1);
         true
     }

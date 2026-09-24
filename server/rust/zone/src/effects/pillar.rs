@@ -18,16 +18,24 @@ pub struct PillarState {
 
 impl PillarState {
     pub const fn new(keep_time_ms: u32, damage_factor: f32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
+        Self {
+            started_at_ms: 0,
+            keep_time_ms,
+            damage_factor_bits: damage_factor.to_bits(),
+        }
     }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != PILLAR_STATE_ID {
             return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
             });
         }
         // Unserialize берёт часы до срока и коэффициента.
@@ -60,9 +68,13 @@ impl PillarState {
         self.started_at_ms = now_ms;
     }
 
-    pub const fn skill_id(self) -> u32 { PILLAR_STATE_ID }
+    pub const fn skill_id(self) -> u32 {
+        PILLAR_STATE_ID
+    }
 
-    pub const fn damage_factor(self) -> f32 { f32::from_bits(self.damage_factor_bits) }
+    pub const fn damage_factor(self) -> f32 {
+        f32::from_bits(self.damage_factor_bits)
+    }
 
     pub const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms

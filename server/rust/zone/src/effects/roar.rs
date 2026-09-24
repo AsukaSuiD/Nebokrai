@@ -19,23 +19,37 @@ pub struct RoarState {
 
 impl RoarState {
     pub const fn new(keep_time_ms: u32, attack_loss: i32, element_attack_loss: i32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms, attack_loss, element_attack_loss }
+        Self {
+            started_at_ms: 0,
+            keep_time_ms,
+            attack_loss,
+            element_attack_loss,
+        }
     }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != ROAR_STATE_ID {
             return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
             });
         }
         let keep_time_ms = reader.read_u32()?;
         let attack_loss = reader.read_i32()?;
         let element_attack_loss = reader.read_i32()?;
         // Unserialize берёт часы после всех трёх сохранённых полей.
-        Ok(Self { started_at_ms: now(), keep_time_ms, attack_loss, element_attack_loss })
+        Ok(Self {
+            started_at_ms: now(),
+            keep_time_ms,
+            attack_loss,
+            element_attack_loss,
+        })
     }
 
     pub fn encoded_for_install(self) -> [u8; ROAR_STATE_BYTES] {
@@ -60,7 +74,9 @@ impl RoarState {
         self.started_at_ms = now_ms;
     }
 
-    pub const fn skill_id(self) -> u32 { ROAR_STATE_ID }
+    pub const fn skill_id(self) -> u32 {
+        ROAR_STATE_ID
+    }
 
     pub const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
@@ -82,7 +98,12 @@ impl RoarState {
         )
     }
 
-    pub fn monster_losses(self, minimum: u32, maximum: u32, element_modify: u32) -> (i32, i32, i32) {
+    pub fn monster_losses(
+        self,
+        minimum: u32,
+        maximum: u32,
+        element_modify: u32,
+    ) -> (i32, i32, i32) {
         (
             minimum.min(self.attack_loss as u32) as i32,
             maximum.min(self.attack_loss as u32) as i32,

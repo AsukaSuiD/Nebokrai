@@ -17,7 +17,10 @@ pub struct CureState {
 
 impl CureState {
     pub const fn new(keep_time_ms: u32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms }
+        Self {
+            started_at_ms: 0,
+            keep_time_ms,
+        }
     }
 
     pub fn begin_at(&mut self, now_ms: u32) {
@@ -37,7 +40,9 @@ impl CureState {
     }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != CURE_STATE_SKILL_ID {
@@ -48,7 +53,10 @@ impl CureState {
             });
         }
         let started_at_ms = now();
-        Ok(Self { started_at_ms, keep_time_ms: reader.read_u32()? })
+        Ok(Self {
+            started_at_ms,
+            keep_time_ms: reader.read_u32()?,
+        })
     }
 
     pub fn encoded(self, now: impl FnMut() -> u32) -> [u8; CURE_STATE_BYTES] {

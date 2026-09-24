@@ -18,24 +18,38 @@ pub struct WangshengState {
 
 impl WangshengState {
     pub const fn new(started_at_ms: u32, keep_time_ms: u32, gain: i32) -> Self {
-        Self { started_at_ms, keep_time_ms, gain }
+        Self {
+            started_at_ms,
+            keep_time_ms,
+            gain,
+        }
     }
 
     pub fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
+        payload: &[u8],
+        offset: usize,
+        now: &mut dyn FnMut() -> u32,
     ) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != WANGSHENG_STATE_ID {
             return Err(LegacyReadBlock {
-                offset, needed: 4, available: payload.len().saturating_sub(offset),
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
             });
         }
         // Общий Unserialize берёт время перед чтением оставшихся DWORD.
         let started_at_ms = now();
-        Ok(Self::new(started_at_ms, reader.read_u32()?, reader.read_i32()?))
+        Ok(Self::new(
+            started_at_ms,
+            reader.read_u32()?,
+            reader.read_i32()?,
+        ))
     }
 
-    pub const fn state_id(self) -> u32 { WANGSHENG_STATE_ID }
+    pub const fn state_id(self) -> u32 {
+        WANGSHENG_STATE_ID
+    }
 
     pub const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
@@ -48,7 +62,11 @@ impl WangshengState {
     /// Property callback записывает HP только при достижении максимума.
     pub const fn capped_health(self, current: u32, maximum: u32) -> Option<u32> {
         let actual = current.wrapping_add(self.gain as u32);
-        if maximum <= actual { Some(maximum) } else { None }
+        if maximum <= actual {
+            Some(maximum)
+        } else {
+            None
+        }
     }
 
     pub fn encoded(self, now: impl FnMut() -> u32) -> [u8; WANGSHENG_STATE_BYTES] {

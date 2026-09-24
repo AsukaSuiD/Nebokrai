@@ -3,8 +3,8 @@
 //! Serialize 0x005F1EE0, Unserialize 0x005F2000, AI 0x005F34B0,
 //! CFightDefense::PreDefense 0x005B0CD8–0x005B0E5F.
 
-use super::time::timed_client_state_time;
 use super::shieldabsorption::absorb_shield_damage;
+use super::time::timed_client_state_time;
 use crate::combat::AttackPower;
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
@@ -61,9 +61,7 @@ impl MachineShieldState {
     }
 
     pub const fn expired(self, now_ms: u32, player_mana: u32, dead: bool) -> bool {
-        self.lifetime_expired(now_ms)
-            || dead
-            || player_mana == 0
+        self.lifetime_expired(now_ms) || dead || player_mana == 0
     }
 
     pub fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
@@ -73,7 +71,11 @@ impl MachineShieldState {
     pub fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
         if reader.read_u32()? != MACHINE_SHIELD_SKILL_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
         }
         Ok(Self::new(
             now_ms,
@@ -99,22 +101,24 @@ impl MachineShieldState {
         writer.write_i32(self.life);
         writer.write_u16(self.hp_factor);
         writer.write_u16(self.mp_factor);
-        bytes.try_into().expect("размер состояния машинного щита фиксирован")
+        bytes
+            .try_into()
+            .expect("размер состояния машинного щита фиксирован")
     }
 
     pub fn encoded_for_install(self) -> [u8; MACHINE_SHIELD_STATE_BYTES] {
         self.encoded_with_remaining(self.keep_time_ms)
     }
     /// PreDefense меняет урон и прочность до обычной защиты; MP игрока меняется позднее.
-    pub fn absorb_damage(
-        &mut self,
-        damage_factor: f32,
-        player_mana: u32,
-        power: &mut AttackPower,
-    ) {
+    pub fn absorb_damage(&mut self, damage_factor: f32, player_mana: u32, power: &mut AttackPower) {
         absorb_shield_damage(
-            &mut self.life, self.hp_factor, self.mp_factor, damage_factor, player_mana,
-            power, None,
+            &mut self.life,
+            self.hp_factor,
+            self.mp_factor,
+            damage_factor,
+            player_mana,
+            power,
+            None,
         );
     }
 }
