@@ -1,5 +1,19 @@
 # Аудит готовности серверной реконструкции
 
+## Zone regions: жизненный цикл CSummonedCreature 24 сентября 2026
+
+`SummonedCreatureLifecycle` и `SummonedCreatureTick` перенесены из `src/gameserver/appserver/summonedcreature.rs` в [`zone/src/regions/summonedcreature.rs`](../../server/rust/zone/src/regions/summonedcreature.rs) — владельцу spawn и удаления принадлежащих региону монстров. Файл самодостаточен; старый файл — тонкий glob-реэкспорт, потребители (`monster`, `serverregion`, `game`) не затронуты. Семантика не изменена: нулевое время отключает срок, смерть имеет приоритет, истечение — строгое сравнение суммы с переполнением с текущим DWORD.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе проверено для ctor `CSummonedCreature` `1:1BA1B0` (VA `0x5BB1B0`): base ctor `CMonster` `0x4E7E70`, оба DWORD времени начала и срока жизни по `+0x2A8/+0x2AC` обнуляются, vtable `0x65CFE4`. Тело tick сравнения сохраняет прежний статус заголовка и заново не дизассемблировалось.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
+## Zone sessions: buyer plug личной лавки 24 сентября 2026
+
+`CPersonalShopBuyer` (owner/session/plug IDs и конструктор `inserted`) перенесён из `src/gameserver/appserver/session/cpersonalshopbuyer.rs` в [`zone/src/sessions/cpersonalshopbuyer.rs`](../../server/rust/zone/src/sessions/cpersonalshopbuyer.rs). Файл самодостаточен; старый файл — тонкий glob-реэкспорт, единственный потребитель `csessionfactory` не затронут. Поведенческие утверждения заголовка (seller среди plug-ов той же session, terminal callback `PROGRESS_SHOPPING` и `0xC0008`) относятся к телам старого пакета и в этом проходе не перепроверялись; перенос меняет только владельца уже достигнутого типа.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone sessions: CTeam и CTeamate 24 сентября 2026
 
 Сеанс команды `CTeam` (локальные создание/вступление, идентичность, распределение, точная сериализация, AI-контроль проекции) и командный разъём `CTeamate` (приглашение/вход, снимок региона и имени, `Serialize` для `0xBFD03`, пятиминутное окно восстановления) перенесены из `src/gameserver/appserver/session/` в [`zone/src/sessions/`](../../server/rust/zone/src/sessions/). Все зависимости уже были в Zone/Shared, швы не потребовались; старые файлы — тонкие glob-реэкспорты, единственный кодовый потребитель `csessionfactory` работает без правок. Все `pub(crate)` стали `pub`; код перенесён дословно, кроме строк владельца, трёх импортов и переносов rustfmt.
