@@ -6,6 +6,7 @@
 //! отменяет следующие ответы или delete. Worker проверяет общий exit перед
 //! проходом и всегда ждёт 5000 ms после него. `End` только присоединяет поток;
 //! Win32 thread API и ADO заменены owned `JoinHandle` и Tiberius.
+//! Перенесён в Realm `billing/`.
 
 use std::collections::VecDeque;
 use std::ffi::CString;
@@ -18,28 +19,28 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use thiserror::Error;
 
-use crate::dbaccess::dbbilling::rsplayeraccount::{
+use super::rsplayeraccount::{
     BillingDatabaseSettings, RsPlayerAccountInitializationError, RsPlayerAccountNotice,
     RsPlayerAccountOwner, TiberiusRsPlayerAccount,
 };
-use crate::dbaccess::dbbilling::rsplayerfillmgr::{
+use crate::app::billing_message::CMessage;
+use crate::billing::rsplayerfillmgr::{
     PlayerFillDatabaseSettings, RsPlayerFillInitializationError, RsPlayerFillNotice,
     RsPlayerFillOwner, TiberiusRsPlayerFillMgr,
 };
-use crate::nets::netbilling::message::CMessage;
-use crate::nets::servers::ServerCommandHandle;
+use nebokrai_shared::network::ServerCommandHandle;
 
 const PLAYER_FILL_RESPONSE: i32 = 0x000F_F004;
 const PLAYER_FILL_CADENCE: Duration = Duration::from_millis(5_000);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerFillWorkerOwner {
+pub enum PlayerFillWorkerOwner {
     FillTable,
     PlayerAccount,
 }
 
 #[derive(Debug)]
-pub(crate) enum PlayerFillNotice {
+pub enum PlayerFillNotice {
     FillDatabase(RsPlayerFillNotice),
     AccountDatabase(RsPlayerAccountNotice),
     WorkerUnavailable {
@@ -51,15 +52,15 @@ pub(crate) enum PlayerFillNotice {
 
 #[derive(Debug, Error)]
 #[error("не создан PlayerFill worker: {0}")]
-pub(crate) struct StartPlayerFillError(#[source] io::Error);
+pub struct StartPlayerFillError(#[source] io::Error);
 
 #[derive(Default)]
-pub(crate) struct CPlayerFillMgr {
+pub struct CPlayerFillMgr {
     notices: Mutex<VecDeque<PlayerFillNotice>>,
 }
 
 impl CPlayerFillMgr {
-    pub(crate) fn run(
+    pub fn run(
         &self,
         fill_database: &mut dyn RsPlayerFillOwner,
         account_database: &mut dyn RsPlayerAccountOwner,
@@ -89,7 +90,7 @@ impl CPlayerFillMgr {
         true
     }
 
-    pub(crate) fn pop_notice(&self) -> Option<PlayerFillNotice> {
+    pub fn pop_notice(&self) -> Option<PlayerFillNotice> {
         self.notices.lock().pop_front()
     }
 
@@ -110,7 +111,7 @@ impl CPlayerFillMgr {
     }
 }
 
-pub(crate) struct PlayerFillRuntime {
+pub struct PlayerFillRuntime {
     manager: Arc<CPlayerFillMgr>,
     fill_database_settings: PlayerFillDatabaseSettings,
     account_database_settings: BillingDatabaseSettings,
@@ -120,7 +121,7 @@ pub(crate) struct PlayerFillRuntime {
 }
 
 impl PlayerFillRuntime {
-    pub(crate) fn new(
+    pub fn new(
         manager: Arc<CPlayerFillMgr>,
         fill_database_settings: PlayerFillDatabaseSettings,
         account_database_settings: BillingDatabaseSettings,
@@ -137,7 +138,7 @@ impl PlayerFillRuntime {
         }
     }
 
-    pub(crate) fn start(&mut self) -> Result<(), StartPlayerFillError> {
+    pub fn start(&mut self) -> Result<(), StartPlayerFillError> {
         let manager = Arc::clone(&self.manager);
         let fill_settings = self.fill_database_settings.clone();
         let account_settings = self.account_database_settings.clone();
@@ -171,7 +172,7 @@ impl PlayerFillRuntime {
         Ok(())
     }
 
-    pub(crate) fn end(&mut self) -> bool {
+    pub fn end(&mut self) -> bool {
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()
         {

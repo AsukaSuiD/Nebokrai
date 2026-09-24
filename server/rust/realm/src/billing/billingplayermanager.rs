@@ -12,6 +12,7 @@
 //! итерации, успешный DB-проход завершается паузой 1 ms; cash-log выполняется
 //! хотя бы раз и останавливается общим exit после сна. Win32 threads/events и
 //! critical sections заменены owned `JoinHandle`, atomics и `parking_lot`.
+//! Перенесено в Realm `billing/`.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -26,24 +27,24 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::dbaccess::dbbilling::rsplayeraccount::{
+use super::rsplayeraccount::{
     BillingDatabaseSettings, RsPlayerAccountInitializationError, RsPlayerAccountNotice,
     RsPlayerAccountOwner, TiberiusRsPlayerAccount,
 };
-use crate::nets::netbilling::message::CMessage;
-use crate::nets::servers::ServerCommandHandle;
+use crate::app::billing_message::CMessage;
+use nebokrai_shared::network::ServerCommandHandle;
+use nebokrai_shared::runtime::put_string_to_file;
 use nebokrai_shared::values::CGuid;
-use crate::public::tools::put_string_to_file;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TagAccInfo {
-    pub(crate) player_id: i32,
-    pub(crate) player_identity: Vec<u8>,
-    pub(crate) game_server_id: i32,
+pub struct TagAccInfo {
+    pub player_id: i32,
+    pub player_identity: Vec<u8>,
+    pub game_server_id: i32,
 }
 
 impl TagAccInfo {
-    pub(crate) fn new(player_id: i32, player_identity: Vec<u8>, game_server_id: i32) -> Self {
+    pub fn new(player_id: i32, player_identity: Vec<u8>, game_server_id: i32) -> Self {
         Self {
             player_id,
             player_identity,
@@ -53,50 +54,50 @@ impl TagAccInfo {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TagTradeNode {
-    pub(crate) trade_type: i32,
-    pub(crate) buyer_id: i32,
-    pub(crate) seller_id: i32,
-    pub(crate) buyer_identity: Vec<u8>,
-    pub(crate) seller_identity: Vec<u8>,
-    pub(crate) buyer_ip: Vec<u8>,
-    pub(crate) seller_ip: Vec<u8>,
-    pub(crate) buyer_name: Vec<u8>,
-    pub(crate) seller_name: Vec<u8>,
-    pub(crate) yuanbao: u32,
-    pub(crate) goods_id: i32,
-    pub(crate) goods_number: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) session_id: i32,
-    pub(crate) plugin_id: i32,
-    pub(crate) login_server_id: i32,
-    pub(crate) world_server_id: i32,
-    pub(crate) goods_guid: CGuid,
+pub struct TagTradeNode {
+    pub trade_type: i32,
+    pub buyer_id: i32,
+    pub seller_id: i32,
+    pub buyer_identity: Vec<u8>,
+    pub seller_identity: Vec<u8>,
+    pub buyer_ip: Vec<u8>,
+    pub seller_ip: Vec<u8>,
+    pub buyer_name: Vec<u8>,
+    pub seller_name: Vec<u8>,
+    pub yuanbao: u32,
+    pub goods_id: i32,
+    pub goods_number: i32,
+    pub game_server_id: i32,
+    pub session_id: i32,
+    pub plugin_id: i32,
+    pub login_server_id: i32,
+    pub world_server_id: i32,
+    pub goods_guid: CGuid,
 }
 
-pub(crate) struct TagTradeNodeParts {
-    pub(crate) trade_type: i32,
-    pub(crate) buyer_id: i32,
-    pub(crate) seller_id: i32,
-    pub(crate) buyer_identity: Vec<u8>,
-    pub(crate) seller_identity: Vec<u8>,
-    pub(crate) buyer_ip: Vec<u8>,
-    pub(crate) seller_ip: Vec<u8>,
-    pub(crate) buyer_name: Vec<u8>,
-    pub(crate) seller_name: Vec<u8>,
-    pub(crate) yuanbao: u32,
-    pub(crate) goods_id: i32,
-    pub(crate) goods_number: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) session_id: i32,
-    pub(crate) plugin_id: i32,
-    pub(crate) login_server_id: i32,
-    pub(crate) world_server_id: i32,
-    pub(crate) goods_guid: CGuid,
+pub struct TagTradeNodeParts {
+    pub trade_type: i32,
+    pub buyer_id: i32,
+    pub seller_id: i32,
+    pub buyer_identity: Vec<u8>,
+    pub seller_identity: Vec<u8>,
+    pub buyer_ip: Vec<u8>,
+    pub seller_ip: Vec<u8>,
+    pub buyer_name: Vec<u8>,
+    pub seller_name: Vec<u8>,
+    pub yuanbao: u32,
+    pub goods_id: i32,
+    pub goods_number: i32,
+    pub game_server_id: i32,
+    pub session_id: i32,
+    pub plugin_id: i32,
+    pub login_server_id: i32,
+    pub world_server_id: i32,
+    pub goods_guid: CGuid,
 }
 
 impl TagTradeNode {
-    pub(crate) fn from_parts(parts: TagTradeNodeParts) -> Self {
+    pub fn from_parts(parts: TagTradeNodeParts) -> Self {
         Self {
             trade_type: parts.trade_type,
             buyer_id: parts.buyer_id,
@@ -121,30 +122,30 @@ impl TagTradeNode {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TagIncLogNode {
-    pub(crate) log_time: f64,
-    pub(crate) buyer_identity: Vec<u8>,
-    pub(crate) buyer_ip: Vec<u8>,
-    pub(crate) yuanbao: u32,
-    pub(crate) goods_id: i32,
-    pub(crate) goods_number: i32,
-    pub(crate) login_server_id: i32,
-    pub(crate) world_server_id: i32,
+pub struct TagIncLogNode {
+    pub log_time: f64,
+    pub buyer_identity: Vec<u8>,
+    pub buyer_ip: Vec<u8>,
+    pub yuanbao: u32,
+    pub goods_id: i32,
+    pub goods_number: i32,
+    pub login_server_id: i32,
+    pub world_server_id: i32,
 }
 
-pub(crate) struct TagIncLogNodeParts {
-    pub(crate) log_time: f64,
-    pub(crate) buyer_identity: Vec<u8>,
-    pub(crate) buyer_ip: Vec<u8>,
-    pub(crate) yuanbao: u32,
-    pub(crate) goods_id: i32,
-    pub(crate) goods_number: i32,
-    pub(crate) login_server_id: i32,
-    pub(crate) world_server_id: i32,
+pub struct TagIncLogNodeParts {
+    pub log_time: f64,
+    pub buyer_identity: Vec<u8>,
+    pub buyer_ip: Vec<u8>,
+    pub yuanbao: u32,
+    pub goods_id: i32,
+    pub goods_number: i32,
+    pub login_server_id: i32,
+    pub world_server_id: i32,
 }
 
 impl TagIncLogNode {
-    pub(crate) fn from_parts(parts: TagIncLogNodeParts) -> Self {
+    pub fn from_parts(parts: TagIncLogNodeParts) -> Self {
         Self {
             log_time: parts.log_time,
             buyer_identity: parts.buyer_identity,
@@ -159,7 +160,7 @@ impl TagIncLogNode {
 }
 
 #[derive(Default)]
-pub(crate) struct CBillingPlayerManager {
+pub struct CBillingPlayerManager {
     account_requests: Mutex<VecDeque<TagAccInfo>>,
     increment_logs: Mutex<VecDeque<TagIncLogNode>>,
     trade_requests: Mutex<VecDeque<TagTradeNode>>,
@@ -167,34 +168,34 @@ pub(crate) struct CBillingPlayerManager {
 }
 
 impl CBillingPlayerManager {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn push_account_request(&self, request: TagAccInfo) -> bool {
+    pub fn push_account_request(&self, request: TagAccInfo) -> bool {
         self.account_requests.lock().push_back(request);
         true
     }
 
-    pub(crate) fn push_increment_log(&self, record: TagIncLogNode) -> bool {
+    pub fn push_increment_log(&self, record: TagIncLogNode) -> bool {
         self.increment_logs.lock().push_back(record);
         true
     }
 
-    pub(crate) fn push_trade_request(&self, request: TagTradeNode) -> bool {
+    pub fn push_trade_request(&self, request: TagTradeNode) -> bool {
         self.trade_requests.lock().push_back(request);
         true
     }
 
-    pub(crate) fn take_account_requests(&self) -> VecDeque<TagAccInfo> {
+    pub fn take_account_requests(&self) -> VecDeque<TagAccInfo> {
         mem::take(&mut *self.account_requests.lock())
     }
 
-    pub(crate) fn take_increment_logs(&self) -> VecDeque<TagIncLogNode> {
+    pub fn take_increment_logs(&self) -> VecDeque<TagIncLogNode> {
         mem::take(&mut *self.increment_logs.lock())
     }
 
-    pub(crate) fn take_trade_requests(&self) -> VecDeque<TagTradeNode> {
+    pub fn take_trade_requests(&self) -> VecDeque<TagTradeNode> {
         mem::take(&mut *self.trade_requests.lock())
     }
 }
@@ -206,13 +207,13 @@ const MAX_PURCHASE_GOODS_NUMBER: i32 = 1000;
 const DATABASE_WORKER_CADENCE: Duration = Duration::from_millis(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BillingPlayerWorkerKind {
+pub enum BillingPlayerWorkerKind {
     Database,
     CashLog,
 }
 
 #[derive(Debug)]
-pub(crate) enum BillingPlayerManagerNotice {
+pub enum BillingPlayerManagerNotice {
     Database(RsPlayerAccountNotice),
     IncrementPurchaseQuantity {
         player_id: i32,
@@ -229,7 +230,7 @@ pub(crate) enum BillingPlayerManagerNotice {
 }
 
 #[derive(Debug)]
-pub(crate) enum CreateBillingPlayerWorkerError {
+pub enum CreateBillingPlayerWorkerError {
     DatabaseOwner(RsPlayerAccountInitializationError),
     Spawn(io::Error),
 }
@@ -257,7 +258,7 @@ struct DatabaseWorker {
     thread: JoinHandle<()>,
 }
 
-pub(crate) struct BillingPlayerManagerRuntime {
+pub struct BillingPlayerManagerRuntime {
     queues: Arc<CBillingPlayerManager>,
     sender: ServerCommandHandle,
     database_settings: BillingDatabaseSettings,
@@ -269,7 +270,7 @@ pub(crate) struct BillingPlayerManagerRuntime {
 }
 
 impl CBillingPlayerManager {
-    pub(crate) fn run(
+    pub fn run(
         &self,
         stop_requested: &AtomicBool,
         database: &mut dyn RsPlayerAccountOwner,
@@ -357,7 +358,7 @@ impl CBillingPlayerManager {
         true
     }
 
-    pub(crate) fn on_log_process(
+    pub fn on_log_process(
         &self,
         database: &mut dyn RsPlayerAccountOwner,
         save_log_interval_ms: &AtomicU32,
@@ -373,7 +374,7 @@ impl CBillingPlayerManager {
         true
     }
 
-    pub(crate) fn pop_notice(&self) -> Option<BillingPlayerManagerNotice> {
+    pub fn pop_notice(&self) -> Option<BillingPlayerManagerNotice> {
         self.notices.lock().pop_front()
     }
 
@@ -389,7 +390,7 @@ impl CBillingPlayerManager {
 }
 
 impl BillingPlayerManagerRuntime {
-    pub(crate) fn new(
+    pub fn new(
         queues: Arc<CBillingPlayerManager>,
         sender: ServerCommandHandle,
         database_settings: BillingDatabaseSettings,
@@ -409,11 +410,11 @@ impl BillingPlayerManagerRuntime {
         }
     }
 
-    pub(crate) fn queues(&self) -> &Arc<CBillingPlayerManager> {
+    pub fn queues(&self) -> &Arc<CBillingPlayerManager> {
         &self.queues
     }
 
-    pub(crate) fn start(&mut self, log_enabled_at_start: bool) -> bool {
+    pub fn start(&mut self, log_enabled_at_start: bool) -> bool {
         if !log_enabled_at_start {
             return true;
         }
@@ -455,7 +456,7 @@ impl BillingPlayerManagerRuntime {
         true
     }
 
-    pub(crate) fn create_thread(&mut self) -> Result<(), CreateBillingPlayerWorkerError> {
+    pub fn create_thread(&mut self) -> Result<(), CreateBillingPlayerWorkerError> {
         let mut database = TiberiusRsPlayerAccount::new(self.database_settings.clone())
             .map_err(CreateBillingPlayerWorkerError::DatabaseOwner)?;
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -481,7 +482,7 @@ impl BillingPlayerManagerRuntime {
         Ok(())
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         let workers = mem::take(&mut self.database_workers);
         for worker in workers {
             worker.stop_requested.store(true, Ordering::Release);
@@ -494,7 +495,7 @@ impl BillingPlayerManagerRuntime {
         }
     }
 
-    pub(crate) fn end(&mut self, log_enabled_at_end: bool) -> bool {
+    pub fn end(&mut self, log_enabled_at_end: bool) -> bool {
         if log_enabled_at_end
             && let Some(worker) = self.log_worker.take()
             && worker.join().is_err()

@@ -20,12 +20,6 @@ pub(crate) mod netauth;
 
 #[allow(
     dead_code,
-    reason = "Billing transport-owner подключён до доменных обработчиков и component worker"
-)]
-pub(crate) mod netbilling;
-
-#[allow(
-    dead_code,
     reason = "Login message-owner подключён до component receive и доменных обработчиков"
 )]
 pub(crate) mod netlogin;

@@ -1,4 +1,5 @@
 //! DB-владелец `CRsPlayerAccount` BillingServer из `rsplayeraccount.cpp`.
+//! Владелец той же семьи перенесён в Realm `billing/`.
 //!
 //! Реализованы операции `GetUserPoint`, `PutCashLog`, `BuyPlayerItem` и
 //! `BuyItemCode`. Выходной `@TranCode` остаётся `adVarChar(500)`, а принимающий
@@ -59,9 +60,7 @@ use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Runtime};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
-use crate::billingserver::appbilling::billingplayermanager::{
-    TagIncLogNode, TagIncLogNodeParts, TagTradeNode,
-};
+use super::billingplayermanager::{TagIncLogNode, TagIncLogNodeParts, TagTradeNode};
 
 type TdsClient = Client<Compat<TcpStream>>;
 
@@ -70,7 +69,7 @@ const MILLIS_PER_DAY: f64 = 86_400_000.0;
 
 /// Две исходные четвёрки connection-полей без публикации credentials.
 #[derive(Clone)]
-pub(crate) struct BillingDatabaseSettings {
+pub struct BillingDatabaseSettings {
     account: BillingDatabaseConnectionSettings,
     cash_log: BillingDatabaseConnectionSettings,
 }
@@ -84,20 +83,20 @@ struct BillingDatabaseConnectionSettings {
 }
 
 /// Обе независимые четвёрки connection-полей одного Billing setup snapshot.
-pub(crate) struct BillingDatabaseSettingsParts {
-    pub(crate) account_host: Vec<u8>,
-    pub(crate) account_database: Vec<u8>,
-    pub(crate) account_user: Vec<u8>,
-    pub(crate) account_password: Vec<u8>,
-    pub(crate) cash_log_host: Vec<u8>,
-    pub(crate) cash_log_database: Vec<u8>,
-    pub(crate) cash_log_user: Vec<u8>,
-    pub(crate) cash_log_password: Vec<u8>,
+pub struct BillingDatabaseSettingsParts {
+    pub account_host: Vec<u8>,
+    pub account_database: Vec<u8>,
+    pub account_user: Vec<u8>,
+    pub account_password: Vec<u8>,
+    pub cash_log_host: Vec<u8>,
+    pub cash_log_database: Vec<u8>,
+    pub cash_log_user: Vec<u8>,
+    pub cash_log_password: Vec<u8>,
 }
 
 impl BillingDatabaseSettings {
     /// Копирует обе независимые четвёрки connection-полей Billing setup.
-    pub(crate) fn from_parts(parts: BillingDatabaseSettingsParts) -> Self {
+    pub fn from_parts(parts: BillingDatabaseSettingsParts) -> Self {
         Self {
             account: BillingDatabaseConnectionSettings {
                 host: parts.account_host,
@@ -117,7 +116,7 @@ impl BillingDatabaseSettings {
 
 /// Исходная DB-операция, для которой применён её доказанный fallback.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RsPlayerAccountOperation {
+pub enum RsPlayerAccountOperation {
     GetUserPoint,
     PutCashLog,
     BuyPlayerItem,
@@ -126,14 +125,14 @@ pub(crate) enum RsPlayerAccountOperation {
 
 /// Структурированная замена старого `AddLogText` с COM description.
 #[derive(Debug)]
-pub(crate) struct RsPlayerAccountNotice {
-    pub(crate) operation: RsPlayerAccountOperation,
-    pub(crate) error: RsPlayerAccountDatabaseError,
+pub struct RsPlayerAccountNotice {
+    pub operation: RsPlayerAccountOperation,
+    pub error: RsPlayerAccountDatabaseError,
 }
 
 /// Ошибка создания синхронного Linux/TDS-владельца.
 #[derive(Debug)]
-pub(crate) struct RsPlayerAccountInitializationError(io::Error);
+pub struct RsPlayerAccountInitializationError(io::Error);
 
 impl fmt::Display for RsPlayerAccountInitializationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -153,7 +152,7 @@ impl Error for RsPlayerAccountInitializationError {
 
 /// Ошибка технической ADO/TDS-границы без credential или runtime-значений.
 #[derive(Debug)]
-pub(crate) enum RsPlayerAccountDatabaseError {
+pub enum RsPlayerAccountDatabaseError {
     Connect(io::Error),
     Tds(tiberius::error::Error),
     MissingOutputRow,
@@ -201,31 +200,31 @@ impl From<tiberius::error::Error> for RsPlayerAccountDatabaseError {
 
 /// Output `GetUserPoint`; при DB-ошибке равен исходным `-2/0`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct UserPointOutcome {
-    pub(crate) result: i32,
-    pub(crate) point: i32,
+pub struct UserPointOutcome {
+    pub result: i32,
+    pub point: i32,
 }
 
 /// Output `buyItemCode` и optional cash-log, создаваемый после успеха.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct BuyItemCodeOutcome {
-    pub(crate) result: i32,
-    pub(crate) transaction_code: Vec<u8>,
-    pub(crate) last_point: i32,
-    pub(crate) increment_log: Option<TagIncLogNode>,
+pub struct BuyItemCodeOutcome {
+    pub result: i32,
+    pub transaction_code: Vec<u8>,
+    pub last_point: i32,
+    pub increment_log: Option<TagIncLogNode>,
 }
 
 /// Output `buyPlayerItem`; `from` — seller, `to` — buyer.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BuyPlayerItemOutcome {
-    pub(crate) result: i32,
-    pub(crate) transaction_code: Vec<u8>,
-    pub(crate) buyer_last_point: i32,
-    pub(crate) seller_last_point: i32,
+pub struct BuyPlayerItemOutcome {
+    pub result: i32,
+    pub transaction_code: Vec<u8>,
+    pub buyer_last_point: i32,
+    pub seller_last_point: i32,
 }
 
 /// Узкая объектная граница четырёх функций исходного `CRsPlayerAccount`.
-pub(crate) trait RsPlayerAccountOwner {
+pub trait RsPlayerAccountOwner {
     fn get_user_point(&mut self, user_id: &[u8]) -> UserPointOutcome;
 
     fn put_cash_log(&mut self, entries: &[TagIncLogNode]) -> i32;
@@ -242,7 +241,7 @@ pub(crate) trait RsPlayerAccountOwner {
 }
 
 /// Linux/TDS-замена одного исходного `CRsPlayerAccount`.
-pub(crate) struct TiberiusRsPlayerAccount {
+pub struct TiberiusRsPlayerAccount {
     account_config: Config,
     cash_log_config: Config,
     runtime: Runtime,
@@ -251,7 +250,7 @@ pub(crate) struct TiberiusRsPlayerAccount {
 
 impl TiberiusRsPlayerAccount {
     /// Создаёт owner без соединения; ADO также соединялся внутри каждой функции.
-    pub(crate) fn new(
+    pub fn new(
         settings: BillingDatabaseSettings,
     ) -> Result<Self, RsPlayerAccountInitializationError> {
         let runtime = Builder::new_current_thread()
