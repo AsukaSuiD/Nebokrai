@@ -1,7 +1,9 @@
 //! Общая блокировка движения и боя для Blind и состояний рывка;
 //! BoaLock использует тот же lifecycle, но запрещает только движение.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/blindstate.cpp
-//! и boalockstate.cpp.
+//! и boalockstate.cpp. Данные и 8-байтная запись семейства перенесены в
+//! Zone `effects/blind.rs` (там же адреса конструкторов и общего кодека);
+//! здесь остаются живой lifecycle и payload-адаптер переходного Game.
 //!
 //! Объектный Begin требует S; NULL U сохраняет timestamp. Visual Update(0)
 //! предшествует move/fight-lock и публикации нового экземпляра в общей арене.
@@ -17,72 +19,19 @@
 //! OnAction не объединён: Blind/KnockOut/Seal/KnightCut заканчиваются при Defense,
 //! Rush/Rush2/SpiderWeb/Strike/BoaLock ничего не делают.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::{AppliedState, StateData, StateKey};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     begin_applied_state_visual, begin_base_applied_state, end_and_destroy_state_at, remove_applied_state_from,
     resolve_applied_state_sufferer, resolve_state_move_shape, resolve_state_move_shape_mut,
-    state_client_record, timed_client_state_time, update_applied_state_end_visual,
+    state_client_record, update_applied_state_end_visual,
     update_applied_state_visual_base, StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const BLIND_STATE_ID: u32 = 0x76;
-pub(crate) const BLIND_STATE_BYTES: usize = 8;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BlindState<const ID: u32 = BLIND_STATE_ID> {
-    started_at_ms: u32,
-    keep_time_ms: u32,
-}
-
-impl<const ID: u32> BlindState<ID> {
-    pub(crate) const fn new(keep_time_ms: u32) -> Self {
-        Self { started_at_ms: 0, keep_time_ms }
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        let started_at_ms = now();
-        let keep_time_ms = reader.read_u32()?;
-        Ok(Self { started_at_ms, keep_time_ms })
-    }
-
-    pub(crate) const fn skill_id(&self) -> u32 { ID }
-
-    pub(crate) const fn expired(&self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn client_state_time(&self, now: impl FnMut() -> u32) -> u32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now)
-    }
-
-    pub(crate) fn client_time(&self, now: impl FnMut() -> u32) -> i32 {
-        self.client_state_time(now) as i32
-    }
-
-    pub(crate) fn encoded(&self, now: impl FnMut() -> u32) -> [u8; BLIND_STATE_BYTES] {
-        self.encode_record(|| self.client_state_time(now))
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> [u8; BLIND_STATE_BYTES] {
-        self.encode_record(|| self.keep_time_ms)
-    }
-
-    fn encode_record(&self, remaining: impl FnOnce() -> u32) -> [u8; BLIND_STATE_BYTES] {
-        let mut record = [0; BLIND_STATE_BYTES];
-        record[..4].copy_from_slice(&ID.to_le_bytes());
-        record[4..].copy_from_slice(&remaining().to_le_bytes());
-        record
-    }
-}
+pub(crate) use nebokrai_zone::effects::{BLIND_STATE_BYTES, BLIND_STATE_ID, BlindState};
 
 pub(crate) trait BlindStatePayload: AppliedState {
     fn blind_state_id(&self) -> u32;
@@ -92,12 +41,13 @@ pub(crate) trait BlindStatePayload: AppliedState {
     fn blocks_fighting(&self) -> bool { true }
 }
 
-impl<const ID: u32> BlindStatePayload for BlindState<ID>
-where BlindState<ID>: AppliedState {
+impl<const ID: u32, const BLOCKS_FIGHTING: bool> BlindStatePayload for BlindState<ID, BLOCKS_FIGHTING>
+where BlindState<ID, BLOCKS_FIGHTING>: AppliedState {
     fn blind_state_id(&self) -> u32 { ID }
-    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
+    fn begin_at(&mut self, now_ms: u32) { BlindState::begin_at(self, now_ms); }
     fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_state_time(now) }
     fn install_record(&self) -> [u8; BLIND_STATE_BYTES] { self.encoded_for_install() }
+    fn blocks_fighting(&self) -> bool { BLOCKS_FIGHTING }
 }
 
 fn has_blind_lifecycle(state: &StateData) -> bool {

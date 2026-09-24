@@ -156,7 +156,7 @@ pub(super) fn run_mosou_attack<Runtime: GameMainLoopRuntime>(
         let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { continue; };
         if !sufferer.has_state_by_skill_id(CURE_SKILL_ID) {
             let persist = properties.query_property(STATE_PERSIST_TIME);
-            let state = KnockOutState::new(0, persist);
+            let state = KnockOutState::new(persist);
             let _ = replace_knock_out_state(game, source, target, state, &mut || runtime.now_milliseconds());
         }
         knock_back_impact_target(game, source, target, region_id, properties);

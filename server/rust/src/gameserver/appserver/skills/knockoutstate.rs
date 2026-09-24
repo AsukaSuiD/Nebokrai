@@ -1,6 +1,8 @@
 //! Оглушение CKnockOutState (0x192): запрет движения и боя до истечения
 //! срока либо защитного действия. Источник: gameserver.exe + GameServer.pdb,
 //! исходный владелец appserver/skills/knockoutstate.cpp.
+//! Данные и 8-байтная запись перенесены в Zone `effects/blind.rs`
+//! (конструкторы VA 0x005F4F30/0x005F4FA0, vtable 0x00660894).
 //!
 //! Vtable наследует AI/End/OnAction/codec от CBlindState. Строгий wrapping
 //! deadline действует и при нулевом сроке; ключ арены отличает одноимённые
@@ -8,58 +10,20 @@
 //! Общий объектный Begin требует S, обновляет timestamp при U,
 //! отправляет BFE03 и ставит оба запрета до публикации в выбранном caller-ом слоте.
 //! Опубликованный derived region сохраняет доставку и callback для всех целей.
-//! DB-запись ID/remaining занимает 8 байт; StartAllStates восстанавливает
-//! блокировки после загрузки. RAW координатной и типизированной перегрузок
-//! Begin (0x005F5020/0x005F5100) сохранён отдельно от объектного пути.
+//! StartAllStates восстанавливает блокировки после загрузки.
 //! Mosou и KnockOut заменяют первый одноимённый объект через полный End,
 //! destructor и объектный Begin, публикуя новый экземпляр в прежней позиции.
 //! BoaLock использует тот же Begin, но снимает первый ID 0x73 и добавляет
 //! новый KnockOut в конец; эта отдельная политика остаётся у boalockattack.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::{
-    resolve_state_move_shape, timed_client_state_time,
-};
+use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::gameserver::game::CGame;
 use super::sealstate::SEAL_STATE_ID;
 use super::blindstate::BLIND_STATE_ID;
 use super::knightcutstate::KNIGHT_CUT_STATE_ID;
 
-pub(crate) const KNOCK_OUT_STATE_ID: u32 = 0x192;
-pub(crate) const KNOCK_OUT_STATE_BYTES: usize = 8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct KnockOutState { started_at_ms: u32, keep_time_ms: u32 }
-
-impl KnockOutState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self { Self { started_at_ms, keep_time_ms } }
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != KNOCK_OUT_STATE_ID {
-            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
-        }
-        Ok(Self::new(now_ms, reader.read_u32()?))
-    }
-    pub(crate) const fn skill_id(self) -> u32 { KNOCK_OUT_STATE_ID }
-    pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
-    pub(crate) fn encoded_for_install(self) -> [u8; KNOCK_OUT_STATE_BYTES] {
-        let mut bytes = [0; KNOCK_OUT_STATE_BYTES];
-        bytes[..4].copy_from_slice(&KNOCK_OUT_STATE_ID.to_le_bytes());
-        bytes[4..].copy_from_slice(&self.keep_time_ms.to_le_bytes());
-        bytes
-    }
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
-    }
-}
-
-impl super::blindstate::BlindStatePayload for KnockOutState {
-    fn blind_state_id(&self) -> u32 { KNOCK_OUT_STATE_ID }
-    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
-    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_time(now) as u32 }
-    fn install_record(&self) -> [u8; KNOCK_OUT_STATE_BYTES] { self.encoded_for_install() }
-}
+pub(crate) use nebokrai_zone::effects::{KNOCK_OUT_STATE_BYTES, KNOCK_OUT_STATE_ID, KnockOutState};
 
 pub(crate) fn replace_knock_out_state(
     game: &mut CGame,
@@ -117,20 +81,6 @@ pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region_id: i32, t
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\knockoutstate.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\knockoutstate.h
-
-// ============================================================================
-// FUNCTION: CKnockOutState::CKnockOutState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\knockoutstate.cpp:24
-// RVA: 0x001F4FA0
-// ADDRESS: 005f4fa0
-// PROTOTYPE: undefined __thiscall CKnockOutState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CKnockOutState::Begin

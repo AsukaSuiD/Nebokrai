@@ -196,7 +196,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         KNOCK_OUT_STATE_ID => StateRecordLayout::typed(
             KNOCK_OUT_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::knockoutstate::KnockOutState::decode(payload, offset, _now()).ok().map(StateData::KnockOut)
+                super::knockoutstate::KnockOutState::decode(payload, offset, _now).ok().map(StateData::KnockOut)
             },
         ),
         SPIDER_WEB_SKILL_ID => StateRecordLayout::typed(
@@ -246,12 +246,12 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         KNIGHT_CUT_STATE_ID => StateRecordLayout::typed(
             KNIGHT_CUT_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::knightcutstate::KnightCutState::decode(payload, offset, _now()).ok().map(StateData::KnightCut)
+                super::knightcutstate::KnightCutState::decode(payload, offset, _now).ok().map(StateData::KnightCut)
             },
         ),
         BOA_LOCK_STATE_ID => StateRecordLayout::typed(
             BOA_LOCK_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::boalockstate::BoaLockState::decode(payload, offset, _now()).ok().map(StateData::BoaLock)
+                super::boalockstate::BoaLockState::decode(payload, offset, _now).ok().map(StateData::BoaLock)
             },
         ),
         RUSH_STATE_ID => StateRecordLayout::typed(

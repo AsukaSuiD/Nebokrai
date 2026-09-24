@@ -47,7 +47,7 @@ fn add_lock_state(
         || !game.live_skill_target_attackable_between(source, target)
         || !source_has_region(game, source)
     { return; }
-    let state = BoaLockState::new(0, keep);
+    let state = BoaLockState::new(keep);
     let _ = replace_boa_lock_state(game, source, target, state, now);
 }
 
@@ -58,7 +58,7 @@ fn add_knock_out_state(
     if !game.live_skill_target_attackable_between(source, target)
         || !source_has_region(game, source)
     { return; }
-    let state = KnockOutState::new(0, keep);
+    let state = KnockOutState::new(keep);
     let previous = resolve_state_move_shape(game, target.0, target.1)
         .and_then(|shape| shape.find_state_position(|state| state.state_id() == PREVIOUS_KNOCK_OUT_ID));
     if let Some((position, _)) = previous {

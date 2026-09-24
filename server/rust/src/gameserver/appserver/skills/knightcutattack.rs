@@ -47,7 +47,7 @@ fn add_knight_cut_state<Runtime: GameMainLoopRuntime>(
         let reduced = duration.wrapping_sub(u32::from(player.combat_properties().reank));
         if (reduced as i32) < 0 { 0 } else { reduced }
     } else { duration };
-    let state = KnightCutState::new(0, duration);
+    let state = KnightCutState::new(duration);
     let _ = replace_primary_blind_state(game, source, target, state, &mut || runtime.now_milliseconds());
     if source.1.object_type == 400 { game.increase_owned_player_rp(source.1.id, true, 0); }
     knock_back_impact_target_with_block_mask(game, source, target, region_id, &properties, 7);

@@ -1699,10 +1699,7 @@ impl CMoveShape {
                 StateData::Blind(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Seal(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::Strike(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
-                StateData::KnockOut(state) => Some([
-                    state_id.to_le_bytes(),
-                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
-                ].concat()),
+                StateData::KnockOut(state) => Some(state.encoded(&mut timed_state_now_milliseconds).to_vec()),
                 StateData::SpiderWeb(state) => Some([
                     state_id.to_le_bytes(),
                     (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),

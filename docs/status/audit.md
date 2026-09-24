@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись blind-семейства 24 сентября 2026
+
+Данные и 8-байтная запись восьми состояний blind-семейства перенесены в [`zone/effects/blind.rs`](../../server/rust/zone/src/effects/blind.rs): общий payload `BlindState<ID, BLOCKS_FIGHTING>` обслуживает Blind (`0x76`), Rush (`0x73`), Rush2 (`0x7C`), Seal (`0x138`), Strike (`0xDD`), KnightCut (`0x67`), KnockOut (`0x192`) и BoaLock (`0xD2`, с `BLOCKS_FIGHTING = false`). Переходный Game сохраняет живой lifecycle, запреты движения/боя, visual и обходы состояний; blanket-адаптер payload покрывает все типы семейства.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) найдены и проверены конструкторы всех восьми классов (адреса — в заголовке Zone-файла): каждый записывает свой ID и срок без чтения часов. Их vtable разделяют Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, GetRemainedTime `0x005F2CD0` и AI `0x005D5BA0`; у BoaLock собственный End `0x005FB800` и пустой OnAction, что закреплено константой типа Zone. Ранее отсутствовавшие адреса writer/reader/vtable для KnightCut, KnockOut и BoaLock этим закрыты. Исправления Rust: decoders трёх standalone-типов читают часы после проверки ID вместо расхода до входа; ручная сериализация KnockOut заменена общим `encoded`; `new(0, keep)` сведены к `new(keep)`. Основания — в [описании blind-семейства](../gameplay/attributes-and-states.md#blind-семейство-блокировка-движения-и-боя).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,93 секунды; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактические Begin/End, запреты и клиентский visual не проверялись.
+
 ## Zone effects: данные и запись DaubPoison 24 сентября 2026
 
 Данные, срок и 8-байтная сохраняемая запись `CDaubPoisonState` (`0xDF`) перенесены в [`zone/effects/daubpoison.rs`](../../server/rust/zone/src/effects/daubpoison.rs), числовое правило запроса срока — в [`zone/skills/daubpoison.rs`](../../server/rust/zone/src/skills/daubpoison.rs). Переходный Game оставляет живые Begin/restart/update/End, visual и разрешение участников; применение навыка продолжает завершать первый слот `0xDF` до запроса срока и Begin.

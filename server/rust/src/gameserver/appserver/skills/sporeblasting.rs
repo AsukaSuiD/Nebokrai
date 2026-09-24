@@ -189,7 +189,7 @@ pub(crate) fn execute_owned_spore_blasting<Runtime: GameMainLoopRuntime>(
                 if !game.live_skill_target_attackable_in(region_owner, source.identity(), identity) {
                     continue;
                 }
-                let state = KnockOutState::new(0, keep_time_ms);
+                let state = KnockOutState::new(keep_time_ms);
                 let _ = game.with_published_region(owner, |game| {
                     let Some(target) = resolve_state_move_shape(game, region_id, identity) else { return; };
                     let target_region = target.shape().get_region_id();

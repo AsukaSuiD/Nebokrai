@@ -269,7 +269,7 @@ fn execute_stage<Runtime: GameMainLoopRuntime>(
     if resolve_state_move_shape(game, target.0, target.1)
         .is_some_and(|shape| !shape.has_state_by_skill_id(CURE_SKILL_ID))
     {
-        let state = KnockOutState::new(0, properties.query_property(PERSIST));
+        let state = KnockOutState::new(properties.query_property(PERSIST));
         let _ = replace_knock_out_state(game, source, target, state, &mut || runtime.now_milliseconds());
     }
     let _ = game.registered_skill_mut(instance).map(|skill| skill.advance_execution(SkillStage::Attack, SkillStage::Apply));
