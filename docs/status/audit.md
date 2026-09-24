@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm content: конфигурация объединения battle fairy 24 сентября 2026
+
+`CBattleFairyProperty` (loader конфигурации объединения по caller-пути и wire subtype `0x2D` с signed count и сырыми `0x7C`-байтовыми записями) перенесён из `src/worldserver/appworld/goods/cbattlefairyproperty.rs` в [`realm/src/content/battlefairyproperty.rs`](../../server/rust/realm/src/content/battlefairyproperty.rs). Граница `path` остаётся у вызывающего; потребители (world `runtime`, `game`, `servermessage`) работают через glob-шим без правок. Одноимённый вариант на стороне gameserver — отдельный владелец со своей цепочкой, переносом не затронут.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): `CBattleFairyProperty::AddToByteArray_Combine` `0x43FF50` вычисляет число записей делением объёма vector-а на magic-constant `0x84210843` с `sar 6` — ровно деление на `0x7C`, и записывает count dword-writer-ом `0x4A3340`. Это подтверждает сырую `0x7C`-байтовую запись из заголовка; утверждения про SSO-layout строк до 15 байт и rejected длинных строк сохраняют прежний статус и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm content: общие wire-структуры организаций 24 сентября 2026
 
 Общие структуры организаций (`tagMemInfo`-проекция `0xF0` с fixed именами, 11 permission states, region, `tagTime` и contribution; enums `EOperator/ECityState/EPurview/EPurviewOwnState`; mutation helpers и `UnterminatedMemberField`) перенесены из `src/worldserver/appworld/organizingsystem/organizing.rs` в [`realm/src/content/organizing.rs`](../../server/rust/realm/src/content/organizing.rs). Швы не потребовались; потребители двух ветвей старого пакета (appworld `organizingsystem/*`, `worldcityregion`, `organsysmessage` и `dbaccess/worlddb/{rsfaction, rsunion}`) работают через glob-шим без правок.

@@ -1,5 +1,6 @@
 //! Подготовка содержимого Realm; исполнение сценариев принадлежит Zone.
 
+pub mod battlefairyproperty;
 mod clientresource;
 pub mod goods;
 pub mod organizing;
