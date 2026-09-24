@@ -1,5 +1,6 @@
 //! Состояние и правила игровых клиентских сессий Zone.
 
+pub mod cpersonalshopbuyer;
 pub mod cplug;
 pub mod csession;
 pub mod cteam;
