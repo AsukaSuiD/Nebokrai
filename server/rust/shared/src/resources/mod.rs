@@ -17,6 +17,7 @@ mod regionrouter;
 mod package;
 mod path;
 mod playerlist;
+mod preciousboxconf;
 mod quest;
 mod quest_text;
 mod quest_wire;
@@ -74,6 +75,11 @@ pub use globesetup::{
 pub use marker::read_to_marker;
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};
 pub use path::{normalize_resource_path, resolve_resource_path};
+pub use preciousboxconf::{
+    PreciousBox, PreciousBoxConf, PreciousBoxCount, PreciousBoxDecodeError,
+    PreciousBoxDecodeField, PreciousBoxItem, PreciousBoxLoadDiagnostic, PreciousBoxLoadError,
+    PreciousBoxLoadReport, PreciousBoxOdds, PreciousBoxSerializeError,
+};
 pub use playerlist::{
     CPlayerList, PlayerBaseProperties, PlayerBasePropertiesMap, PlayerCreationPropertiesLookup,
     PlayerListDecodeError, PlayerListFormatError, PlayerListLoadReport, PlayerListSerializeError,

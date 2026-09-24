@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: precious box 25 сентября 2026
+
+Конфигурация `PreciousBoxConf` (ordered box/odds groups, XML-loader, wire-codec и `random_item`) перенесена из `src/setup/preciousboxconf.rs` в [`shared/src/resources/preciousboxconf.rs`](../../server/rust/shared/src/resources/preciousboxconf.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла. Установленный экземпляр и его потребители остаются у владельцев ролей. Правила сохранены: loader публикует records только в `_box_conf`, тогда как serializer читает `_box` (после reload subtype `0x1E` остаётся пустым), decoder очищает только `_box` и публикует box после полного разбора его временного odds-vector, 17 значимых bytes item без трёх padding, один roll `[0, 10000)` и half-open odds range с равномерным item и inclusive level.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `server/setup/preciousboxconf.h/.cpp`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка конфигурации в работающий Game и загрузка XML World этим переносом не проверялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: списки монстров новых навыков 25 сентября 2026
 
 Списки монстров новых навыков `CNewSkillMonserConf` (ordered группы skill ID → локализованные имена, XML-loader, wire-codec) перенесены из `src/setup/newskillmonsterlist.rs` в [`shared/src/resources/newskillmonsterlist.rs`](../../server/rust/shared/src/resources/newskillmonsterlist.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла. Правила сохранены: duplicate skill ID заменяет всю группу, Game decoder собирает группу во временный vector и лишь затем заменяет map entry, StringTable miss даёт пустое имя, signed counts, history quoted/unquoted normalization attributes через `quick-xml` той же версии.
