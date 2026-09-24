@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm organizations: параметры организаций 25 сентября 2026
+
+В [`realm/organizations`](../../server/rust/realm/src/organizations/) добавлен [`COrganizingParam`](../../server/rust/realm/src/organizations/organizingparam.rs) — владелец параметров организаций (ini, level params, позиции today tax refresh и taxes schedule, release отчёт). Все прежние связи уже у новых владельцев: NetWorld message/SendMessageError → realm `app/world_message`, `ServerCommandHandle` → Shared network, TagTime-family → Shared values, `read_to` → Shared resources, timer и tools → Shared runtime; швы не потребовались. Потребители поимённо (world `runtime`/`game`, `organsysmessage`, `logmessage`, `organizingctrl`, `faction`, `union`, `dbaccess/rsfaction`) работают через glob-шим без правок. Контроллер `organizingctrl` остаётся своим отдельным связным разговором.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): `COrganizingParam::Load` `0x4416D0` — SEH-раскладка, member params по `+0x74` через config-helper `0x440F00`, затем чтение трёх глобальных config value bases мира, как ожидает ini. Уровень limit и today tax refresh позиции сохраняют прежний статус заголовка и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm activities/characters: война четырёх стран и снимок exploit 25 сентября 2026
 
 В [`realm/activities`](../../server/rust/realm/src/activities/) добавлена четвёртая войсковая система [`CFourNationWarSys`](../../server/rust/realm/src/activities/fournationwarsys.rs) (мировая война четырёх стран: каскад state, календарь и reload, `ConvertMoraleToExploit` через владельца игрока с его None или forwarded disposition). Все пути её связей уже у новых владельцев; швы не потребовались. Тип `PlayerExploitUpdate` извлечён из определения в world `player.rs` в [`realm/characters/playerexploit.rs`](../../server/rust/realm/src/characters/playerexploit.rs) — по форме извлечения AuthDbContext: на месте определения осталась одна строка реэкспорта, покрывающая и потребителя в world `game`; сам `CPlayer` с `add_exploit_wrapping` остаётся за своим глубоким шагом. Потребители поимённо (world `runtime`, `game`, `organsysmessage`, `servermessage`, `countrymessage`) работают через glob-шимы без правок.
