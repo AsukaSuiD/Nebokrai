@@ -5,6 +5,7 @@ pub mod app;
 pub mod combat;
 pub mod content;
 pub mod effects;
+pub mod items;
 pub mod quests;
 pub mod regions;
 pub mod replication;

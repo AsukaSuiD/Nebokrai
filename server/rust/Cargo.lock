@@ -996,6 +996,7 @@ dependencies = [
 name = "nebokrai-zone"
 version = "0.0.0"
 dependencies = [
+ "indexmap",
  "nebokrai-shared",
  "parking_lot",
  "thiserror 2.0.20",

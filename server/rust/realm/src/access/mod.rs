@@ -10,4 +10,5 @@ pub mod message_func;
 pub mod mywininet;
 pub mod networkconfig;
 pub mod rscdkey;
+pub mod servlogqueue;
 pub mod validcode;
