@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: списки монстров новых навыков 25 сентября 2026
+
+Списки монстров новых навыков `CNewSkillMonserConf` (ordered группы skill ID → локализованные имена, XML-loader, wire-codec) перенесены из `src/setup/newskillmonsterlist.rs` в [`shared/src/resources/newskillmonsterlist.rs`](../../server/rust/shared/src/resources/newskillmonsterlist.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла. Правила сохранены: duplicate skill ID заменяет всю группу, Game decoder собирает группу во временный vector и лишь затем заменяет map entry, StringTable miss даёт пустое имя, signed counts, history quoted/unquoted normalization attributes через `quick-xml` той же версии.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `setup/newskillmonsterlist.h/.cpp`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка списков в работающий Game и загрузка XML World этим переносом не проверялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: таблицы опыта fairy и battle fairy 25 сентября 2026
 
 Общие таблицы опыта `CBattleFairyExpConfig` (ordered owner-level map, XML-loader через `quick-xml`, wire-codec) и наследуемый `CFairyExpConf` перенесены из `src/setup/` в [`shared/src/resources/cbattlefairyexpconfig.rs`](../../server/rust/shared/src/resources/cbattlefairyexpconfig.rs) и [`fairyexpconf.rs`](../../server/rust/shared/src/resources/fairyexpconf.rs). Обе роли используют одну реализацию; `quick-xml` добавлен зависимостью Shared с той же версией, прежние `src/setup/*` стали тонкими реэкспортами. Правила сохранены: duplicate level или неполная группа очищает всю map, минимум `MaxLevel - 1` значений, Game decoder создаёт key только при первом exp value и дописывает повторную wire-группу, signed counts.

@@ -12,6 +12,7 @@ mod globesetup;
 mod gmlist;
 mod marker;
 mod monsterlist;
+mod newskillmonsterlist;
 mod regionrouter;
 mod package;
 mod path;
@@ -48,6 +49,10 @@ pub use incrementshoplist::{
 pub use hitlevel::{
     CHitLevelSetup, HitLevelDecodeError, HitLevelEntry, HitLevelFormatError,
     HitLevelSerializeError,
+};
+pub use newskillmonsterlist::{
+    NewSkillMonsterConf, NewSkillMonsterDecodeError, NewSkillMonsterFileLoadError,
+    NewSkillMonsterLoadError, NewSkillMonsterLoadReport, NewSkillMonsterSerializeError,
 };
 pub use monsterlist::{
     MonsterDrop, MonsterDropList, MonsterDropRegistry, MonsterListDecodeError,
