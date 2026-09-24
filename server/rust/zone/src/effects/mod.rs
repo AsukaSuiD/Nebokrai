@@ -3,6 +3,7 @@
 mod agility;
 mod attackgain;
 mod automaticrestore;
+mod battlefairy;
 mod bloodloss;
 mod blind;
 mod callosity;
@@ -49,6 +50,10 @@ pub use automaticrestore::{
     AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID, AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,
     AUTOMATIC_RESTORE_STATE_BYTES, AutomaticRestoreKind, AutomaticRestoreMutation,
     AutomaticRestoreProperties, AutomaticRestoreState, is_automatic_restore_state_id,
+};
+pub use battlefairy::{
+    BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeKind,
+    BattleFairyAttributePlayerView, BattleFairyAttributeState, battle_fairy_attribute_kind,
 };
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,

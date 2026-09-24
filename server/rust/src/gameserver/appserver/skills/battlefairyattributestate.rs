@@ -1,174 +1,57 @@
-//! Состояния Po/Yu (0x212..0x219): gameserver.exe/GameServer.pdb,
+//! Живые Begin/restart/AI/End состояний Po/Yu (0x212..0x219) в переходном
+//! Game. Источник: gameserver.exe/GameServer.pdb,
 //! appserver/skills/{pojia,pobing,pomo,pofa,yujia,yubing,yumo,yufa}state.cpp.
+//! Данные, вид, 12-байтная запись и числовые формулы перенесены в Zone
+//! `effects/battlefairy.rs` (там же адреса конструкторов и общего кодека).
 //!
 //! User всегда держатель арены; Sufferer у Po — caster, у Yu — сам держатель.
 //! Object Begin требует User, читает собственные часы и создаёт silent loop1.
 //! OnUpdateProperties требует User: Po публикует ему, Yu — Sufferer,
-//! а формула всегда меняет User. Среди монстровых формул существуют только
-//! снижение атаки Pobing и element modifier Pomo; Yu меняют лишь игрока.
-//! Повторные состояния применяются в живом порядке общей арены, без второго
-//! агрегата. Замена завершает прежний экземпляр и добавляет новый в хвост.
-//! Прямой End — базовый ended→RemoveState у User без visual. Таймер после
-//! строгого unsigned deadline сначала обновляет существующий visual,
-//! затем выполняет тот же End. NULL цели подавляет пакет, но не visual tail.
-//! DB codec: ID→живой remaining→signed value; положительный remaining читает
-//! часы дважды. Load читает собственный clock перед keep/value. Техническая
-//! запись первичного наложения часов не читает. SetRegion меняет только User.
-//! Begin(NULL, holder) после загрузки отказывает до базы: сохраняет timestamp,
-//! ended и visual. Пустой User не заменяется holder; общий Clear удаляет остаток.
+//! а формула всегда меняет User. Повторные состояния применяются в живом
+//! порядке общей арены, без второго агрегата. Замена завершает прежний
+//! экземпляр и добавляет новый в хвост. Прямой End — базовый
+//! ended→RemoveState у User без visual. Таймер после строгого unsigned
+//! deadline сначала обновляет существующий visual, затем выполняет тот же
+//! End. NULL цели подавляет пакет, но не visual tail. Техническая запись
+//! первичного наложения часов не читает. SetRegion меняет только User.
+//! Begin(NULL, holder) после загрузки отказывает до базы: сохраняет
+//! timestamp, ended и visual. Пустой User не заменяется holder; общий Clear
+//! удаляет остаток.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    timed_client_state_time, resolve_state_move_shape, end_base_applied_state,
-    resolve_state_move_shape_mut, resolve_applied_state_user,
-    update_applied_state_end_visual, update_property_state_visual, StatePropertyTarget,
+    end_base_applied_state, resolve_applied_state_user, resolve_state_move_shape,
+    resolve_state_move_shape_mut, update_applied_state_end_visual,
+    update_property_state_visual, StatePropertyTarget,
 };
 use crate::gameserver::gameserver::game::CGame;
 
-pub(crate) const BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES: usize = 12;
+pub(crate) use nebokrai_zone::effects::{
+    BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeKind,
+    BattleFairyAttributePlayerView, BattleFairyAttributeState,
+};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyAttributeKind {
-    AttackAvoidLoss,
-    AttackLoss,
-    ElementModifyLoss,
-    ElementAvoidLoss,
-    AttackAvoidGain,
-    AttackGain,
-    ElementModifyGain,
-    ElementAvoidGain,
-}
-
-impl BattleFairyAttributeKind {
-    pub(crate) const fn targets_self(self) -> bool {
-        matches!(
-            self,
-            Self::AttackAvoidGain
-                | Self::AttackGain
-                | Self::ElementModifyGain
-                | Self::ElementAvoidGain
-        )
+fn apply_to_player(
+    state: BattleFairyAttributeState,
+    properties: PlayerCombatProperties,
+) -> PlayerCombatProperties {
+    let view = BattleFairyAttributePlayerView {
+        attack_avoid: properties.attack_avoid,
+        element_avoid: properties.element_avoid,
+        minimum_attack: properties.minimum_attack,
+        maximum_attack: properties.maximum_attack,
+        element_modify: properties.element_modify,
+    };
+    let view = state.apply_to_player_view(view);
+    PlayerCombatProperties {
+        attack_avoid: view.attack_avoid,
+        element_avoid: view.element_avoid,
+        minimum_attack: view.minimum_attack,
+        maximum_attack: view.maximum_attack,
+        element_modify: view.element_modify,
+        ..properties
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyAttributeState {
-    skill_id: u32,
-    kind: BattleFairyAttributeKind,
-    started_at_ms: u32,
-    keep_time_ms: u32,
-    value: i32,
-}
-
-impl BattleFairyAttributeState {
-    pub(crate) const fn new(
-        skill_id: u32,
-        kind: BattleFairyAttributeKind,
-        started_at_ms: u32,
-        keep_time_ms: u32,
-        value: i32,
-    ) -> Self {
-        Self { skill_id, kind, started_at_ms, keep_time_ms, value }
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
-    pub(crate) const fn kind(self) -> BattleFairyAttributeKind { self.kind }
-    pub(crate) const fn started_at_ms(self) -> u32 { self.started_at_ms }
-    pub(crate) const fn keep_time_ms(self) -> u32 { self.keep_time_ms }
-    pub(crate) const fn value(self) -> i32 { self.value }
-    pub(crate) fn decode(
-        payload: &[u8], offset: usize, now: &mut dyn FnMut() -> u32,
-    ) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        let skill_id = reader.read_u32()?;
-        let Some(definition) = super::battlefairyattribute::definition(skill_id) else { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); };
-        let started_at_ms = now();
-        Ok(Self::new(skill_id, definition.kind, started_at_ms, reader.read_u32()?, reader.read_i32()?))
-    }
-    pub(crate) fn encoded(
-        &self, now: &mut dyn FnMut() -> u32,
-    ) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
-        self.encoded_with_remaining(|| self.client_state_time(now))
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
-        self.encoded_with_remaining(|| self.keep_time_ms)
-    }
-
-    fn encoded_with_remaining(
-        &self, remaining: impl FnOnce() -> u32,
-    ) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
-        let mut bytes = [0; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES];
-        bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes());
-        bytes[4..8].copy_from_slice(&remaining().to_le_bytes());
-        bytes[8..].copy_from_slice(&self.value.to_le_bytes());
-        bytes
-    }
-
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
-    }
-
-    pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
-        match self.kind {
-            BattleFairyAttributeKind::AttackAvoidLoss => {
-                let value = i32::from(properties.attack_avoid).wrapping_sub(self.value);
-                properties.attack_avoid = if value < 1 { 0 } else { value as u16 };
-            }
-            BattleFairyAttributeKind::AttackLoss => {
-                properties.minimum_attack = subtract_player_attack(properties.minimum_attack, self.value);
-                properties.maximum_attack = subtract_player_attack(properties.maximum_attack, self.value);
-            }
-            BattleFairyAttributeKind::ElementModifyLoss => {
-                let value = properties.element_modify.wrapping_sub(self.value);
-                properties.element_modify = if value < 1 { 0 } else { value };
-            }
-            BattleFairyAttributeKind::ElementAvoidLoss => {
-                let value = i32::from(properties.element_avoid).wrapping_sub(self.value);
-                properties.element_avoid = if value < 1 { 0 } else { value as u16 };
-            }
-            BattleFairyAttributeKind::AttackAvoidGain => {
-                properties.attack_avoid = properties.attack_avoid.wrapping_add(self.value as u16);
-            }
-            BattleFairyAttributeKind::AttackGain => {
-                properties.minimum_attack = add_player_attack(properties.minimum_attack, self.value);
-                properties.maximum_attack = add_player_attack(properties.maximum_attack, self.value);
-            }
-            BattleFairyAttributeKind::ElementModifyGain => {
-                properties.element_modify = properties.element_modify.wrapping_add(self.value);
-            }
-            BattleFairyAttributeKind::ElementAvoidGain => {
-                properties.element_avoid = properties.element_avoid.wrapping_add(self.value as u16);
-            }
-        }
-        properties
-    }
-
-    pub(crate) const fn apply_to_monster_element(self, value: i32) -> i32 {
-        match self.kind {
-            BattleFairyAttributeKind::ElementModifyLoss => {
-                let next = value.wrapping_sub(self.value);
-                if next < 1 { 0 } else { next }
-            }
-            _ => value,
-        }
-    }
-}
-
-const fn subtract_player_attack(value: u32, amount: i32) -> u32 {
-    let next = (value as i32).wrapping_sub(amount);
-    if next < 1 { 0 } else { next as u32 }
-}
-
-const fn add_player_attack(value: u32, amount: i32) -> u32 {
-    let next = value.wrapping_add(amount as u32);
-    if next > i32::MAX as u32 { i32::MAX as u32 } else { next }
 }
 
 pub(crate) fn begin_battle_fairy_attribute_state(
@@ -182,7 +65,7 @@ pub(crate) fn begin_battle_fairy_attribute_state(
     let Some(user_region) = resolve_state_move_shape(game, region_id, holder)
         .map(|shape| shape.shape().get_region_id())
     else { return false };
-    state.started_at_ms = now();
+    state.begin_at(now());
     let sufferer = resolve_state_move_shape(game, region_id, sufferer)
         .map(|shape| (shape.shape().get_region_id(), sufferer));
     let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) else { return false };
@@ -203,7 +86,7 @@ pub(crate) fn update_battle_fairy_attribute_state_properties(
     let Some(state) = resolve_state_move_shape(game, region_id, holder)
         .and_then(|shape| shape.applied_state::<BattleFairyAttributeState>(key))
     else { return false };
-    let visual_target = if state.kind.targets_self() {
+    let visual_target = if state.kind().targets_self() {
         StatePropertyTarget::Sufferer
     } else {
         StatePropertyTarget::User
@@ -224,9 +107,9 @@ pub(crate) fn update_battle_fairy_attribute_state_properties(
     match target.object_type {
         400 => {
             let Some(player) = game.find_player_mut(target.id) else { return false };
-            player.update_state_combat_properties(|properties| state.apply_to_player(properties));
+            player.update_state_combat_properties(|properties| apply_to_player(state, properties));
         }
-        600 => match state.kind {
+        600 => match state.kind() {
             BattleFairyAttributeKind::AttackLoss => {
                 for minimum in [true, false] {
                     let Some(shape) = resolve_state_move_shape_mut(game, target_region, target)
@@ -237,7 +120,7 @@ pub(crate) fn update_battle_fairy_attribute_state_properties(
                     } else {
                         &mut modifiers.maximum_attack
                     };
-                    *value = value.wrapping_sub(state.value);
+                    *value = value.wrapping_sub(state.value());
                     let Some(monster) = game.find_region(target_region)
                         .and_then(|region| region.base().find_monster_by_id(target.id))
                     else { return false };
@@ -302,7 +185,7 @@ pub(crate) fn update_battle_fairy_attribute_state(
         .copied()
     else { return false };
     if !state.expired(now_ms) { return false }
-    let visual_target = if state.kind.targets_self() {
+    let visual_target = if state.kind().targets_self() {
         StatePropertyTarget::Sufferer
     } else {
         StatePropertyTarget::User

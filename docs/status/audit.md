@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: атрибутные состояния боевой феи 24 сентября 2026
+
+Данные, вид, формулы и 12-байтная запись восьми состояний Po/Yu (`0x212`–`0x219`) перенесены в [`zone/effects/battlefairy.rs`](../../server/rust/zone/src/effects/battlefairy.rs). Переходный Game сохраняет живые Begin/restart/AI/End, разрешение участников и применение к живому игроку/монстру; формулы получили примитивный `BattleFairyAttributePlayerView` вместо зависимости от `PlayerCombatProperties`.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) найдены конструкторы всех восьми классов (адреса — в заголовке Zone-файла) и их vtable: общие Serialize `0x005E7330`, Unserialize `0x005FD660`, GetRemainedTime `0x00605E10`, AI `0x005E6E20` и End `0x005DBCE0`. Различие Po/Yu подтверждено различием вызовов участников в Begin. Формулы применения перенесены без изменения и без поколбэчной сверки, поэтому остаются `PARTIAL`; decode сохранил исходный порядок (часы после ID, до срока и значения). Основания — в [описании атрибутов боевой феи](../gameplay/attributes-and-states.md#атрибутные-состояния-боевой-феи).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,87 секунды; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическое наложение и пересчёт свойств не проверялись.
+
 ## Zone effects: SpiderWeb и BossBlueQuake в blind-семействе 24 сентября 2026
 
 Payload `CSpiderWebState` (`0x199`) и `CBossBlueQuakeState` (`0x1F8`) присоединены к общему типу семейства в [`zone/effects/blind.rs`](../../server/rust/zone/src/effects/blind.rs); переходный Game сохраняет живые Begin/restart/End, visual и обходы. По совпадающей паре Game EXE/PDB найдены конструкторы `CSpiderWebState` VA `0x005EA6E0/0x005EA750` (vtable `0x0065FBCC`) и `CBossBlueQuakeState` VA `0x005E8590/0x005E8600` (vtable `0x0065F934`): каждый записывает свой ID и срок без чтения часов, а vtable разделяют с семейством Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, getter `0x005F2CD0`, AI `0x005D5BA0` и End `0x005EA9A0`. Адрес `0x005EA750` и слоты `0x005EA7D0/0x005EA8B0` совпали с ранее сохранёнными метаданными ctor/Begin. Ранее адреса обоих классов не были зафиксированы. Исправления Rust: decode обоих типов читает часы после проверки ID; ручная сериализация SpiderWeb заменена общим `encoded`; `new(0, x)` сведены к `new(x)`. Основания — в [описании blind-семейства](../gameplay/attributes-and-states.md#blind-семейство-блокировка-движения-и-боя).

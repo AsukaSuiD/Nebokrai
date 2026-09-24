@@ -240,7 +240,7 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     }
     let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
     let value = properties.query_property(definition.value_usage) as i32;
-    let state = BattleFairyAttributeState::new(skill_id, definition.kind, 0, keep, value);
+    let state = BattleFairyAttributeState::new(skill_id, definition.kind, keep, value);
     let begun = begin_battle_fairy_attribute_state(
         game, region, holder, user, state, &mut || runtime.now_milliseconds(),
     );
