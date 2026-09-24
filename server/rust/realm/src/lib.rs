@@ -6,4 +6,6 @@ pub mod app;
 pub mod auction;
 pub mod billing;
 pub mod content;
+pub mod organizations;
 pub mod persistence;
+pub mod regions;
