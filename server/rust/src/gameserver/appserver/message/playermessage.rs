@@ -1411,7 +1411,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let remaining = game
                 .find_player(player_id)
                 .expect("quest-time player сохранён после context lookup")
-                .quest_time_remaining(game_wall_time_seconds() as i32);
+                .client_quest_time_remaining(game_wall_time_seconds() as i32);
             let mut response = CMessage::new(0x000b_f72b);
             response.add_long(remaining);
             let _ = response.send_to_player(game.net_server(), player_id);

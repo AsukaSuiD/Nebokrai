@@ -4376,6 +4376,12 @@ impl CPlayer {
         self.base_properties.quest_availability.remaining(now_seconds)
     }
 
+    pub(crate) const fn client_quest_time_remaining(&self, now_seconds: i32) -> i32 {
+        self.base_properties
+            .quest_availability
+            .client_remaining(now_seconds)
+    }
+
     pub(crate) const fn acknowledge_heartbeat(&mut self) {
         self.heart_request_sent = 0;
         self.heart_received = true;

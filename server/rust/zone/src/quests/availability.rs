@@ -5,6 +5,9 @@
 //! `QuestTimeBegin` VA 0x0042DA20–0x0042DAAF, `QuestTimeClear`
 //! VA 0x0042DAC0–0x0042DB32, `SetQuestOn` VA 0x0042DB40–0x0042DBB4
 //! записывают поля игрока до создания клиентского сообщения.
+//! Game script GetQuestTime VA 0x004BA553–0x004BA59A и 0x004B81ED
+//! проверяет нули и обнуляет отрицательный остаток; client 0x8FA12
+//! VA 0x004FAB19–0x004FAB6A отправляет сырую 32-битную разность.
 
 /// Три сохраняемых поля вложены в живого игрока, а Game выполняет доставку.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -49,7 +52,7 @@ impl PlayerQuestAvailability {
         self.time_limit = 0;
     }
 
-    /// Прежняя Rust-формула; её исходные ветви пока требуют прямой сверки.
+    /// Сценарный GetQuestTime обнуляет отсутствующий и отрицательный остаток.
     pub const fn remaining(self, now_seconds: i32) -> i32 {
         if self.time_begin == 0 || self.time_limit == 0 {
             return 0;
@@ -59,5 +62,12 @@ impl PlayerQuestAvailability {
             .wrapping_add(self.time_limit)
             .wrapping_sub(now_seconds);
         if remaining < 0 { 0 } else { remaining }
+    }
+
+    /// Клиентский запрос передаёт разность, включая отрицательное значение.
+    pub const fn client_remaining(self, now_seconds: i32) -> i32 {
+        self.time_limit
+            .wrapping_sub(now_seconds)
+            .wrapping_add(self.time_begin)
     }
 }
