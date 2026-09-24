@@ -33,6 +33,8 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerCodecError};
 
+pub(crate) use nebokrai_realm::persistence::writelog::LargessWriteLog;
+
 const ERROR_GOODS_ID: &[u8] = b"error goodsID!";
 const LARGESS_DEPOT_EXTENSION_FIRST_POSITION: u32 = 0x60;
 const LARGESS_DEPOT_EXTENSION_STRIDE: u32 = 0x0D;
@@ -42,21 +44,6 @@ const LARGESS_DEPOT_EXTENSION_END: u32 = 0xA1;
 pub(crate) enum LargessDepotAddOutcome {
     Added { position: u32 },
     Rejected { position: u32 },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LargessWriteLog {
-    pub(crate) account: Vec<u8>,
-    pub(crate) player_id: i32,
-    pub(crate) send_time: Vec<u8>,
-    pub(crate) goods_id: Vec<u8>,
-    pub(crate) goods_index: u32,
-    pub(crate) goods_name: Vec<u8>,
-    pub(crate) goods_level: i32,
-    pub(crate) send_num: i32,
-    pub(crate) sent_num: i32,
-    pub(crate) current_sent_num: i32,
-    pub(crate) result: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
