@@ -927,6 +927,7 @@ dependencies = [
  "nebokrai-shared",
  "parking_lot",
  "reqwest",
+ "thiserror 2.0.20",
  "tiberius",
  "tokio",
  "tokio-util",
