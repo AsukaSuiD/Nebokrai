@@ -8,6 +8,7 @@ mod quests;
 mod scriptfiles;
 mod scripts;
 pub mod skill;
+pub mod skillfactory;
 mod timetoreturn;
 
 pub use clientresource::{

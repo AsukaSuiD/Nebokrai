@@ -253,11 +253,6 @@ pub(crate) mod appworld {
     pub(crate) mod skills {
         #[allow(
             dead_code,
-            reason = "CSkill owner подключён к initial-config до полного skill loader-а"
-        )]
-        pub(crate) mod skill;
-        #[allow(
-            dead_code,
             reason = "skill registry подключён к initial-config до полного skill loader-а"
         )]
         pub(crate) mod skillfactory;
