@@ -8,6 +8,7 @@ mod emotion;
 mod fairyexpconf;
 mod filesinfo;
 mod hitlevel;
+mod honorelimilateconfig;
 mod incrementshoplist;
 mod globesetup;
 mod gmlist;
@@ -57,6 +58,7 @@ pub use hitlevel::{
     CHitLevelSetup, HitLevelDecodeError, HitLevelEntry, HitLevelFormatError,
     HitLevelSerializeError,
 };
+pub use honorelimilateconfig::{HonorElimilateConfig, HonorEliminateDecodeError};
 pub use newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterDecodeError, NewSkillMonsterFileLoadError,
     NewSkillMonsterLoadError, NewSkillMonsterLoadReport, NewSkillMonsterSerializeError,
