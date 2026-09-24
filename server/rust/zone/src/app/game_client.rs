@@ -424,38 +424,3 @@ impl CMyNetClient {
         Err(error)
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\nets\netserver\mynetclient.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\nets\netserver\mynetclient.h
-
-// IMPLEMENTED: constructor, `GetSocketCommand` и destructor материализованы
-// выше; чужой deleting thunk и allocator/SEH cleanup выражены RAII.
-
-// IMPLEMENTED: `HandleClose` материализован выше с изолированной unknown-type
-// UB-границей.
-
-// ============================================================================
-// FUNCTION: CMyNetClient::SetSendRevBuf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\nets\netserver\mynetclient.cpp:232
-// RVA: 0x0001A650
-// ADDRESS: 0041a650
-// PROTOTYPE: void __thiscall SetSendRevBuf(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `OnReceive` материализован выше; покрытые allocation,
-// accumulator и memmove выражены владеющим `Vec`.
-
-// CLASSIFIED_TECHNICAL_NOISE: placement delete и constructor unwind не
-// имеют самостоятельного эффекта поверх Rust ownership.
-
-// COMPONENT_VARIANT_END: GameServer
