@@ -110,3 +110,16 @@ impl PromotionState {
         bytes
     }
 }
+
+/// Стихийный множитель Promotion в `CFightDefense::PreDefense` VA
+/// `0x005B0C80`: только `kind == 3` (Element); FILD WORD-коэффициента,
+/// FIMUL signed-урона, FMUL f32-константы `0.001`, FISTP-усечение обратно.
+pub fn promotion_element_attack(factor: u16, damage: i32) -> i32 {
+    crate::combat::truncate_original(f64::from(factor) * f64::from(damage) * f64::from(0.001_f32))
+}
+
+impl PromotionState {
+    pub fn apply_element_attack(self, damage: i32) -> i32 {
+        promotion_element_attack(self.magic_attack_factor(), damage)
+    }
+}

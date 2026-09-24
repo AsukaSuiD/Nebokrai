@@ -10,6 +10,7 @@ mod bossbluefury;
 mod callosity;
 mod cure;
 mod daubpoison;
+mod defenseshield;
 mod element;
 mod energyholding;
 mod fullmiss;
@@ -76,6 +77,7 @@ pub use callosity::{
 };
 pub use cure::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID, CureState};
 pub use daubpoison::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};
+pub use defenseshield::{DefenseShieldState, is_pre_defense_skipped_skill};
 pub use element::{
     ELEMENT_STATE_BYTES, ElementState, ORIGIN_STATE_ID, OriginState, TAIJI_STATE_ID, TaiJiState,
 };
@@ -104,7 +106,9 @@ pub use periodicattack::{
 pub use pillar::{PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState};
 pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
-pub use promotion::{PROMOTION_STATE_BYTES, PROMOTION_STATE_ID, PromotionState};
+pub use promotion::{
+    PROMOTION_STATE_BYTES, PROMOTION_STATE_ID, PromotionState, promotion_element_attack,
+};
 pub use roar::{ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState};
 pub use soulcollect::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState};
 pub use swordship::{

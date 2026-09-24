@@ -36,6 +36,7 @@ use crate::gameserver::appserver::states::attackpower::{AttackInformation, Attac
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
 pub(crate) use nebokrai_zone::combat::truncate_original;
+use nebokrai_zone::effects::{is_pre_defense_skipped_skill, promotion_element_attack};
 
 fn avoid_damage(damage: i32, avoid: u16) -> i32 {
     let passed = 100i32.wrapping_sub(i32::from(avoid));
@@ -81,17 +82,13 @@ fn apply_monster_promotion(
     kind: AttackPowerType,
     damage: i32,
 ) -> i32 {
-    if (530..=545).contains(&skill_id) && skill_id != 544 {
+    if is_pre_defense_skipped_skill(skill_id) {
         return damage;
     }
     if kind != AttackPowerType::Element {
         return damage;
     }
-    factor.map_or(damage, |factor| {
-        truncate_original(
-            f64::from(factor) * f64::from(damage) * f64::from(0.001_f32),
-        )
-    })
+    factor.map_or(damage, |factor| promotion_element_attack(factor, damage))
 }
 
 fn apply_pillar_post_defense(

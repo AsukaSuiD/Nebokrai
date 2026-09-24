@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: диспетчер PreDefense и стихийная формула Promotion 24 сентября 2026
+
+Диспетчер вариантов щитов `DefenseShieldState` (enum, выбор источника MP, правило пропуска ID) перенесён в [`zone/effects/defenseshield.rs`](../../server/rust/zone/src/effects/defenseshield.rs); стихийная формула Promotion — в [`zone/effects/promotion.rs`](../../server/rust/zone/src/effects/promotion.rs) как `promotion_element_attack`. Переходный Game сохраняет живые Begin/restart/AI/End щитов и вызовы из `fightdefense`.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) в `CFightDefense::PreDefense` подтверждены: диспетчер пропуска VA `0x005B0A50–0x005B0A72` (`jl 0x212`, `jg 0x221`, `jne 0x220` — пропуск ID `530..=545` кроме `544`) и стихийная ветвь VA `0x005B0C80–0x005B0CD3` (ID `0x142`, `kind == 3`, WORD `+0x3C`, `FIMUL` урона, `FMUL` f32-константы `0.001` из `0x64E9FC`, `FISTP`). **Исправлено расхождение**: ветвь игрока в Rust использовала `f64`-литерал `0.001` вместо загружаемой оригиналом `f32`-константы; теперь обе ветви делят `f64::from(0.001_f32)`. Дубль правила пропуска между `shieldstate` и `fightdefense` устранён общим предикатом Zone. Основания — в [бое](../gameplay/combat.md) и [описании Promotion](../gameplay/attributes-and-states.md#promotion-усиление-атаки-и-лечения).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 33,63 секунды без предупреждений; `rustfmt` новых Zone-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактический удар со щитами не проверялся.
+
 ## Zone effects: данные и запись BossBlueFury 24 сентября 2026
 
 Данные, срок слабой фазы и 12-байтная запись `CBossBlueFuryState` (`0x1F7`) перенесены в [`zone/effects/bossbluefury.rs`](../../server/rust/zone/src/effects/bossbluefury.rs). Переходный Game сохраняет живые restart/AI/End, запреты и пересчёт монстра.
