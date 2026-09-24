@@ -4,11 +4,16 @@ mod clientresource;
 mod quests;
 mod scriptfiles;
 mod scripts;
+mod timetoreturn;
 
 pub use clientresource::{
     DefaultClientResourceOwner, DefaultClientResourceReplacement, LOAD_SERVER_RESOURCE_SUCCESS_LOG,
 };
 pub use quests::{QuestCatalog, QUEST_EX_PATH, QUEST_PATH};
+pub use timetoreturn::{
+    TimeToReturn, TimeToReturnCallbacks, TimeToReturnContext, TimeToReturnFireDisposition,
+    TimeToReturnFireReport, TimeToReturnLoadError, TimeToReturnLoadReport, TimeToReturnParam,
+};
 
 pub use scriptfiles::{find_script_files, ScriptFileScan, ScriptFileScanError};
 pub use scripts::{
