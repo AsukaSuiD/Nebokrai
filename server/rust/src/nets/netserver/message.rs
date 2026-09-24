@@ -243,7 +243,7 @@ impl<'a> GameServerAroundRuntime<'a> {
     }
 }
 
-pub(crate) use nebokrai_zone::app::game_message::{CMessage, CreateMessageError, SendMessageError};
+pub(crate) use nebokrai_zone::app::game_message::{CMessage, SendMessageError};
 
 /// Способ вызова старого `nets/netserver/message.cpp` поверх общего владельца
 /// сообщения: доменные операции, RLE send-family и `Run` сохраняют тот же текст

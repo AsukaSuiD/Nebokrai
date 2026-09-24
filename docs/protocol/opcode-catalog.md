@@ -7,7 +7,7 @@
 | Точка входа | Фильтр и правило | Доказательство и предел |
 | --- | --- | --- |
 | Игровой клиент → LoginServer | `0x2FD01..=0x3FBFF` после проверки кадра; тип и socket/CD-key/IP попадают в FIFO | [Receive owner](../../server/rust/realm/src/app/login_server_client.rs), точная Login EXE/PDB. Диапазон `VERIFIED`, обработчики не для каждого числа в нём — `PARTIAL`. |
-| Игровой клиент → GameServer | `0x8F701..=0x9F5FF` после проверки кадра; тип и socket/map/IP попадают в FIFO | [Receive owner](../../server/rust/src/nets/netserver/myserverclient.rs), Game `OnReceive` RVA `0x0001C7F0`. Диапазон `VERIFIED`, полное покрытие содержимого `PARTIAL`. |
+| Игровой клиент → GameServer | `0x8F701..=0x9F5FF` после проверки кадра; тип и socket/map/IP попадают в FIFO | [Receive owner](../../server/rust/zone/src/app/game_server_client.rs), Game `OnReceive` RVA `0x0001C7F0`. Диапазон `VERIFIED`, полное покрытие содержимого `PARTIAL`. |
 | Внутри LoginServer | `Run` сначала проверяет диапазон Auth `0xCF301..0xDF1FE`, затем семейство `MsgType & 0xFFFFFF00`: GM `0x20000`, GMA `0x20100`, Log `0x1FF00/0x2FD00/0x10000`, Server `0xFF00/0x1FE00` | [Login message](../../server/rust/realm/src/app/login_message.rs), точная Login EXE/PDB. Неизвестный тип — no-op с возвратом `1`; это не доказательство успеха доменной операции. |
 | Внутри GameServer | `Run` разрешает игрока по числовому map ID, его регион, затем выбирает обработчик по `MsgType & 0xFFFFFF00`; некоторые семейства требуют оба объекта | [Game message](../../server/rust/src/nets/netserver/message.rs), RVA `0x000149D0`. Семейства перечислены в owner-е; их маршрутизация `VERIFIED`, полнота вложенных handlers `PARTIAL`. |
 
@@ -51,7 +51,7 @@
 | `0xBF401` | Game → клиент | Полный начальный snapshot либо короткий отказ `long(0)`. Точный внешний порядок и доказанный однобайтовый `country_identity` приведены в [спецификации сообщения](game-login.md). Общий layout `PARTIAL`. |
 | `0xEF201` | Game → Billing | Запрос баланса: C-строка account, затем `long player_id`. Game ставит его после вызова отправки начального snapshot, **без проверки её результата**. Приём — `BillingMessageHandler::on_account_request`; ответ — `0xFF001`, см. таблицу ниже. |
 | `0x7F903`, `0x7F904`, `0x7F905` | World → Game | Исключение игрока и изменение присутствия друзей; [Game dispatcher](../../server/rust/src/gameserver/appserver/message/logmessage.rs) для friend notices переписывает тип на клиентские `0xBF404`/`0xBF405` и отправляет адресно. `VERIFIED` для достигнутых преобразований. |
-| `0x6FA01` | локально внутри Game | Событие потери клиентского соединения с map ID и пустой C-строкой, создаётся компонентным `OnClose`; **не считать сетевым пакетом** без отдельного доказательства. [Game receive](../../server/rust/src/nets/netserver/myserverclient.rs). |
+| `0x6FA01` | локально внутри Game | Событие потери клиентского соединения с map ID и пустой C-строкой, создаётся компонентным `OnClose`; **не считать сетевым пакетом** без отдельного доказательства. [Game receive](../../server/rust/zone/src/app/game_server_client.rs). |
 
 Клиентское `0x8F701` — нижняя граница допустимого диапазона, **не доказанный здесь смысл сообщения**. Семейство `0xBFxxx` — не гарантия одинакового payload; например `0xBF401` имеет две формы. Список типов выше не следует использовать как повод генерировать ответ для неописанного opcode.
 

@@ -62,12 +62,6 @@ pub(crate) mod mysocket;
 
 #[allow(
     dead_code,
-    reason = "accepted-client owner подключён до восстановления servers и component messages"
-)]
-pub(crate) mod serverclient;
-
-#[allow(
-    dead_code,
     reason = "общий server-owner подключён до component callbacks и message parsers"
 )]
 pub(crate) mod servers;

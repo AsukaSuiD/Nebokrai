@@ -1,38 +1,53 @@
-//! Принятое игровое client-соединение GameServer из
-//! `nets/netserver/myserverclient.cpp`.
+//! Принятое игровое client-соединение GameServer из `nets/netserver/myserverclient.cpp`,
+//! перенесённое в Zone app — состояние принятого игрового клиента
+//! game-направления. Источник контракта — та же точная пара, что у
+//! [`crate::app::game_message`].
+//!
+//! Машинно подтверждённые точки (первая секция `.exe/gameserver.exe`,
+//! дизассемблер этого прохода):
+//! - ctor `CMyServerClient` `0x41C5C0`: base `0x41B850`, vtable `0x64D6EC`,
+//!   receive capacity ровно `0x5000` (`push 0x5000` + `[+0x64] = 0x5000`),
+//!   два компаньона `0xC800` в `+0x70/+0x74` (исходный send accumulator) и
+//!   объект `0x2C` сообщения во всех synthetic вызовах;
+//! - `OnReceive` `0x41C7F0`: gate owner `+0xA8`, цикл, пока накоплено `>= 0xC`;
+//!   флаг `[owner+0x10C]`: предел полной длины (`declared > [owner+0x118]`) и
+//!   CRC длины через общий `DataCrc32 0x47B0A0`, `declared > size` — останов
+//!   без потери хвоста; флаг `[owner+0x10D]`: CRC по сжатым байтам
+//!   `[+0xC, declared-0xC]`; create только RLE `0x413700`; opcode допустим в
+//!   `(0x8F700, 0x9F600)` exclusive — точное `0x8F701..=0x9F5FF`; контекст
+//!   `[+0x34]→[+0x24]` socket, `[+0x88]→[+0x20]` map, `[+0x2C]→[+0x28]` IPv4
+//!   (CD-key у Game-получателя не присваивается); publish через push helper
+//!   `0x4126D0`; consume `sub size, declared`; shrink к `0x100000` при
+//!   возврате под лимит; reject очищает accumulator без отката опубликованного;
+//! - доказаны ровно четыре пути с `AddForbidIP 0x417960` + `QUIT 0x415080`:
+//!   предел длины (с virtual `OnTotalMessageSizeOver [+0x40]`, `0x41C9E3`),
+//!   length CRC (`0x41CA19`), content CRC (`0x41CA49`), opcode вне диапазона
+//!   (`0x41CA93` c deleting dtor `[edx]` с `push 1`); create-null — без ban
+//!   (`0x41CABE`: очистка size и sprintf-log без forbid);
+//! - `OnClose` `0x41C670`: при нулевом map identity — ни публикации, ни
+//!   общего close (`je` сразу в эпилог); при ненулевом — `new(0x2C)`
+//!   `CMessage(0x6FA01)` через ctor `0x4136D0`, `Add` map identity, `Add` общего
+//!   writer-ом empty cstring `0x64BB41`, publish через `0x4126D0` и общий close
+//!   `0x41AD10(0)` — точное совпадение прежнего `bool`-ветвления.
 //!
 //! Статус owner-а: `IMPLEMENTED` для constructor/destructor ownership,
 //! `OnClose`, обе limit diagnostics и корректного/неполного `OnReceive`;
 //! malformed length/RLE границы остаются локальными `BLOCKED_MISSING_FACT`.
-//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`;
-//! существенные RVA: constructor `0x0001C5C0`, destructor `0x0001C640`,
-//! `OnClose` `0x0001C670`, diagnostics `0x0001C710/0x0001C770`, `OnReceive`
-//! `0x0001C7F0`.
 //!
-//! Derived constructor задавал receive capacity `0x5000` и send capacity
-//! `0xC800`. Общий `CServerClient` владеет обоими accumulators; `Vec` заменяет
-//! ручные allocation/realloc/memmove, сохраняя frames и неполный TCP-хвост.
-//! Client envelope имеет форму `[total_len, optional crc(total_len), optional
+//! Общий `CServerClient` владеет обоими accumulators; `Vec` заменяет ручные
+//! allocation/realloc/memmove, сохраняя frames и неполный TCP-хвост. Client
+//! envelope имеет форму `[total_len, optional crc(total_len), optional
 //! crc(rle), rle(message)]`; обе проверки независимо включаются setup-ом, а
-//! предел одного frame проверяется только вместе с length CRC. Допустим полный
-//! unsigned opcode range `0x8F701..=0x9F5FF`; готовое сообщение получает
-//! socket/map/IP и публикуется в netserver FIFO.
-//!
-//! Превышение длины, обе ошибки CRC и opcode вне диапазона требуют исходных
-//! diagnostic -> forbid IP -> quit; owner классифицирует эту реакцию, а общий
-//! `CServer` применяет её после callback. Null create очищает accumulator без
-//! ban. `OnClose` только при ненулевом map ID публикует `0x6FA01 + map ID +
-//! empty C-string` и вызывает base close; нулевой ID остаётся no-op.
+//! предел одного frame проверяется только вместе с length CRC. Готовое
+//! сообщение получает socket/map/IP и публикуется в netserver FIFO.
 //!
 //! Старые внутренности STL, deleting thunk, SEH и allocator unwind не имеют
 //! самостоятельной семантики поверх материализованного владения Rust и удалены.
 
-use crate::nets::basemessage::RleDecodeError;
-use crate::nets::msgqueue::CMsgQueue;
-use crate::nets::serverclient::CServerClient;
-use crate::public::crc32static::data_crc32;
+use nebokrai_shared::network::{CMsgQueue, CServerClient, RleDecodeError};
+use nebokrai_shared::protocol::data_crc32;
 
-use super::message::{CMessage, CreateMessageError};
+use super::game_message::{CMessage, CreateMessageError};
 
 const CLIENT_INITIAL_RECEIVE_CAPACITY: usize = 0x5000;
 const CLIENT_ENVELOPE_LEN: usize = 12;
@@ -41,14 +56,14 @@ const CLIENT_MESSAGE_MAX: u32 = 0x0009_F5FF;
 const CLIENT_DISCONNECTED: i32 = 0x0006_FA01;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ClientReceiveSettings {
+pub struct ClientReceiveSettings {
     check_length_crc: bool,
     check_content_crc: bool,
     maximum_message_length: u32,
 }
 
 impl ClientReceiveSettings {
-    pub(crate) const fn new(
+    pub const fn new(
         check_length_crc: bool,
         check_content_crc: bool,
         maximum_message_length: u32,
@@ -62,7 +77,7 @@ impl ClientReceiveSettings {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum ClientReceiveError {
+pub enum ClientReceiveError {
     MessageLengthExceeded { declared: u32, permitted: u32 },
     LengthChecksumMismatch { expected: u32, actual: u32 },
     ContentChecksumMismatch { expected: u32, actual: u32 },
@@ -73,7 +88,7 @@ pub(crate) enum ClientReceiveError {
 }
 
 impl ClientReceiveError {
-    pub(crate) const fn requires_forbid_and_quit(&self) -> bool {
+    pub const fn requires_forbid_and_quit(&self) -> bool {
         matches!(
             self,
             Self::MessageLengthExceeded { .. }
@@ -85,23 +100,23 @@ impl ClientReceiveError {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ClientReceiveOutcome {
+pub struct ClientReceiveOutcome {
     messages: i32,
     pending_bytes: usize,
 }
 
 impl ClientReceiveOutcome {
-    pub(crate) const fn messages(&self) -> i32 {
+    pub const fn messages(&self) -> i32 {
         self.messages
     }
 
-    pub(crate) const fn pending_bytes(&self) -> usize {
+    pub const fn pending_bytes(&self) -> usize {
         self.pending_bytes
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum ClientNetworkNotice {
+pub enum ClientNetworkNotice {
     OneMessageSizeExceeded {
         player_id: i32,
         peer_ipv4: u32,
@@ -116,9 +131,9 @@ pub(crate) enum ClientNetworkNotice {
     },
 }
 
-pub(crate) struct CMyServerClient;
+pub struct CMyServerClient;
 
-pub(crate) trait ClientMessageSink {
+pub trait ClientMessageSink {
     fn publish_message(&self, message: CMessage);
 }
 
@@ -129,7 +144,7 @@ impl ClientMessageSink for CMsgQueue<CMessage> {
 }
 
 impl CMyServerClient {
-    pub(crate) fn new_state(socket_id: i32, peer_ipv4: u32, now_ms: u32) -> CServerClient {
+    pub fn new_state(socket_id: i32, peer_ipv4: u32, now_ms: u32) -> CServerClient {
         CServerClient::with_receive_capacity(
             socket_id,
             peer_ipv4,
@@ -139,7 +154,7 @@ impl CMyServerClient {
     }
 
     /// Публикует synthetic disconnect только после назначения player/map ID.
-    pub(crate) fn on_close(client: &mut CServerClient, messages: &dyn ClientMessageSink) -> bool {
+    pub fn on_close(client: &mut CServerClient, messages: &dyn ClientMessageSink) -> bool {
         let map_id = client.message_context().map_id;
         if map_id == 0 {
             return false;
@@ -152,7 +167,7 @@ impl CMyServerClient {
         true
     }
 
-    pub(crate) fn on_receive(
+    pub fn on_receive(
         client: &mut CServerClient,
         settings: ClientReceiveSettings,
         messages: &dyn ClientMessageSink,
