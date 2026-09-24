@@ -522,7 +522,7 @@ use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use nebokrai_shared::resources::HitLevelEntry;
 use nebokrai_shared::resources::CQuestSystem;
-use nebokrai_zone::quests::PlayerQuestProgress;
+use nebokrai_zone::quests::{PlayerQuestAvailability, PlayerQuestProgress};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bitflags::bitflags;
@@ -1208,9 +1208,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
     pub(crate) display_head_piece: bool,
-    pub(crate) quest_time_begin: i32,
-    pub(crate) quest_time_limit: i32,
-    pub(crate) quest_enabled: bool,
+    pub(crate) quest_availability: PlayerQuestAvailability,
     pub(crate) fy_enable_flags: LeiTingEnableFlags,
     pub(crate) fy_energy: u32,
     pub(crate) lt_60_stamp: u32,
@@ -3170,7 +3168,7 @@ impl CPlayer {
             ),
             (
                 BASE_QUEST_ENABLED_OFFSET,
-                self.base_properties.quest_enabled,
+                self.base_properties.quest_availability.enabled(),
             ),
         ] {
             wire[offset] = u8::from(value);
@@ -3204,11 +3202,11 @@ impl CPlayer {
             (BASE_EXALT_OFFSET, self.base_properties.exalt),
             (
                 BASE_QUEST_TIME_BEGIN_OFFSET,
-                self.base_properties.quest_time_begin as u32,
+                self.base_properties.quest_availability.time_begin() as u32,
             ),
             (
                 BASE_QUEST_TIME_LIMIT_OFFSET,
-                self.base_properties.quest_time_limit as u32,
+                self.base_properties.quest_availability.time_limit() as u32,
             ),
             (BASE_EXPLOIT_OFFSET, self.base_properties.exploit),
             (BASE_BREAK_ARMOUR_OFFSET, self.base_properties.break_armour),
@@ -3355,11 +3353,11 @@ impl CPlayer {
         self.base_properties.credit = read_player_wire_u32(wire, BASE_CREDIT_OFFSET);
         self.base_properties.exalt = read_player_wire_u32(wire, BASE_EXALT_OFFSET);
         self.base_properties.display_head_piece = wire[BASE_DISPLAY_HEAD_PIECE_OFFSET] != 0;
-        self.base_properties.quest_time_begin =
-            read_player_wire_u32(wire, BASE_QUEST_TIME_BEGIN_OFFSET) as i32;
-        self.base_properties.quest_time_limit =
-            read_player_wire_u32(wire, BASE_QUEST_TIME_LIMIT_OFFSET) as i32;
-        self.base_properties.quest_enabled = wire[BASE_QUEST_ENABLED_OFFSET] != 0;
+        self.base_properties.quest_availability = PlayerQuestAvailability::from_snapshot(
+            read_player_wire_u32(wire, BASE_QUEST_TIME_BEGIN_OFFSET) as i32,
+            read_player_wire_u32(wire, BASE_QUEST_TIME_LIMIT_OFFSET) as i32,
+            wire[BASE_QUEST_ENABLED_OFFSET] != 0,
+        );
         self.base_properties.exploit = read_player_wire_u32(wire, BASE_EXPLOIT_OFFSET);
         self.base_properties.fairy_container_enabled =
             wire[BASE_FAIRY_CONTAINER_ENABLED_OFFSET] != 0;
@@ -4359,34 +4357,23 @@ impl CPlayer {
     }
 
     pub(crate) const fn quest_enabled(&self) -> bool {
-        self.base_properties.quest_enabled
+        self.base_properties.quest_availability.enabled()
     }
 
     pub(crate) const fn set_quest_enabled(&mut self, enabled: bool) {
-        self.base_properties.quest_enabled = enabled;
+        self.base_properties.quest_availability.set_enabled(enabled);
     }
 
     pub(crate) const fn begin_quest_time(&mut self, now_seconds: i32, time_limit: i32) {
-        self.base_properties.quest_time_begin = now_seconds;
-        self.base_properties.quest_time_limit = time_limit;
+        self.base_properties.quest_availability.begin(now_seconds, time_limit);
     }
 
     pub(crate) const fn clear_quest_time(&mut self) {
-        self.base_properties.quest_time_begin = 0;
-        self.base_properties.quest_time_limit = 0;
+        self.base_properties.quest_availability.clear_time();
     }
 
     pub(crate) const fn quest_time_remaining(&self, now_seconds: i32) -> i32 {
-        if self.base_properties.quest_time_begin == 0 || self.base_properties.quest_time_limit == 0
-        {
-            return 0;
-        }
-        let remaining = self
-            .base_properties
-            .quest_time_begin
-            .wrapping_add(self.base_properties.quest_time_limit)
-            .wrapping_sub(now_seconds);
-        if remaining < 0 { 0 } else { remaining }
+        self.base_properties.quest_availability.remaining(now_seconds)
     }
 
     pub(crate) const fn acknowledge_heartbeat(&mut self) {

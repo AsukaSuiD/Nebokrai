@@ -75,9 +75,11 @@ World `dispatch_player_quest_command/dispatch_player_run_script` находят 
 
 ## Время задания
 
-У персонажа одна пара `quest_time_begin/quest_time_limit`, не таймер на каждый quest ID. `begin_quest_time` записывает начало и лимит в секундах, `clear_quest_time` обнуляет оба. `CPlayer::quest_time_remaining` вычисляет `max(0, begin.wrapping_add(limit).wrapping_sub(now))`; при нулевом begin или limit сразу возвращает `0`.
+У персонажа одна пара времени и один флаг доступности, не таймер на каждый quest ID. Ими владеет [Zone `PlayerQuestAvailability`](../../server/rust/zone/src/quests/availability.rs), вложенный в базовые свойства живого игрока Game. `begin` записывает начало и лимит в секундах, `clear_time` обнуляет оба. `remaining` сейчас вычисляет `max(0, begin.wrapping_add(limit).wrapping_sub(now))`; при нулевом begin или limit сразу возвращает `0`. Для этой формулы исходные ветви ещё не установлены прямым основанием, статус `PARTIAL`.
 
 Сценарные `QuestTimeBegin` (`3502`) и `GetQuestTime` (`3507`) берут Unix timestamp через `chrono::Local`, приводя к `i32`; `QuestTimeClear` (`3503`) очищает пару. Game отправляет лимит в `0xBF729`, очистку — в `0xBF72A`. Клиентский `0x8FA12` в [playermessage.rs](../../server/rust/src/gameserver/appserver/message/playermessage.rs) получает остаток в `0xBF72B`. Доступность заданий меняется отдельно через `3501` и `0xBF728`, читается через `3500`.
+
+`VERIFIED` для трёх локальных мутаций по той же Game EXE/PDB: `CPlayer::QuestTimeBegin` VA `0x0042DA20–0x0042DAAF` получает время и записывает поля `+0x2E4/+0x2E8` перед созданием `0xBF729`; `QuestTimeClear` VA `0x0042DAC0–0x0042DB32` обнуляет их до `0xBF72A`; `SetQuestOn` VA `0x0042DB40–0x0042DBB4` пишет байт `+0x2EC` до `0xBF728`. Zone меняет данные, а переходный Game отправляет сообщения после мутации. Смещения GameSave `0x108/0x10C/0x110` при переносе не менялись. Вызовы `GetQuestTime` и клиентского запроса остатка этой проверкой не подтверждены.
 
 Эти методы не планируют автоматический отказ или награду по истечении срока. Периодический обработчик, который завершал бы задание по этой паре, в текущем пути не подключён; реакция требует отдельного вызывающего. `wait/RunTime` не являются заменой: они хранят миллисекундное ожидание экземпляра сценария. Пара времени задания и флаг доступности входят в базовые свойства GameSave; World сохраняет их в `CSL_PLAYER_ABILITY.QuestTimeBegin`, `QuestTimeLimit`, `Quest` через scalar-проекцию [rsplayer](../../server/rust/src/dbaccess/worlddb/rsplayer.rs).
 
