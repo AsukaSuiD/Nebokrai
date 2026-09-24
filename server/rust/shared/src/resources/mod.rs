@@ -5,6 +5,7 @@ mod cbattlefairyexpconfig;
 mod changebody;
 mod ciqing;
 mod contributesetup;
+mod dakongxiangqian;
 mod dupliregionsetup;
 mod emotion;
 mod equipmentcomposelist;
@@ -56,6 +57,10 @@ pub use ciqing::{
 pub use contributesetup::{
     CContributeSetup, ContributeItem, ContributeSetupDecodeError,
     ContributeSetupFileLoadError, ContributeSetupFormatError, ContributeSetupSerializeError,
+};
+pub use dakongxiangqian::{
+    CDaKongXiangQian, DaKongDecodeError, DaKongDeluxModify, DaKongExternalAttribute,
+    DaKongInfo, DaKongLoadError, DaKongLoadReport, DaKongSerializeError,
 };
 pub use dupliregionsetup::{
     CDupliRegionSetup, DupliRegionDecodeError, DupliRegionEntry, DupliRegionSerializeError,
