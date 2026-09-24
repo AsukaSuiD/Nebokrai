@@ -1,5 +1,12 @@
 # Аудит готовности серверной реконструкции
 
+## Shared runtime: технические helpers 25 сентября 2026
+
+Общие технические helpers (`ini_decode`, `put_string_to_file`, `put_debug_string`, `add_game_log_text/add_game_error_log_text`, `get_line_direction`) перенесены из `src/public/tools.rs` в [`shared/runtime/tools.rs`](../../server/rust/shared/src/runtime/tools.rs). Контракт login/World/Game/Billing и metadata UNKNOWN-варианты остальных серверов сохранены заголовком модуля; прежний файл стал тонким реэкспортом для всех 85 потребителей старого пакета, `chrono` уже был зависимостью Shared.
+
+Перенос подтверждён прямыми машинными ссылками к цитируемым RVA: `IniDecoder` мира (RVA `0x453C50`) — цикл `mov dl,[ecx+eax]; sub dl,0xC; not dl; mov [eax],dl`, то есть `~(byte − 0x0C)` с wrapping в 8 бит, in-place в output-buffer — точное совпадение с Rust map без добавления NUL-терминатора. `GetLineDir` GameServer (RVA `0x1D080`) подтверждён вплоть до представлений чисел: wrap-разности Windows `long`, `fild [esp+0xC]; fstp dword [esp+0xC]` — X округляется до float записью dword float, тогда как Y остаётся точным целым в x87-пути деления; наклон вычисляется через `fdivr st(1)/fabs`, а пороги — `fptan` на двух QWORD-литералах (нижний по адресу `0x64d8d0`, верхний по `0x64d8c8`) — как заявлено, и `f64::tan` заменяет исходный `fptan`, не меняя восьми направлений и нуля для совпавших точек. Остальные цитируемые RVA (Billing `PutStringToFile 0x0000FC60`, Login `IniDecoder 0x00020A90`, World/Game logging-ветви, `GetCurTickCount` и пр.) в этом проходе не открывались и остаются на прежнем основании из заголовка.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 37,18 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
 ## Shared protocol: CRC-32 helpers 25 сентября 2026
 
 CRC-32 helpers `data_crc32` и `file_crc32` перенесены из `src/public/crc32static.rs` в [`shared/src/protocol/crc32.rs`](../../server/rust/shared/src/protocol/crc32.rs); `crc32fast` добавлен зависимостью Shared с тем же constraint, что в основном пакете (`1.5.0`), lockfile отличается на одну запись. Все семь направлений (netserver/networld/netlogin/netauth/netbilling/netmisc и applogin/gasthread) продолжают пользоваться тонким реэкспортом прежнего файла; без состояния и собственного экземпляра.
