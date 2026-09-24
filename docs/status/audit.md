@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm app: конфигурация MiscServer 25 сентября 2026
+
+Конфигурация MiscServer `CSetup` (`LoadIpPort` читает из `setup.ini` четыре позиционные пары World IP/порт и local bind/listen IP/port; поздний stream fail оставляет прочитанный prefix и общий успех, ошибка открытия не меняет прежнее состояние; неинициализированные поля как `None`) перенесена из `src/miscserver/miscserver/setup/setup.rs` в [`realm/src/app/setup.rs`](../../server/rust/realm/src/app/setup.rs) — принятую app-обязанность конфигурации роли. Зависимости только std и `thiserror`, уже присутствующие в Realm; потребитель miscserver `game` работает через glob-шим без правок.
+
+Машинное основание на точной паре `miscserver.exe` + `MiscServer.pdb` (`F4426942`, RSDS match) в этом проходе для `LoadIpPort` `0x4105D0`: SEH-раскладка, инициализация SSO-строки (capacity `0xF`) и переход в open path чтения `setup.ini` — структурно подтверждает владельца загрузки. Утверждения prefix на позднем fail и byte-exact строк с игнорируемыми именами слева сохраняют прежний статус заголовка и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm access: DB queue-формы и IPv4-фильтр 25 сентября 2026
 
 В [`realm/src/access/`](../../server/rust/realm/src/access/) перенесены два самодостаточных владельца Auth-допуска: типизированные DB-формы [`dbqueue.rs`](../../server/rust/realm/src/access/dbqueue.rs) (`AuthQuestData/AuthResultData/AuthExResultData` как enum вместо integer tag и `void *`, `LockUntil` без обнулённых `wDayOfWeek/wMilliseconds`, `ServerInfoQueue` с обновлением `player_count` существующего ключа на прежней позиции, добавлением нового в хвост и полным снятием по FIFO) и [`kl_ipfilter.rs`](../../server/rust/realm/src/access/kl_ipfilter.rs) (IPv4-фильтр с wildcard-нулевым октетом, allow-list по найденному совпадению, deny-list по его отсутствию, whitespace-токены и atoi-подобный prefix с i32-насыщением). Швы не потребовались; потребители (`authdb/authproc`, `cgame`, `configreader`, `message_func`, login- и world-side `game`/`servermessage`) работают через glob-шимы без правок. Исполнение SQL в `authproc` остаётся своим следующим шагом — это отдельный владелец цепочки.
