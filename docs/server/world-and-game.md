@@ -23,7 +23,7 @@ World ведёт мировые данные и сохранение; Game ис�
 
 ## Путь данных в World
 
-World получает сообщения Game через `nets/networld`. Мировой диспетчер обрабатывает серверную очередь, затем очередь соединения с Login.
+World получает сообщения Game через направление `networld`: владельцы края перенесены в Realm app ([server](../../server/rust/realm/src/app/world_server.rs), [принятый Game-клиент](../../server/rust/realm/src/app/world_server_client.rs), [исходящий к Login](../../server/rust/realm/src/app/world_client.rs)), в `nets/networld` остались переходные реэкспорты. Мировой диспетчер обрабатывает серверную очередь, затем очередь соединения с Login.
 
 Загрузка персонажа проходит через мирового [CPlayer](../../server/rust/src/worldserver/appworld/player.rs), worker загрузки и [rsplayer](../../server/rust/src/dbaccess/worlddb/rsplayer.rs). При сохранении World формирует снимки, передаёт их очередям и выполняет [SQL-фазы](../architecture/database.md). Живое состояние Game и DB-снимок имеют разный жизненный цикл.
 
