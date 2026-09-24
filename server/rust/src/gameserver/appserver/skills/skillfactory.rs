@@ -71,13 +71,10 @@
 //! свойств уже исполняются в Rust.
 
 use std::collections::BTreeMap;
-use thiserror::Error;
 
-use super::skillbaseproperties::{CSkillBaseProperties, UNKNOWN_SKILL_TYPE};
-use nebokrai_shared::protocol::LegacyReader;
+pub(crate) use nebokrai_zone::content::CSkillBaseProperties;
 
 pub(crate) use nebokrai_zone::combat::UNKNOWN_SKILL_ID;
-const MAX_SKILL_NAME_LENGTH: usize = 255;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -467,49 +464,24 @@ skill_owners! {
     CNonFun62: Attack, COMMON, Weapon => 0x3c2,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub(crate) enum SkillFactoryDecodeError {
-    #[error("skill snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
-    UnexpectedEnd {
-        field: &'static str,
-        offset: usize,
-        required: usize,
-        available: usize,
-    },
-    #[error("skill snapshot содержит отрицательное число slots {count}")]
-    NegativeSlotCount {
-        count: i32,
-    },
-    #[error("skill slot {slot} содержит имя длиной {length} при максимуме {MAX_SKILL_NAME_LENGTH}")]
-    NameTooLong {
-        slot: usize,
-        length: usize,
-    },
-    #[error("skill slot {slot} содержит {length} байт, требуется {required}")]
-    RecordTooShort {
-        slot: usize,
-        length: usize,
-        required: usize,
-    },
-    #[error("skill slot {slot} содержит непредставимое число usage-записей {count}")]
-    UsageTableTooLarge {
-        slot: usize,
-        count: u32,
-    },
-}
+pub(crate) use nebokrai_zone::content::SkillPropertiesDecodeError as SkillFactoryDecodeError;
 
+
+pub(crate) use nebokrai_zone::content::SkillPropertiesCatalog as SkillPropertiesCatalogInternal;
+
+/// Переходная обёртка прежнего имени: добирает остальные API поверх Zone.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSkillFactory {
-    properties: BTreeMap<u32, CSkillBaseProperties>,
+    catalog: SkillPropertiesCatalogInternal,
 }
 
 impl CSkillFactory {
     pub(crate) const fn properties(&self) -> &BTreeMap<u32, CSkillBaseProperties> {
-        &self.properties
+        self.catalog.properties()
     }
 
     pub(crate) fn clear_skill_cache(&mut self) {
-        self.properties.clear();
+        self.catalog.clear();
     }
 
     pub(crate) fn rebuild(
@@ -517,31 +489,7 @@ impl CSkillFactory {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<(), SkillFactoryDecodeError> {
-        self.clear_skill_cache();
-        let count = read_i32(source, cursor, "slot count")?;
-        if count < 0 {
-            return Err(SkillFactoryDecodeError::NegativeSlotCount { count });
-        }
-
-        let declared_slots = count as usize;
-        let mut empty_slots = 0;
-        let mut skipped_records = 0;
-        for slot in 0..declared_slots {
-            let length = read_u32(source, cursor, "record length")? as usize;
-            if length == 0 {
-                empty_slots += 1;
-                continue;
-            }
-            let record = take_bytes(source, cursor, length, "skill record")?;
-            let Some((key, properties)) = decode_record(record, slot)? else {
-                skipped_records += 1;
-                continue;
-            };
-            self.properties.insert(key, properties);
-        }
-
-        tracing::trace!(declared_slots, published_records = self.properties.len(), empty_slots, skipped_records, "реестр навыков декодирован");
-        Ok(())
+        self.catalog.rebuild(source, cursor)
     }
 
     pub(crate) fn query_skill_base_properties(
@@ -549,13 +497,11 @@ impl CSkillFactory {
         skill_id: u32,
         level: i32,
     ) -> Option<&CSkillBaseProperties> {
-        self.properties.get(&skill_key(skill_id, level as u32))
+        self.catalog.query_skill_base_properties(skill_id, level)
     }
 
     pub(crate) fn query_skill_type(&self, skill_id: u32, level: i32) -> u32 {
-        self.query_skill_base_properties(skill_id, level)
-            .map(CSkillBaseProperties::skill_type)
-            .unwrap_or(UNKNOWN_SKILL_TYPE)
+        self.catalog.query_skill_type(skill_id, level)
     }
 
     /// Точная null/non-null граница `CSkillFactory::QuerySkill`. Уровень
@@ -565,19 +511,11 @@ impl CSkillFactory {
     }
 
     pub(crate) fn query_skill_id(&self, name: Option<&[u8]>) -> u32 {
-        let Some(name) = name.map(visible_c_string) else {
-            return UNKNOWN_SKILL_ID;
-        };
-        self.properties
-            .iter()
-            .find_map(|(&key, properties)| (properties.skill_name() == name).then_some(key >> 16))
-            .unwrap_or(UNKNOWN_SKILL_ID)
+        self.catalog.query_skill_id(name).unwrap_or(UNKNOWN_SKILL_ID)
     }
 
     pub(crate) fn query_skill_name(&self, skill_id: i32) -> Option<&[u8]> {
-        self.properties.iter().find_map(|(&key, properties)| {
-            ((key >> 16) == skill_id as u32).then_some(properties.skill_name())
-        })
+        self.catalog.query_skill_name(skill_id)
     }
 
     pub(crate) const fn get_skill_failed_message_color() -> u32 {
@@ -593,164 +531,9 @@ impl CSkillFactory {
     }
 }
 
-fn decode_record(
-    record: &[u8],
-    slot: usize,
-) -> Result<Option<(u32, CSkillBaseProperties)>, SkillFactoryDecodeError> {
-    const FIXED_PREFIX: usize = 20;
-    if record.len() < FIXED_PREFIX {
-        return Err(SkillFactoryDecodeError::RecordTooShort {
-            slot,
-            length: record.len(),
-            required: FIXED_PREFIX,
-        });
-    }
-
-    let mut reader = LegacyReader::new(record);
-    let skill_type = reader.read_u32().expect("проверен префикс записи");
-    let skill_id = reader.read_u32().expect("проверен префикс записи");
-    let level = reader.read_u32().expect("проверен префикс записи");
-    let is_target_self = reader.read_i32().expect("проверен префикс записи");
-    let name_length = reader.read_u32().expect("проверен префикс записи") as usize;
-    if name_length > MAX_SKILL_NAME_LENGTH {
-        return Err(SkillFactoryDecodeError::NameTooLong {
-            slot,
-            length: name_length,
-        });
-    }
-    let usage_count_offset =
-        FIXED_PREFIX
-            .checked_add(name_length)
-            .ok_or(SkillFactoryDecodeError::RecordTooShort {
-                slot,
-                length: record.len(),
-                required: usize::MAX,
-            })?;
-    let usage_data_offset =
-        usage_count_offset
-            .checked_add(4)
-            .ok_or(SkillFactoryDecodeError::RecordTooShort {
-                slot,
-                length: record.len(),
-                required: usize::MAX,
-            })?;
-    if record.len() < usage_data_offset {
-        return Err(SkillFactoryDecodeError::RecordTooShort {
-            slot,
-            length: record.len(),
-            required: usage_data_offset,
-        });
-    }
-
-    let name = visible_c_string(
-        reader
-            .read_bytes(name_length)
-            .expect("проверена длина имени"),
-    )
-    .to_vec();
-    let usage_count = reader.read_u32().expect("проверено число usage-записей");
-    if usage_count != 0 && usage_data_offset >= record.len() {
-        return Ok(None);
-    }
-    let usage_bytes = usize::try_from(usage_count)
-        .ok()
-        .and_then(|count| count.checked_mul(8))
-        .ok_or(SkillFactoryDecodeError::UsageTableTooLarge {
-            slot,
-            count: usage_count,
-        })?;
-    let required = usage_data_offset.checked_add(usage_bytes).ok_or(
-        SkillFactoryDecodeError::UsageTableTooLarge {
-            slot,
-            count: usage_count,
-        },
-    )?;
-    if record.len() < required {
-        return Err(SkillFactoryDecodeError::RecordTooShort {
-            slot,
-            length: record.len(),
-            required,
-        });
-    }
-
-    let mut properties = CSkillBaseProperties::new(skill_type, is_target_self, name);
-    for _ in 0..usage_count {
-        let usage = reader.read_u32().expect("проверена usage-пара");
-        let value = reader.read_u32().expect("проверена usage-пара");
-        properties.set_property(usage, value);
-    }
-    Ok(Some((skill_key(skill_id, level), properties)))
-}
-
-const fn skill_key(skill_id: u32, level: u32) -> u32 {
-    skill_id.wrapping_shl(16) | (level & 0xffff)
-}
-
 fn visible_c_string(bytes: &[u8]) -> &[u8] {
     bytes
         .iter()
         .position(|byte| *byte == 0)
         .map_or(bytes, |end| &bytes[..end])
-}
-
-fn read_i32(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<i32, SkillFactoryDecodeError> {
-    let mut reader = skill_reader(source, *cursor, field, 4)?;
-    let value = reader.read_i32().map_err(|block| skill_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
-fn read_u32(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<u32, SkillFactoryDecodeError> {
-    let mut reader = skill_reader(source, *cursor, field, 4)?;
-    let value = reader.read_u32().map_err(|block| skill_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(value)
-}
-
-fn take_bytes<'a>(
-    source: &'a [u8],
-    cursor: &mut usize,
-    required: usize,
-    field: &'static str,
-) -> Result<&'a [u8], SkillFactoryDecodeError> {
-    let mut reader = skill_reader(source, *cursor, field, required)?;
-    let bytes = reader
-        .read_bytes(required)
-        .map_err(|block| skill_read_error(field, block))?;
-    *cursor = reader.position();
-    Ok(bytes)
-}
-
-fn skill_reader<'source>(
-    source: &'source [u8],
-    cursor: usize,
-    field: &'static str,
-    required: usize,
-) -> Result<LegacyReader<'source>, SkillFactoryDecodeError> {
-    LegacyReader::at(source, cursor).map_err(|block| SkillFactoryDecodeError::UnexpectedEnd {
-        field,
-        offset: block.offset,
-        required,
-        available: block.available,
-    })
-}
-
-fn skill_read_error(
-    field: &'static str,
-    block: nebokrai_shared::protocol::LegacyReadBlock,
-) -> SkillFactoryDecodeError {
-    SkillFactoryDecodeError::UnexpectedEnd {
-        field,
-        offset: block.offset,
-        required: block.needed,
-        available: block.available,
-    }
 }

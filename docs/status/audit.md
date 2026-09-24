@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone content: полученный кэш runtime-свойств навыков 25 сентября 2026
+
+Изменяемый кэш свойств навыков — `CSkillBaseProperties`, composite key `id << 16 | level & 0xffff`, двоичный кодекс `rebuild` и реестр — перенесён в [`zone/content/skills.rs`](../../server/rust/zone/src/content/skills.rs). Переходный Game делегирует каталог через тонкую обёртку `CSkillFactory`; статический реестр владельцев `SkillOwner` и их политик остаётся в Game как диспетчер исполнения, без второй копии набора. Запросы свойств, типа, имени и предикаты делегированы Zone; `supports_skill_id`/свободные константы цвета и war-soul/float вычисляются из общих Zone-функций и прежнего реестра.
+
+По совпадающей паре Game EXE/PDB ранее подтверждён `Rebuild` RVA `0x0006CE10` (очистка до count, signed-проход, пропуск нулевой длины, malformed-record skip с публикацией разобранного префикса, last-write-wins ключей); сериализатор WorldServer — парная сторона. Этот перенос не меняет порядок: поле `skill_factory` в Game делегирует тот же алгоритм через идентичный код, вынесенный в Zone. Основания — в [навыках](../gameplay/skills.md#конфигурация-регистрация-и-команда).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 33,49 секунды без предупреждений; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; доставка кэша в работающий Game и запросы свойств этим шагом не проверялись.
+
 ## Zone effects: данные и записи сценарных состояний AddState 24 сентября 2026
 
 Payload и записи семи состояний `CMoveShape::AddState` перенесены в [`zone/effects/scriptstate.rs`](../../server/rust/zone/src/effects/scriptstate.rs): пять UseGoods (`100007`–`100012`), ImproveExp (`100009`) и AutoProtect (`110000`). Переходный Game сохраняет живые Begin/restart/AI/End и GM-gate; property-формулы остаются у файлов-владельцев, диспетчер по виду — в адаптере.
