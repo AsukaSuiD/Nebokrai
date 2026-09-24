@@ -1,41 +1,32 @@
-//! Сохранённое состояние `CTianShenXiaFanState` (`0x335`).
+//! Живые Begin/restart/AI/End `CTianShenXiaFanState` (`0x335`) в переходном Game.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/skills/tianshenxiafanstate.cpp`. `Serialize` пишет три `DWORD`:
-//! ID, оставшееся время и уровень, поэтому запись занимает 12 байт. Нативный
-//! `Unserialize` 0x00605C20 асимметричен: без чтения часов пишет `WORD`
-//! с wire +4 в timestamp (+0x2C), а level читает с +6. Factory 0x005D8A34
-//! передаёт constructor(level=0, keep=0); Unserialize keep не меняет.
-//! Native input занимает 10 байт с ID; общий factory сохраняет это продвижение,
-//! а отдельный tracked cache-span содержит 12 байт Serialize. Неизвестный
-//! исходный tail не перечитывается с +12 и не перезаписывается расширением.
-//! GetRemainedTime — constant-zero 0x00601200, поэтому нормализация без часов.
-//! Сохранение непрозрачного tail не объявляется native round-trip гарантией.
-//! Этот legacy defect сохранён. Типизированный owner участвует в login, пересчёте
-//! свойств, строгом `CBlindState::AI`, визуалах и обратном DB-кодеке.
-//! Достигнутый AI получает один поколенческий ключ общей арены;
-//! порядок вызовов и границу прохода задаёт общий CMoveShape::UpdateAbnormality.
-//! Любое удаление адресует тот же экземпляр, а не первый дубль.
-//! AI/End разрешают общий CMoveShape по region/type/id; RTTI-ограничения
-//! формул игрока не запрещают жизненный цикл региональных держателей.
-//! Exact vtable 0x0066202C: End 0x006059A0 отправляет visual и вызывает базовый End 0x005DBCE0.
-//! После эффекта holder перечитывается; общий virtual UpdateProperty
-//! пересчитывает свойства только при фактическом удалении точной записи.
-//! Прямой End и AI используют один exact-key хвост без чтения часов.
-//! StartAllStates 0x004CE050 вызывает Begin(0, self); Begin 0x00605B70
-//! создаёт visual, но User остаётся NULL. Для загруженной записи базовый End
-//! лишь отмечает ended; удаление из контейнера User отсутствует.
-
-//! Restart воспроизводит только Begin(NULL, holder) (0x00605B70):
-//! базовый Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
+//! `appserver/skills/tianshenxiafanstate.cpp`. Данные, асимметричный кодек и
+//! формулы свойств перенесены в Zone `effects/tianshenxiafan.rs` (там же
+//! адреса конструктора, vtable и обеих сторон кодека).
+//! Нативный input занимает 10 байт с ID; общий factory сохраняет это
+//! продвижение, а отдельный tracked cache-span содержит 12 байт Serialize.
+//! Неизвестный исходный tail не перечитывается с +12 и не перезаписывается
+//! расширением. Этот legacy defect сохранён. Типизированный owner участвует
+//! в login, пересчёте свойств, строгом `CBlindState::AI`, визуалах и
+//! обратном DB-кодеке. Достигнутый AI получает один поколенческий ключ
+//! общей арены; порядок вызовов и границу прохода задаёт общий
+//! CMoveShape::UpdateAbnormality. Любое удаление адресует тот же экземпляр,
+//! а не первый дубль. AI/End разрешают общий CMoveShape по region/type/id;
+//! RTTI-ограничения формул игрока не запрещают жизненный цикл региональных
+//! держателей. Exact vtable 0x0066202C: End 0x006059A0 отправляет visual и
+//! вызывает базовый End 0x005DBCE0. После эффекта holder перечитывается;
+//! общий virtual UpdateProperty пересчитывает свойства только при фактическом
+//! удалении точной записи. Прямой End и AI используют один exact-key хвост
+//! без чтения часов. StartAllStates 0x004CE050 вызывает Begin(0, self);
+//! Begin 0x00605B70 создаёт visual, но User остаётся NULL. Для загруженной
+//! записи базовый End лишь отмечает ended; удаление из контейнера User
+//! отсутствует. Restart воспроизводит только Begin(NULL, holder): базовый
+//! Begin сохраняет timestamp/user; готовая запись и её ключ не заменяются.
 //! Visual принадлежит экземпляру общей арены: BeginVisualEffect(1) →
-//! concrete Update(0) → базовый visual-хвост.
-//! Его vtable +0x30/+0x38 ведёт на 0x00601200: пакет пишет два нуля без часов.
-
-//! OnUpdateProperties 0x00605A10: GetSufferer → RTTI CPlayer → семь запросов
-//! skill properties → элементная, физическая и защитная формулы. NULL/неигрок
-//! возвращает 0, отсутствующая запись skill — 1 без изменений. Visual и часов
-//! в этом callback нет; результат записывается в живой tagProperty.
+//! concrete Update(0) → базовый visual-хвост. OnUpdateProperties 0x00605A10:
+//! GetSufferer → RTTI CPlayer → семь запросов skill properties → формулы.
+//! NULL/неигрок возвращает 0, отсутствующая запись skill — 1 без изменений.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
@@ -45,102 +36,48 @@ use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_base_applied_state, resolve_state_move_shape};
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
-use super::skillfactory::CSkillFactory;
+pub(crate) use nebokrai_zone::effects::{
+    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanPlayerView,
+    TianShenXiaFanState,
+};
 
-pub(crate) const TIAN_SHEN_XIA_FAN_STATE_ID: u32 = 0x335;
-pub(crate) const TIAN_SHEN_XIA_FAN_STATE_BYTES: usize = 12;
-
-const TARGET_DEFENSE_GAIN: u32 = 109;
-const TARGET_ELEMENT_RESISTANCE_GAIN: u32 = 112;
-const TARGET_ELEMENT_MODIFY_GAIN: u32 = 115;
-const TARGET_MINIMUM_ATTACK_GAIN: u32 = 116;
-const TARGET_MAXIMUM_ATTACK_GAIN: u32 = 117;
-const PHYSICAL_AVOID_GAIN: u32 = 130;
-const MAGIC_AVOID_GAIN: u32 = 131;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TianShenXiaFanState {
-    started_at_ms: u32,
-    keep_time_ms: u32,
-    level: i32,
-}
-
-impl TianShenXiaFanState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, level: i32) -> Self {
-        Self { started_at_ms, keep_time_ms, level }
+fn apply_to_player(
+    game: &CGame,
+    state: TianShenXiaFanState,
+    properties: PlayerCombatProperties,
+) -> PlayerCombatProperties {
+    let view = TianShenXiaFanPlayerView {
+        element_modify: properties.element_modify,
+        minimum_attack: properties.minimum_attack,
+        maximum_attack: properties.maximum_attack,
+        defense: properties.defense,
+        element_resistance: properties.element_resistance,
+        attack_avoid: properties.attack_avoid,
+        element_avoid: properties.element_avoid,
+    };
+    let query = game
+        .skill_factory()
+        .query_skill_base_properties(state.state_id(), state.level());
+    let view = state.apply_to_player_view(view, query.map(|skill| {
+        move |key: u32| skill.query_property(key)
+    }));
+    PlayerCombatProperties {
+        element_modify: view.element_modify,
+        minimum_attack: view.minimum_attack,
+        maximum_attack: view.maximum_attack,
+        defense: view.defense,
+        element_resistance: view.element_resistance,
+        attack_avoid: view.attack_avoid,
+        element_avoid: view.element_avoid,
+        ..properties
     }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != TIAN_SHEN_XIA_FAN_STATE_ID {
-            return Err(LegacyReadBlock {
-                offset,
-                needed: 4,
-                available: payload.len().saturating_sub(offset),
-            });
-        }
-        // Exact `Unserialize`: WORD в timestamp, затем DWORD level с offset + 6.
-        let started_at_ms = u32::from(reader.read_u16()?);
-        let level = reader.read_i32()?;
-        Ok(Self::new(started_at_ms, 0, level))
-    }
-
-    pub(crate) const fn state_id(self) -> u32 { TIAN_SHEN_XIA_FAN_STATE_ID }
-
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-    pub(crate) const fn client_time(self) -> u32 {
-        0
-    }
-
-    pub(crate) fn encoded(self) -> [u8; TIAN_SHEN_XIA_FAN_STATE_BYTES] {
-        let mut bytes = Vec::with_capacity(TIAN_SHEN_XIA_FAN_STATE_BYTES);
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_u32(self.state_id());
-        writer.write_u32(self.client_time());
-        writer.write_i32(self.level);
-        bytes.try_into().expect("размер состояния сошествия фиксирован")
-    }
-
-    pub(crate) fn apply_to_player(
-        self,
-        mut properties: PlayerCombatProperties,
-        skill_factory: &CSkillFactory,
-    ) -> PlayerCombatProperties {
-        let Some(skill) = skill_factory.query_skill_base_properties(self.state_id(), self.level)
-        else {
-            return properties;
-        };
-        let element = skill.query_property(TARGET_ELEMENT_MODIFY_GAIN);
-        let minimum = skill.query_property(TARGET_MINIMUM_ATTACK_GAIN);
-        let maximum = skill.query_property(TARGET_MAXIMUM_ATTACK_GAIN);
-        let defense = skill.query_property(TARGET_DEFENSE_GAIN);
-        let resistance = skill.query_property(TARGET_ELEMENT_RESISTANCE_GAIN);
-        let physical_avoid = skill.query_property(PHYSICAL_AVOID_GAIN);
-        let magic_avoid = skill.query_property(MAGIC_AVOID_GAIN);
-        properties.element_modify = properties.element_modify.wrapping_add(element as i32);
-        properties.minimum_attack = capped_gain(properties.minimum_attack, minimum);
-        properties.maximum_attack = capped_gain(properties.maximum_attack, maximum);
-        properties.defense = capped_gain(properties.defense, defense);
-        properties.element_resistance = capped_gain(properties.element_resistance, resistance);
-        properties.attack_avoid = properties.attack_avoid.wrapping_add(physical_avoid as u16);
-        properties.element_avoid = properties.element_avoid.wrapping_add(magic_avoid as u16);
-        properties
-    }
-}
-
-const fn capped_gain(value: u32, gain: u32) -> u32 {
-    let result = value.wrapping_add(gain);
-    if result > i32::MAX as u32 { i32::MAX as u32 } else { result }
 }
 
 pub(crate) fn send_tian_shen_xia_fan_state_visual(
@@ -181,7 +118,7 @@ pub(crate) fn update_tian_shen_xia_fan_state_properties(
         .and_then(|shape| shape.applied_state::<TianShenXiaFanState>(key)).copied()
     else { return false; };
     let Some(player) = game.find_player(target.id) else { return false; };
-    let properties = state.apply_to_player(player.combat_properties(), game.skill_factory());
+    let properties = apply_to_player(game, state, player.combat_properties());
     if let Some(player) = game.find_player_mut(target.id) {
         player.update_state_combat_properties(|_| properties);
     }
@@ -255,35 +192,7 @@ pub(crate) fn end_tian_shen_xia_fan_state(
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\tianshenxiafanstate.cpp
 
 // ============================================================================
-// FUNCTION: CTianShenXiaFanState::CTianShenXiaFanState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\tianshenxiafanstate.cpp:19
-// RVA: 0x00205780
-// ADDRESS: 00605780
-// PROTOTYPE: undefined __thiscall CTianShenXiaFanState(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTianShenXiaFanState::~CTianShenXiaFanState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\tianshenxiafanstate.cpp:29
-// RVA: 0x00205800
-// ADDRESS: 00605800
-// PROTOTYPE: void __thiscall ~CTianShenXiaFanState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTianShenXiaFanState::Begin
+// FUNCTION: CTianShenXiaFan::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -311,24 +220,6 @@ pub(crate) fn end_tian_shen_xia_fan_state(
 //
 
 // ============================================================================
-// FUNCTION: CTianShenXiaFanState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\tianshenxiafanstate.cpp:141
-// RVA: 0x002059C0
-// ADDRESS: 006059c0
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// CTianShenXiaFanState::OnUpdateProperties (0x00605A10) реализован
-// в update_tian_shen_xia_fan_state_properties; guards и порядок формул
-// зафиксированы в заголовке владельца.
-
-// ============================================================================
 // FUNCTION: CTianShenXiaFanState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -337,20 +228,6 @@ pub(crate) fn end_tian_shen_xia_fan_state(
 // RVA: 0x00205B70
 // ADDRESS: 00605b70
 // PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTianShenXiaFanState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\tianshenxiafanstate.cpp:152
-// RVA: 0x00205C20
-// ADDRESS: 00605c20
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -369,8 +246,5 @@ pub(crate) fn end_tian_shen_xia_fan_state(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

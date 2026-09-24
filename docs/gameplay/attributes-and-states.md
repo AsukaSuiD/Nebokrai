@@ -209,6 +209,12 @@ Player-ветвь callback сначала ограничивает потерю 
 
 Формулы применения (вычитание с нижней границей `0` у Po, прибавка с потолком `INT_MAX` у атаки Yu) перенесены в Zone без изменения; поколбэчная сверка всех восьми property callbacks не выполнялась, поэтому они остаются `PARTIAL`. Формулы получили примитивный вид [`BattleFairyAttributePlayerView`](../../server/rust/zone/src/effects/battlefairy.rs) вместо зависимости от всего `PlayerCombatProperties`; Game пересобирает проекцию. При переносе ничего в арифметике не менялось. Фактическое наложение и клиентский результат не запускались.
 
+## TianShenXiaFan: асимметричная запись сошествия
+
+Данные и сохраняемая запись `CTianShenXiaFanState` (`0x335`) находятся в [`Zone effects`](../../server/rust/zone/src/effects/tianshenxiafan.rs); живые Begin/restart/AI/End, visual и разрешение участников остаются у [переходного Game](../../server/rust/src/gameserver/appserver/skills/tianshenxiafanstate.rs). По совпадающей паре Game EXE/PDB `VERIFIED`: конструктор VA `0x00605780` записывает ID, срок и уровень без чтения часов; vtable `0x0066202C` связывает Begin `0x00605B70`, общий AI `0x005D5BA0`, End `0x006059A0`, OnUpdateProperties `0x00605A10`, константно нулевой GetRemainedTime `0x00601200`, Serialize `0x006059C0` и Unserialize `0x00605C20`.
+
+Запись асимметрична: Serialize пишет три DWORD (ID, поле timestamp как есть, уровень — 12 байт), а Unserialize читает WORD в timestamp и DWORD уровня со смещением `+6`, не читая часов и не трогая `keep` (он остаётся нулём от factory). Вход при этом продвигается на 10 байт. Исправлено расхождение: Rust encode ранее писал константный ноль вместо поля timestamp, хотя native Serialize пишет поле как есть — теперь загруженный WORD переживает цикл сохранения. Порядок семи запросов свойств и формулы перенесены без изменения; их поколбэчная сверка не выполнялась (`PARTIAL`). Фактический пересчёт свойств и клиентский visual не запускались.
+
 ## Сценарий: паутина и несколько запретов одновременно
 
 [`SpiderWebState`](../../server/rust/src/gameserver/appserver/skills/spiderwebstate.rs) использует общий жизненный цикл [`blindstate`](../../server/rust/src/gameserver/appserver/skills/blindstate.rs). `begin_primary_blind_state_at` разрешает участников, отправляет начало visual, увеличивает запреты движения и боя, затем публикует запись состояния. Повторный вход запускает `restart_blind_state`, который восстанавливает эти запреты для загруженного экземпляра.

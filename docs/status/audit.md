@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и асимметричная запись TianShenXiaFan 24 сентября 2026
+
+Данные, кодек и формулы свойств `CTianShenXiaFanState` (`0x335`) перенесены в [`zone/effects/tianshenxiafan.rs`](../../server/rust/zone/src/effects/tianshenxiafan.rs). Переходный Game сохраняет живые Begin/restart/AI/End, visual и связь с фабрикой навыков; формулы получили примитивный `TianShenXiaFanPlayerView`.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) машинный код подтверждает ранее описанные адреса: конструктор `0x00605780` (ID и поля без часов), vtable `0x0066202C` с Begin `0x00605B70`, AI `0x005D5BA0`, End `0x006059A0`, OnUpdateProperties `0x00605A10`, GetRemainedTime `0x00601200`, Serialize `0x006059C0`, Unserialize `0x00605C20`. Подтверждена асимметрия записи: 12 байт на записи (ID, timestamp как есть, level) против WORD+DWORD и отсутствия часов на чтении. **Исправлено расхождение**: Rust encode писал константный ноль вместо поля timestamp, тогда как native Serialize пишет поле `+0x2C` как есть; теперь загруженный WORD переживает цикл сохранения. Порядок семи запросов свойств и формулы перенесены без поколбэчной сверки (`PARTIAL`). Основания — в [описании сошествия](../gameplay/attributes-and-states.md#tianshenxiafan-асимметричная-запись-сошествия).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,75 секунды; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактический пересчёт свойств и клиентский visual не проверялись.
+
 ## Zone effects: атрибутные состояния боевой феи 24 сентября 2026
 
 Данные, вид, формулы и 12-байтная запись восьми состояний Po/Yu (`0x212`–`0x219`) перенесены в [`zone/effects/battlefairy.rs`](../../server/rust/zone/src/effects/battlefairy.rs). Переходный Game сохраняет живые Begin/restart/AI/End, разрешение участников и применение к живому игроку/монстру; формулы получили примитивный `BattleFairyAttributePlayerView` вместо зависимости от `PlayerCombatProperties`.

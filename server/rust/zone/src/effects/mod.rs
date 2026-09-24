@@ -30,6 +30,7 @@ mod roar;
 mod shieldabsorption;
 mod soulcollect;
 mod swordship;
+mod tianshenxiafan;
 mod time;
 mod visualeffect;
 mod wangsheng;
@@ -105,6 +106,10 @@ pub use soulcollect::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulColle
 pub use swordship::{
     SWORDSHIP_2_STATE_ID, SWORDSHIP_3_STATE_ID, SWORDSHIP_4_STATE_ID, SWORDSHIP_STATE_BYTES,
     SWORDSHIP_STATE_ID, SwordshipState, is_swordship_state_id,
+};
+pub use tianshenxiafan::{
+    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanPlayerView,
+    TianShenXiaFanState,
 };
 pub use time::timed_client_state_time;
 pub use visualeffect::CVisualEffect;
