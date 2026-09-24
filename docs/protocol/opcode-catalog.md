@@ -18,7 +18,7 @@
 | Auth | Точный opcode через `AuthMessageKind::from_opcode`, включая проверку `0xCF501/0xCF502`, регистрацию и GM. Неизвестный тип не вызывает handler. | [netauth/message.rs](../../server/rust/src/nets/netauth/message.rs) → `AuthMessageHandlers::handle`. |
 | Billing | Семейства `0xFF000/0xEF200` → billing; `0xEF100/0x10EF00` → server; затем точный тип в handler. | [netbilling/message.rs](../../server/rust/src/nets/netbilling/message.rs) → `BillingMessageHandler` / `ServerMessageHandler`. |
 | Misc | `0x14ED00` → аукцион; `0x16EA00` → служебная функция; `0x14EC00` — no-op; остальные → `on_other_msg`. | [netmisc/message.rs](../../server/rust/src/nets/netmisc/message.rs) → `CGame::process_message`. |
-| World, сообщения Misc | `0x15EB00` → `on_misc_auction`, затем `on_msg_m2w_auction`. Это общий принятый server-путь World. | [networld/message.rs](../../server/rust/src/nets/networld/message.rs) → [аукционный обработчик](../../server/rust/src/worldserver/appworld/message/onmsg_m2w_auction.rs). |
+| World, сообщения Misc | `0x15EB00` → `on_misc_auction`, затем `on_msg_m2w_auction`. Это общий принятый server-путь World. | [world_message.rs](../../server/rust/realm/src/app/world_message.rs) → [аукционный обработчик](../../server/rust/src/worldserver/appworld/message/onmsg_m2w_auction.rs). |
 
 Выбор семейства не означает успех операции. Чтобы добавить тип, нужно проследить фильтр входа, диспетчер и точную ветвь handler; порядок работы приведён в [сетевом runtime](../server/network-runtime.md).
 

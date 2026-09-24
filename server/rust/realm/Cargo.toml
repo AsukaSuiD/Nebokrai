@@ -8,5 +8,6 @@ publish = false
 
 [dependencies]
 nebokrai-shared = { path = "../shared" }
+parking_lot = "0.12.5"
 walkdir = "2.5.0"
 tracing = "0.1.44"
