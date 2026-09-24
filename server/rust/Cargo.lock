@@ -976,6 +976,7 @@ dependencies = [
  "quick-xml",
  "socket2",
  "tokio",
+ "tracing",
  "uuid",
  "zerocopy",
 ]

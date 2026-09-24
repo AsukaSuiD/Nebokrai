@@ -18,6 +18,7 @@ md-5 = "0.11.0"
 parking_lot = "0.12.5"
 socket2 = "0.6.5"
 tokio = { version = "1.53.1", features = ["io-util", "net", "rt-multi-thread", "time"] }
+tracing = "0.1.44"
 getrandom = { workspace = true }
 nom = "8.0.0"
 uuid = { workspace = true }

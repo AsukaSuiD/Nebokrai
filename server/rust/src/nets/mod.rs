@@ -71,9 +71,3 @@ pub(crate) mod serverclient;
     reason = "общий server-owner подключён до component callbacks и message parsers"
 )]
 pub(crate) mod servers;
-
-#[allow(
-    dead_code,
-    reason = "очередь сокетных команд подключена до восстановления clients и servers"
-)]
-pub(crate) mod socketcommands;
