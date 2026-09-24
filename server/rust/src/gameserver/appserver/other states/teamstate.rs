@@ -22,112 +22,22 @@
 //! default-ctor stamp безопасно равен0 до Begin; отказ allocator не эмулируется.
 //! Координатные Begin0x005BF800/0x005BF8D0 остаются только в локальном исследовательском корпусе.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
-    default_client_state_time, remove_applied_state_from, resolve_applied_state_sufferer,
-    resolve_state_move_shape, resolve_state_move_shape_mut, update_applied_state_end_visual,
+    remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
+    resolve_state_move_shape_mut, update_applied_state_end_visual,
     update_applied_state_visual_base,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
-const TEAM_STATE_STRING_CAPACITY: usize = 256;
-const TEAM_STATE_CHECK_INTERVAL_MS: u32 = 5_000;
+pub(crate) use nebokrai_zone::effects::{CTeamState, TEAM_STATE_ID};
+
 const TEAM_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const TEAM_STATE_UPDATE_MESSAGE: i32 = 0x000b_fe05;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CTeamState {
-    team_name: Vec<u8>,
-    team_password: Vec<u8>,
-    last_check_timestamp_ms: u32,
-}
-
-impl CTeamState {
-    pub(crate) fn new(mut team_name: Vec<u8>, mut team_password: Vec<u8>) -> Self {
-        if let Some(end) = team_name.iter().position(|byte| *byte == 0) {
-            team_name.truncate(end);
-        }
-        if let Some(end) = team_password.iter().position(|byte| *byte == 0) {
-            team_password.truncate(end);
-        }
-        Self {
-            team_name,
-            team_password,
-            last_check_timestamp_ms: 0,
-        }
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        let _state_id = reader.read_i32()?;
-        let team_name = reader.read_c_string(TEAM_STATE_STRING_CAPACITY)?.to_vec();
-        let team_password = reader.read_c_string(TEAM_STATE_STRING_CAPACITY)?.to_vec();
-        Ok(Self::new(team_name, team_password))
-    }
-
-    pub(crate) fn serialized_size(payload: &[u8], offset: usize) -> Option<usize> {
-        let mut reader = LegacyReader::at(payload, offset).ok()?;
-        let _state_id = reader.read_i32().ok()?;
-        let _team_name = reader.read_c_string(TEAM_STATE_STRING_CAPACITY).ok()?;
-        let _team_password = reader.read_c_string(TEAM_STATE_STRING_CAPACITY).ok()?;
-        reader.position().checked_sub(offset)
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(6 + self.team_name.len() + self.team_password.len());
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_i32(TEAM_STATE_ID);
-        writer.write_c_string(&self.team_name);
-        writer.write_c_string(&self.team_password);
-        bytes
-    }
-
-    pub(crate) const fn state_id(&self) -> i32 {
-        TEAM_STATE_ID
-    }
-
-    /// Базовый `CState::GetClientStateTime` для этого бессрочного state.
-    pub(crate) const fn client_state_time(&self) -> i32 {
-        default_client_state_time()
-    }
-
-    pub(crate) fn additional_data(&self, teammates: usize) -> u32 {
-        (u32::from(!self.team_password.is_empty()) << 16)
-            | teammates as u32
-    }
-
-    pub(crate) fn team_name(&self) -> &[u8] {
-        &self.team_name
-    }
-
-    pub(crate) fn team_password(&self) -> &[u8] {
-        &self.team_password
-    }
-
-    pub(crate) const fn check_due(&self, sampled_at_ms: u32) -> bool {
-        self.last_check_timestamp_ms
-            .wrapping_add(TEAM_STATE_CHECK_INTERVAL_MS)
-            <= sampled_at_ms
-    }
-
-    pub(crate) const fn record_check(&mut self, sampled_at_ms: u32) {
-        self.last_check_timestamp_ms = sampled_at_ms;
-    }
-
-    pub(crate) const fn ends_for_team(
-        player_id: i32,
-        team_id: i32,
-        team_leader_id: Option<i32>,
-    ) -> bool {
-        team_id != 0 && matches!(team_leader_id, Some(leader_id) if leader_id != player_id)
-    }
-}
 
 pub(crate) fn begin_primary_team_state(
     game: &mut CGame,
@@ -176,7 +86,7 @@ pub(crate) fn restart_team_recruitment_state(
     if let Some(state) = resolve_state_move_shape_mut(game, region_id, holder)
         .and_then(|shape| shape.applied_state_mut::<CTeamState>(key))
     {
-        state.last_check_timestamp_ms = 0;
+        state.reset_check();
     }
     true
 }

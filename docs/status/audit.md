@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись TeamState 24 сентября 2026
+
+Данные и запись переменной длины `CTeamState` (`0x186A6`) перенесены в [`zone/effects/teamstate.rs`](../../server/rust/zone/src/effects/teamstate.rs). Переходный Game сохраняет живые Begin/restart/AI/End и пакеты.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) инструкции подтверждают: конструктор `0x005BFE60` (ID `0x186A6`, stamp 0, без часов), Serialize `0x005BFA50` (ID и две C-строки, без часов), GetAdditionalData `0x005BFDD0` (бит 16 по ненулевой длине пароля, живой счёт plugs), AI `0x005BFD20` (unsigned `last + 5000 <= now`). Основания — в [описании набора](../gameplay/attributes-and-states.md#teamstate-наборное-состояние-команды). Поведение Rust при переносе не менялось.
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 36,40 секунды без предупреждений; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактический цикл набора не проверялся.
+
 ## Zone effects: данные и запись восстановления от предметов 24 сентября 2026
 
 Данные, таймер и 16-байтная запись `CRestoreHpState` (`100000`) и `CRestoreMpState` (`100001`) перенесены в [`zone/effects/consumablerestore.rs`](../../server/rust/zone/src/effects/consumablerestore.rs) вместе с enum и интервалами применения. Переходный Game сохраняет живые Begin/restart/AI/End и применение ресурса.
