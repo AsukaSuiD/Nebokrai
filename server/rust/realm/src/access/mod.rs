@@ -3,6 +3,7 @@
 pub mod acclog;
 pub mod acclogqueue;
 pub mod acclogthread;
+pub mod authmanager;
 pub mod authproc;
 pub mod configreader;
 pub mod dbcontext;

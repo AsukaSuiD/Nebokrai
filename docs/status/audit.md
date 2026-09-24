@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm access: менеджер Auth-заявок Login 25 сентября 2026
+
+`AuthManager` перенесён из `src/loginserver/loginserver/authmanager.rs` в [`realm/access/authmanager.rs`](../../server/rust/realm/src/access/authmanager.rs): pending очередь с отбрасыванием точного duplicate account; заявка сначала попадает в хвост, затем отправляется `0xCF501`, затем вызывается первый listener slot (ошибка send не откатывает вставку); strict wrapping timeout `timeout < now - start` публикует synthetic `0xCF601`, не удаляя запись и не обновляя tick до первого ответа; ответ удаляет account до второго listener callback; `CLOCK_BOOTTIME` сохраняет wrapping ticks `timeGetTime`. Связи уже имели владельцев (Shared network `ClientSendQueue`, realm app `login_message`/`login_auth_client`); трейт `AuthListener` sync, desugar не потребовался, швов нет. Старый файл стал glob-шимом; потребители поимённо (`asmessage`, `message/mod`, `authhandler`, login `game`, `loginqueue`) работают через шим без правок.
+
+Машинное основание на точной паре `loginserver.exe` + `LoginServer.pdb` (`1C84006D`, RSDS match): публичные символы сборки содержат семейство `AuthManager` (ctor, методы по `AuthQuest`). Opcodes `0xCF501`/`0xCF601` и семантика timeout-ов сохраняют прежний статус заголовка и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm access: consumer account-журналов и GetIP 25 сентября 2026
 
 `AccLogThread` перенесён из `src/loginserver/applogin/acclogthread.rs` в [`realm/access/acclogthread.rs`](../../server/rust/realm/src/access/acclogthread.rs): четыре SQL-шаблона `LogInfo` (INSERT Account/AccountEnterTime/IP и три UPDATE-ветви с `SELECT TOP 1 ... ORDER BY AccountEnterTime DESC`), отдельное DB-соединение на каждую запись, как в оригинале, Windows-1251 декодируется только после byte-exact сборки SQL; owned SQL вместо исходного переполняемого `char[512]` сохраняет текст и DB-эффект. Чистая функция `format_ipv4` (`CGasOperator::GetIP`) перенесена в [`realm/access/gasoperator.rs`](../../server/rust/realm/src/access/gasoperator.rs). Связи уже имели владельцев (`rscdkey`, `acclogqueue`, `acclog` — realm/access); швов нет. Старые файлы стали glob-шимами; потребители поимённо (login `game` — `AccLogThread`/`AccLogThreadNotice`, `process/loginserver`, `gasthread` — `format_ipv4`) работают через шимы без правок.
