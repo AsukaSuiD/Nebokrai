@@ -17424,16 +17424,15 @@ impl CGame {
             let _ = request.send(self, false);
             return;
         }
-        let Some(quest) = self.quest_system.system().quest_data_by_id(quest_id) else {
-            return;
-        };
+        let quest = self.quest_system.system().quest_data_by_id(quest_id);
         let player = self
             .players
             .get_mut(&player_id)
             .expect("local quest-player проверен до mutation");
-        if !player.accept_script_quest(quest_id) {
+        if !player.accept_script_quest(quest_id, quest.is_some()) {
             return;
         }
+        let quest = quest.expect("допуск Zone проверил наличие определения");
 
         let mut message = CMessage::new(0x000b_ff2c);
         message.base_mut().add_short(quest_id as i16);

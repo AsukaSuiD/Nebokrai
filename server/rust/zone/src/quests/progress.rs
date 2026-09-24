@@ -4,6 +4,8 @@
 //! `AddQuestDataByteArray` VA 0x00433310–0x0043339F: count, затем
 //! упорядоченные u16 ID и u8 state. `AddQuestDataByteArray_ForClient`
 //! VA 0x0043E204–0x0043E229 пропускает state 1 и неизвестные каталогу ID.
+//! `CPlayer::AddQuest` VA 0x00445397–0x00445531 удаляет прежнее ненулевое
+//! состояние до поиска определения и только затем вставляет новый ноль.
 
 use std::collections::BTreeMap;
 
@@ -51,8 +53,13 @@ impl PlayerQuestProgress {
         self.raw_state(quest_id).map_or(2, i32::from)
     }
 
-    pub fn accept(&mut self, quest_id: u16) -> bool {
+    /// При отсутствии определения прежнее ненулевое состояние уже удалено.
+    pub fn accept(&mut self, quest_id: u16, definition_exists: bool) -> bool {
         if self.raw_state(quest_id) == Some(0) {
+            return false;
+        }
+        self.states.remove(&quest_id);
+        if !definition_exists {
             return false;
         }
         self.states.insert(quest_id, 0);

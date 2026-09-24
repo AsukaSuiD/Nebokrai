@@ -3863,8 +3863,8 @@ impl CPlayer {
         self.quest_progress.insert_snapshot(quest_id, state);
     }
 
-    pub(crate) fn accept_script_quest(&mut self, quest_id: u16) -> bool {
-        self.quest_progress.accept(quest_id)
+    pub(crate) fn accept_script_quest(&mut self, quest_id: u16, definition_exists: bool) -> bool {
+        self.quest_progress.accept(quest_id, definition_exists)
     }
 
     pub(crate) fn complete_script_quest(&mut self, quest_id: u16) -> bool {
