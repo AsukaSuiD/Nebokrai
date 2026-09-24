@@ -1,8 +1,9 @@
-//! Семь состояний CMoveShape::AddState, gameserver.exe + GameServer.pdb.
-//! Исходные owners: moveshape.cpp и other states/{usegoodsenlarge*,improveexp,
-//! autoprotect}state.cpp. Здесь один lifecycle/codec и одна запись арены:
-//! started/keep хранятся только у ScriptMoveState, коэффициент — в варианте.
-//! Чистые формулы остаются в исходных owners; экземпляры не копируются.
+//! Живые Begin/restart/AI/End семи состояний `CMoveShape::AddState` в
+//! переходном Game. Данные, enum и записи перенесены в Zone
+//! `effects/scriptstate.rs` (там же адреса vtable и кодека).
+//! Источник: gameserver.exe + GameServer.pdb, moveshape.cpp и
+//! other states/{usegoodsenlarge*,improveexp,autoprotect}state.cpp.
+//!
 //! Пять UseGoods и ImproveExp требуют non-NULL User до base Begin. Первичное
 //! self/self применение читает clock до U/S getters, создаёт visual loop0,
 //! затем caller добавляет запись и вызывает UpdateProperty. Begin не шлёт
@@ -25,174 +26,61 @@
 //! Шесть visuals всегда строят BFE03; AutoProtect visual0x005D4530 различает
 //! BFE03/BFE04. Время — два чтения при положительном остатке, additional=0.
 //! SetRegion пяти UseGoods и AutoProtect меняет User; ImproveExp — Sufferer.
-//! Save шести0x005D4D10/0x005E7330 пишет ID/remaining/coefficient (12 байт),
-//! AutoProtect0x005F51E0 — ID/remaining (8 байт). Save не меняет live keep.
-//! Decode0x004F9D80/0x005D6190/0x005EAAC0 читает clock перед keep/coefficient.
 //! SlotMap/заимствования заменяют CState* и ручной lifetime; отказ native
 //! allocator не эмулируется. Неизвестные перегрузки Begin сохранены у owners.
 
-use super::autoprotectstate::AUTO_PROTECT_STATE_ID;
-use super::improveexpstate::{self, IMPROVE_EXP_STATE_ID};
+use super::improveexpstate;
 use super::player::PlayerCombatProperties;
 use super::shape::ShapeIdentity;
-use super::usegoodsenlargedefstate::{self, USE_GOODS_ENLARGE_DEF_STATE_ID};
-use super::usegoodsenlargeelmdefstate::{self, USE_GOODS_ENLARGE_ELM_DEF_STATE_ID};
-use super::usegoodsenlargefullmissstate::{self, USE_GOODS_ENLARGE_FULL_MISS_STATE_ID};
-use super::usegoodsenlargemaxhpstate::{self, USE_GOODS_ENLARGE_MAX_HP_STATE_ID};
-use super::usegoodsenlargemaxmpstate::{self, USE_GOODS_ENLARGE_MAX_MP_STATE_ID};
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use super::usegoodsenlargedefstate;
+use super::usegoodsenlargeelmdefstate;
+use super::usegoodsenlargefullmissstate;
+use super::usegoodsenlargemaxhpstate;
+use super::usegoodsenlargemaxmpstate;
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
     remove_applied_state_from, resolve_applied_state_sufferer,
-    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
     update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const SCRIPT_STATE_TIMED_BYTES: usize = 12;
-pub(crate) const AUTO_PROTECT_STATE_BYTES: usize = 8;
+pub(crate) use nebokrai_zone::effects::{
+    AUTO_PROTECT_STATE_BYTES, SCRIPT_STATE_TIMED_BYTES, ScriptMoveState, ScriptStateKind,
+};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ScriptStateKind {
-    EnlargeMaxHp(u32),
-    EnlargeMaxMp(u32),
-    ImproveExp(u32),
-    EnlargeDefense(u32),
-    EnlargeElementDefense(u32),
-    EnlargeFullMiss(u32),
-    AutoProtect,
+/// Формулы пяти UseGoods сохраняют владельцев в своих файлах; здесь только
+/// диспетчер по виду payload.
+pub(crate) fn apply_script_combat_properties(
+    state: &ScriptMoveState,
+    properties: &mut PlayerCombatProperties,
+) {
+    match state.kind() {
+        ScriptStateKind::EnlargeMaxHp(value) => {
+            usegoodsenlargemaxhpstate::apply(*value, properties)
+        }
+        ScriptStateKind::EnlargeMaxMp(value) => {
+            usegoodsenlargemaxmpstate::apply(*value, properties)
+        }
+        ScriptStateKind::EnlargeDefense(value) => {
+            usegoodsenlargedefstate::apply(*value, properties)
+        }
+        ScriptStateKind::EnlargeElementDefense(value) => {
+            usegoodsenlargeelmdefstate::apply(*value, properties)
+        }
+        ScriptStateKind::EnlargeFullMiss(value) => {
+            usegoodsenlargefullmissstate::apply(*value, properties)
+        }
+        ScriptStateKind::ImproveExp(_) | ScriptStateKind::AutoProtect => {}
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptMoveState {
-    kind: ScriptStateKind,
-    started_at_ms: u32,
-    time_to_keep_ms: u32,
-}
-
-impl ScriptMoveState {
-    pub(crate) fn from_factory(state_id: i32, value1: i32, value2: i32) -> Option<Self> {
-        let coefficient = value2 as u32;
-        let kind = match state_id {
-            USE_GOODS_ENLARGE_MAX_HP_STATE_ID => ScriptStateKind::EnlargeMaxHp(coefficient),
-            USE_GOODS_ENLARGE_MAX_MP_STATE_ID => ScriptStateKind::EnlargeMaxMp(coefficient),
-            IMPROVE_EXP_STATE_ID => ScriptStateKind::ImproveExp(coefficient),
-            USE_GOODS_ENLARGE_DEF_STATE_ID => ScriptStateKind::EnlargeDefense(coefficient),
-            USE_GOODS_ENLARGE_ELM_DEF_STATE_ID => ScriptStateKind::EnlargeElementDefense(coefficient),
-            USE_GOODS_ENLARGE_FULL_MISS_STATE_ID => ScriptStateKind::EnlargeFullMiss(coefficient),
-            AUTO_PROTECT_STATE_ID => ScriptStateKind::AutoProtect,
-            _ => return None,
-        };
-        Some(Self { kind, started_at_ms: 0, time_to_keep_ms: value1 as u32 })
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        let state_id = reader.read_i32()?;
-        let keep_time = reader.read_u32()?;
-        let value = if state_id == AUTO_PROTECT_STATE_ID { 0 } else { reader.read_u32()? };
-        let mut state = Self::from_factory(state_id, keep_time as i32, value as i32)
-            .ok_or(LegacyReadBlock {
-                offset,
-                needed: 4,
-                available: payload.len().saturating_sub(offset),
-            })?;
-        state.started_at_ms = now_ms;
-        Ok(state)
-    }
-
-    pub(crate) const fn serialized_size(state_id: i32) -> Option<usize> {
-        match state_id {
-            AUTO_PROTECT_STATE_ID => Some(AUTO_PROTECT_STATE_BYTES),
-            USE_GOODS_ENLARGE_MAX_HP_STATE_ID
-            | USE_GOODS_ENLARGE_MAX_MP_STATE_ID
-            | IMPROVE_EXP_STATE_ID
-            | USE_GOODS_ENLARGE_DEF_STATE_ID
-            | USE_GOODS_ENLARGE_ELM_DEF_STATE_ID
-            | USE_GOODS_ENLARGE_FULL_MISS_STATE_ID => Some(SCRIPT_STATE_TIMED_BYTES),
-            _ => None,
-        }
-    }
-
-    fn coefficient(&self) -> Option<u32> {
-        match &self.kind {
-            ScriptStateKind::EnlargeMaxHp(value)
-            | ScriptStateKind::EnlargeMaxMp(value)
-            | ScriptStateKind::ImproveExp(value)
-            | ScriptStateKind::EnlargeDefense(value)
-            | ScriptStateKind::EnlargeElementDefense(value)
-            | ScriptStateKind::EnlargeFullMiss(value) => Some(*value),
-            ScriptStateKind::AutoProtect => None,
-        }
-    }
-
-    fn encoded_with_remaining(&self, remaining: u32) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(if self.is_auto_protect() {
-            AUTO_PROTECT_STATE_BYTES
-        } else {
-            SCRIPT_STATE_TIMED_BYTES
-        });
-        let mut writer = LegacyWriter::new(&mut bytes);
-        writer.write_i32(self.state_id());
-        writer.write_u32(remaining);
-        if let Some(value) = self.coefficient() { writer.write_u32(value); }
-        bytes
-    }
-
-    pub(crate) fn encoded(&self, now: impl FnMut() -> u32) -> Vec<u8> {
-        self.encoded_with_remaining(self.client_state_time(now) as u32)
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> Vec<u8> {
-        self.encoded_with_remaining(self.time_to_keep_ms)
-    }
-
-    pub(crate) const fn state_id(&self) -> i32 {
-        match &self.kind {
-            ScriptStateKind::EnlargeMaxHp(_) => USE_GOODS_ENLARGE_MAX_HP_STATE_ID,
-            ScriptStateKind::EnlargeMaxMp(_) => USE_GOODS_ENLARGE_MAX_MP_STATE_ID,
-            ScriptStateKind::ImproveExp(_) => IMPROVE_EXP_STATE_ID,
-            ScriptStateKind::EnlargeDefense(_) => USE_GOODS_ENLARGE_DEF_STATE_ID,
-            ScriptStateKind::EnlargeElementDefense(_) => USE_GOODS_ENLARGE_ELM_DEF_STATE_ID,
-            ScriptStateKind::EnlargeFullMiss(_) => USE_GOODS_ENLARGE_FULL_MISS_STATE_ID,
-            ScriptStateKind::AutoProtect => AUTO_PROTECT_STATE_ID,
-        }
-    }
-
-    pub(crate) const fn is_auto_protect(&self) -> bool {
-        matches!(self.kind, ScriptStateKind::AutoProtect)
-    }
-
-    pub(crate) const fn is_improve_exp(&self) -> bool {
-        matches!(self.kind, ScriptStateKind::ImproveExp(_))
-    }
-
-    pub(crate) fn client_state_time(&self, now: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.time_to_keep_ms, now) as i32
-    }
-
-    pub(crate) const fn expired(&self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.time_to_keep_ms) < now_ms
-    }
-
-    fn apply_combat_properties(&self, properties: &mut PlayerCombatProperties) {
-        match &self.kind {
-            ScriptStateKind::EnlargeMaxHp(value) => usegoodsenlargemaxhpstate::apply(*value, properties),
-            ScriptStateKind::EnlargeMaxMp(value) => usegoodsenlargemaxmpstate::apply(*value, properties),
-            ScriptStateKind::EnlargeDefense(value) => usegoodsenlargedefstate::apply(*value, properties),
-            ScriptStateKind::EnlargeElementDefense(value) => usegoodsenlargeelmdefstate::apply(*value, properties),
-            ScriptStateKind::EnlargeFullMiss(value) => usegoodsenlargefullmissstate::apply(*value, properties),
-            ScriptStateKind::ImproveExp(_) | ScriptStateKind::AutoProtect => {}
-        }
-    }
-
-    pub(crate) fn experience_multiplier_delta(&self) -> f64 {
-        match &self.kind {
-            ScriptStateKind::ImproveExp(value) => improveexpstate::multiplier_delta(*value),
-            _ => 0.0,
-        }
+pub(crate) fn script_experience_multiplier_delta(state: &ScriptMoveState) -> f64 {
+    match state.kind() {
+        ScriptStateKind::ImproveExp(value) => improveexpstate::multiplier_delta(*value),
+        _ => 0.0,
     }
 }
 
@@ -209,7 +97,7 @@ pub(crate) fn begin_primary_script_state(
     if state.is_auto_protect() && game.script_player_gm_level(player_id).unwrap_or(0) != 0 {
         return None;
     }
-    state.started_at_ms = now();
+    state.begin_at(now());
     let player = game.find_player(player_id)?;
     let participant = (
         player.shape().get_region_id(),
@@ -249,7 +137,7 @@ pub(crate) fn update_script_move_state_properties(
             let Some(state) = resolve_state_move_shape(game, region_id, holder)
                 .and_then(|shape| shape.applied_state::<ScriptMoveState>(key))
             else { return false; };
-            state.apply_combat_properties(&mut properties);
+            apply_script_combat_properties(state, &mut properties);
             let Some(player) = game.find_player_mut(target.id) else { return false; };
             player.update_state_combat_properties(|_| properties);
         }

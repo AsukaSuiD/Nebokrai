@@ -34,6 +34,7 @@ mod poisonfog;
 mod promotion;
 mod ride;
 mod roar;
+mod scriptstate;
 mod shieldabsorption;
 mod soulcollect;
 mod swordship;
@@ -134,6 +135,13 @@ pub use promotion::{
 };
 pub use ride::{RIDE_GOODS_CHECK_INTERVAL_MS, RIDE_STATE_ID, RideState};
 pub use roar::{ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState};
+pub use scriptstate::{
+    AUTO_PROTECT_STATE_BYTES, AUTO_PROTECT_STATE_ID, IMPROVE_EXP_STATE_ID,
+    SCRIPT_STATE_TIMED_BYTES, ScriptMoveState, ScriptStateKind,
+    USE_GOODS_ENLARGE_DEF_STATE_ID, USE_GOODS_ENLARGE_ELM_DEF_STATE_ID,
+    USE_GOODS_ENLARGE_FULL_MISS_STATE_ID, USE_GOODS_ENLARGE_MAX_HP_STATE_ID,
+    USE_GOODS_ENLARGE_MAX_MP_STATE_ID,
+};
 pub use soulcollect::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState};
 pub use swordship::{
     SWORDSHIP_2_STATE_ID, SWORDSHIP_3_STATE_ID, SWORDSHIP_4_STATE_ID, SWORDSHIP_STATE_BYTES,

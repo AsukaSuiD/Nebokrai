@@ -12,7 +12,6 @@
 //! Exact vtable направляет клиентский срок на
 //! `CAgilityState2::GetRemainedTime` по `0x005D5F30`.
 
-pub(crate) const IMPROVE_EXP_STATE_ID: i32 = 100_009;
 
 pub(crate) fn multiplier_delta(coefficient: u32) -> f64 {
     f64::from(coefficient) * f64::from(0.01_f32)

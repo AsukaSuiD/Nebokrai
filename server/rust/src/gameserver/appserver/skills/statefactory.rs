@@ -404,7 +404,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         state_id if ScriptMoveState::serialized_size(state_id as i32).is_some() => StateRecordLayout::typed(
             ScriptMoveState::serialized_size(state_id as i32)?, |payload, offset, _owner, _factory, _now| {
-                ScriptMoveState::decode(payload, offset, _now()).ok().map(StateData::Script)
+                ScriptMoveState::decode(payload, offset, _now).ok().map(StateData::Script)
             },
         ),
         RIDE_STATE_ID => StateRecordLayout::typed(

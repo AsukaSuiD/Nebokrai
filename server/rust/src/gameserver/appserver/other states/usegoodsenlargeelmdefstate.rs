@@ -10,7 +10,6 @@
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 
-pub(crate) const USE_GOODS_ENLARGE_ELM_DEF_STATE_ID: i32 = 100_011;
 
 pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
     let delta = truncate_original(f64::from(coefficient)

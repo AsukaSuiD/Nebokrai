@@ -5450,7 +5450,7 @@ impl CPlayer {
         self.move_shape
             .script_states()
             .fold(1.0_f64, |multiplier, state| {
-                multiplier + state.experience_multiplier_delta()
+                multiplier + super::scriptstate::script_experience_multiplier_delta(state)
             })
     }
 

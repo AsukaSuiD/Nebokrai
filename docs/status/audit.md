@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и записи сценарных состояний AddState 24 сентября 2026
+
+Payload и записи семи состояний `CMoveShape::AddState` перенесены в [`zone/effects/scriptstate.rs`](../../server/rust/zone/src/effects/scriptstate.rs): пять UseGoods (`100007`–`100012`), ImproveExp (`100009`) и AutoProtect (`110000`). Переходный Game сохраняет живые Begin/restart/AI/End и GM-gate; property-формулы остаются у файлов-владельцев, диспетчер по виду — в адаптере.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) vtable семи классов подтверждают: AutoProtect (`0x0065E00C`) — собственный End `0x005D44E0`, 8-байтная запись `0x005F51E0`; пять UseGoods — End `0x005D5B80`, getter `0x005F2CD0`, 12-байтная запись `0x005D4D10`; ImproveExp — getter `0x005D5F30`, AI `0x005D60B0`, 12-байтная запись `0x005E7330`; readers `0x004F9D80`/`0x005D6190`/`0x005EAAC0` читают clock после внешнего ID. Исправления Rust: decode читает часы после проверки ID вместо расхода до входа; дублирующие константы ID в файлах формул заменены общими Zone, неиспользуемый переходный реэкспорт `timed_client_state_time` удалён. Основания — в [описании сценарных состояний](../gameplay/attributes-and-states.md#сценарные-состояния-addstate).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,65 секунды без предупреждений; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактические property-эффекты не проверялись.
+
 ## Zone effects: данные и запись TeamState 24 сентября 2026
 
 Данные и запись переменной длины `CTeamState` (`0x186A6`) перенесены в [`zone/effects/teamstate.rs`](../../server/rust/zone/src/effects/teamstate.rs). Переходный Game сохраняет живые Begin/restart/AI/End и пакеты.

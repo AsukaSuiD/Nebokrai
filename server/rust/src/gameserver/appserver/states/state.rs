@@ -1231,9 +1231,6 @@ pub(crate) const fn default_additional_data() -> u32 {
     0
 }
 
-// Переходный путь для ещё не перенесённых состояний Game.
-pub(crate) use nebokrai_zone::effects::timed_client_state_time;
-
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E

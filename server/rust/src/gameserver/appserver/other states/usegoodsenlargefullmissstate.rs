@@ -9,7 +9,6 @@
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
-pub(crate) const USE_GOODS_ENLARGE_FULL_MISS_STATE_ID: i32 = 100_012;
 
 pub(crate) fn apply(coefficient: u32, properties: &mut PlayerCombatProperties) {
     properties.full_miss = properties.full_miss.wrapping_add(coefficient as u16);

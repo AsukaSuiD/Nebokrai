@@ -9,7 +9,7 @@
 //! Default ctor 0x005D41A0 задаёт keep=0; промежуточный объект заменён
 //! прямой загрузкой полей общего payload, без наблюдаемых callbacks.
 
-pub(crate) const AUTO_PROTECT_STATE_ID: i32 = 110_000;
+pub(crate) use nebokrai_zone::effects::AUTO_PROTECT_STATE_ID;
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
 
