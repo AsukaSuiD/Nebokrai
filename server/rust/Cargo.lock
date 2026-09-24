@@ -974,6 +974,8 @@ dependencies = [
  "nom",
  "parking_lot",
  "quick-xml",
+ "socket2",
+ "tokio",
  "uuid",
  "zerocopy",
 ]

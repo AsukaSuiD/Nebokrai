@@ -2,6 +2,6 @@
 //! Здесь реэкспорт для переходных потребителей всех направлений.
 
 pub(crate) use nebokrai_shared::network::{
-    legacy_bind_endpoint, legacy_inet_addr, legacy_ipv4_word, SocketIdAllocator, DEFAULT_IP,
-    DEFAULT_PORT, DEFAULT_SOCKET_TYPE,
+    legacy_inet_addr, legacy_ipv4_word, SocketIdAllocator, DEFAULT_IP, DEFAULT_PORT,
+    DEFAULT_SOCKET_TYPE,
 };
