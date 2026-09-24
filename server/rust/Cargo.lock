@@ -968,6 +968,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "lzo",
+ "md-5",
  "nom",
  "quick-xml",
  "uuid",
