@@ -1,7 +1,7 @@
 //! Базовый `CBaseObject` старого GameServer перенесён в Zone regions.
 //! Здесь реэкспорт типов и фабрики отдельных ветвей, принадлежащих доменным классам.
 
-pub(crate) use nebokrai_zone::regions::baseobject::{BaseObjectDecodeError, CBaseObject};
+pub(crate) use nebokrai_zone::regions::baseobject::CBaseObject;
 
 use super::monster::CMonster;
 use super::npc::CNpc;

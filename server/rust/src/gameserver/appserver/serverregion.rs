@@ -274,18 +274,7 @@ const CITY_STATE_DECLARE: i32 = 1;
 const CITY_STATE_MASS: i32 = 2;
 const CITY_STATE_FIGHT: i32 = 3;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct RegionParamState {
-    pub(crate) region_id: i32,
-    pub(crate) max_tax_rate: i32,
-    pub(crate) current_tax_rate: i32,
-    pub(crate) total_tax: u32,
-    pub(crate) today_total_tax: u32,
-    pub(crate) superior_region_id: i32,
-    pub(crate) turn_in_tax_rate: i32,
-    pub(crate) owned_faction_id: i32,
-    pub(crate) owned_union_id: i32,
-}
+pub(crate) use nebokrai_zone::regions::regionparam::RegionParamState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RegionTaxAddition {

@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone regions: proxy-region unit 24 сентября 2026
+
+Proxy-region `CProxyServerRegion` (сознательно неполный wire: base decode, country byte, war-region type, точный блок `0x24` `tagRegionParam`) и его wire-проекция `RegionParamState` перенесены в `zone/src/regions/`: тип проекции — в новый [`regionparam.rs`](../../server/rust/zone/src/regions/regionparam.rs), декодер — в [`proxyserverregion.rs`](../../server/rust/zone/src/regions/proxyserverregion.rs). Определение struct в `serverregion.rs` заменено реэкспортом — прежние точки налоговой диагностики и snapshots region-семейства работают без правок; потребители proxy (`game`, `servermessage`) — через glob-шим. Парный World serializer остаётся методом большого `worldregion.rs` и в этот шаг не переносился.
+
+Машинное основание сверено на двух точных парах. Game (`4F5C98E0`, RSDS match): `CProxyServerRegion::DecordFromByteArray` `0x5CA910` — сначала `CBaseObject::DecordFromByteArray` `0x4FC440` (тот же адрес, что сверялся при переносе базового объекта), затем country byte по `+0x74`, war-region type по `+0x210` и buffer-read ровно `0x24` по `+0x214`. World (`F3AC454D`, RSDS match): `CWorldRegion::AddToByteArrayForProxy` `0x473F00` — зеркально: базовый writer `0x4D55C0`, country byte из `+0x80` через `0x4A3450`, war-region type из `+0xF8` через `0x4A3340` и raw-блок `0x24` из `+0xFC`. Порядок и размерность пары совпадают.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Ссылки обновлены в [realm-and-zone.md](../architecture/realm-and-zone.md), [regions-and-visibility.md](../gameplay/regions-and-visibility.md) и [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm content: конфигурация объединения battle fairy 24 сентября 2026
 
 `CBattleFairyProperty` (loader конфигурации объединения по caller-пути и wire subtype `0x2D` с signed count и сырыми `0x7C`-байтовыми записями) перенесён из `src/worldserver/appworld/goods/cbattlefairyproperty.rs` в [`realm/src/content/battlefairyproperty.rs`](../../server/rust/realm/src/content/battlefairyproperty.rs). Граница `path` остаётся у вызывающего; потребители (world `runtime`, `game`, `servermessage`) работают через glob-шим без правок. Одноимённый вариант на стороне gameserver — отдельный владелец со своей цепочкой, переносом не затронут.

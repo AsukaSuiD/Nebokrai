@@ -3,7 +3,9 @@
 pub mod area;
 pub mod baseobject;
 mod identity;
+pub mod proxyserverregion;
 pub mod region;
+pub mod regionparam;
 pub mod shape;
 pub mod summonedcreature;
 
