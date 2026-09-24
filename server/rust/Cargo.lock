@@ -920,12 +920,16 @@ dependencies = [
 name = "nebokrai-realm"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "encoding_rs",
  "freetype-rs",
  "getrandom 0.4.3",
  "nebokrai-shared",
  "parking_lot",
+ "reqwest",
+ "tiberius",
  "tokio",
+ "tokio-util",
  "tracing",
  "walkdir",
 ]

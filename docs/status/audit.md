@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm access: GAS HTTP и login DB 25 сентября 2026
+
+В [`realm/src/access/`](../../server/rust/realm/src/access/) перенесены две связанные части доступа к входу: [`CMyWinInet`](../../server/rust/realm/src/access/mywininet.rs) (blocking reqwest с теми же HTTP/1 POST headers, системным proxy, обходом проверки CA старого сервера при проверке hostname и 1024-байтовым Recv-накопителем) и [`CRsCDKey`](../../server/rust/realm/src/access/rscdkey.rs) (CDKeyBan, IP-фильтры, matrix-card операции, `GetBanTime` nullable datetime, `FixPtAcc`, `ValidateLocalPassord`, GAS `getAccInfoEx`; отдельное соединение на операцию). Швы не потребовались — оба уже использовали только workspace-пакеты; потребители (`gasthread`, `acclogthread`, `loginqueue`, loginserver `game`, `process`) работают через glob-шимы без правок. В манифест Realm добавлены `reqwest`, `tiberius`, `chrono`, `tokio-util` теми же версиями и фичами; `Cargo.lock` обновлён cargo только в секции realm.
+
+Машинное основание на точной паре `loginserver.exe` + `LoginServer.pdb` (`1C84006D`, RSDS match): `CRsCDKey::IPIsAllowed` `0x4625E0` проверяет setup-флаг по `+0x16D` и выполняет ручной байт-реверс 32-битного raw IP перед сравнением — тот самый `bswap` из заголовка; ctor `CMyWinInet` `0x425200` ставит vtable `0x486F30` и два `rep stosd`, обнуляя `0x40` dword c `+0x10` и `0x100` dword c `+0x110` — тот самый 1024-байтовый буфер Recv. Остальные условия (отдельное соединение на операцию, нетранзакционный `NOLOCK → UPDATE/INSERT` у `CDKeyBan`, allow/forbid ошибки в `false`) сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений; rustfmt и `git diff --check` чисты. Отметка владельца обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm access: генератор validcode 25 сентября 2026
 
 Генератор `validcode` LoginServer (`ValidCode.ini` с GBK-глифами, выбор/поворот/шум, BMP `0x70B6` с исторически несоответствующими `bfSize 0xF6` и `biSizeImage 0xC0`, сравнение ответа по исходным восьми байтам) перенесён из `src/loginserver/applogin/validcode.rs` в новый компонент [`realm/src/access/`](../../server/rust/realm/src/access/) — принятый таблицей компонентов дом клиента до мирового входа и вариантов допуска. Швы не потребовались; потребители (`loginqueue`, `logmessage`) работают через glob-шим без правок. В манифест Realm добавлены те же версии `encoding_rs`, `freetype-rs` (bundled) и `getrandom`, что в корневом пакете; `Cargo.lock` обновлён cargo всего тремя строками.
