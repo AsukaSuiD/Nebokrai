@@ -10,6 +10,7 @@ mod filesinfo;
 mod hitlevel;
 mod honorelimilateconfig;
 mod incrementshoplist;
+mod leitingsetup;
 mod lingbao;
 mod globesetup;
 mod gmlist;
@@ -55,6 +56,12 @@ pub use incrementshoplist::{
     CIncrementShopList, IncrementShopDecodeError, IncrementShopGoodsQuery,
     IncrementShopGoodsResult, IncrementShopItem, IncrementShopLoadError,
     IncrementShopLoadReport, IncrementShopSerializeError, IncrementShopStringField,
+};
+pub use leitingsetup::{
+    CThingSetup, LeiTingDailyThing, LeiTingLocalTime, LeiTingThingNode,
+    ThingSetupCodecError, ThingSetupEmptyFile, ThingSetupFileLoadError,
+    ThingSetupLoadReport, ThingSetupTextCutoff, ThingSetupTextCutoffReason,
+    ThingSetupTextField,
 };
 pub use lingbao::{
     CLingBaoSetup, LingBaoDecodeError, LingBaoFirstNode, LingBaoLoadReport,

@@ -1,5 +1,14 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: ежедневные действия LeiTing 25 сентября 2026
+
+Таблица ежедневных действий `CThingSetup` (deque мастер-записей TID/max/point, token loader с логами, wire-codec и daily projection) перенесена из `src/setup/leitingsetup.rs` в [`shared/src/resources/leitingsetup.rs`](../../server/rust/shared/src/resources/leitingsetup.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла; логи loader-а по-прежнему передаются замыканием caller-а, внешних зависимостей у модуля нет. Установленный экземпляр и его потребители остаются у владельцев ролей, включая World-цепочки DB-проекций игроков.
+
+В этом шаге wire-формат и projection сверены с машинным кодом зафиксированной пары сборок. World writer не экспортируется публичными символами (тело VA 0x481ae0, вызывается из reload-блока `0x36` по 0x17f99): пишет u32 count (`[0x6bf038]`) и шесть raw байт на запись — TID/max/point; Rust `add_to_byte_array` с тремя u16 даёт те же байты. Game decoder `DecordFromByteArray@CThingSetup` (decoder VA 0x4db5a0) очищает deque, читает count 6-байтовыми записями в `push_back`, собирает журнальную строку с count. Daily projection `GetDailyThingList` (worldserver VA 0x481ff0) подтверждена полностью: TID ≥ 2000 входит всегда, строго `1000 < TID < 2000` — только при совпадении `(TID % 1000) % 7` с `tm_wday` от `time()` отдельно для каждого элемента; пустой результат не замещает destination (swap выполняется лишь при непустом локальном итоге). `SetDailyUpdateStamp` (VA 0x481ac0) пишет 23:59:59 в tm hour/minute/second. Указатели потока: World reload отправляет subtype `0x36`, Game decord-handling того же потока в диспетчере начальной конфигурации (call site RVA 0x9de62).
+
+Класс расхождения `max(0)`: outer count decoder-а выходит по JBE — отрицательный count оригинал принял бы за огромный loop с чтением за пределами буфера; Rust отвечает явной ошибкой `NegativeCount` вместо пустого входа или отказа. Уточнение записано в заголовок Shared-файла. Text-loader повреждённого хвоста (последняя полная запись и нулевые остатки полей) этим проходом не дизассемблировался — основание прежнее: заголовок.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 38,11 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
 ## Shared resources: тюремная конфигурация 25 сентября 2026
 
 Тюремная конфигурация `PrisonConf` (Option PK-порог, signed-byte map `i8 → PrisonParam`, позиционный loader и wire-codec) перенесена из `src/setup/prisonconf.rs` в [`shared/src/resources/prisonconf.rs`](../../server/rust/shared/src/resources/prisonconf.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла. Установленный экземпляр и его потребители остаются у владельцев ролей.
