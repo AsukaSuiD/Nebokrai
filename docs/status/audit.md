@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm activities: DB-адаптер Gods Battle 25 сентября 2026
+
+DB-адаптер Gods Battle перенесён из `src/dbaccess/worlddb/rsgodsbattle.rs` в [`realm/activities/rsgodsbattle.rs`](../../server/rust/realm/src/activities/rsgodsbattle.rs): таблицы `CSL_GODSBATTLE`/`CSL_GODSBATTLE_NPC` (load/delete/insert с исходным SQL-порядком), top-ten SZL игроков из `CSL_PLAYER_ABILITY`, notice queue с checkpoint/drain-семантикой, save в переданной активной транзакции или автономном соединении. Связи уже имели владельцев (`CGodsBattleConf` → Shared resources, rssetup → realm persistence). Трейт `RsGodsBattleOwner` переведён на desugar по прецеденту `rssetup`: все 6 async-методов с `+ Send` (захваты — plain data snapshots и `&mut CGodsBattleConf`/`Option<&mut WorldTdsClient>`), sync `pop_notice` без изменений. Старый файл стал glob-шимом; потребители поимённо (`gmmessage`, `servermessage`, world `game`/`runtime`/`savedb`) не тронуты.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): строки `CSL_GODSBATTLE` (6 вхождений), `CSL_GODSBATTLE_NPC` (3) и `GodsBattleFaction` (2) присутствуют в той же сборке. Ошибки/notice семантика и SQL-формы сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm content/persistence: общие переменные мира и CSL_GENVAR 25 сентября 2026
 
 Связная пара перенесена из старого пакета: `CVariableList` (список переменных с load/save оркестрацией и `VariableListSaveSource`) в [`realm/content/variablelist.rs`](../../server/rust/realm/src/content/variablelist.rs), DB-адаптер таблицы `CSL_GENVAR` (prefix-scan SELECT, INSERT/UPDATE, notice) в [`realm/persistence/rsgenvar.rs`](../../server/rust/realm/src/persistence/rsgenvar.rs). Трейт `RsGenVarOwner` переведён на desugar по прецеденту `rssetup`: `load_general_variables` с `+ Send` (future держит только `&mut CVariableList`), `save` без `Send` (future держит `&S` через точки await, а bound `S: VariableListSaveSource` в `save_var_data` и четырёх точках `savedb.rs` не требовал ни Send, ни Sync — сохранение прежней сигнатуры точнее повторяет исходный async-trait). Старые файлы стали glob-шимами; потребители (world `game`, `runtime`, `savedb`, `servermessage`) не тронуты, имена проверены поимённо.
