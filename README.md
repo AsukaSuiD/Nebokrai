@@ -27,12 +27,12 @@ Game owns live regional state; World handles character persistence. Tokio provid
 
 ## Current status
 
-As documented on **21 September 2026**:
+As documented in the [audit](docs/status/audit.md) through **24 September 2026**:
 
 - All six Rust services compiled and ran together in a local Linux development setup.
-- The legacy client reached the world and the owner was able to move a character, although movement was visibly delayed.
-- A later Game-loop correction reduced the measured release AI pass to roughly the 80 ms tick budget; a clean release restart reached 549 regions and a healthy client listener.
-- **A stable, playable session has not been demonstrated.** The same client scenario still needs to be repeated on that corrected release build.
+- The legacy client reached the world. The first movement attempt was visibly delayed; after Game-loop and self-delivery fixes, a short release-build check showed continuous movement without the earlier stalls.
+- The measured release AI pass was reduced to roughly the 80 ms tick budget; a clean release restart reached 549 regions and a healthy client listener.
+- **A stable, playable session has not been demonstrated.** The short movement check does not establish sustained play.
 - Full persistence across sessions, region transitions, billing, auctions, and sustained performance remain unproven.
 
 The current work is component refactoring with technical debt and defects addressed in each affected area; see the [roadmap](docs/overview/roadmap.md). The [status overview](docs/overview/status.md) separates implementation from observed behavior and links to the detailed evidence.
