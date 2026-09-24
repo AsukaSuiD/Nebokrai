@@ -2,10 +2,12 @@
 
 pub mod acclog;
 pub mod acclogqueue;
+pub mod acclogthread;
 pub mod authproc;
 pub mod configreader;
 pub mod dbcontext;
 pub mod dbqueue;
+pub mod gasoperator;
 pub mod kl_ipfilter;
 pub mod kl_multi_list;
 pub mod message_func;
