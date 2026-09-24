@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: торговые списки NPC 25 сентября 2026
+
+Общие торговые списки `CTradeList` (записи NPC и товара, loader, wire-codec и lookup) перенесены из `src/setup/tradelist.rs` в [`shared/src/resources/tradelist.rs`](../../server/rust/shared/src/resources/tradelist.rs). Обе роли используют одну реализацию: World загружает и сериализует, Game принимает и ищет по имени NPC; прежний `src/setup/tradelist.rs` стал тонким реэкспортом. Алгоритм не менялся: очистка карты до разбора, duplicate NPC заменяет список, публикация NPC только после полного goods-list, сужение чисел до byte и byte-лексикографический порядок `BTreeMap`.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `setup/tradelist.cpp`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка списков в работающий Game и загрузка текстов World этим переносом не проверялись. Основания — в [магазине](../gameplay/trade.md#магазин-npc-товар-цена-и-необратимый-порядок).
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: глобальный setup и маршрутизатор регионов 25 сентября 2026
 
 `CGlobeSetup` (0x1114-байтный snapshot, typed accessors, decode/loader) и `CRegionRouter` (маршрутизация переходов) перенесены из `src/setup/` в [`shared/src/resources/globesetup.rs`](../../server/rust/shared/src/resources/globesetup.rs) и [`shared/src/resources/regionrouter.rs`](../../server/rust/shared/src/resources/regionrouter.rs). Обе роли используют одну реализацию: World загружает тексты и сериализует, Game принимает и хранит экземпляры; прежние `src/setup/*` стали тонкими реэкспортами. World JJC получил локальный adapter `GlobeSetupJjcWorldConfig` поверх нового Shared view `jjc_run_config_fields`, не зависящего от типа старого владельца. Счёт дублей router теперь возвращается из Game-декодера и журналируется обработчиком вместо скрытого trace библиотеки.
