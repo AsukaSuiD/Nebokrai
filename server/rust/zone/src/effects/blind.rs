@@ -9,8 +9,10 @@
 //! (vtable 0x00662274, ID 0x73), Rush2 VA 0x005F12E0/0x005F1350
 //! (vtable 0x0066041C, ID 0x7C), Seal VA 0x005FF800/0x005FF870
 //! (vtable 0x006615F4, ID 0x138), Strike VA 0x00606830
-//! (vtable 0x00662154, ID 0xDD).
-//! Все восемь vtable разделяют Serialize VA 0x005F51E0 (ID, затем остаток
+//! (vtable 0x00662154, ID 0xDD), SpiderWeb VA 0x005EA6E0/0x005EA750
+//! (vtable 0x0065FBCC, ID 0x199), BossBlueQuake VA 0x005E8590/0x005E8600
+//! (vtable 0x0065F934, ID 0x1F8).
+//! Все десять vtable разделяют Serialize VA 0x005F51E0 (ID, затем остаток
 //! через getter), Unserialize VA 0x005EAAC0 (часы после внешнего ID и до
 //! сохранённого остатка), GetRemainedTime VA 0x005F2CD0 и AI
 //! VA 0x005D5BA0 (завершение только при `now > start + keep`).
@@ -26,6 +28,10 @@ pub const KNOCK_OUT_STATE_ID: u32 = 0x192;
 pub const KNOCK_OUT_STATE_BYTES: usize = BLIND_STATE_BYTES;
 pub const BOA_LOCK_STATE_ID: u32 = 0xd2;
 pub const BOA_LOCK_STATE_BYTES: usize = BLIND_STATE_BYTES;
+pub const SPIDER_WEB_STATE_ID: u32 = 0x199;
+pub const SPIDER_WEB_STATE_BYTES: usize = BLIND_STATE_BYTES;
+pub const BOSS_BLUE_QUAKE_STATE_ID: u32 = 0x1f8;
+pub const BOSS_BLUE_QUAKE_STATE_BYTES: usize = BLIND_STATE_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BlindState<const ID: u32 = BLIND_STATE_ID, const BLOCKS_FIGHTING: bool = true> {
@@ -107,3 +113,5 @@ pub type KnockOutState = BlindState<KNOCK_OUT_STATE_ID>;
 /// Единственное отличие BoaLock в данных семейства: запрет боя не ставится
 /// (его vtable имеет собственный End VA 0x005FB800 и пустой OnAction).
 pub type BoaLockState = BlindState<BOA_LOCK_STATE_ID, false>;
+pub type SpiderWebState = BlindState<SPIDER_WEB_STATE_ID>;
+pub type BossBlueQuakeState = BlindState<BOSS_BLUE_QUAKE_STATE_ID>;

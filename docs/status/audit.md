@@ -1,5 +1,11 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: SpiderWeb и BossBlueQuake в blind-семействе 24 сентября 2026
+
+Payload `CSpiderWebState` (`0x199`) и `CBossBlueQuakeState` (`0x1F8`) присоединены к общему типу семейства в [`zone/effects/blind.rs`](../../server/rust/zone/src/effects/blind.rs); переходный Game сохраняет живые Begin/restart/End, visual и обходы. По совпадающей паре Game EXE/PDB найдены конструкторы `CSpiderWebState` VA `0x005EA6E0/0x005EA750` (vtable `0x0065FBCC`) и `CBossBlueQuakeState` VA `0x005E8590/0x005E8600` (vtable `0x0065F934`): каждый записывает свой ID и срок без чтения часов, а vtable разделяют с семейством Serialize `0x005F51E0`, Unserialize `0x005EAAC0`, getter `0x005F2CD0`, AI `0x005D5BA0` и End `0x005EA9A0`. Адрес `0x005EA750` и слоты `0x005EA7D0/0x005EA8B0` совпали с ранее сохранёнными метаданными ctor/Begin. Ранее адреса обоих классов не были зафиксированы. Исправления Rust: decode обоих типов читает часы после проверки ID; ручная сериализация SpiderWeb заменена общим `encoded`; `new(0, x)` сведены к `new(x)`. Основания — в [описании blind-семейства](../gameplay/attributes-and-states.md#blind-семейство-блокировка-движения-и-боя).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,76 секунды без предупреждений; `rustfmt` Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактические запреты и клиентский visual не проверялись.
+
 ## Zone effects: данные и запись Promotion 24 сентября 2026
 
 Данные, срок и 12-байтная запись `CPromotionState` (`0x142`) перенесены в [`zone/effects/promotion.rs`](../../server/rust/zone/src/effects/promotion.rs). Переходный Game сохраняет живой Begin/restart с visual и участниками; применение коэффициентов в бою и лечении не менялось.

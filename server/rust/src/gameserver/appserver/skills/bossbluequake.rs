@@ -571,7 +571,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         };
         game.with_published_player_ai(player_id, player_ai, |game| {
             game.apply_boss_blue_quake_control(
-                region_id, player_id, target, BossBlueQuakeState::new(0, duration),
+                region_id, player_id, target, BossBlueQuakeState::new(duration),
                 back_steps, move_speed, runtime,
             );
         });
@@ -695,7 +695,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             scaled_monster_duration(persist, properties.query_property(SKILL_USAGE_TIME_PERCENT))
         };
         replace_quake_state(
-            game, target_region, identity, (region_id, source), BossBlueQuakeState::new(0, duration),
+            game, target_region, identity, (region_id, source), BossBlueQuakeState::new(duration),
             || runtime.now_milliseconds(),
         );
         let Some((x, y, moved)) = quake_knockback_destination(

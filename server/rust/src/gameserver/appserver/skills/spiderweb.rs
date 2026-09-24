@@ -122,7 +122,7 @@ fn install_state<Runtime: GameMainLoopRuntime>(
         .wrapping_add(properties.query_property(SKILL_USAGE_CONST) as i32)
         .max(1);
     let keep = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME).wrapping_mul(multiplier as u32);
-    let state = SpiderWebState::new(0, keep);
+    let state = SpiderWebState::new(keep);
     if let Some((position, _)) = resolve_state_move_shape(game, target_region, target.1)
         .and_then(|shape| shape.find_state_position(|state| state.state_id() == SPIDER_WEB_SKILL_ID))
     {

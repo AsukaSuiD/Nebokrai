@@ -201,7 +201,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         SPIDER_WEB_SKILL_ID => StateRecordLayout::typed(
             SPIDER_WEB_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::spiderwebstate::SpiderWebState::decode(payload, offset, _now()).ok().map(StateData::SpiderWeb)
+                super::spiderwebstate::SpiderWebState::decode(payload, offset, _now).ok().map(StateData::SpiderWeb)
             },
         ),
         SEAL_STATE_ID => StateRecordLayout::typed(
@@ -241,7 +241,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         BOSS_BLUE_QUAKE_STATE_ID => StateRecordLayout::typed(
             BOSS_BLUE_QUAKE_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::bossbluequakestate::BossBlueQuakeState::decode(payload, offset, _now()).ok().map(StateData::BossBlueQuake)
+                super::bossbluequakestate::BossBlueQuakeState::decode(payload, offset, _now).ok().map(StateData::BossBlueQuake)
             },
         ),
         KNIGHT_CUT_STATE_ID => StateRecordLayout::typed(

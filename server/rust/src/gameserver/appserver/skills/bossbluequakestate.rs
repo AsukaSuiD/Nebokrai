@@ -1,6 +1,8 @@
-//! Блокировка землетрясения CBossBlueQuakeState (0x1f8).
-//! Источник: gameserver.exe + GameServer.pdb, исходный владелец
-//! appserver/skills/bossbluequakestate.cpp.
+//! Блокировка землетрясения CBossBlueQuakeState (0x1f8), переходный адаптер
+//! Game. Источник: gameserver.exe + GameServer.pdb, исходный владелец
+//! appserver/skills/bossbluequakestate.cpp. Данные и 8-байтная запись
+//! перенесены в Zone `effects/blind.rs` (конструкторы VA
+//! 0x005E8590/0x005E8600, vtable 0x0065F934).
 //!
 //! Объектный Begin использует общий Blind-адаптер: timestamp
 //! меняется только при U; loop1/Update0 предшествует move/fight-lock и записи
@@ -9,86 +11,23 @@
 //! End: visual → S → fight-unlock → move-unlock → RemoveState
 //! того же ключа, без чтения часов. Истечение использует строгий wrapping deadline.
 //! GetRemainedTime читает часы второй раз при положительном остатке.
-//! DB-запись ID/remaining занимает 8 байт; Load получает отдельный timestamp,
-//! который Restart не заменяет. OnUpdateProperties возвращает 1
-//! без изменения свойств, визуала или блокировок.
+//! Load получает отдельный timestamp, который Restart не заменяет.
+//! OnUpdateProperties возвращает 1 без изменения свойств, визуала или блокировок.
 
 use crate::gameserver::appserver::states::state::{
     begin_base_applied_state, begin_applied_state_visual, update_applied_state_visual_base,
 };
 use crate::gameserver::appserver::moveshape::StateKey;
-
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    resolve_state_move_shape, resolve_state_move_shape_mut, timed_client_state_time,
+    resolve_state_move_shape, resolve_state_move_shape_mut,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
-pub(crate) const BOSS_BLUE_QUAKE_STATE_ID: u32 = 0x1f8;
-pub(crate) const BOSS_BLUE_QUAKE_STATE_BYTES: usize = 8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BossBlueQuakeState {
-    started_at_ms: u32,
-    keep_time_ms: u32,
-}
-
-impl BossBlueQuakeState {
-    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
-        Self { started_at_ms, keep_time_ms }
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != BOSS_BLUE_QUAKE_STATE_ID {
-            return Err(LegacyReadBlock {
-                offset,
-                needed: 4,
-                available: payload.len().saturating_sub(offset),
-            });
-        }
-        Ok(Self::new(now_ms, reader.read_u32()?))
-    }
-
-
-
-    pub(crate) fn encoded_for_install(self) -> [u8; BOSS_BLUE_QUAKE_STATE_BYTES] {
-        self.encoded_with_remaining(self.keep_time_ms)
-    }
-
-    pub(crate) fn encoded(
-        self,
-        now_milliseconds: impl FnMut() -> u32,
-    ) -> [u8; BOSS_BLUE_QUAKE_STATE_BYTES] {
-        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
-    }
-
-    fn encoded_with_remaining(self, remaining: u32) -> [u8; BOSS_BLUE_QUAKE_STATE_BYTES] {
-        let mut bytes = [0; BOSS_BLUE_QUAKE_STATE_BYTES];
-        bytes[..4].copy_from_slice(&BOSS_BLUE_QUAKE_STATE_ID.to_le_bytes());
-        bytes[4..].copy_from_slice(&remaining.to_le_bytes());
-        bytes
-    }
-
-    pub(crate) const fn skill_id(self) -> u32 { BOSS_BLUE_QUAKE_STATE_ID }
-
-    pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
-        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
-    }
-}
-
-impl super::blindstate::BlindStatePayload for BossBlueQuakeState {
-    fn blind_state_id(&self) -> u32 { BOSS_BLUE_QUAKE_STATE_ID }
-    fn begin_at(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
-    fn remaining(&self, now: &mut dyn FnMut() -> u32) -> u32 { self.client_time(now) as u32 }
-    fn install_record(&self) -> [u8; BOSS_BLUE_QUAKE_STATE_BYTES] { self.encoded_for_install() }
-}
+pub(crate) use nebokrai_zone::effects::{
+    BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID, BossBlueQuakeState,
+};
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точную точку круговой доставки состояния")]
 pub(crate) fn send_boss_blue_quake_state_visual(
