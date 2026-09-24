@@ -17674,7 +17674,12 @@ impl CGame {
             ) else {
                 return Ok(0);
             };
-            message.send_to_around(Some(region), player.shape(), None, &runtime.with_player(player))
+            message.send_to_around(
+                Some(region),
+                player.shape(),
+                None,
+                &runtime.with_player(player.player_id(), player.team_id(), player.shape()),
+            )
         };
 
         let mut position_delivery = None;
@@ -33451,7 +33456,10 @@ impl CGame {
             return;
         };
         let _ = message.send_to_around(
-            Some(region.base()), player.shape(), excluded_player_id, &runtime.with_player(player),
+            Some(region.base()),
+            player.shape(),
+            excluded_player_id,
+            &runtime.with_player(player.player_id(), player.team_id(), player.shape()),
         );
     }
 
@@ -39892,7 +39900,7 @@ impl CGame {
             area_width,
             area_height,
         )
-        .map(|around| around.with_player(&player))
+        .map(|around| around.with_player(player.player_id(), player.team_id(), player.shape()))
         .and_then(|around| {
             Some(player
                 .move_step(

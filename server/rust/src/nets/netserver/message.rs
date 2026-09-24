@@ -70,8 +70,9 @@
 //! реализация и не новый общий protocol framework.
 
 use crate::gameserver::appserver::area::CArea;
-use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionRecipientsSnapshot};
+use crate::gameserver::appserver::session::cplug::CPlug;
+use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeCoordinateBlock};
 use crate::gameserver::gameserver::game::CGame;
@@ -167,88 +168,40 @@ pub(crate) enum GameMessageRoute {
     UniBill,
 }
 
-struct GameServerAroundPlayer {
-    player_id: i32,
-    team_id: i32,
-    shape: CShape,
-}
+pub(crate) use nebokrai_zone::app::game_message::{CMessage, SendMessageError};
+pub(crate) use nebokrai_zone::replication::around::{
+    AroundPlayerLookup, AroundPlayerView, AroundSessionLookup,
+};
 
-enum GameServerAroundPlayerRef<'a> {
-    Detached(&'a GameServerAroundPlayer),
-    Live(&'a CPlayer),
-}
+/// Конкретная around-runtime привязка старого пакета к `CGame` и
+/// `CSessionFactory`: generic-владелец живёт в Zone `replication/`, а
+/// downstream-подписи старого пакета сохраняют прежнюю одну lifetime-позицию.
+pub(crate) type GameServerAroundRuntime<'a, P = CGame, S = CSessionFactory> =
+    nebokrai_zone::replication::around::GameServerAroundRuntime<'a, P, S>;
 
-impl GameServerAroundPlayerRef<'_> {
-    fn player_id(&self) -> i32 {
-        match self {
-            Self::Detached(player) => player.player_id,
-            Self::Live(player) => player.player_id(),
-        }
-    }
-
-    fn team_id(&self) -> i32 {
-        match self {
-            Self::Detached(player) => player.team_id,
-            Self::Live(player) => player.team_id(),
-        }
-    }
-
-    fn shape(&self) -> &CShape {
-        match self {
-            Self::Detached(player) => &player.shape,
-            Self::Live(player) => player.shape(),
-        }
-    }
-}
-
-pub(crate) struct GameServerAroundRuntime<'a> {
-    game: &'a CGame,
-    sessions: &'a CSessionFactory,
-    player: Option<GameServerAroundPlayer>,
-    area_width: i32,
-    area_height: i32,
-}
-
-impl<'a> GameServerAroundRuntime<'a> {
-    /// Создаёт runtime-view только для доказанных положительных area spans.
-    pub(crate) fn new(
-        game: &'a CGame,
-        sessions: &'a CSessionFactory,
-        area_width: i32,
-        area_height: i32,
-    ) -> Option<Self> {
-        (area_width > 0 && area_height > 0).then_some(Self {
-            game,
-            sessions,
-            player: None,
-            area_width,
-            area_height,
+impl AroundPlayerLookup for CGame {
+    fn around_player_view(&self, player_id: i32) -> Option<AroundPlayerView<'_>> {
+        self.find_player(player_id).map(|player| AroundPlayerView {
+            player_id: player.player_id(),
+            team_id: player.team_id(),
+            shape: player.shape(),
         })
     }
 
-    pub(crate) fn with_player(mut self, player: &CPlayer) -> Self {
-        self.player = Some(GameServerAroundPlayer {
-            player_id: player.player_id(),
-            team_id: player.team_id(),
-            shape: player.shape().clone(),
-        });
-        self
-    }
-
-    fn resolve_player(&self, player_id: i32) -> Option<GameServerAroundPlayerRef<'_>> {
-        self.player
-            .as_ref()
-            .filter(|player| player.player_id == player_id)
-            .map(GameServerAroundPlayerRef::Detached)
-            .or_else(|| {
-                self.game
-                    .find_player(player_id)
-                    .map(GameServerAroundPlayerRef::Live)
-            })
+    fn team_session_id(&self, team_id: u32) -> i32 {
+        self.get_team_session_id(team_id)
     }
 }
 
-pub(crate) use nebokrai_zone::app::game_message::{CMessage, SendMessageError};
+impl AroundSessionLookup for CSessionFactory {
+    fn query_session(&self, session_id: i32) -> Option<&CSession> {
+        CSessionFactory::query_session(self, session_id)
+    }
+
+    fn query_plug(&self, plug_id: i32) -> Option<&CPlug> {
+        CSessionFactory::query_plug(self, plug_id)
+    }
+}
 
 /// Способ вызова старого `nets/netserver/message.cpp` поверх общего владельца
 /// сообщения: доменные операции, RLE send-family и `Run` сохраняют тот же текст
@@ -309,7 +262,7 @@ pub(crate) trait GameMessageDomainOps {
         server_region: Option<&CServerRegion>,
         origin: &CShape,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> Result<i32, ShapeCoordinateBlock>;
     /// То же с его recipient-snapshot.
     fn send_to_around_snapshot(
@@ -317,7 +270,7 @@ pub(crate) trait GameMessageDomainOps {
         server_region: &ServerRegionRecipientsSnapshot,
         origin: &CShape,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> Result<i32, ShapeCoordinateBlock>;
     /// То же с прямой координатой центра.
     fn send_to_around_position(
@@ -326,7 +279,7 @@ pub(crate) trait GameMessageDomainOps {
         tile_x: i32,
         tile_y: i32,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> i32;
 
     /// Общий recipient-путь send-family.
@@ -345,7 +298,7 @@ pub(crate) trait GameMessageDomainOps {
         tile_y: i32,
         main_shape: Option<&CShape>,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> i32;
 
     /// Общий broadcast-путь по спискам map-identity.
@@ -586,7 +539,7 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
         server_region: Option<&CServerRegion>,
         origin: &CShape,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> Result<i32, ShapeCoordinateBlock> {
         let tile_x = origin.get_tile_x()?;
         let tile_y = origin.get_tile_y()?;
@@ -605,7 +558,7 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
         server_region: &ServerRegionRecipientsSnapshot,
         origin: &CShape,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> Result<i32, ShapeCoordinateBlock> {
         let tile_x = origin.get_tile_x()?;
         let tile_y = origin.get_tile_y()?;
@@ -625,7 +578,7 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
         tile_x: i32,
         tile_y: i32,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> i32 {
         self.send_to_around_at(
             server_region.map(RegionMessageRecipients::Live),
@@ -644,7 +597,7 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
         tile_y: i32,
         main_shape: Option<&CShape>,
         excluded_player_id: Option<i32>,
-        runtime: &GameServerAroundRuntime<'_>,
+        runtime: &GameServerAroundRuntime<'_, CGame, CSessionFactory>,
     ) -> i32 {
         let Some(server_region) = server_region else {
             return 0;
@@ -652,8 +605,8 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
         let frame = self.rle_send_frame();
         self.log_oversized_rle("SendToAround", server_region.region_id(), frame.len());
         let mut around_player_ids = Vec::new();
-        let center_x = tile_x / runtime.area_width;
-        let center_y = tile_y / runtime.area_height;
+        let center_x = tile_x / runtime.area_width();
+        let center_y = tile_y / runtime.area_height();
         for (offset_x, offset_y) in AROUND_SEND_AREA_OFFSETS {
             server_region.find_player_ids_in_area(
                 center_x.wrapping_add(offset_x),
@@ -670,7 +623,7 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
                 continue;
             }
             let _ = runtime
-                .game
+                .players()
                 .net_server()
                 .send_to_player(player.player_id(), &frame);
         }
@@ -684,18 +637,15 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
         if main_player.team_id() == 0 {
             return 1;
         }
-        let session_id = runtime
-            .game
-            .get_team_session_id(main_player.team_id() as u32);
+        let session_id = runtime.team_session_id(main_player.team_id() as u32);
         if session_id == 0 {
             return 1;
         }
-        let Some(session) = runtime.sessions.query_session(session_id) else {
+        let Some(session) = runtime.query_session(session_id) else {
             return 1;
         };
         for plug_id in session.get_plug_list() {
             let Some(player) = runtime
-                .sessions
                 .query_plug(*plug_id)
                 .filter(|plug| plug.has_owner(PLAYER_TYPE, plug.owner_id()))
                 .and_then(|plug| runtime.resolve_player(plug.owner_id()))
@@ -712,7 +662,7 @@ impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
                 continue;
             }
             let _ = runtime
-                .game
+                .players()
                 .net_server()
                 .send_to_player(player.player_id(), &frame);
         }

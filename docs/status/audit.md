@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone replication: around-runtime 24 сентября 2026
+
+Around-runtime GameServer (`GameServerAroundPlayer/Ref`, runtime со span-границей `Option` и snapshot-first разрешением точного ID) перенесён из `src/nets/netserver/message.rs` в [`zone/src/replication/around.rs`](../../server/rust/zone/src/replication/around.rs). Прямые ссылки на `CGame` и `CSessionFactory` заменены typed-швами: `AroundPlayerLookup` (`around_player_view` + `team_session_id`) и `AroundSessionLookup` (`query_session`/`query_plug`) реализованы старым пакетом прямой делегацией через полный путь, без рекурсии на одноимённые inherent методы. Порядок рассылки, фильтры и team-хвост `send_to_around_at` не тронуты; type alias старого пакета с параметрами по умолчанию сохраняет прежние подписи `moveshape`/`player`/`serverregion` без правок, а три вызова `with_player` приняли скалярную форму.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе проверено для связанного wrapper `SendToAround` `0x14970`: father-region читается по `+0x40`, area-размеры запрашиваются у владельца, текущие tile X/Y фигуры берутся вызовами `0x5B110/0x5B140`, затем управление передаётся deep overload `0x14420`. Переносимый runtime-view сам по себе EXE-тела не образует; граница положительных span и snapshot-first разрешение сохранены без изменения семантики. Адреса send-family в заголовке `message.rs` сохраняют прежний статус VERIFIED_DISASSEMBLY.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Указание на нового владельца обновлено в [regions-and-visibility.md](../gameplay/regions-and-visibility.md) и [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone regions: storage-часть CArea 24 сентября 2026
 
 Достигнутая storage-часть `CArea` (девять vector-storage, три ordered map, membership-семейство `AddObject/RemoveObject/FindShapes/GetAllShapes`, ordered identity snapshot-ы, WarSoul map) перенесена из `src/gameserver/appserver/area.rs` в [`zone/src/regions/area.rs`](../../server/rust/zone/src/regions/area.rs) — четвёртый примитив владельца region-слоя. Все зависимости уже были в Zone/Shared, швы не потребовались; единственная правка импортов — `ShapeIdentity` берётся через re-export `regions/mod.rs`, как делает сам `shape.rs`. Старый файл — тонкий glob-реэкспорт; потребители (`serverregion`, `game`, `netserver/message`, `player`) не затронуты. Все 43 `pub(crate)` стали `pub`, код перенесён дословно, кроме строки владельца, разбиения одного импорта и двух переносов rustfmt.

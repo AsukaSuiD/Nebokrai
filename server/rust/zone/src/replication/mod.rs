@@ -5,4 +5,5 @@
 //!
 //! [карте владельцев]: ../../../../docs/architecture/realm-and-zone.md
 
+pub mod around;
 pub mod recipients;
