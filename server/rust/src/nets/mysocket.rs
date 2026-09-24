@@ -2,5 +2,5 @@
 //! Здесь реэкспорт для переходных потребителей всех направлений.
 
 pub(crate) use nebokrai_shared::network::{
-    legacy_inet_addr, legacy_ipv4_word, DEFAULT_PORT, DEFAULT_SOCKET_TYPE,
+    legacy_inet_addr, legacy_ipv4_word, DEFAULT_SOCKET_TYPE,
 };

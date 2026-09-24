@@ -223,6 +223,7 @@ pub struct CServerClient {
     closing: bool,
     close_started: bool,
     receive_buffer: Vec<u8>,
+    receive_shrink_target: usize,
     send_buffer: Vec<u8>,
     io_operations: i32,
     receive_rate: PackageRateCounter,
@@ -231,7 +232,13 @@ pub struct CServerClient {
 impl CServerClient {
     /// Создаёт состояние нового принятого соединения с исходными defaults.
     pub fn new(socket_id: i32, peer_ipv4: u32, now_ms: u32) -> Self {
-        Self::with_receive_capacity(socket_id, peer_ipv4, now_ms, INITIAL_RECEIVE_CAPACITY)
+        Self::with_receive_shrink_target(
+            socket_id,
+            peer_ipv4,
+            now_ms,
+            INITIAL_RECEIVE_CAPACITY,
+            INITIAL_RECEIVE_CAPACITY,
+        )
     }
 
     /// Создаёт то же общее состояние с доказанной component capacity.
@@ -245,6 +252,29 @@ impl CServerClient {
         now_ms: u32,
         receive_capacity: usize,
     ) -> Self {
+        Self::with_receive_shrink_target(
+            socket_id,
+            peer_ipv4,
+            now_ms,
+            receive_capacity,
+            INITIAL_RECEIVE_CAPACITY,
+        )
+    }
+
+    /// Создаёт то же общее состояние с доказанным component shrink target.
+    ///
+    /// World принятого клиента после разбора сжимает accumulator обратно не к
+    /// общему `0x100000`, а к своему начальному `0x1400000` (машинно
+    /// подтверждённая форма `CMyServerClient::OnReceive`); Billing — к
+    /// `0x100000`. Shrink target — свойство component receive path, а не
+    /// единый для всех планов.
+    pub fn with_receive_shrink_target(
+        socket_id: i32,
+        peer_ipv4: u32,
+        now_ms: u32,
+        receive_capacity: usize,
+        receive_shrink_target: usize,
+    ) -> Self {
         Self {
             socket_id,
             peer_ipv4,
@@ -253,6 +283,7 @@ impl CServerClient {
             closing: false,
             close_started: false,
             receive_buffer: Vec::with_capacity(receive_capacity),
+            receive_shrink_target,
             send_buffer: Vec::new(),
             io_operations: 0,
             receive_rate: PackageRateCounter::new(now_ms),
@@ -344,10 +375,10 @@ impl CServerClient {
         }
 
         self.receive_buffer.drain(..count);
-        if self.receive_buffer.capacity() > INITIAL_RECEIVE_CAPACITY
-            && self.receive_buffer.len() <= INITIAL_RECEIVE_CAPACITY
+        if self.receive_buffer.capacity() > self.receive_shrink_target
+            && self.receive_buffer.len() <= self.receive_shrink_target
         {
-            self.receive_buffer.shrink_to(INITIAL_RECEIVE_CAPACITY);
+            self.receive_buffer.shrink_to(self.receive_shrink_target);
         }
         true
     }

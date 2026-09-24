@@ -82,12 +82,14 @@ pub trait WorldMessageSink {
 }
 
 impl CMyServerClient {
-    /// Создаёт общий client-state с доказанным World accumulator `0x1400000`.
+    /// Создаёт общий client-state с доказанным World accumulator `0x1400000`
+    /// и тем же значением как target shrink после разбора кадра.
     pub fn new_state(socket_id: i32, peer_ipv4: u32, now_ms: u32) -> CServerClient {
-        CServerClient::with_receive_capacity(
+        CServerClient::with_receive_shrink_target(
             socket_id,
             peer_ipv4,
             now_ms,
+            WORLD_INITIAL_RECEIVE_CAPACITY,
             WORLD_INITIAL_RECEIVE_CAPACITY,
         )
     }
