@@ -44,7 +44,7 @@ use std::task::Poll;
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::time::Duration;
 
-use chrono::{Local, NaiveDateTime};
+use chrono::Local;
 use encoding_rs::WINDOWS_1251;
 use parking_lot::Mutex;
 use rustix::system::uname;
@@ -472,41 +472,9 @@ pub(crate) enum WorldOperatorLogRecord {
     Lost { world_name: Vec<u8> },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountEnterRecord {
-    pub(crate) account: Vec<u8>,
-    pub(crate) client_ip: u32,
-    pub(crate) recorded_at: NaiveDateTime,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountLeaveRecord {
-    pub(crate) account: Vec<u8>,
-    pub(crate) recorded_at: NaiveDateTime,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RoleEnterRecord {
-    pub(crate) account: Vec<u8>,
-    pub(crate) role_name: Vec<u8>,
-    pub(crate) role_level: u8,
-    pub(crate) world_number: i32,
-    pub(crate) recorded_at: NaiveDateTime,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SessionLeaveRecord {
-    pub(crate) account: Vec<u8>,
-    pub(crate) recorded_at: NaiveDateTime,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AccountLogRecord {
-    Enter(AccountEnterRecord),
-    RoleEnter(RoleEnterRecord),
-    SessionLeave(SessionLeaveRecord),
-    Leave(AccountLeaveRecord),
-}
+pub(crate) use nebokrai_realm::access::acclog::{
+    AccountEnterRecord, AccountLeaveRecord, AccountLogRecord, RoleEnterRecord, SessionLeaveRecord,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PrepareEnterOutcome {
