@@ -362,12 +362,7 @@ pub(crate) struct PlayerMurderCounterReset {
     pub(crate) previous_pk_count: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerExploitUpdate {
-    pub(crate) previous_exploit: u32,
-    pub(crate) increment: i32,
-    pub(crate) exploit: u32,
-}
+pub(crate) use nebokrai_realm::characters::playerexploit::PlayerExploitUpdate;
 
 impl PlayerBaseProperty {
     fn read_u8(&self, offset: usize) -> u8 {
