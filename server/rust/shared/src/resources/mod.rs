@@ -14,6 +14,7 @@ mod leitingsetup;
 mod lingbao;
 mod globesetup;
 mod gmlist;
+mod godsbattleconf;
 mod goodsdestructionconfig;
 mod marker;
 mod monsterlist;
@@ -93,6 +94,14 @@ pub use globesetup::{
     GLOBE_SETUP_BLOB_LENGTH, GlobePlayerPropertyCoefficients, GlobeRpGainPolicy,
     GlobeSetupDecodeError, GlobeSetupLoadError, GlobeSetupLoadReport, GlobeSetupSnapshot,
     GlobeStiffenSetup,
+};
+pub use godsbattleconf::{
+    CGodsBattleConf, GodsBattleBaseMoney, GodsBattleCollection, GodsBattleDecodeError,
+    GodsBattleDecodeSection, GodsBattleDieBackPosition, GodsBattleFactionNpcName,
+    GodsBattleFactionRule, GodsBattleFactionXydUpdate, GodsBattleLoadError,
+    GodsBattleLoadSection, GodsBattleNpcFactionUpdate, GodsBattleNpcStringField,
+    GodsBattleReviseMoney, GodsBattleSerializeError, GodsBattleStringField,
+    GodsBattleSzlCalculation, GodsBattleSzlLevel,
 };
 pub use goodsdestructionconfig::{
     GoodsDestroyDecodeError, GoodsDestroyFileLoadError, GoodsDestroyFormatError,
