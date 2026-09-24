@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и кодек RideState 24 сентября 2026
+
+Данные и wire-кодек `CRideState` (ID `100004`) перенесены в [`zone/effects/ride.rs`](../../server/rust/zone/src/effects/ride.rs). Переходный Game сохраняет живые Begin/End, visual и разрешение участников; переменная запись `ID/type/level/roleLimit/goodsName\0` и goods-check gate стали библиотечными.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) инструкции подтверждают: Serialize VA `0x004F8F60` (четыре DWORD и C-string, без часов), safe Unserialize VA `0x004F93B0` (три DWORD и NUL в пределах стекового буфера), отсутствие обновления timestamp в AI. Основания — в [ездовом состоянии](../gameplay/movement.md#ездовое-состояние). Поведение Rust при переносе не менялось.
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,59 секунды без предупреждений; `rustfmt` новых Zone-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическое оседлование и клиентский visual не проверялись.
+
 ## Zone effects: диспетчер PreDefense и стихийная формула Promotion 24 сентября 2026
 
 Диспетчер вариантов щитов `DefenseShieldState` (enum, выбор источника MP, правило пропуска ID) перенесён в [`zone/effects/defenseshield.rs`](../../server/rust/zone/src/effects/defenseshield.rs); стихийная формула Promotion — в [`zone/effects/promotion.rs`](../../server/rust/zone/src/effects/promotion.rs) как `promotion_element_attack`. Переходный Game сохраняет живые Begin/restart/AI/End щитов и вызовы из `fightdefense`.
