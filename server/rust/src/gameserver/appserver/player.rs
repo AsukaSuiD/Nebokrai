@@ -522,6 +522,7 @@ use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use nebokrai_shared::resources::HitLevelEntry;
 use nebokrai_shared::resources::CQuestSystem;
+use nebokrai_zone::quests::PlayerQuestProgress;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bitflags::bitflags;
@@ -1931,7 +1932,7 @@ pub(crate) struct CPlayer {
     heart_request_sent: i32,
     heart_received: bool,
     friends: Vec<PlayerFriend>,
-    quest_states: BTreeMap<u16, u8>,
+    quest_progress: PlayerQuestProgress,
     lei_ting_things: VecDeque<PlayerLeiTingThing>,
     uncreated_pets: Vec<PlayerUncreatedPet>,
     uncreated_carriage: PlayerUncreatedCarriage,
@@ -2482,7 +2483,7 @@ impl CPlayer {
             heart_request_sent: 0,
             heart_received: false,
             friends: Vec::new(),
-            quest_states: BTreeMap::new(),
+            quest_progress: PlayerQuestProgress::default(),
             lei_ting_things: VecDeque::new(),
             uncreated_pets: Vec::new(),
             uncreated_carriage: PlayerUncreatedCarriage::default(),
@@ -2903,12 +2904,12 @@ impl CPlayer {
         player.city_war_died_state =
             player.city_war_died_state_time_ms > 0 && player.base_properties.occupation != 6;
 
-        player.quest_states.clear();
+        player.quest_progress.clear();
         let quest_count = read_player_game_save_i32(source, cursor, "m_PlayerQuests")?;
         for _ in 0..quest_count.max(0) {
             let quest_id = read_player_game_save_u16(source, cursor, "tagPlayerQuest.wQuestID")?;
             let state = read_player_game_save_u8(source, cursor, "tagPlayerQuest.byComplete")?;
-            player.quest_states.insert(quest_id, state);
+            player.quest_progress.insert_snapshot(quest_id, state);
         }
         player.country = read_player_game_save_u8(source, cursor, "m_btCountry")?;
         player.contribution = read_player_game_save_i32(source, cursor, "m_lContribute")?;
@@ -3087,8 +3088,8 @@ impl CPlayer {
         writer.write_u8(u8::from(recreate_carriage));
         writer.write_u8(u8::from(self.login));
         writer.write_i32(self.city_war_died_state_time_ms);
-        append_player_game_save_count(destination, "m_PlayerQuests", self.quest_states.len())?;
-        for (quest_id, state) in &self.quest_states {
+        append_player_game_save_count(destination, "m_PlayerQuests", self.quest_progress.len())?;
+        for (quest_id, state) in self.quest_progress.iter() {
             let mut writer = LegacyWriter::new(destination);
             writer.write_u16(*quest_id);
             writer.write_u8(*state);
@@ -3742,7 +3743,7 @@ impl CPlayer {
         append_old_client_volume(&mut payload, &self.ci_qing_compose, goods_factory, da_kong_enabled)?;
         append_old_client_volume(&mut payload, &self.ci_qing, goods_factory, da_kong_enabled)?;
         {
-            let quest_state = self.quest_states.get(&(ci_qing_quest_id as u16)).copied();
+            let quest_state = self.quest_progress.raw_state(ci_qing_quest_id as u16);
             if quest_state == Some(1) {
                 self.ci_qing_open = true;
             }
@@ -3759,12 +3760,8 @@ impl CPlayer {
         quest_system: &CQuestSystem,
     ) -> Option<()> {
         let active: Vec<_> = self
-            .quest_states
-            .iter()
-            .filter(|(_, state)| **state != 1)
-            .filter_map(|(quest_id, _)| {
-                quest_system.quest_data_by_id(*quest_id).map(|quest| (*quest_id, quest))
-            })
+            .quest_progress
+            .client_entries(|quest_id| quest_system.quest_data_by_id(quest_id))
             .collect();
         let mut writer = LegacyWriter::new(destination);
         writer.write_i32(quest_system.max_quest_count);
@@ -3857,53 +3854,36 @@ impl CPlayer {
 
 
 
-    /// Exact `GetQuestState`: отсутствующий ushort ID имеет state `2`,
-    /// существующий возвращает persisted byte без дополнительной проверки.
+    /// Возвращает состояние вложенного в игрока прогресса для сценарного входа.
     pub(crate) fn quest_state(&self, quest_id: u16) -> i32 {
-        self.quest_states
-            .get(&quest_id)
-            .copied()
-            .map_or(2, i32::from)
+        self.quest_progress.state(quest_id)
     }
 
     pub(crate) fn set_quest_state_snapshot(&mut self, quest_id: u16, state: u8) {
-        self.quest_states.insert(quest_id, state);
+        self.quest_progress.insert_snapshot(quest_id, state);
     }
 
     pub(crate) fn accept_script_quest(&mut self, quest_id: u16) -> bool {
-        if self.quest_states.get(&quest_id).copied() == Some(0) {
-            return false;
-        }
-        self.quest_states.insert(quest_id, 0);
-        true
+        self.quest_progress.accept(quest_id)
     }
 
     pub(crate) fn complete_script_quest(&mut self, quest_id: u16) -> bool {
-        let Some(state) = self.quest_states.get_mut(&quest_id) else {
-            return false;
-        };
-        *state = 1;
-        true
+        self.quest_progress.complete(quest_id)
     }
 
     pub(crate) fn remove_script_quest(&mut self, quest_id: u16) -> bool {
-        self.quest_states.remove(&quest_id).is_some()
+        self.quest_progress.remove(quest_id)
     }
 
     pub(crate) fn has_script_quest(&self, quest_id: u16) -> bool {
-        self.quest_states.contains_key(&quest_id)
+        self.quest_progress.contains(quest_id)
     }
 
     pub(crate) fn valid_script_quest_count(
         &self,
-        mut is_displayed_quest: impl FnMut(u16) -> bool,
+        is_displayed_quest: impl FnMut(u16) -> bool,
     ) -> i32 {
-        self.quest_states
-            .iter()
-            .filter(|(quest_id, state)| **state != 1 && is_displayed_quest(**quest_id))
-            .count()
-            .try_into()
-            .unwrap_or(i32::MAX)
+        self.quest_progress.valid_count(is_displayed_quest)
     }
 
     pub(crate) fn add_friend_state(&mut self, name: &[u8]) -> PlayerFriendAddOutcome {
