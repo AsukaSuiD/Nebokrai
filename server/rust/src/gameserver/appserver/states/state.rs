@@ -233,10 +233,7 @@ pub(crate) fn update_applied_state_end_visual(
 /// CHBY/CExState GetRemainedTime (0x005DA030), включая самостоятельные
 /// чтения часов и специальное значение 1 после ненулевого срока.
 pub(crate) fn change_body_client_time(start: u32, keep: u32, now: &mut dyn FnMut() -> u32) -> u32 {
-    let deadline = start.wrapping_add(keep);
-    if keep != 0 && deadline <= now() { return 1; }
-    if deadline <= now() { return 0; }
-    deadline.wrapping_sub(now())
+    nebokrai_zone::effects::change_body_client_state_time(start, keep, now)
 }
 
 /// CExStateNew/CNotDisappearAfterDead (0x005D6320): нулевой срок

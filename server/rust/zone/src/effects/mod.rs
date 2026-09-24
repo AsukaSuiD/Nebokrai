@@ -13,6 +13,7 @@ mod daubpoison;
 mod defenseshield;
 mod element;
 mod energyholding;
+mod extended;
 mod fullmiss;
 mod godbless;
 mod heal;
@@ -82,6 +83,10 @@ pub use element::{
     ELEMENT_STATE_BYTES, ElementState, ORIGIN_STATE_ID, OriginState, TAIJI_STATE_ID, TaiJiState,
 };
 pub use energyholding::{ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID, EnergyHoldingState};
+pub use extended::{
+    EX_STATE_BYTES, EX_STATE_ID, EX_STATE_NEW_BYTES, EX_STATE_NEW_ID, ExtendedState,
+    ExtendedStateKind,
+};
 pub use fullmiss::{
     ENLARGE_FULL_MISS_STATE_BYTES, ENLARGE_FULL_MISS_STATE_ID, EnlargeFullMissState,
 };
@@ -127,7 +132,7 @@ pub use tianshenxiafan::{
     TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanPlayerView,
     TianShenXiaFanState,
 };
-pub use time::{guarded_client_state_time, timed_client_state_time};
+pub use time::{change_body_client_state_time, guarded_client_state_time, timed_client_state_time};
 pub use undead::{UNDEAD_STATE_ID, UNDEAD_STATE_PARAMETER_BYTES, UndeadState};
 pub use visualeffect::CVisualEffect;
 pub use wangsheng::{WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID, WangshengState};

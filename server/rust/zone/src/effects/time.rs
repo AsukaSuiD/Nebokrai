@@ -33,3 +33,21 @@ pub fn guarded_client_state_time(
     }
     timed_client_state_time(started_at_ms, keep_time_ms, now_milliseconds)
 }
+
+/// Вариант `CHBYState::GetRemainedTime`, общий с `CExState` Original:
+/// после истечения ненулевого срока возвращает 1, после бессрочного — 0,
+/// живой срок читает часы повторно для вычитания.
+pub fn change_body_client_state_time(
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
+) -> u32 {
+    let deadline = started_at_ms.wrapping_add(keep_time_ms);
+    if keep_time_ms != 0 && deadline <= now_milliseconds() {
+        return 1;
+    }
+    if deadline <= now_milliseconds() {
+        return 0;
+    }
+    deadline.wrapping_sub(now_milliseconds())
+}

@@ -840,7 +840,7 @@ use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainer
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
-use crate::gameserver::appserver::exstate::{ExtendedState, ExtendedStateKind};
+use crate::gameserver::appserver::exstate::{ExtendedState, ExtendedStateKind, extended_state_from_factory};
 use crate::gameserver::appserver::gameeffectjournal::{
     GameEffect, GameEffectJournal, SharedGameEffectJournal, shared_game_effect_journal,
 };
@@ -28060,7 +28060,7 @@ impl CGame {
         let Some(player) = self.find_player(player_id) else { return 0 };
         let region_id = player.shape().get_region_id();
         let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
-        let Some(mut state) = ExtendedState::from_factory(kind, state_id, &self.skill_factory)
+        let Some(mut state) = extended_state_from_factory(kind, state_id, &self.skill_factory)
         else { return 0 };
         if kind == ExtendedStateKind::Original && state.state_type == 0x12f {
             self.remove_script_god_bless_state(player_id);

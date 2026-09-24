@@ -131,12 +131,12 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         EX_STATE_ID => StateRecordLayout::typed(
             44, |payload, offset, _owner, _factory, _now| {
-                crate::gameserver::appserver::exstate::ExtendedState::decode_at(payload, offset, _now()).map(StateData::Extended)
+                crate::gameserver::appserver::exstate::ExtendedState::decode_at(payload, offset, _now).map(StateData::Extended)
             },
         ),
         EX_STATE_NEW_ID => StateRecordLayout::typed(
             56, |payload, offset, _owner, _factory, _now| {
-                crate::gameserver::appserver::exstate::ExtendedState::decode_at(payload, offset, _now()).map(StateData::Extended)
+                crate::gameserver::appserver::exstate::ExtendedState::decode_at(payload, offset, _now).map(StateData::Extended)
             },
         ),
         UNDEAD_STATE_ID => StateRecordLayout::typed(

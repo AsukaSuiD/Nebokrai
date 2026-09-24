@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и записи Ex/ExNew 24 сентября 2026
+
+Данные, записи 40/52 байта и кодек `CExState` (`0x32`) / `CExStateNew` (`0x33`) перенесены в [`zone/effects/extended.rs`](../../server/rust/zone/src/effects/extended.rs); Game получил тонкую `extended_state_from_factory`, живые Add/Del/Begin/End и periodic use_item остаются у moveshape/notdisappearafterdead-путей.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) машинный код подтверждает: конструкторы `0x005D9230`/`0x005D9990` без часов, Serialize `0x005D9510`/`0x005D9BB0` (остаток в живой keep через getter, затем блок), Unserialize `0x005D9550`/`0x005D9BF0` (clock до блока; New — в оба timestamp), AI `0x005D94E0`/`0x005D9FB0`. Различие getter-ов Original (`0x005DA030`, общий с CHBYState) и New (`0x005D6320`) вынесено в Zone `time.rs` как `change_body_client_state_time`/`guarded_client_state_time`; переходный `state.rs` делегирует. Исправление Rust: decode читает часы после проверки ID и уровня вместо расхода до входа. Основания — в [описании extended-state](../gameplay/attributes-and-states.md#exexnew-обычные-extended-state).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,23 секунды без предупреждений; `rustfmt` новых Zone-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактические Begin/End и расход предмета не проверялись.
+
 ## Zone effects: данные и 76-байтная запись Undead 24 сентября 2026
 
 Данные, кодек и тик-правила `CNotDisappearAfterDead` (внешний ID `0x38`) перенесены в [`zone/effects/undead.rs`](../../server/rust/zone/src/effects/undead.rs); фабрика навыков остаётся в Game через тонкую `undead_state_from_factory`, живые Begin/AI/End и visual — у `notdisappearafterdead` и moveshape.
