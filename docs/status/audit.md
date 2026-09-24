@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и 124-байтная запись ChangeBody 24 сентября 2026
+
+Данные и запись `CHBYState` (`0x37`) перенесены в [`zone/effects/changebody.rs`](../../server/rust/zone/src/effects/changebody.rs); Game получил тонкую `change_body_state_from_factory`, живые Begin/restart/End, visual, навыки и hotkeys остаются в `chbystate.rs`.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) машинный код подтверждает: конструктор `0x005DAC90` (ID без часов), vtable `0x0065E41C` с AI `0x005DAAA0`, End `0x005DA240`, getter `0x005DA030`, Serialize `0x005DA080` (остаток в живой keep, затем блок 0x78) и Unserialize `0x005DA0C0` (clock до блока, затем online=true). Исправление Rust: decode читает часы после проверки ID вместо получения снятого фабрикой значения. Основания — в [описании преображения](../gameplay/attributes-and-states.md#changebody-преображение-игрока).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,08 секунды без предупреждений; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическое преображение не проверялось.
+
 ## Zone effects: данные и записи Ex/ExNew 24 сентября 2026
 
 Данные, записи 40/52 байта и кодек `CExState` (`0x32`) / `CExStateNew` (`0x33`) перенесены в [`zone/effects/extended.rs`](../../server/rust/zone/src/effects/extended.rs); Game получил тонкую `extended_state_from_factory`, живые Add/Del/Begin/End и periodic use_item остаются у moveshape/notdisappearafterdead-путей.

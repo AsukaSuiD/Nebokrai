@@ -8,6 +8,7 @@ mod blind;
 mod bloodloss;
 mod bossbluefury;
 mod callosity;
+mod changebody;
 mod cure;
 mod daubpoison;
 mod defenseshield;
@@ -75,6 +76,10 @@ pub use bloodloss::{
 pub use bossbluefury::{BOSS_BLUE_FURY_STATE_BYTES, BOSS_BLUE_FURY_STATE_ID, BossBlueFuryState};
 pub use callosity::{
     CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID, CALLOSITY_STATE_BYTES, CallosityFamilyState,
+};
+pub use changebody::{
+    CHANGE_BODY_PARAMETER_BYTES, CHANGE_BODY_SKILL_TYPE, CHANGE_BODY_STATE_BYTES,
+    CHANGE_BODY_STATE_ID, ChangeBodyState,
 };
 pub use cure::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID, CureState};
 pub use daubpoison::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};

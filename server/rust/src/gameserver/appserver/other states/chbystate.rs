@@ -62,7 +62,6 @@
 //! и не читает часы; расчёт заимствует payload без копии накопленного m_vskill.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
-use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -74,233 +73,19 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const CHANGE_BODY_STATE_ID: u32 = 0x37;
-pub(crate) const CHANGE_BODY_SKILL_TYPE: u32 = 55;
-const CHANGE_BODY_PARAMETER_BYTES: usize = 120;
-pub(crate) const CHANGE_BODY_STATE_BYTES: usize = 4 + CHANGE_BODY_PARAMETER_BYTES;
+pub(crate) use nebokrai_zone::effects::{
+    CHANGE_BODY_SKILL_TYPE, CHANGE_BODY_STATE_BYTES, CHANGE_BODY_STATE_ID, ChangeBodyState,
+};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ChangeBodyState {
-    pub(crate) has_changed_region: bool,
-    pub(crate) visual_effect: u16,
-    pub(crate) level: u32,
-    pub(crate) keep_time_ms: u32,
-    pub(crate) mode: u32,
-    pub(crate) change_region: bool,
-    pub(crate) restore_online: bool,
-    pub(crate) continue_after_death: bool,
-    pub(crate) online: bool,
-    pub(crate) maximum_hp: u32,
-    pub(crate) maximum_mp: u32,
-    pub(crate) minimum_attack: u32,
-    pub(crate) maximum_attack: u32,
-    pub(crate) defense: u32,
-    pub(crate) element_resistance: u32,
-    pub(crate) cch: u16,
-    pub(crate) blast_attack: u16,
-    pub(crate) blast_element_attack: u16,
-    pub(crate) skills: [(u16, u16); 5],
-    begun_skill_ids: Vec<u16>,
-    pub(crate) old_hotkeys: [u32; 12],
-    pub(crate) started_ms: u32,
-    serialized_offset: Option<usize>,
-}
-
-
-impl ChangeBodyState {
-    pub(crate) fn from_factory(
-        level: u32,
-        factory: &CSkillFactory,
-    ) -> Option<Self> {
-        if level == 0 { return None }
-        let properties =
-            factory.query_skill_base_properties(CHANGE_BODY_SKILL_TYPE, level as i32)?;
-        let get = |usage| Some(properties.query_property(usage));
-        let skills = [
-            (get(60_011)? as u16, get(60_012)? as u16),
-            (get(60_021)? as u16, get(60_022)? as u16),
-            (get(60_031)? as u16, get(60_032)? as u16),
-            (get(60_041)? as u16, get(60_042)? as u16),
-            (get(60_051)? as u16, get(60_052)? as u16),
-        ];
-        Some(Self {
-            has_changed_region: true,
-            visual_effect: get(60_001)? as u16,
-            level,
-            keep_time_ms: get(10_002)?,
-            mode: get(60_000)?,
-            change_region: get(60_002)? != 0,
-            restore_online: get(60_003)? != 0,
-            continue_after_death: get(60_004)? != 0,
-            online: false,
-            maximum_hp: get(118)?,
-            maximum_mp: get(119)?,
-            minimum_attack: get(116)?,
-            maximum_attack: get(117)?,
-            defense: get(109)?,
-            element_resistance: get(112)?,
-            cch: get(108)? as u16,
-            blast_attack: get(125)? as u16,
-            blast_element_attack: get(126)? as u16,
-            skills,
-            begun_skill_ids: Vec::new(),
-            old_hotkeys: [0; 12],
-            started_ms: 0,
-            serialized_offset: None,
-        })
-    }
-
-    pub(crate) fn decode_at(payload: &[u8], offset: usize, started_ms: u32) -> Option<Self> {
-        offset.checked_add(4 + CHANGE_BODY_PARAMETER_BYTES)
-            .filter(|end| *end <= payload.len())?;
-        if read_u32(payload, offset) != Some(CHANGE_BODY_STATE_ID) {
-            return None;
-        }
-        let base = offset + 4;
-        let Some(level) = read_u32(payload, base + 4) else {
-            return None;
-        };
-        if level == 0
-            || payload[base] > 1
-            || payload[base + 16] > 1
-            || payload[base + 17] > 1
-            || payload[base + 18] > 1
-            || payload[base + 19] > 1
-        {
-            return None;
-        }
-        let mut skills = [(0, 0); 5];
-        for (index, skill) in skills.iter_mut().enumerate() {
-            *skill = (
-                read_u16(payload, base + 50 + index * 4).unwrap_or_default(),
-                read_u16(payload, base + 52 + index * 4).unwrap_or_default(),
-            );
-        }
-        let mut old_hotkeys = [0; 12];
-        for (index, hotkey) in old_hotkeys.iter_mut().enumerate() {
-            *hotkey = read_u32(payload, base + 72 + index * 4).unwrap_or_default();
-        }
-        Some(Self {
-            has_changed_region: payload[base] != 0,
-            visual_effect: read_u16(payload, base + 2).unwrap_or_default(),
-            level,
-            keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
-            mode: read_u32(payload, base + 12).unwrap_or_default(),
-            change_region: payload[base + 16] != 0,
-            restore_online: payload[base + 17] != 0,
-            continue_after_death: payload[base + 18] != 0,
-            online: true,
-            maximum_hp: read_u32(payload, base + 20).unwrap_or_default(),
-            maximum_mp: read_u32(payload, base + 24).unwrap_or_default(),
-            minimum_attack: read_u32(payload, base + 28).unwrap_or_default(),
-            maximum_attack: read_u32(payload, base + 32).unwrap_or_default(),
-            defense: read_u32(payload, base + 36).unwrap_or_default(),
-            element_resistance: read_u32(payload, base + 40).unwrap_or_default(),
-            cch: read_u16(payload, base + 44).unwrap_or_default(),
-            blast_attack: read_u16(payload, base + 46).unwrap_or_default(),
-            blast_element_attack: read_u16(payload, base + 48).unwrap_or_default(),
-            skills,
-            begun_skill_ids: Vec::new(),
-            old_hotkeys,
-            started_ms,
-            serialized_offset: Some(offset),
-        })
-    }
-
-
-    pub(crate) fn serialized_span(&self) -> Option<(usize, usize)> {
-        self.serialized_offset
-            .map(|offset| (offset, 4 + CHANGE_BODY_PARAMETER_BYTES))
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> [u8; CHANGE_BODY_STATE_BYTES] {
-        let mut record = [0; CHANGE_BODY_STATE_BYTES];
-        self.update_serialized_record(&mut record, 0, self.keep_time_ms);
-        record
-    }
-
-
-    pub(crate) fn update_serialized_record(&self, payload: &mut [u8], offset: usize, remaining: u32) {
-        if offset.checked_add(CHANGE_BODY_STATE_BYTES).is_none_or(|end| end > payload.len()) {
-            return;
-        }
-        let base = offset + 4;
-        write_u32(payload, offset, CHANGE_BODY_STATE_ID);
-        payload[base] = u8::from(self.has_changed_region);
-        write_u16(payload, base + 2, self.visual_effect);
-        write_u32(payload, base + 4, self.level);
-        write_u32(payload, base + 8, remaining);
-        write_u32(payload, base + 12, self.mode);
-        payload[base + 16] = u8::from(self.change_region);
-        payload[base + 17] = u8::from(self.restore_online);
-        payload[base + 18] = u8::from(self.continue_after_death);
-        payload[base + 19] = u8::from(self.online);
-        write_u32(payload, base + 20, self.maximum_hp);
-        write_u32(payload, base + 24, self.maximum_mp);
-        write_u32(payload, base + 28, self.minimum_attack);
-        write_u32(payload, base + 32, self.maximum_attack);
-        write_u32(payload, base + 36, self.defense);
-        write_u32(payload, base + 40, self.element_resistance);
-        write_u16(payload, base + 44, self.cch);
-        write_u16(payload, base + 46, self.blast_attack);
-        write_u16(payload, base + 48, self.blast_element_attack);
-        for (index, (skill_id, level)) in self.skills.iter().copied().enumerate() {
-            write_u16(payload, base + 50 + index * 4, skill_id);
-            write_u16(payload, base + 52 + index * 4, level);
-        }
-        for (index, hotkey) in self.old_hotkeys.iter().copied().enumerate() {
-            write_u32(payload, base + 72 + index * 4, hotkey);
-        }
-    }
-
-
-    pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
-        self.client_state_time(|| now_ms)
-    }
-
-    pub(crate) fn client_state_time(&self, mut now: impl FnMut() -> u32) -> u32 {
-        change_body_client_time(self.started_ms, self.keep_time_ms, &mut now)
-    }
-
-    pub(crate) fn expired(&self, now_ms: u32) -> bool {
-        self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    pub(crate) fn commit_serialized_time(&mut self, remaining: u32) {
-        self.keep_time_ms = remaining;
-    }
-
-    pub(crate) fn on_change_region(&mut self) -> bool {
-        if !self.has_changed_region {
-            self.has_changed_region = true;
-            return false;
-        }
-        !self.change_region
-    }
-
-    pub(crate) fn on_player_lost(&mut self) -> bool {
-        self.has_changed_region = false;
-        self.online = true;
-        !self.restore_online
-    }
-
-
-    pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
-        if let Some(offset) = &mut self.serialized_offset {
-            if *offset >= inserted_offset {
-                *offset += amount;
-            }
-        }
-    }
-
-    pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
-        if self
-            .serialized_offset
-            .is_some_and(|offset| removed_offset < offset)
-        {
-            self.serialized_offset = self.serialized_offset.map(|offset| offset - amount);
-        }
-    }
+/// Тонкая оболочка переходного Game: фабрика навыков остаётся у старого
+/// владельца, а данные и 124-байтная запись — в Zone `effects/changebody.rs`.
+pub(crate) fn change_body_state_from_factory(
+    level: u32,
+    factory: &CSkillFactory,
+) -> Option<ChangeBodyState> {
+    let properties =
+        factory.query_skill_base_properties(CHANGE_BODY_SKILL_TYPE, level as i32)?;
+    ChangeBodyState::from_properties(level, |usage| Some(properties.query_property(usage)))
 }
 
 pub(crate) fn update_change_body_state_properties(
@@ -513,22 +298,6 @@ fn send_change_body_begin_visual(
     }
     let _ = game.send_move_shape_around(region_id, holder, &message);
     true
-}
-
-fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
-    LegacyReader::at(source, offset).ok()?.read_u16().ok()
-}
-
-fn read_u32(source: &[u8], offset: usize) -> Option<u32> {
-    LegacyReader::at(source, offset).ok()?.read_u32().ok()
-}
-
-fn write_u16(destination: &mut [u8], offset: usize, value: u16) {
-    LegacyWriter::write_u16_at(destination, offset, value).expect("проверенное поле CHBYState");
-}
-
-fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
-    LegacyWriter::write_u32_at(destination, offset, value).expect("проверенное поле CHBYState");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

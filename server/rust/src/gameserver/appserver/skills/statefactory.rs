@@ -126,7 +126,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
     Some(match state_id {
         CHANGE_BODY_STATE_ID => StateRecordLayout::typed(
             124, |payload, offset, _owner, _factory, _now| {
-                crate::gameserver::appserver::chbystate::ChangeBodyState::decode_at(payload, offset, _now()).map(StateData::ChangeBody)
+                crate::gameserver::appserver::chbystate::ChangeBodyState::decode_at(payload, offset, _now).map(StateData::ChangeBody)
             },
         ),
         EX_STATE_ID => StateRecordLayout::typed(

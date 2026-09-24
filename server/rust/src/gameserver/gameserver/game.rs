@@ -798,7 +798,7 @@ use crate::gameserver::appserver::ai::puninesscreature::execute_owned_puniness_c
 use crate::gameserver::appserver::area::{
     AreaAiContext, AreaMonsterAiFacts, AreaWokenMonsterClass,
 };
-use crate::gameserver::appserver::chbystate::ChangeBodyState;
+use crate::gameserver::appserver::chbystate::{ChangeBodyState, change_body_state_from_factory};
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsTaken,
 };
@@ -28691,7 +28691,7 @@ impl CGame {
         let Some(player) = self.find_player(player_id) else { return 0 };
         let region_id = player.shape().get_region_id();
         let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
-        let Some(mut state) = ChangeBodyState::from_factory(state_id, &self.skill_factory)
+        let Some(mut state) = change_body_state_from_factory(state_id, &self.skill_factory)
         else { return 0 };
 
         let mut index = 0;
