@@ -1,6 +1,7 @@
 //! Полученные определения и ресурсы Zone; живые игровые экземпляры здесь не хранятся.
 
 mod functions;
+pub mod goods;
 mod quests;
 mod scripts;
 mod skills;

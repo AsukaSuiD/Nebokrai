@@ -1,0 +1,602 @@
+//! Базовые свойства товара GameServer и их startup wire-decoder, перенесённые в Zone `content/`.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/goods/cgoodsbaseproperties.cpp`. Парный
+//! WorldServer serializer пишет два NUL-terminated имени, type/place/price/
+//! weight, icons и вложенное дерево addon properties. Порядок элементов,
+//! signedness scalar-ов, first-match lookup и last-write-free vector semantics
+//! сохранены.
+//! Отдельный legacy `m_eBFEquipPlace` constructor и wire decoder не
+//! инициализировали; он хранится как `None`, чтобы не превращать allocator
+//! garbage в выдуманную battle-fairy ячейку.
+//!
+//! `Vec` и обычное владение Rust заменяют MSVC allocator/destructor plumbing.
+//! Повреждённые count/string границы, где старый код уходил в out-of-bounds,
+//! завершаются typed error-ом с уже применённым prefix state.
+
+use thiserror::Error;
+
+use nebokrai_shared::protocol::LegacyReader;
+
+pub const GOODS_TYPE_USELESS: i32 = 0;
+pub const GOODS_TYPE_CONSUMABLE: i32 = 1;
+pub const GOODS_TYPE_EQUIPMENT: i32 = 2;
+pub const GAP_GOODS_AUCTION_SCALE: i32 = 235;
+pub const GAP_ROLE_MINIMUM_LEVEL_LIMIT: i32 = 6;
+pub const GAP_WEAPON_CATEGORY: i32 = 5;
+pub const GAP_ROLE_MINIMUM_STRENGTH_LIMIT: i32 = 7;
+pub const GAP_ROLE_MINIMUM_AGILITY_LIMIT: i32 = 8;
+pub const GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT: i32 = 9;
+pub const GAP_ROLE_MINIMUM_WAKAN_LIMIT: i32 = 10;
+pub const GAP_REQUIRE_OCCUPATION: i32 = 11;
+pub const GAP_REQUIRE_GENDER: i32 = 12;
+pub const GAP_PARTICULAR_ATTRIBUTE: i32 = 0x0d;
+pub const GAP_MINIMUM_ATTACK_CORRECTION: i32 = 14;
+pub const GAP_MAXIMUM_ATTACK_CORRECTION: i32 = 15;
+pub const GAP_ELEMENT_ATTACK_CORRECTION: i32 = 16;
+pub const GAP_ARMOR_CORRECTION: i32 = 17;
+pub const GAP_ATTACK_SPEED_CORRECTION: i32 = 18;
+pub const GAP_HIT_RATE_CORRECTION: i32 = 19;
+pub const GAP_FATAL_BLOW_RATE_CORRECTION: i32 = 20;
+pub const GAP_DODGE_CORRECTION: i32 = 21;
+pub const GAP_SKILL_REUSE_TIME_CORRECTION: i32 = 22;
+pub const GAP_ELEMENT_RESISTANCE_CORRECTION: i32 = 23;
+pub const GAP_HP_RESTORE_SPEED_CORRECTION: i32 = 25;
+pub const GAP_MP_RESTORE_SPEED_CORRECTION: i32 = 26;
+pub const GAP_STRENGTH_CORRECTION: i32 = 27;
+pub const GAP_AGILITY_CORRECTION: i32 = 28;
+pub const GAP_CONSTITUTION_CORRECTION: i32 = 29;
+pub const GAP_WAKAN_CORRECTION: i32 = 30;
+pub const GAP_HP_UPPER_LIMIT_CORRECTION: i32 = 31;
+pub const GAP_MP_UPPER_LIMIT_CORRECTION: i32 = 32;
+pub const GAP_GOODS_MAXIMUM_DURABILITY: i32 = 37;
+pub const GAP_GOODS_STACKING_LIMIT: i32 = 0x26;
+pub const GAP_RETURN_TO_TOWN: i32 = 45;
+pub const GAP_RANDOM_TRANSMIT: i32 = 46;
+pub const GAP_EXECUTE_SCRIPT: i32 = 47;
+pub const GAP_GOODS_BIND: i32 = 236;
+pub const GAP_YUANBAO_DIKOU: i32 = 101;
+pub const GAP_WEAPON_LEVEL: i32 = 0x30;
+pub const GAP_STIFFEN_PROBABILITY_CORRECTION: i32 = 51;
+pub const GAP_BURDEN_UPPER_LIMIT_CORRECTION: i32 = 52;
+pub const GAP_MINIMUM_ATTACK_UPGRADE: i32 = 53;
+pub const GAP_MAXIMUM_ATTACK_UPGRADE: i32 = 54;
+pub const GAP_ELEMENT_ATTACK_UPGRADE: i32 = 55;
+pub const GAP_ARMOR_UPGRADE: i32 = 56;
+pub const GAP_ATTACK_SPEED_UPGRADE: i32 = 57;
+pub const GAP_HIT_RATE_UPGRADE: i32 = 58;
+pub const GAP_FATAL_BLOW_RATE_UPGRADE: i32 = 59;
+pub const GAP_DODGE_UPGRADE: i32 = 60;
+pub const GAP_ROLE_MINIMUM_LEVEL_LIMIT_UPGRADE: i32 = 61;
+pub const GAP_ROLE_MINIMUM_STRENGTH_LIMIT_UPGRADE: i32 = 62;
+pub const GAP_ROLE_MINIMUM_AGILITY_LIMIT_UPGRADE: i32 = 63;
+pub const GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT_UPGRADE: i32 = 64;
+pub const GAP_ROLE_MINIMUM_WAKAN_LIMIT_UPGRADE: i32 = 65;
+pub const GAP_GOODS_MAXIMUM_DURABILITY_UPGRADE: i32 = 66;
+pub const GAP_HP_UPPER_LIMIT_CORRECTION_UPGRADE: i32 = 67;
+pub const GAP_MP_UPPER_LIMIT_CORRECTION_UPGRADE: i32 = 68;
+pub const GAP_SKILL_REUSE_TIME_CORRECTION_UPGRADE: i32 = 69;
+pub const GAP_STIFFEN_PROBABILITY_CORRECTION_UPGRADE: i32 = 70;
+pub const GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE: i32 = 71;
+pub const GAP_ANIMA_BIND: i32 = 104;
+pub const GAP_EQUIP_ACTIVE: i32 = 105;
+pub const GAP_ITEM_QUALITY: i32 = 106;
+pub const GAP_GOODS_UPGRADE_PRICE: i32 = 72;
+pub const GAP_ELEMENT_RESISTANCE_CORRECTION_UPGRADE: i32 = 73;
+pub const GAP_GEM_TYPE: i32 = 79;
+pub const GAP_GEM_LEVEL: i32 = 80;
+pub const GAP_GEM_PROBABILITY: i32 = 81;
+pub const GAP_GEM_UPGRADE_SUCCEED_RESULT: i32 = 82;
+pub const GAP_GEM_UPGRADE_FAILED_RESULT: i32 = 83;
+pub const GAP_MOUNT_TYPE: i32 = 84;
+pub const GAP_MOUNT_LEVEL: i32 = 85;
+pub const GAP_MOUNT_PLAYER_ROLE_LIMIT: i32 = 86;
+pub const GAP_UNLIMITED_ACCESS: i32 = 87;
+pub const GAP_EXCEPTION_STATE: i32 = 89;
+pub const GAP_WEAPON_DAMAGE_LEVEL: i32 = 90;
+pub const GAP_ATTACK_AVOID: i32 = 91;
+pub const GAP_ELEMENT_AVOID: i32 = 92;
+pub const GAP_FULL_MISS: i32 = 93;
+pub const GAP_WEAPON_DAMAGE_UPGRADE: i32 = 94;
+pub const GAP_BLAST_ATTACK: i32 = 95;
+pub const GAP_BLAST_ELEMENT_ATTACK: i32 = 96;
+pub const GAP_FUMO_PROPERTY: i32 = 97;
+pub const GAP_FAIRY_STATE: i32 = 107;
+pub const GAP_EQUIP_STATE: i32 = 137;
+pub const GAP_FAIRY_COMBINATED_TIMES: i32 = 108;
+pub const GAP_FAIRY_MAX_COMBINATED_TIMES: i32 = 109;
+pub const GAP_FAIRY_LEVEL: i32 = 110;
+pub const GAP_FAIRY_RIPE_MIN_LEVEL: i32 = 111;
+pub const GAP_FAIRY_RIPE_MAX_LEVEL: i32 = 112;
+pub const GAP_FAIRY_EXP: i32 = 113;
+pub const GAP_FAIRY_MAX_EXP: i32 = 114;
+pub const GAP_FAIRY_MAIN_ABILITY: i32 = 115;
+pub const GAP_FAIRY_GROWING_RATE: i32 = 116;
+pub const GAP_FAIRY_STRENGTH: i32 = 117;
+pub const GAP_FAIRY_AGILITY: i32 = 118;
+pub const GAP_FAIRY_WAKAN: i32 = 119;
+pub const GAP_FAIRY_HP: i32 = 120;
+pub const GAP_FAIRY_STRENGTH_BASE_VALUE: i32 = 121;
+pub const GAP_FAIRY_AGILITY_BASE_VALUE: i32 = 122;
+pub const GAP_FAIRY_WAKAN_BASE_VALUE: i32 = 123;
+pub const GAP_FAIRY_HP_BASE_VALUE: i32 = 124;
+pub const GAP_FAIRY_EGG_ID: i32 = 125;
+pub const GAP_FAIRY_YOUNG_ID: i32 = 126;
+pub const GAP_FAIRY_RIPE_ID: i32 = 127;
+pub const GAP_BREAK_ARMOUR: i32 = 128;
+pub const GAP_PUNCTURE: i32 = 129;
+pub const GAP_BREAK_ELEMENT: i32 = 130;
+pub const GAP_BREAK_BOUND: i32 = 131;
+pub const GAP_GOLD_POWER: i32 = 132;
+pub const GAP_SKILL_ID: i32 = 135;
+pub const GAP_SKILL_LEVEL: i32 = 136;
+pub const GAP_CHANGEBODY_TYPE: i32 = 138;
+pub const GAP_BAOSHI_COLOR: i32 = 139;
+pub const GAP_DAKONG_1: i32 = 140;
+pub const GAP_DAKONG_EXTERN_1: i32 = 147;
+pub const GAP_DAKONG_EXTERN_2: i32 = 148;
+pub const GAP_DAKONG_EXTERN_3: i32 = 149;
+pub const GAP_BF_LEVEL: i32 = 150;
+pub const GAP_BF_CURRENT_EXP: i32 = 151;
+pub const GAP_BF_CURRENT_MAX_EXP: i32 = 152;
+pub const GAP_BF_HP: i32 = 153;
+pub const GAP_BF_MP: i32 = 154;
+pub const GAP_BF_ATTACK: i32 = 155;
+pub const GAP_BF_SPRITE: i32 = 156;
+pub const GAP_BF_BLAST: i32 = 157;
+pub const GAP_BF_BRAVE: i32 = 158;
+pub const GAP_BF_AGILITY: i32 = 159;
+pub const GAP_BF_SPRITUALISM: i32 = 160;
+pub const GAP_BF_STRENGH: i32 = 161;
+pub const GAP_BF_PULLULATERATE: i32 = 162;
+pub const GAP_BF_POTENTIAL: i32 = 163;
+pub const GAP_BF_MODULE: i32 = 164;
+pub const GAP_BF_MATERIAL: i32 = 169;
+pub const GAP_BF_FETCH_BODY: i32 = 170;
+pub const GAP_BF_FETCH_STONE: i32 = 171;
+pub const GAP_BF_BATTLE_FAIRY: i32 = 172;
+pub const GAP_BF_WEAPON: i32 = 173;
+pub const GAP_BF_HUXINJING: i32 = 174;
+pub const GAP_BF_JEWELLERY: i32 = 175;
+pub const GAP_BF_CLOTH: i32 = 176;
+pub const GAP_BF_GEM: i32 = 177;
+pub const GAP_BF_SKY: i32 = 178;
+pub const GAP_BF_EARTH: i32 = 179;
+pub const GAP_BF_MAN: i32 = 180;
+pub const GAP_BF_SKY_SKILL: i32 = 181;
+pub const GAP_BF_EARTH_SKILL: i32 = 182;
+pub const GAP_BF_MAN_SKILL: i32 = 183;
+pub const GAP_BF_ALL_SKILL: i32 = 184;
+pub const GAP_BF_MAX_HP: i32 = 185;
+pub const GAP_BF_MAX_MP: i32 = 186;
+pub const GAP_BF_ATTACK_POTENTIAL: i32 = 187;
+pub const GAP_BF_SPRITE_POTENTIAL: i32 = 188;
+pub const GAP_BF_BLAST_POTENTIAL: i32 = 189;
+pub const GAP_BF_BRAVE_POTENTIAL: i32 = 190;
+pub const GAP_BF_AGILITY_POTENTIAL: i32 = 191;
+pub const GAP_BF_SPRITUALISM_POTENTIAL: i32 = 192;
+pub const GAP_BF_STRENGH_POTENTIAL: i32 = 193;
+pub const GAP_BF_ATTACK_BASE: i32 = 194;
+pub const GAP_BF_SPRITE_BASE: i32 = 195;
+pub const GAP_BF_BRAVE_BASE: i32 = 196;
+pub const GAP_BF_AGILITY_BASE: i32 = 197;
+pub const GAP_BF_SPRITUALISM_BASE: i32 = 198;
+pub const GAP_BF_STRENGH_BASE: i32 = 199;
+// Live battle-fairy equipment range из того же wire enum; значения являются
+// catalog keys и потому не заменяются отдельным Rust enum discriminant-ом.
+pub const GAP_BF_LIFE_ADDON: i32 = 200;
+pub const GAP_BF_MP_ADDON: i32 = 201;
+pub const GAP_BF_ATTACK_ADDON: i32 = 202;
+pub const GAP_BF_SPRITE_ADDON: i32 = 203;
+pub const GAP_BF_ABRAVE_ADDON: i32 = 204;
+pub const GAP_BF_AGILITY_ADDON: i32 = 205;
+pub const GAP_BF_SPRITUALISE_ADDON: i32 = 206;
+pub const GAP_BF_STRENGH_ADDON: i32 = 207;
+pub const GAP_BF_BLAST_ADDON: i32 = 208;
+pub const GAP_CIQING_PROPERTY1: i32 = 243;
+pub const GAP_CIQING_PROPERTY2: i32 = 244;
+pub const GAP_BF_LIFE_GROW: i32 = 209;
+pub const GAP_BF_MP_GROW: i32 = 210;
+pub const GAP_BF_ATTACK_GROW: i32 = 211;
+pub const GAP_BF_SPRITE_GROW: i32 = 212;
+pub const GAP_BF_ABRAVE_GROW: i32 = 213;
+pub const GAP_BF_AGILITY_GROW: i32 = 214;
+pub const GAP_BF_SPRITUALISE_GROW: i32 = 215;
+pub const GAP_BF_STRENGH_GROW: i32 = 216;
+pub const GAP_BF_MAX_LEVEL: i32 = 217;
+pub const GAP_BF_CUT_HURT_SCALE: i32 = 218;
+pub const GAP_BF_WEAPON_LEVEL: i32 = 219;
+pub const GAP_BF_GLOVE: i32 = 220;
+pub const GAP_BF_PIFENG: i32 = 221;
+pub const GAP_BF_YAODAI: i32 = 222;
+pub const GAP_BF_XIEZI: i32 = 223;
+pub const GAP_BF_HUOXIESHU_SKILL: i32 = 224;
+pub const GAP_BF_LINGZHISHU_SKILL: i32 = 225;
+pub const GAP_BF_BFEQUIPEMENT: i32 = 226;
+pub const GAP_BF_CUT_HURT_ADDON: i32 = 227;
+pub const GAP_BF_DEFUALT_SKLL: i32 = 228;
+pub const GAP_GOODS_LIFE_TYPE: i32 = 229;
+pub const GAP_GOODS_START_POINT: i32 = 230;
+pub const GAP_GOODS_EQUIMENT_FLASH: i32 = 231;
+pub const GAP_GOODS_PACKAGE_EXTENTION: i32 = 234;
+pub const ICON_TYPE_GROUND: i32 = 1;
+
+pub const EQUIP_PLACE_HEAD: i32 = 1;
+pub const EQUIP_PLACE_BODY: i32 = 2;
+pub const EQUIP_PLACE_HAND: i32 = 3;
+pub const EQUIP_PLACE_GLOVE: i32 = 4;
+pub const EQUIP_PLACE_BOOT: i32 = 5;
+pub const EQUIP_PLACE_ORNAMENTS: i32 = 6;
+pub const EQUIP_PLACE_MEDAL: i32 = 7;
+pub const EQUIP_PLACE_POSTERIOR: i32 = 8;
+pub const EQUIP_PLACE_JEWELRY: i32 = 9;
+pub const EQUIP_PLACE_HEADGEAR: i32 = 10;
+pub const EQUIP_PLACE_TALISMAN: i32 = 11;
+pub const EQUIP_PLACE_FROCK: i32 = 12;
+pub const EQUIP_PLACE_WING: i32 = 13;
+pub const EQUIP_PLACE_MANTEAU: i32 = 14;
+pub const EQUIP_PLACE_FAIRY: i32 = 15;
+pub const EQUIP_PLACE_LING_BAO: i32 = 16;
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum GoodsBasePropertiesDecodeError {
+    #[error(
+        "goods properties обрываются на {field} в {offset}: нужно {required}, доступно {available}"
+    )]
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        required: usize,
+        available: usize,
+    },
+    #[error("goods properties не содержат NUL для {field} в {offset} ({available} байт)")]
+    MissingStringTerminator {
+        field: &'static str,
+        offset: usize,
+        available: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GoodsBaseIcon {
+    pub icon_type: i32,
+    pub icon_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GoodsBaseAddonPropertyValueModifier {
+    pub probability: u32,
+    pub lower_limit: i32,
+    pub upper_limit: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GoodsBaseAddonPropertyValue {
+    pub id: u32,
+    pub base_value: i32,
+    pub is_modifier_enabled: i32,
+    pub modifiers: Vec<GoodsBaseAddonPropertyValueModifier>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GoodsBaseAddonProperty {
+    pub property_type: i32,
+    pub is_enabled: i32,
+    pub is_implicit_attribute: i32,
+    pub occur_probability: u32,
+    pub values: Vec<GoodsBaseAddonPropertyValue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CGoodsBaseProperties {
+    original_name: Vec<u8>,
+    name: Vec<u8>,
+    description: Vec<u8>,
+    goods_type: i32,
+    equip_place: i32,
+    battle_fairy_equip_place: Option<i32>,
+    price: u32,
+    weight: u32,
+    icons: Vec<GoodsBaseIcon>,
+    addon_properties: Vec<GoodsBaseAddonProperty>,
+}
+
+impl Default for CGoodsBaseProperties {
+    fn default() -> Self {
+        Self {
+            original_name: Vec::new(),
+            name: Vec::new(),
+            description: Vec::new(),
+            goods_type: GOODS_TYPE_USELESS,
+            equip_place: 0,
+            battle_fairy_equip_place: None,
+            price: 0,
+            weight: 0,
+            icons: Vec::new(),
+            addon_properties: Vec::new(),
+        }
+    }
+}
+
+impl CGoodsBaseProperties {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn unserialize(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<(), GoodsBasePropertiesDecodeError> {
+        self.clear();
+        self.original_name = read_c_string(source, cursor, "original name")?;
+        self.name = read_c_string(source, cursor, "name")?;
+        self.goods_type = read_i32(source, cursor, "goods type")?;
+        self.equip_place = read_i32(source, cursor, "equip place")?;
+        self.price = read_u32(source, cursor, "price")?;
+        self.weight = read_u32(source, cursor, "weight")?;
+
+        let icon_count = read_u32(source, cursor, "icon count")?;
+        for _ in 0..icon_count {
+            self.icons.push(GoodsBaseIcon {
+                icon_type: read_i32(source, cursor, "icon type")?,
+                icon_id: read_u32(source, cursor, "icon id")?,
+            });
+        }
+
+        let property_count = read_u32(source, cursor, "addon property count")?;
+        for _ in 0..property_count {
+            self.addon_properties
+                .push(GoodsBaseAddonProperty::unserialize(source, cursor)?);
+        }
+        Ok(())
+    }
+
+    pub fn original_name(&self) -> &[u8] {
+        &self.original_name
+    }
+
+    pub fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    pub fn description(&self) -> &[u8] {
+        &self.description
+    }
+
+    pub const fn goods_type(&self) -> i32 {
+        self.goods_type
+    }
+
+    pub const fn equip_place(&self) -> i32 {
+        self.equip_place
+    }
+
+    pub const fn battle_fairy_equip_place(&self) -> Option<i32> {
+        self.battle_fairy_equip_place
+    }
+
+    pub const fn price(&self) -> u32 {
+        self.price
+    }
+
+    pub const fn weight(&self) -> u32 {
+        self.weight
+    }
+
+    pub fn icons(&self) -> &[GoodsBaseIcon] {
+        &self.icons
+    }
+
+    pub fn addon_properties(&self) -> &[GoodsBaseAddonProperty] {
+        &self.addon_properties
+    }
+
+    pub fn get_icon_id(&self, icon_type: i32) -> u32 {
+        self.icons
+            .iter()
+            .find(|icon| icon.icon_type == icon_type)
+            .map_or(0, |icon| icon.icon_id)
+    }
+
+    pub fn get_occur_probability(&self, property_type: i32) -> u32 {
+        self.addon_properties
+            .iter()
+            .find(|property| property.property_type == property_type)
+            .map_or(0, |property| property.occur_probability)
+    }
+
+    pub fn is_implicit(&self, property_type: i32) -> i32 {
+        self.addon_properties
+            .iter()
+            .find(|property| property.property_type == property_type)
+            .map_or(0, |property| property.is_implicit_attribute)
+    }
+
+    pub fn has_addon_property(&self, property_type: i32) -> bool {
+        self.addon_properties
+            .iter()
+            .any(|property| property.property_type == property_type)
+    }
+
+    pub fn has_enabled_addon_property(&self, property_type: i32) -> bool {
+        self.addon_properties
+            .iter()
+            .any(|property| property.property_type == property_type && property.is_enabled != 0)
+    }
+
+    pub fn get_addon_property_value(&self, property_type: i32, has_values: bool) -> i32 {
+        self.addon_properties
+            .iter()
+            .find(|property| {
+                property.property_type == property_type && !property.values.is_empty() == has_values
+            })
+            .and_then(|property| property.values.first())
+            .map_or(0, |value| value.base_value)
+    }
+
+    pub fn get_addon_property_values(&self, property_type: i32) -> &[GoodsBaseAddonPropertyValue] {
+        self.addon_properties
+            .iter()
+            .find(|property| property.property_type == property_type)
+            .map_or(&[], |property| property.values.as_slice())
+    }
+
+    pub fn query_addon_max_property_value(&self, property_type: i32, value_id: u32) -> i32 {
+        let Some(value) = self
+            .get_addon_property_values(property_type)
+            .iter()
+            .find(|value| value.id == value_id)
+        else {
+            return 0;
+        };
+        let maximum_modifier = value
+            .modifiers
+            .iter()
+            .map(|modifier| modifier.upper_limit)
+            .max()
+            .unwrap_or(0)
+            .max(0);
+        value.base_value.wrapping_add(maximum_modifier)
+    }
+
+    pub fn valid_addon_properties(&self) -> impl Iterator<Item = i32> + '_ {
+        self.addon_properties
+            .iter()
+            .filter(|property| property.is_enabled == 1)
+            .map(|property| property.property_type)
+    }
+
+    pub fn all_addon_property_values(&self) -> Vec<GoodsBaseAddonProperty> {
+        self.addon_properties.clone()
+    }
+}
+
+impl GoodsBaseAddonProperty {
+    fn unserialize(
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<Self, GoodsBasePropertiesDecodeError> {
+        let property_type = read_i32(source, cursor, "addon property type")?;
+        let is_enabled = read_i32(source, cursor, "addon enabled")?;
+        let is_implicit_attribute = read_i32(source, cursor, "addon implicit")?;
+        let occur_probability = read_u32(source, cursor, "addon probability")?;
+        let value_count = read_u32(source, cursor, "addon value count")?;
+        let mut values = Vec::new();
+        for _ in 0..value_count {
+            values.push(GoodsBaseAddonPropertyValue::unserialize(source, cursor)?);
+        }
+        Ok(Self {
+            property_type,
+            is_enabled,
+            is_implicit_attribute,
+            occur_probability,
+            values,
+        })
+    }
+}
+
+impl GoodsBaseAddonPropertyValue {
+    fn unserialize(
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<Self, GoodsBasePropertiesDecodeError> {
+        let id = read_u32(source, cursor, "addon value id")?;
+        let base_value = read_i32(source, cursor, "addon base value")?;
+        let is_modifier_enabled = read_i32(source, cursor, "modifier enabled")?;
+        let modifier_count = read_u32(source, cursor, "modifier count")?;
+        let mut modifiers = Vec::new();
+        for _ in 0..modifier_count {
+            modifiers.push(GoodsBaseAddonPropertyValueModifier {
+                probability: read_u32(source, cursor, "modifier probability")?,
+                lower_limit: read_i32(source, cursor, "modifier lower limit")?,
+                upper_limit: read_i32(source, cursor, "modifier upper limit")?,
+            });
+        }
+        Ok(Self {
+            id,
+            base_value,
+            is_modifier_enabled,
+            modifiers,
+        })
+    }
+}
+
+fn read_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<Vec<u8>, GoodsBasePropertiesDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let mut reader = LegacyReader::at(source, offset).map_err(|_| {
+        GoodsBasePropertiesDecodeError::MissingStringTerminator {
+            field,
+            offset,
+            available,
+        }
+    })?;
+    let value = reader.read_c_string(available).map_err(|_| {
+        GoodsBasePropertiesDecodeError::MissingStringTerminator {
+            field,
+            offset,
+            available,
+        }
+    })?;
+    *cursor = reader.position();
+    Ok(value.to_vec())
+}
+
+fn read_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, GoodsBasePropertiesDecodeError> {
+    let mut reader = goods_reader(source, *cursor, 4, field)?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn read_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, GoodsBasePropertiesDecodeError> {
+    let mut reader = goods_reader(source, *cursor, 4, field)?;
+    let value = reader
+        .read_u32()
+        .map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn goods_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    required: usize,
+    field: &'static str,
+) -> Result<LegacyReader<'source>, GoodsBasePropertiesDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| {
+        GoodsBasePropertiesDecodeError::UnexpectedEnd {
+            field,
+            offset: block.offset,
+            required,
+            available: block.available,
+        }
+    })
+}
+
+fn goods_read_error(
+    field: &'static str,
+    block: nebokrai_shared::protocol::LegacyReadBlock,
+) -> GoodsBasePropertiesDecodeError {
+    GoodsBasePropertiesDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        required: block.needed,
+        available: block.available,
+    }
+}

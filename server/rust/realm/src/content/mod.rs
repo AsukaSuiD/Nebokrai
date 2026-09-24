@@ -1,6 +1,7 @@
 //! Подготовка содержимого Realm; исполнение сценариев принадлежит Zone.
 
 mod clientresource;
+pub mod goods;
 mod quests;
 mod scriptfiles;
 mod scripts;
