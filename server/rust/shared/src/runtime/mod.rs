@@ -1,8 +1,20 @@
 //! Общие средства запуска и механизмы ожиданий без реестров доменов.
 
+mod netsession;
+mod netsessionmanager;
 mod timer;
 mod tools;
 
+pub use netsession::{
+    CNetSession, NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionBeginBlock,
+    NetSessionBeginDispatch, NetSessionCallbackAlreadyAssigned, NetSessionCookie,
+    NetSessionEndpoint,
+};
+pub use netsessionmanager::{
+    CNetSessionManager, CreatedNetSession, NetSessionCallbackOutcome, NetSessionCreateBlock,
+    NetSessionManagerBeginBlock, NetSessionManagerVariant, NetSessionRunReport,
+    NetSessionSetCallbackBlock,
+};
 pub use timer::{
     AsyncTimerCallbackDisposition, AsyncTimerCallbackHandler, AsyncTimerRunBlock, CTimer,
     CalendarTimerRegistration, PeriodicTimer, TimerCallbackInvocation, TimerCallbackSource,

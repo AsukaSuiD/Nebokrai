@@ -972,6 +972,7 @@ dependencies = [
  "lzo",
  "md-5",
  "nom",
+ "parking_lot",
  "quick-xml",
  "uuid",
 ]
