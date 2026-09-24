@@ -379,12 +379,12 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         state_id if state_id == RESTORE_HP_STATE_ID as u32 => StateRecordLayout::typed(
             RESTORE_HP_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                ConsumableRestoreState::decode(payload, offset, _now()).map(StateData::ConsumableRestore)
+                ConsumableRestoreState::decode(payload, offset, _now).map(StateData::ConsumableRestore)
             },
         ),
         state_id if state_id == RESTORE_MP_STATE_ID as u32 => StateRecordLayout::typed(
             RESTORE_MP_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                ConsumableRestoreState::decode(payload, offset, _now()).map(StateData::ConsumableRestore)
+                ConsumableRestoreState::decode(payload, offset, _now).map(StateData::ConsumableRestore)
             },
         ),
         state_id if is_automatic_restore_state_id(state_id) => StateRecordLayout::typed(

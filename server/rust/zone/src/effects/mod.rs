@@ -9,6 +9,7 @@ mod bloodloss;
 mod bossbluefury;
 mod callosity;
 mod changebody;
+mod consumablerestore;
 mod cure;
 mod daubpoison;
 mod defenseshield;
@@ -80,6 +81,10 @@ pub use callosity::{
 pub use changebody::{
     CHANGE_BODY_PARAMETER_BYTES, CHANGE_BODY_SKILL_TYPE, CHANGE_BODY_STATE_BYTES,
     CHANGE_BODY_STATE_ID, ChangeBodyState,
+};
+pub use consumablerestore::{
+    CONSUMABLE_RESTORE_STATE_BYTES, ConsumableRestoreIntervals, ConsumableRestoreState,
+    RESTORE_HP_STATE_ID, RESTORE_MP_STATE_ID, RestoreHpState, RestoreMpState, RestoreStateData,
 };
 pub use cure::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID, CureState};
 pub use daubpoison::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};

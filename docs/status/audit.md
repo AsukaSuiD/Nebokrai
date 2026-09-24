@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись восстановления от предметов 24 сентября 2026
+
+Данные, таймер и 16-байтная запись `CRestoreHpState` (`100000`) и `CRestoreMpState` (`100001`) перенесены в [`zone/effects/consumablerestore.rs`](../../server/rust/zone/src/effects/consumablerestore.rs) вместе с enum и интервалами применения. Переходный Game сохраняет живые Begin/restart/AI/End и применение ресурса.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) инструкции подтверждают: конструкторы `0x004F8410`/`0x004F87B0` (поля из аргументов, ID `0x186A0`/`0x186A1`, без часов), vtable `0x0065355C`/`0x006535BC` с общими Serialize `0x005F65F0`, Unserialize `0x005EEC70`, getter `0x005F2CD0` и additional `0x00601200`. Исправление Rust: decode читает часы после проверки ID вместо расхода до входа. Основания — в [описании восстановления](../gameplay/attributes-and-states.md#восстановление-от-расходуемых-предметов).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,59 секунды без предупреждений; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактические тики не проверялись.
+
 ## Zone effects: данные и 124-байтная запись ChangeBody 24 сентября 2026
 
 Данные и запись `CHBYState` (`0x37`) перенесены в [`zone/effects/changebody.rs`](../../server/rust/zone/src/effects/changebody.rs); Game получил тонкую `change_body_state_from_factory`, живые Begin/restart/End, visual, навыки и hotkeys остаются в `chbystate.rs`.
