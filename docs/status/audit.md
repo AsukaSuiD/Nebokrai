@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone activities: три войсковые системы организаций 24 сентября 2026
+
+Снимки войн GameServer перенесены в `zone/src/activities/` — принятый дом локального исполнения военных режимов: [`CAttackCitySys`](../../server/rust/zone/src/activities/attackcitysys.rs) (городские войны), [`CVillageWarSys`](../../server/rust/zone/src/activities/villagewarsys.rs) (деревенские) и [`CFourNationWarSys`](../../server/rust/zone/src/activities/fournationwarsys.rs) (четырёх стран, 196-байтовые setup records и 16-байтовые `tagRECT`). Единственная связь всех трёх — `TagTime`, уже находящийся в Shared values, поэтому швы не потребовались, а его импорт заменён прямым импортом Shared. Потребители (`game`, `organsysmessage`, `servermessage`, region-семейство войн) работают через glob-шимы без правок; исследовательские хвосты (243+216+233 строки) по конвенции не копированы.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе подтверждено для границ трёх decoder-ов: `AttackCitySys` snapshot/setup `0x60E40` и `VillageWarSys` `0x5F320` вводят snapshot-чтение в протоколированной SEH-раскладке с map/vector доступом владельца; `CFourNationWarSys::DecordFromByteArray` `0x5BEA00` подтверждает повторный snapshot — существующий буфер setup удаляется, три глобала обнуляются, count читается cursor-ом со знаковой границей. Остальные RVA заголовков (phase callbacks, faction update, initial state, schedule queries) сохраняют прежний статус VERIFIED_DISASSEMBLY и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка владельца обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone regions: proxy-region unit 24 сентября 2026
 
 Proxy-region `CProxyServerRegion` (сознательно неполный wire: base decode, country byte, war-region type, точный блок `0x24` `tagRegionParam`) и его wire-проекция `RegionParamState` перенесены в `zone/src/regions/`: тип проекции — в новый [`regionparam.rs`](../../server/rust/zone/src/regions/regionparam.rs), декодер — в [`proxyserverregion.rs`](../../server/rust/zone/src/regions/proxyserverregion.rs). Определение struct в `serverregion.rs` заменено реэкспортом — прежние точки налоговой диагностики и snapshots region-семейства работают без правок; потребители proxy (`game`, `servermessage`) — через glob-шим. Парный World serializer остаётся методом большого `worldregion.rs` и в этот шаг не переносился.
