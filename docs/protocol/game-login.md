@@ -29,13 +29,13 @@
 | № | Часть payload | Размер и условие | Статус и свидетельство |
 | ---: | --- | --- | --- |
 | 1 | ID игрока | `long`, 4 байта | `VERIFIED`: `CGame::OnLogMessage` VA `0x0049F140`; `initial.add_long(expected_player_id)` в [Game owner-е](../../server/rust/src/gameserver/gameserver/game.rs). |
-| 2 | Разреженная проекция `tagSetup` и соседних настроек | Переменный размер из-за двух C-строк; точный порядок источников ниже | `VERIFIED` для указанного порядка в [GlobeSetup owner-е](../../server/rust/src/setup/globesetup.rs). Назначение каждого сырого байта внутри диапазонов не выводится из этой страницы (`UNKNOWN`). |
+| 2 | Разреженная проекция `tagSetup` и соседних настроек | Переменный размер из-за двух C-строк; точный порядок источников ниже | `VERIFIED` для указанного порядка в [GlobeSetup owner-е](../../server/rust/shared/src/resources/globesetup.rs). Назначение каждого сырого байта внутри диапазонов не выводится из этой страницы (`UNKNOWN`). |
 | 3 | `CPlayer::AddToByteArray_ForClient(true)` | Переменный блок, без отдельной длины перед ним в `0xBF401` | `PARTIAL`: оригинальный serializer RVA `0x0004A480`, реализованный [player snapshot](../../server/rust/src/gameserver/appserver/player.rs). Отдельные доказанные поля описаны ниже; весь вложенный layout здесь не заявлен. |
 | 4 | Имя региона | Исходные байты C-строки до первого NUL, затем `0x00` | `VERIFIED`: оригинал копирует строку без перекодирования; Rust берёт `region.region.get_name()`. [Точные источники ниже](#поля-региона-после-player-snapshot). |
 | 5–8 | `region_type`, `war_region_type`, `resource_id`, `exp_scale` | Три `long`, затем биты `float`; по 4 байта | Источники и порядок записи оригинала — [ниже](#поля-региона-после-player-snapshot). Размеры карты в этот блок не входят. |
 | 9 | Признак первого входа | `byte`, 1 байт: `0` или `1` | `VERIFIED`: `add_byte(u8::from(first_login))`; флаг получают при первом `mark_login_script_started`. |
 | 10 | Дублирующие регионы | Только если первый вход и существует setup-owner; знаковый 32-битный счётчик, затем по два 32-битных ID на запись | `VERIFIED` для этой условной формы в [CDupliRegionSetup](../../server/rust/src/public/dupliregionsetup.rs); обязательность присутствия owner-а при любом запуске не утверждается. |
-| 11 | Расширение `tagSetup` | `AddEx`: 32-битная длина `0x400`, затем ровно `0x400` байт из setup offset `0xD08..0x1108` | `VERIFIED` для вызова и длины: [Game owner](../../server/rust/src/gameserver/gameserver/game.rs), [GlobeSetup](../../server/rust/src/setup/globesetup.rs), [базовый `AddEx`](../../server/rust/src/nets/basemessage.rs). Семантика всех 1024 байт здесь не заявлена. |
+| 11 | Расширение `tagSetup` | `AddEx`: 32-битная длина `0x400`, затем ровно `0x400` байт из setup offset `0xD08..0x1108` | `VERIFIED` для вызова и длины: [Game owner](../../server/rust/src/gameserver/gameserver/game.rs), [GlobeSetup](../../server/rust/shared/src/resources/globesetup.rs), [базовый `AddEx`](../../server/rust/src/nets/basemessage.rs). Семантика всех 1024 байт здесь не заявлена. |
 
 ## Поля региона после player snapshot
 
@@ -59,7 +59,7 @@
 
 ## Проекция `tagSetup` перед блоком игрока
 
-[GlobeSetup](../../server/rust/src/setup/globesetup.rs) пишет исходные байты **в указанном порядке**, а не сплошной `tagSetup`. Таблица фиксирует только доказанное копирование и размер, не придумывая названия каждому полю исходной структуры.
+[GlobeSetup](../../server/rust/shared/src/resources/globesetup.rs) пишет исходные байты **в указанном порядке**, а не сплошной `tagSetup`. Таблица фиксирует только доказанное копирование и размер, не придумывая названия каждому полю исходной структуры.
 
 | Порядок | Источник | Что записывается |
 | ---: | --- | --- |

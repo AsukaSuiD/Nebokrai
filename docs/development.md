@@ -49,7 +49,7 @@ Login принимает клиента и выбирает путь входа;
 | Изменить предмет или перенос | [goodsmessage](../server/rust/src/gameserver/appserver/message/goodsmessage.rs), [containermessage](../server/rust/src/gameserver/appserver/message/containermessage.rs) | Владелец предмета, контейнер, блокировки, события и сохранение; [предметы](gameplay/items.md). |
 | Изменить загрузку или сохранение | [World player](../server/rust/src/worldserver/appworld/player.rs), [savedb](../server/rust/src/worldserver/worldserver/savedb.rs) | Снимок, очередь, конкретный модуль `dbaccess/worlddb/`; [жизненный цикл персонажа](gameplay/player-lifecycle.md). |
 | Исправить потерю/обрамление пакета | [nets/](../server/rust/src/nets/), [transport/](../server/rust/src/transport/) | Сначала определить направление и стадию: TCP → кадр → сообщение → обработчик. |
-| Изменить конфигурацию или игровую таблицу | [World reload](../server/rust/src/worldserver/worldserver/game.rs), [setup/](../server/rust/src/setup/) | Файл/пакет → parser → таблица World → снимок или сообщение → потребитель; [загрузка ресурсов](architecture/resources-and-configuration.md). |
+| Изменить конфигурацию или игровую таблицу | [World reload](../server/rust/src/worldserver/worldserver/game.rs), [Shared resources](../server/rust/shared/src/resources/) | Файл/пакет → parser → таблица World → снимок или сообщение → потребитель; [загрузка ресурсов](architecture/resources-and-configuration.md). |
 
 Для поиска начинайте с имени функции или opcode в указанном модуле. Например, из корня репозитория: `rg -n 'dispatch_game_shape_message|QUEST_MOVE_STEP' server/rust/src/gameserver`. Большие файлы `game.rs` связывают много подсистем; полезнее проследить конкретный вызов, чем читать их подряд.
 
