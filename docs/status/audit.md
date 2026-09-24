@@ -8,6 +8,8 @@
 
 `cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,59 секунды без предупреждений; `rustfmt` новых Zone-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическое оседлование и клиентский visual не проверялись.
 
+Тот же коммит `04f32ad39` по ошибке включил форматную нормализацию `rustfmt` четырнадцати ранее существовавших файлов `zone/effects/` (запущенный на `mod.rs` rustfmt обработал дочерние модули). Изменение только форматирующее, поведение не меняет; обе Linux-проверки выше выполнялись уже на нормализованном дереве. Расхождение зафиксировано здесь, поскольку сообщение коммита его не отражает.
+
 ## Zone effects: диспетчер PreDefense и стихийная формула Promotion 24 сентября 2026
 
 Диспетчер вариантов щитов `DefenseShieldState` (enum, выбор источника MP, правило пропуска ID) перенесён в [`zone/effects/defenseshield.rs`](../../server/rust/zone/src/effects/defenseshield.rs); стихийная формула Promotion — в [`zone/effects/promotion.rs`](../../server/rust/zone/src/effects/promotion.rs) как `promotion_element_attack`. Переходный Game сохраняет живые Begin/restart/AI/End щитов и вызовы из `fightdefense`.
