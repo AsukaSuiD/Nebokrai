@@ -5,6 +5,9 @@
 //!
 //! [карте владельцев]: ../../../../docs/architecture/realm-and-zone.md
 
+pub mod auth_message;
+pub mod auth_server;
+pub mod auth_server_client;
 pub mod billing_message;
 pub mod billing_server;
 pub mod billing_server_client;
