@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Игровой клиент → LoginServer | `0x2FD01..=0x3FBFF` после проверки кадра; тип и socket/CD-key/IP попадают в FIFO | [Receive owner](../../server/rust/src/nets/netlogin/mynetserverclient_client.rs), точная Login EXE/PDB. Диапазон `VERIFIED`, обработчики не для каждого числа в нём — `PARTIAL`. |
 | Игровой клиент → GameServer | `0x8F701..=0x9F5FF` после проверки кадра; тип и socket/map/IP попадают в FIFO | [Receive owner](../../server/rust/src/nets/netserver/myserverclient.rs), Game `OnReceive` RVA `0x0001C7F0`. Диапазон `VERIFIED`, полное покрытие содержимого `PARTIAL`. |
-| Внутри LoginServer | `Run` сначала проверяет диапазон Auth `0xCF301..0xDF1FE`, затем семейство `MsgType & 0xFFFFFF00`: GM `0x20000`, GMA `0x20100`, Log `0x1FF00/0x2FD00/0x10000`, Server `0xFF00/0x1FE00` | [Login message](../../server/rust/src/nets/netlogin/message.rs), точная Login EXE/PDB. Неизвестный тип — no-op с возвратом `1`; это не доказательство успеха доменной операции. |
+| Внутри LoginServer | `Run` сначала проверяет диапазон Auth `0xCF301..0xDF1FE`, затем семейство `MsgType & 0xFFFFFF00`: GM `0x20000`, GMA `0x20100`, Log `0x1FF00/0x2FD00/0x10000`, Server `0xFF00/0x1FE00` | [Login message](../../server/rust/realm/src/app/login_message.rs), точная Login EXE/PDB. Неизвестный тип — no-op с возвратом `1`; это не доказательство успеха доменной операции. |
 | Внутри GameServer | `Run` разрешает игрока по числовому map ID, его регион, затем выбирает обработчик по `MsgType & 0xFFFFFF00`; некоторые семейства требуют оба объекта | [Game message](../../server/rust/src/nets/netserver/message.rs), RVA `0x000149D0`. Семейства перечислены в owner-е; их маршрутизация `VERIFIED`, полнота вложенных handlers `PARTIAL`. |
 
 Дополнительные маршруты действующего Rust-кода:
