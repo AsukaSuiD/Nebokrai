@@ -975,6 +975,7 @@ dependencies = [
  "parking_lot",
  "quick-xml",
  "uuid",
+ "zerocopy",
 ]
 
 [[package]]
