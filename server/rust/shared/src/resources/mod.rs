@@ -11,6 +11,7 @@ mod hitlevel;
 mod incrementshoplist;
 mod globesetup;
 mod gmlist;
+mod goodsdestructionconfig;
 mod marker;
 mod monsterlist;
 mod newskillmonsterlist;
@@ -76,6 +77,10 @@ pub use globesetup::{
     GLOBE_SETUP_BLOB_LENGTH, GlobePlayerPropertyCoefficients, GlobeRpGainPolicy,
     GlobeSetupDecodeError, GlobeSetupLoadError, GlobeSetupLoadReport, GlobeSetupSnapshot,
     GlobeStiffenSetup,
+};
+pub use goodsdestructionconfig::{
+    GoodsDestroyDecodeError, GoodsDestroyFileLoadError, GoodsDestroyFormatError,
+    GoodsDestroyList, GoodsDestroyLoadReport, GoodsDestroySerializeError, GoodsDestroySetup,
 };
 pub use marker::read_to_marker;
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};

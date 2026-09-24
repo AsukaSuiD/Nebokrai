@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: уничтожение предметов 25 сентября 2026
+
+Правила уничтожения предметов `GoodsDestroySetup` (enabled, ordered goods types и original names, позиционный loader и wire-codec) перенесены из `src/setup/goodsdestructionconfig.rs` в [`shared/src/resources/goodsdestructionconfig.rs`](../../server/rust/shared/src/resources/goodsdestructionconfig.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла; информационная trace-строка после decode удалена вместе с зависимостью Shared от `tracing`. Установленный экземпляр и его потребители остаются у владельцев ролей; `load_from_file` без живых call sites сохранён как клон оригинального `LoadFromFile`. Правила сохранены: wire пишет `u32 enabled`, signed counts, `u16` goods types и NUL-terminated original names; loader очищает оба vectors, но при ошибке открытия сохраняет enabled; после `#` идут `* label u16`, после `<end>` — независимые `+ name`; файл без `#` успешен с пустыми vectors и прежним enabled; Game decoder очищает оба списка и публикует enabled и каждый полный элемент по мере чтения.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `setup/goodsdestructionconfig.h/.cpp`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка правил в работающий Game и загрузка INI World этим переносом не проверялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 38,39 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: ограничения смены тела 25 сентября 2026
 
 Ограничения смены тела `CChangeBodyConf` (vector ограничений goods, XML-loader и wire-codec) перенесены из `src/setup/changebody.rs` в [`shared/src/resources/changebody.rs`](../../server/rust/shared/src/resources/changebody.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла; `thiserror` derive заменён ручными `Display`/`Error` (Shared не зависит от `thiserror`). Установленный экземпляр и его потребители остаются у владельцев ролей. Правила сохранены: loader очищает vector до открытия XML, принимает только direct `Goods` children `RestrictionsGoodsList`, missing `index` очищает результат, diagnostics сохраняют StringTable IDs `GS1148..1151`; wire пишет signed count и `u32` items; Game decoder немедленно очищает vector и сохраняет каждый полный `u32`, safe short-buffer оставляет decoded prefix.
