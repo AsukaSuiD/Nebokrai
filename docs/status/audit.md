@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: глобальный setup и маршрутизатор регионов 25 сентября 2026
+
+`CGlobeSetup` (0x1114-байтный snapshot, typed accessors, decode/loader) и `CRegionRouter` (маршрутизация переходов) перенесены из `src/setup/` в [`shared/src/resources/globesetup.rs`](../../server/rust/shared/src/resources/globesetup.rs) и [`shared/src/resources/regionrouter.rs`](../../server/rust/shared/src/resources/regionrouter.rs). Обе роли используют одну реализацию: World загружает тексты и сериализует, Game принимает и хранит экземпляры; прежние `src/setup/*` стали тонкими реэкспортами. World JJC получил локальный adapter `GlobeSetupJjcWorldConfig` поверх нового Shared view `jjc_run_config_fields`, не зависящего от типа старого владельца. Счёт дублей router теперь возвращается из Game-декодера и журналируется обработчиком вместо скрытого trace библиотеки.
+
+Происхождение сохранено заголовками: сериализатор/декодер World/Game EXE/PDB, исходники `server/setup/globesetup.cpp/.h` и `regionrouter.cpp/.h`. Алгоритмы не менялись: очистка router до count, first-wins обоих map-insert, очистка snapshot и typed offsets читаются из того же сырья. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка snapshot/router Game и загрузка текстов World этим переносом не проверялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; `rustfmt` новых Shared-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: общий формат обмена монстров 25 сентября 2026
 
 Формат `CMonsterList` (типы, реестры, текстовый загрузчик, сериализатор/декодер и lookup) перенесён из `src/setup/monsterlist.rs` в [`shared/src/resources/monsterlist.rs`](../../server/rust/shared/src/resources/monsterlist.rs). Обе роли используют одну реализацию: World сериализует и загружает тексты, Game принимает реестр и хранит экземпляр полем; прежний `src/setup/monsterlist.rs` стал тонким реэкспортом. Это перенос собственной реализации без изменения алгоритмов: порядка записей, очистки реестров, last-write-wins, line/NUL-правила строк и кодировки полей.

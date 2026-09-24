@@ -2144,7 +2144,9 @@ fn decode_runtime_configuration_startup(
             {
                 let (globe_setup, region_router) = game.globe_setup_and_region_router_mut();
                 match globe_setup.decord_from_byte_array(region_router, source, cursor) {
-                    Ok(()) => {}
+                    Ok((duplicate_regions, duplicate_transitions)) => {
+                        tracing::trace!(duplicate_regions, duplicate_transitions, "маршрутизатор регионов декодирован");
+                    }
                     Err(error) => {
                         return Some(Err(GameRuntimeConfigurationStartupError::GlobeSetup(error)));
                     }

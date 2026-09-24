@@ -4,8 +4,10 @@ mod catalog;
 mod emotion;
 mod filesinfo;
 mod hitlevel;
+mod globesetup;
 mod marker;
 mod monsterlist;
+mod regionrouter;
 mod package;
 mod path;
 mod playerlist;
@@ -26,7 +28,6 @@ pub use hitlevel::{
     CHitLevelSetup, HitLevelDecodeError, HitLevelEntry, HitLevelFormatError,
     HitLevelSerializeError,
 };
-pub use marker::read_to_marker;
 pub use monsterlist::{
     MonsterDrop, MonsterDropList, MonsterDropRegistry, MonsterListDecodeError,
     MonsterListLoadError, MonsterListSerializeError, MonsterProperties, MonsterRegistry,
@@ -35,6 +36,12 @@ pub use monsterlist::{
     get_monster_property_by_picture_id, load_drop_goods_list, load_monster_list,
     serialize_monster_list,
 };
+pub use globesetup::{
+    GLOBE_SETUP_BLOB_LENGTH, GlobePlayerPropertyCoefficients, GlobeRpGainPolicy,
+    GlobeSetupDecodeError, GlobeSetupLoadError, GlobeSetupLoadReport, GlobeSetupSnapshot,
+    GlobeStiffenSetup,
+};
+pub use marker::read_to_marker;
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};
 pub use path::{normalize_resource_path, resolve_resource_path};
 pub use playerlist::{
@@ -42,6 +49,12 @@ pub use playerlist::{
     PlayerListDecodeError, PlayerListFormatError, PlayerListLoadReport, PlayerListSerializeError,
     PlayerOriginEquipment, PlayerPropertiesUpgrade, PlayerPropertiesUpgradeLoadReport,
     PlayerPropertiesUpgradeMap,
+};
+pub use regionrouter::{
+    RegionNextNode, RegionRoutePoint, RegionRouteStep, RegionRouter,
+    RegionRouterChangeOutcome, RegionRouterDecodeError, RegionRouterDecodeField,
+    RegionRouterLoadError, RegionRouterLoadReport, RegionRouterNode,
+    RegionRouterSerializeError,
 };
 pub use quest::{CQuestSystem, QuestEntry};
 pub use quest_text::{

@@ -140,7 +140,7 @@ use crate::public::timer::{
     CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
     TimerRunReport,
 };
-use crate::setup::globesetup::{GlobeSetupLoadError, GlobeSetupSnapshot};
+use crate::setup::globesetup::{GlobeSetupJjcWorldConfig, GlobeSetupLoadError, GlobeSetupSnapshot};
 use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleLoadError, GodsBattleSerializeError,
 };
@@ -14721,7 +14721,7 @@ impl CGame {
         let bai_tan_jjc = self
             .run_main_loop_bai_tan_jjc_stage(
                 owners.jjc,
-                resources.globe_setup.jjc_run_config(),
+                resources.globe_setup.jjc_run_config_world(),
                 owners.jjc_context,
                 owners.jjc_week_clear_worker,
                 owners.tokio_runtime.clone(),
@@ -18568,7 +18568,7 @@ where
     let original_name_index = &resource_snapshot.original_name_index;
     let coefficients = &resource_snapshot.coefficients;
     let globe_setup = &resource_snapshot.globe_setup;
-    let jjc_config = globe_setup.jjc_run_config();
+    let jjc_config = globe_setup.jjc_run_config_world();
     let region_router = &resource_snapshot.region_router;
     let player_list = &mut resource_snapshot.player_list;
     let log_system = &resource_snapshot.log_system;
