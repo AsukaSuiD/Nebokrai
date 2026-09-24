@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm content: serializer одной записи навыка 24 сентября 2026
+
+Описание одного навыка `CSkill` (wire-запись type/id/level/target, имя length+bytes без NUL, `usage_count` и пары `(usage, cost)`) перенесено из `src/worldserver/appworld/skills/skill.rs` в [`realm/src/content/skill.rs`](../../server/rust/realm/src/content/skill.rs) — World-side половина wire-контракта, чей парный `Rebuild` уже находится у `zone/skills/skillfactory`. Швы не потребовались; единственный прямой потребитель `appworld/skills/skillfactory.rs` работает через glob-шим без правок.
+
+Машинное основание по точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match) в этом проходе проверено для `CSkill::Serialize` `0x4DCE50`: отказ при невалидном ID (`0x7FFFFFFF`) и нулевом скаляре, inline strlen имени по `+0x10`, число пар usage/cost как `(end-begin)/8`, заявленная длина записи `name_len + count*8 + 0x20` — ровно на восемь байт больше записываемых полей (16 скаляров + 4 длина + 4 count = `0x18`). Это и есть framing-quirk, который парный Game `Rebuild` использует как границу record-а; он сохранён в Rust без изменения принимаемой структуры.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone content: startup snapshot CHonorRanks 24 сентября 2026
 
 Startup snapshot почётных списков `CHonorRanks` (4 rank types × 4 country lists, record = player ID, level byte, NUL-name, occupation byte, appellation ID, eliminate count; `GetPlayerPosition` с 1-based order и `AddToByteArray` для `0xBFF35`) перенесён из `src/gameserver/gameserver/honorranks.rs` в [`zone/src/content/honorranks.rs`](../../server/rust/zone/src/content/honorranks.rs). Швы не потребовались; потребители (`game`, `servermessage`) работают через glob-шим без правок. Одноимённый тип `worldserver/worldserver/honorranks.rs` — отдельный WorldServer-владелец, перенос его не затрагивает.

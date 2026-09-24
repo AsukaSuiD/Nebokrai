@@ -5,6 +5,7 @@ pub mod goods;
 mod quests;
 mod scriptfiles;
 mod scripts;
+pub mod skill;
 mod timetoreturn;
 
 pub use clientresource::{
