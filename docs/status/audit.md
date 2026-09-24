@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm access: генератор validcode 25 сентября 2026
+
+Генератор `validcode` LoginServer (`ValidCode.ini` с GBK-глифами, выбор/поворот/шум, BMP `0x70B6` с исторически несоответствующими `bfSize 0xF6` и `biSizeImage 0xC0`, сравнение ответа по исходным восьми байтам) перенесён из `src/loginserver/applogin/validcode.rs` в новый компонент [`realm/src/access/`](../../server/rust/realm/src/access/) — принятый таблицей компонентов дом клиента до мирового входа и вариантов допуска. Швы не потребовались; потребители (`loginqueue`, `logmessage`) работают через glob-шим без правок. В манифест Realm добавлены те же версии `encoding_rs`, `freetype-rs` (bundled) и `getrandom`, что в корневом пакете; `Cargo.lock` обновлён cargo всего тремя строками.
+
+Машинное основание на точной паре `loginserver.exe` + `LoginServer.pdb` (`1C84006D`, RSDS match): `CValidCode::GenerateValidCodeString` `0x4246C0` — обход SSO-строки с capacity `0x10` и итерацией по символам источника. Утверждения BMP layout и несоответствия `bfSize/biSizeImage` payload-у, как и повороты, шум шрифтов и eight byte сравнение, сохраняют прежний статус заголовка файла и заново не дизассемблировались.
+
+Потребители вызывают `CValidCode::generate`, `.valid_code()` и `.bitmap()`. На этом Windows-хосте bundled `freetype-sys` не компилируется без INCLUDE-путей MSVC, как и в корневом пакете; штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений, включая сборку C freetype в образе. Отметки обновлены в [карте проекта](../architecture/workspace.md) и строке `access` таблицы [realm-and-zone.md](../architecture/realm-and-zone.md). rustfmt и `git diff --check` чисты. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Свип ссылок документации на новых владельцев 25 сентября 2026
 
 Выполнен глобальный свип всех ссылок `docs/` на цели `server/rust/src/**/*.rs` с проверкой существования каждой по диску. Найдены шесть мёртвых ссылок на уже перенесённых владельцев и одна ложная серия URL-encoded `other%20states` (файлы существуют, оставлена). Исправлены: [transport.md](../protocol/transport.md) (Game server client → Zone app), [connection-lifecycle.md](../protocol/connection-lifecycle.md) (три ссылки → Shared network), [network-runtime.md](../server/network-runtime.md) и [shared-mechanisms.md](../architecture/shared-mechanisms.md) (serverclient/socketcommands → Shared network), [realm-and-zone.md](../architecture/realm-and-zone.md) (World skill cache → Realm content). Повторный свип после правок: мёртвых целей ноль.

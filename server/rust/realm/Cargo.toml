@@ -12,3 +12,6 @@ parking_lot = "0.12.5"
 tokio = { version = "1.53.1", features = ["macros", "net"] }
 walkdir = "2.5.0"
 tracing = "0.1.44"
+encoding_rs = "0.8.35"
+freetype-rs = { version = "0.38.0", features = ["bundled"] }
+getrandom = "0.4.3"
