@@ -223,6 +223,10 @@ Player-ветвь callback сначала ограничивает потерю 
 
 Машинный AI подтверждает две раздельные проверки часов: после слабой границы оба запрета снимаются на каждом проходе (без one-shot флага), после общей — вызывается End. При переносе decode стал читать часы после проверки ID вместо расхода до входа. Формула процента от живых getter-ов атаки монстра перенесена без изменения; фактическое усиление босса и клиентский visual не запускались.
 
+## Particular: товарный сторож
+
+Данные и 8-байтная запись `CParticularState` (`0x186A5`) находятся в [`Zone effects`](../../server/rust/zone/src/effects/particular.rs); живые Begin/restart/AI/End и проверка товара у игрока остаются у [переходного Game](../../server/rust/src/gameserver/appserver/other%20states/particularstate.rs). По совпадающей паре Game EXE/PDB `VERIFIED`: конструктор VA `0x004F9440` принимает любой DWORD `additional` (vtable `0x00653684`), Serialize VA `0x005E23D0` и Unserialize VA `0x00601350` сохраняют ID и `additional` без часов. AI VA `0x004F9900` после границы 2000 мс проверяет наличие товара у игрока и завершает состояние при его отсутствии; checkstamp всегда нулевой и не продвигается. Фактическая работа сторожа и клиентский visual этим переносом не проверялись.
+
 ## Сценарий: паутина и несколько запретов одновременно
 
 [`SpiderWebState`](../../server/rust/src/gameserver/appserver/skills/spiderwebstate.rs) использует общий жизненный цикл [`blindstate`](../../server/rust/src/gameserver/appserver/skills/blindstate.rs). `begin_primary_blind_state_at` разрешает участников, отправляет начало visual, увеличивает запреты движения и боя, затем публикует запись состояния. Повторный вход запускает `restart_blind_state`, который восстанавливает эти запреты для загруженного экземпляра.

@@ -25,6 +25,7 @@ mod maxresource;
 mod meteorarrow;
 mod periodicattack;
 mod pillar;
+mod particular;
 mod poison;
 mod poisonfog;
 mod promotion;
@@ -105,6 +106,10 @@ pub use periodicattack::{
     encode_periodic_state_for_install,
 };
 pub use pillar::{PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState};
+pub use particular::{
+    PARTICULAR_STATE_BYTES, PARTICULAR_STATE_CHECK_INTERVAL_MS, PARTICULAR_STATE_ID,
+    ParticularState,
+};
 pub use poison::{POISON_STATE_BYTES, PoisonState};
 pub use poisonfog::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID, PoisonFogState};
 pub use promotion::{

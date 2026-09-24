@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись ParticularState 24 сентября 2026
+
+Данные и 8-байтная запись `CParticularState` (`0x186A5`) перенесены в [`zone/effects/particular.rs`](../../server/rust/zone/src/effects/particular.rs). Переходный Game сохраняет живые Begin/restart/AI/End и проверку товара у игрока.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) инструкции подтверждают: конструктор VA `0x004F9440` (additional из аргумента, vtable `0x00653684`), Serialize VA `0x005E23D0` и Unserialize VA `0x00601350` (ID + additional без часов). Основания — в [описании товарного сторожа](../gameplay/attributes-and-states.md#particular-товарный-сторож). Поведение Rust при переносе не менялось.
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,94 секунды без предупреждений; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическая работа сторожа не проверялась.
+
 ## Zone effects: данные и кодек RideState 24 сентября 2026
 
 Данные и wire-кодек `CRideState` (ID `100004`) перенесены в [`zone/effects/ride.rs`](../../server/rust/zone/src/effects/ride.rs). Переходный Game сохраняет живые Begin/End, visual и разрешение участников; переменная запись `ID/type/level/roleLimit/goodsName\0` и goods-check gate стали библиотечными.

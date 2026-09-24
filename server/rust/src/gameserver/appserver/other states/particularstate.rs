@@ -1,8 +1,10 @@
-//! CParticularState, gameserver.exe + GameServer.pdb, исходный owner
-//! appserver/other states/particularstate.cpp. Экземпляры принадлежат общей
-//! арене CMoveShape; Vec/SlotMap и заимствования заменяют CState*/ручной lifetime.
-//! Ctor0x004F9440 принимает любой DWORD additional; goods/duplicate-gates —
-//! ответственность caller. Object Begin0x004F9710 требует non-NULL sufferer:
+//! Живые Begin/restart/AI/End CParticularState в переходном Game.
+//! Источник: gameserver.exe + GameServer.pdb, исходный owner
+//! appserver/other states/particularstate.cpp. Данные и 8-байтная запись
+//! перенесены в Zone `effects/particular.rs` (там же адреса конструктора
+//! и кодека). Экземпляры принадлежат общей арене CMoveShape; Vec/SlotMap
+//! и заимствования заменяют CState*/ручной lifetime.
+//! Object Begin0x004F9710 требует non-NULL sufferer:
 //! base self/self clock → visual loop1/BFE03 → base tail → checkstamp=0,
 //! затем append. NULL-user restart сохраняет User и не читает часы.
 //! Base timestamp не потребляется AI/codec и не хранится фиктивным таймером.
@@ -14,68 +16,23 @@
 //! Checkstamp всегда нулевой и не продвигается; death-gate отсутствует.
 //! End0x005FD420: optional visual/BFE04 → свежий sufferer → RemoveState,
 //! без state.ended и принудительного удаления из другой арены.
-//! Vtable0x00653684 SetRegion меняет только sufferer. Client time=0,
-//! additional=DWORD; Serialize0x005E23D0/Unserialize0x00601350 сохраняют
-//! ID/additional (8 байт), без часов, включая additional=0 при загрузке.
+//! Vtable SetRegion меняет только sufferer.
 //! Drop освобождает ресурс без End/пакетов; отказ native allocator не эмулируется.
 //! Координатный/typed-target Begin0x004F9540/0x004F9610 остаются только в локальном исследовательском корпусе.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::moveshape::StateKey;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
     StatePropertyTarget, begin_applied_state_visual, begin_base_applied_state,
-    default_client_state_time, remove_applied_state_from, resolve_applied_state_sufferer,
-    resolve_state_move_shape, update_applied_state_end_visual, update_applied_state_visual_base,
+    remove_applied_state_from, resolve_applied_state_sufferer, resolve_state_move_shape,
+    update_applied_state_end_visual, update_applied_state_visual_base,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) const PARTICULAR_STATE_ID: u32 = 0x186a5;
-pub(crate) const PARTICULAR_STATE_BYTES: usize = 8;
-const PARTICULAR_STATE_CHECK_INTERVAL_MS: u32 = 2_000;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ParticularState {
-    additional_data: u32,
-}
-
-impl ParticularState {
-    pub(crate) const fn new(additional_data: u32) -> Self {
-        Self { additional_data }
-    }
-
-    pub(crate) const fn additional_data(&self) -> u32 {
-        self.additional_data
-    }
-
-    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
-        let mut reader = LegacyReader::at(payload, offset)?;
-        let _state_id = reader.read_u32()?;
-        Ok(Self::new(reader.read_u32()?))
-    }
-
-    pub(crate) fn encoded(&self) -> [u8; PARTICULAR_STATE_BYTES] {
-        let mut record = [0; PARTICULAR_STATE_BYTES];
-        record[..4].copy_from_slice(&PARTICULAR_STATE_ID.to_le_bytes());
-        record[4..].copy_from_slice(&self.additional_data.to_le_bytes());
-        record
-    }
-
-    pub(crate) const fn state_id(&self) -> i32 {
-        PARTICULAR_STATE_ID as i32
-    }
-
-    pub(crate) const fn client_state_time(&self) -> i32 {
-        default_client_state_time()
-    }
-
-    pub(crate) const fn due(&self, now_ms: u32) -> bool {
-        PARTICULAR_STATE_CHECK_INTERVAL_MS <= now_ms
-    }
-}
+pub(crate) use nebokrai_zone::effects::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
 
 pub(crate) fn begin_primary_particular_state(
     player: &mut CPlayer,
