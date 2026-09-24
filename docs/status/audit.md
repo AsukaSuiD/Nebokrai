@@ -1,5 +1,11 @@
 # Аудит готовности серверной реконструкции
 
+## Свип ссылок документации на новых владельцев 25 сентября 2026
+
+Выполнен глобальный свип всех ссылок `docs/` на цели `server/rust/src/**/*.rs` с проверкой существования каждой по диску. Найдены шесть мёртвых ссылок на уже перенесённых владельцев и одна ложная серия URL-encoded `other%20states` (файлы существуют, оставлена). Исправлены: [transport.md](../protocol/transport.md) (Game server client → Zone app), [connection-lifecycle.md](../protocol/connection-lifecycle.md) (три ссылки → Shared network), [network-runtime.md](../server/network-runtime.md) и [shared-mechanisms.md](../architecture/shared-mechanisms.md) (serverclient/socketcommands → Shared network), [realm-and-zone.md](../architecture/realm-and-zone.md) (World skill cache → Realm content). Повторный свип после правок: мёртвых целей ноль.
+
+Авторитетный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` подтверждён без предупреждений; `git diff --check` чист. Код не менялся — правка только документации.
+
 ## Realm content: параметры стран WorldServer 25 сентября 2026
 
 World-side `CCountryParam` (Load resource с очисткой шести start/main maps и wire serializer 39 DWORD с main/technology/exile maps) перенесён из `src/worldserver/appworld/country/countryparam.rs` в [`realm/src/content/countryparam.rs`](../../server/rust/realm/src/content/countryparam.rs). Зависимости только в Shared; потребители поимённо (world `runtime`/`game`, `country`, `king`, `handler`, `player`, `worldregion`, `worldcityregion`, `servermessage`, `countrymessage`, `logmessage`, `organsysmessage`, `dbaccess/worlddb/dbcountry`) работают через glob-шим без правок. Game-сторона страны уже находится у `zone/content`, парным потребителем wire остаётся.
