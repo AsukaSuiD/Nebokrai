@@ -26,11 +26,9 @@ use std::future::Future;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use parking_lot::{Mutex, RwLock, RwLockReadGuard};
+use parking_lot::{Mutex, RwLockReadGuard};
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tokio::net::TcpStream;
@@ -41,10 +39,8 @@ use crate::authserver::appauth::message::message_func::{AuthMessageHandlers, Log
 use crate::authserver::src::configreader::{ConfigLoadError, ConfigReader};
 use crate::authserver::src::dbqueue::{
     AuthExResultData, AuthResultData, DbQuest, DbResult, LockResultData, ServerInfo,
-    ServerInfoQueue,
 };
-use crate::authserver::src::kl_ipfilter::{IpFilter, IpFilterLoadError, load_ip_patterns};
-use crate::authserver::src::kl_multi_list::MultiList;
+use crate::authserver::src::kl_ipfilter::{IpFilterLoadError, load_ip_patterns};
 use crate::dbaccess::authdb::authproc::{
     AuthDatabaseNotice, AuthDatabaseWorkerJoinError, AuthDatabaseWorkerStartError,
     AuthDatabaseWorkers,
@@ -60,31 +56,7 @@ use crate::nets::servers::{
     ServerHostError, ServerIoAction, ServerIoCompletion, ServerSnapshotError,
 };
 
-pub(crate) struct AuthNetworkConfig {
-    host_port: u32,
-    max_login_servers: i32,
-    max_in_flight_sends: i32,
-    permitted_send_bytes: i32,
-    new_accept_timeout_ms: i32,
-}
-
-impl AuthNetworkConfig {
-    pub(crate) const fn new(
-        host_port: u32,
-        max_login_servers: i32,
-        max_in_flight_sends: i32,
-        permitted_send_bytes: i32,
-        new_accept_timeout_ms: i32,
-    ) -> Self {
-        Self {
-            host_port,
-            max_login_servers,
-            max_in_flight_sends,
-            permitted_send_bytes,
-            new_accept_timeout_ms,
-        }
-    }
-}
+pub(crate) use nebokrai_realm::access::networkconfig::AuthNetworkConfig;
 
 #[derive(Default)]
 pub(crate) struct AuthRuntimeStep {
@@ -281,112 +253,7 @@ impl LegacyTickClock {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct AuthDbContext {
-    config: Arc<RwLock<ConfigReader>>,
-    quests: Arc<MultiList<DbQuest>>,
-    results: Arc<MultiList<DbResult>>,
-    server_info: Arc<ServerInfoQueue>,
-    client_ip_forbider: Arc<RwLock<IpFilter<false>>>,
-}
-
-impl AuthDbContext {
-    fn new(config: ConfigReader) -> Self {
-        Self {
-            config: Arc::new(RwLock::new(config)),
-            quests: Arc::new(MultiList::new()),
-            results: Arc::new(MultiList::new()),
-            server_info: Arc::new(ServerInfoQueue::new()),
-            client_ip_forbider: Arc::new(RwLock::new(IpFilter::new())),
-        }
-    }
-
-    pub(crate) fn config(&self) -> RwLockReadGuard<'_, ConfigReader> {
-        self.config.read()
-    }
-
-    pub(crate) fn push_quest(&self, quest: DbQuest) -> bool {
-        if self.quests.size() < self.config.read().max_auth_queue_size() as u32 {
-            self.quests.push_back(quest);
-            return true;
-        }
-
-        let rejection = match quest {
-            DbQuest::Authenticate {
-                return_socket_id,
-                request,
-            } => Some(DbResult::Authenticate {
-                return_socket_id,
-                result: AuthResultData::new(
-                    6,
-                    request.account,
-                    request.client_ip,
-                    request.client_socket_id,
-                ),
-            }),
-            DbQuest::AuthenticateExtended {
-                return_socket_id,
-                request,
-            } => Some(DbResult::AuthenticateExtended {
-                return_socket_id,
-                result: AuthExResultData::new(
-                    6,
-                    request.account,
-                    request.client_ip,
-                    request.client_socket_id,
-                ),
-            }),
-            DbQuest::Lock {
-                return_socket_id,
-                request,
-            } => Some(DbResult::Lock {
-                return_socket_id,
-                result: LockResultData {
-                    account: request.account,
-                    succeeded: false,
-                },
-            }),
-            DbQuest::WriteServerInfo => None,
-        };
-
-        if let Some(rejection) = rejection {
-            self.results.push_back(rejection);
-        }
-        false
-    }
-
-    pub(crate) fn quest_count(&self) -> u32 {
-        self.quests.size()
-    }
-
-    pub(crate) fn pop_quest_until_stopped(&self, stopped: &AtomicBool) -> Option<DbQuest> {
-        self.quests.pop_front_wait_until_stopped(stopped)
-    }
-
-    pub(crate) fn wake_quest_waiters(&self) {
-        self.quests.wake_all();
-    }
-
-    pub(crate) fn push_result(&self, result: DbResult) {
-        self.results.push_back(result);
-    }
-
-    pub(crate) fn push_server_info(&self, info: ServerInfo) {
-        self.server_info.push_back(info);
-    }
-
-    pub(crate) fn pop_all_server_info(&self) -> std::collections::VecDeque<ServerInfo> {
-        self.server_info.pop_all()
-    }
-
-    pub(crate) fn is_client_ip_allowed(&self, address: u32) -> bool {
-        !self.config.read().client_ip_filter_enabled()
-            || self
-                .client_ip_forbider
-                .read()
-                .is_allowed(address.to_le_bytes())
-    }
-}
+pub(crate) use nebokrai_realm::access::dbcontext::AuthDbContext;
 
 pub(crate) struct CGame<Handler> {
     db: AuthDbContext,

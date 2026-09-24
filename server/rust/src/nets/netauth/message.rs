@@ -2,5 +2,5 @@
 //! Здесь реэкспорт для переходных потребителей.
 
 pub(crate) use nebokrai_realm::app::auth_message::{
-    AuthMessageHandler, AuthMessageKind, CMessage, DispatchError, SendMessageError,
+    AuthMessageHandler, CMessage, DispatchError, SendMessageError,
 };

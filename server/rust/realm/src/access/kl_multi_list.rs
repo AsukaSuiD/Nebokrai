@@ -1,6 +1,7 @@
 //! Очередь `kl_multi_list.h`, подтверждённая `authserver.exe` и
-//! `authserver.pdb`. `parking_lot::{Mutex, Condvar}` и `VecDeque` заменяют
-//! Win32-синхронизацию и `std::list` без изменения FIFO.
+//! `authserver.pdb`, перенесённая в Realm `access/`. `parking_lot::{Mutex,
+//! Condvar}` и `VecDeque` заменяют Win32-синхронизацию и `std::list` без
+//! изменения FIFO.
 //!
 //! Размер читается отдельным snapshot, после чего worker ожидает каждый элемент;
 //! это намеренно не заменено атомарным drain. Stop может прервать только пустое
@@ -12,24 +13,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::{Condvar, Mutex};
 
-pub(crate) struct MultiList<T> {
+pub struct MultiList<T> {
     elements: Mutex<VecDeque<T>>,
     available: Condvar,
 }
 
 impl<T> MultiList<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             elements: Mutex::new(VecDeque::new()),
             available: Condvar::new(),
         }
     }
 
-    pub(crate) fn size(&self) -> u32 {
+    pub fn size(&self) -> u32 {
         self.elements.lock().len() as u32
     }
 
-    pub(crate) fn push_back(&self, element: T) {
+    pub fn push_back(&self, element: T) {
         let mut elements = self.elements.lock();
         let was_empty = elements.is_empty();
         elements.push_back(element);
@@ -38,7 +39,7 @@ impl<T> MultiList<T> {
         }
     }
 
-    pub(crate) fn pop_front_wait(&self) -> T {
+    pub fn pop_front_wait(&self) -> T {
         let mut elements = self.elements.lock();
         while elements.is_empty() {
             self.available.wait(&mut elements);
@@ -48,7 +49,7 @@ impl<T> MultiList<T> {
             .expect("очередь проверена под тем же mutex")
     }
 
-    pub(crate) fn pop_front_wait_until_stopped(&self, stopped: &AtomicBool) -> Option<T> {
+    pub fn pop_front_wait_until_stopped(&self, stopped: &AtomicBool) -> Option<T> {
         let mut elements = self.elements.lock();
         while elements.is_empty() {
             if stopped.load(Ordering::Acquire) {
@@ -59,13 +60,13 @@ impl<T> MultiList<T> {
         elements.pop_front()
     }
 
-    pub(crate) fn wake_all(&self) {
+    pub fn wake_all(&self) {
         // Тот же mutex закрывает окно между проверкой stop и `Condvar::wait`.
         let _elements = self.elements.lock();
         self.available.notify_all();
     }
 
-    pub(crate) fn try_pop_front(&self) -> Option<T> {
+    pub fn try_pop_front(&self) -> Option<T> {
         self.elements.lock().pop_front()
     }
 }
