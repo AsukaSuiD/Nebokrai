@@ -1325,7 +1325,7 @@ impl CServerRegion {
         context: &mut Context,
     ) -> Result<i32, RegionMembershipBlock> {
         let id = self.next_monster_id.take();
-        let mut monster = CBaseObject::create_monster(id);
+        let mut monster = crate::gameserver::appserver::baseobject::create_monster(id);
         monster.bind_spawn_property(property);
         monster.initialize_skills(property, skill_factory, &mut |bound| {
             context.random_below(bound)
@@ -1405,7 +1405,7 @@ impl CServerRegion {
         mut now_ms: impl FnMut(&mut Context) -> u32,
     ) -> Result<i32, RegionMembershipBlock> {
         let id = self.next_monster_id.take();
-        let mut monster = CBaseObject::create_monster(id);
+        let mut monster = crate::gameserver::appserver::baseobject::create_monster(id);
         monster.bind_spawn_property(property);
         monster.initialize_skills(property, skill_factory, &mut |bound| {
             context.random_below(bound)
@@ -2820,7 +2820,7 @@ impl CServerRegion {
             }
 
             let id = self.next_npc_id.take();
-            let mut npc = CBaseObject::create_npc(id);
+            let mut npc = crate::gameserver::appserver::baseobject::create_npc(id);
             let shape = npc.move_shape_mut().shape_mut();
             shape.base_object_mut().set_name(&setup.name);
             shape.base_object_mut().set_graphics_id(setup.picture_id);
