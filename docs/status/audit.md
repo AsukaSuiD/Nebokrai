@@ -1,5 +1,12 @@
 # Аудит готовности серверной реконструкции
 
+## Порядок переноса: TimeToReturn 25 сентября 2026
+
+Оценена принадлежность `src/setup/timetoreturn.rs` (`TimeToReturn`): это Realm-событие (World-only по заголовку, активируется календарём `CTimer` и отправляет `0x7FA13` маршрутом `game_server_number_by_region_id → send_to_map_id`). Зависимости уже разведены и выделены: `TagTime` — в [`shared/values/date.rs`](../../server/rust/shared/src/values/date.rs), `CTimer` — в [`shared/runtime/timer.rs`](../../server/rust/shared/src/runtime/timer.rs), `read_to` — `read_to_marker` в Shared resources.
+
+Перенос в `realm/` сейчас упирается в направление сети: граница отправки требует `CMessage` со `send_to_map_id/send_to_socket` и `ServerCommandHandle` из `nets/networld` вместе с `CBaseMessage`, RLE, клиентскими/серверными очередями и сериализационным мьютексом старого пакета. Собственный 16-байтовый header с типом в `+4` принадлежит именно этому стеку направлений, а не формату события TimeToReturn; воспроизводить его локально в Realm-активности — дублирование несогласованного знания о wire-framing. Поэтому TimeToReturn отложен не по неопределённости, а по карте зависимостей: он поедет вместе с мировыми организаторскими календарями (`organizingsystem/*`, те же пользователи `CTimer`) после выделенной сетевой направленности World→Realm (`nets/networld` → компоненты Realm app/network), где `CMessage` получит своего нового владельца. Пребывание в `src/setup/` без тонкого реэкспорта оставлено сознательно.
+
+Соответствующие этой ссылке переносы `date.rs` и `timer.rs` зафиксированы отдельными записями аудита в тот же день; проверки для этой записи — общий уже прошедший Linux `cargo check --locked --workspace --lib --bins`; новых кусков кода эта запись не вносит.
 ## Shared runtime: CTimer 25 сентября 2026
 
 Calendar/interval реестр `CTimer` (generic-пара typed periodic records с PDB-layout `tagTimer`, ordered calendar events, singleton-совместимый global uid-счётчик и оба прохода `Run` — sync и async DB-owner adapter) перенесён из `src/public/timer.rs` в новый компонент [`shared/runtime/timer.rs`](../../server/rust/shared/src/runtime/timer.rs) по правилу архитектурной карты для Shared runtime (механизмы ожиданий и источники времени; у роли остаётся его экземпляр и семантика срока). Прежний `src/public/timer.rs` стал тонким реэкспортом. На границе пакета всплыл lint `async_fn_in_trait` — он подавлен известным `#[allow]`, так как trait use only внутренний, публичного контракта auto-bounds у него нет.
