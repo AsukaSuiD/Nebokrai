@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone content: startup snapshot CHonorRanks 24 сентября 2026
+
+Startup snapshot почётных списков `CHonorRanks` (4 rank types × 4 country lists, record = player ID, level byte, NUL-name, occupation byte, appellation ID, eliminate count; `GetPlayerPosition` с 1-based order и `AddToByteArray` для `0xBFF35`) перенесён из `src/gameserver/gameserver/honorranks.rs` в [`zone/src/content/honorranks.rs`](../../server/rust/zone/src/content/honorranks.rs). Швы не потребовались; потребители (`game`, `servermessage`) работают через glob-шим без правок. Одноимённый тип `worldserver/worldserver/honorranks.rs` — отдельный WorldServer-владелец, перенос его не затрагивает.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе проверено для decoder-а `DecordFromByteArray` `0x40D390`: rank type ограничен `0..3`, country `-1` ветвится отдельно, конкретная страна ограничена `0..3`, целевой list очищается перед чтением, неположительный count оставляет его пустым, первое поле record читается cursor-ом как player ID. Сохранение прочитанного prefix при безопасном отказе и замена `std::list` на `Vec` сохраняют прежний статус и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка владельца обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone activities: состояние CJJcSystem 24 сентября 2026
 
 Process-owned состояние арены `CJJcSystem` (две ordered map: region→пара участников и player→сведения соперника и точка возврата) перенесено из `src/gameserver/appserver/jjcsystem.rs` в [`zone/src/activities/jjcsystem.rs`](../../server/rust/zone/src/activities/jjcsystem.rs) — принятый таблицей компонентов дом локального исполнения арен. Швы не потребовались; потребители (`game`, `jjcsystemmessage`) работают через glob-шим без правок. Исследовательский хвост (строки 118–363) по конвенции не скопирован. Вопрос дома, по которому файл ранее откладывался, закрыт строкой `activities` в принятой таблице — не новым предположением.
