@@ -5,6 +5,7 @@ mod basemessage;
 mod clients;
 mod msgqueue;
 mod mysocket;
+mod serverclient;
 mod socketcommands;
 mod transport;
 
@@ -17,6 +18,10 @@ pub use msgqueue::CMsgQueue;
 pub use mysocket::{
     legacy_bind_endpoint, legacy_inet_addr, legacy_ipv4_word, SocketIdAllocator, DEFAULT_IP,
     DEFAULT_PORT, DEFAULT_SOCKET_TYPE,
+};
+pub use serverclient::{
+    AddSendDataOutcome, CServerClient, ServerClientMessageContext, ServerClientSizeError,
+    ServerSendBatch, ServerSendCompletion, DEFAULT_PERMITTED_SEND_BYTES,
 };
 pub use socketcommands::CSocketCommands;
 pub use transport::{
