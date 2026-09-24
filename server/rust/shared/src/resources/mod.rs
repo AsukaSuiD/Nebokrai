@@ -1,6 +1,7 @@
 //! Общие форматы ресурсов; выбор корня и публикация остаются у владельца роли.
 
 mod catalog;
+mod contributesetup;
 mod emotion;
 mod filesinfo;
 mod hitlevel;
@@ -22,6 +23,10 @@ mod stringtable_wire;
 mod tradelist;
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
+pub use contributesetup::{
+    CContributeSetup, ContributeItem, ContributeSetupDecodeError,
+    ContributeSetupFileLoadError, ContributeSetupFormatError, ContributeSetupSerializeError,
+};
 pub use emotion::{
     CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
 };

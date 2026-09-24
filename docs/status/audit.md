@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: country contribution 25 сентября 2026
+
+Общая таблица `CContributeSetup` (одиннадцать scalars, позиционный loader и wire-codec) перенесена из `src/setup/contributesetup.rs` в [`shared/src/resources/contributesetup.rs`](../../server/rust/shared/src/resources/contributesetup.rs). Обе роли используют одну реализацию; прежний `src/setup/contributesetup.rs` стал тонким реэкспортом. Порядок сохранён: loader очищает только items, одиннадцать scalars при ошибке открытия сохраняются и обновляются позиционно, malformed value оставляет уже прочитанный префикс, wire пишет scalars и records `u32 lo/hi/count + name\0`.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `setup/contributesetup.cpp`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка таблицы в работающий Game и загрузка World этим переносом не проверялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,55 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: список операторов GM 25 сентября 2026
 
 Общие операторы `CGMList` (два map `name → GmInfo`, god passport, loader и wire-codec) перенесены из `src/setup/gmlist.rs` в [`shared/src/resources/gmlist.rs`](../../server/rust/shared/src/resources/gmlist.rs). Обе роли используют одну реализацию; прежний `src/setup/gmlist.rs` стал тонким реэкспортом. Исходный god passport `@^$^#SDFSDslfld/$dsl2a` и правила (signed count, внутренний NUL в строке блокирует append до изменения destination, byte-порядок ключей) сохранены без изменения.
