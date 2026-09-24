@@ -921,6 +921,7 @@ name = "nebokrai-realm"
 version = "0.0.0"
 dependencies = [
  "nebokrai-shared",
+ "tracing",
  "walkdir",
 ]
 

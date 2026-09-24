@@ -9,3 +9,4 @@ publish = false
 [dependencies]
 nebokrai-shared = { path = "../shared" }
 walkdir = "2.5.0"
+tracing = "0.1.44"

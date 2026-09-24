@@ -1,13 +1,17 @@
 //! Подготовка содержимого Realm; исполнение сценариев принадлежит Zone.
 
+mod clientresource;
+mod quests;
 mod scriptfiles;
 mod scripts;
-mod quests;
 
-pub use quests::{QUEST_EX_PATH, QUEST_PATH, QuestCatalog};
+pub use clientresource::{
+    DefaultClientResourceOwner, DefaultClientResourceReplacement, LOAD_SERVER_RESOURCE_SUCCESS_LOG,
+};
+pub use quests::{QuestCatalog, QUEST_EX_PATH, QUEST_PATH};
 
-pub use scriptfiles::{ScriptFileScan, ScriptFileScanError, find_script_files};
+pub use scriptfiles::{find_script_files, ScriptFileScan, ScriptFileScanError};
 pub use scripts::{
-    ScriptListSource, ScriptLoadContext, ScriptLoadReport, ScriptReleaseState,
-    ScriptRequiredFile, ScriptResources, normalize_script_path,
+    normalize_script_path, ScriptListSource, ScriptLoadContext, ScriptLoadReport,
+    ScriptReleaseState, ScriptRequiredFile, ScriptResources,
 };
