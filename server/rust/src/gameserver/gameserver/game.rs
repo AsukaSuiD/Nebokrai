@@ -17524,10 +17524,10 @@ impl CGame {
         player_id: i32,
         quest_id: u16,
     ) -> Option<i32> {
-        if self.find_player(player_id)?.quest_state(quest_id) != 0 {
-            return None;
-        }
-        let path = self.quest_system.system().disband_script_by_id(quest_id)?.to_vec();
+        let path = self
+            .find_player(player_id)?
+            .abandon_quest_script_path(quest_id, self.quest_system.system())?
+            .to_vec();
         self.queue_player_script(player_id, &path)
     }
 

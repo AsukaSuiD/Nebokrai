@@ -9,6 +9,9 @@
 //! `CPlayer::RunQuestCompleteScript` VA 0x00458940–0x004589AA допускает
 //! только запись с нулевым byte state, затем ищет определение и передаёт
 //! его complete-script в общий исполнитель.
+//! Клиентские ветви `OnOrgasysMessage` VA 0x0048AE0C–0x0048AED2 и
+//! 0x0048AED7–0x0048AF9D проверяют нулевое состояние перед поиском
+//! complete/disband-script; запуск сценария принадлежит Game.
 
 use nebokrai_shared::resources::CQuestSystem;
 use std::collections::BTreeMap;
@@ -67,6 +70,18 @@ impl PlayerQuestProgress {
             return None;
         }
         catalog.complete_script_by_id(quest_id)
+    }
+
+    /// Локальный допуск сценария отказа использует ту же карту прогресса.
+    pub fn abandon_script_path<'a>(
+        &self,
+        quest_id: u16,
+        catalog: &'a CQuestSystem,
+    ) -> Option<&'a [u8]> {
+        if self.raw_state(quest_id) != Some(0) {
+            return None;
+        }
+        catalog.disband_script_by_id(quest_id)
     }
 
     /// При отсутствии определения прежнее ненулевое состояние уже удалено.

@@ -3865,6 +3865,14 @@ impl CPlayer {
         self.quest_progress.complete_script_path(quest_id, catalog)
     }
 
+    pub(crate) fn abandon_quest_script_path<'a>(
+        &self,
+        quest_id: u16,
+        catalog: &'a CQuestSystem,
+    ) -> Option<&'a [u8]> {
+        self.quest_progress.abandon_script_path(quest_id, catalog)
+    }
+
     pub(crate) fn set_quest_state_snapshot(&mut self, quest_id: u16, state: u8) {
         self.quest_progress.insert_snapshot(quest_id, state);
     }
