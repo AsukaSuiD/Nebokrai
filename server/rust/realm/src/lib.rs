@@ -3,6 +3,7 @@
 
 pub mod access;
 pub mod app;
+pub mod auction;
 pub mod billing;
 pub mod content;
 pub mod persistence;
