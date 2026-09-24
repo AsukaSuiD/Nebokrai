@@ -933,7 +933,7 @@ use crate::gameserver::appserver::monster::{
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePositionBlock,
-    MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE,
+    MoveShapeResolver, UndeadState, SKILL_BASE_DEFENSE, undead_state_from_factory,
 };
 use crate::gameserver::appserver::build::{
     BUILD_OBJECT_TYPE, BuildClientPublication, CBuild,
@@ -27944,7 +27944,7 @@ impl CGame {
         let Some(player) = self.find_player(player_id) else { return 0 };
         let region_id = player.shape().get_region_id();
         let holder = ShapeIdentity { ex_id: CGuid::GUID_INVALID, ..player.shape().identity() };
-        let Some(mut state) = UndeadState::from_factory(state_id, &self.skill_factory)
+        let Some(mut state) = undead_state_from_factory(state_id, &self.skill_factory)
         else { return 0 };
         let mut index = 0;
         loop {

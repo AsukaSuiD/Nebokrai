@@ -242,10 +242,7 @@ pub(crate) fn change_body_client_time(start: u32, keep: u32, now: &mut dyn FnMut
 /// CExStateNew/CNotDisappearAfterDead (0x005D6320): нулевой срок
 /// бессрочен и не читает часы, положительный читает одно либо два значения.
 pub(crate) fn extended_client_time(start: u32, keep: u32, now: &mut dyn FnMut() -> u32) -> u32 {
-    if keep == 0 { return 0; }
-    let deadline = start.wrapping_add(keep);
-    if deadline <= now() { return 0; }
-    deadline.wrapping_sub(now())
+    nebokrai_zone::effects::guarded_client_state_time(start, keep, now)
 }
 
 /// Объектный CState::Begin (0x005DBD70) с NULL user. Часы и прежний user

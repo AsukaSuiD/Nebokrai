@@ -141,7 +141,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         UNDEAD_STATE_ID => StateRecordLayout::typed(
             76, |payload, offset, _owner, _factory, _now| {
-                crate::gameserver::appserver::moveshape::UndeadState::decode_at(payload, offset, _now()).map(StateData::Undead)
+                crate::gameserver::appserver::moveshape::UndeadState::decode_at(payload, offset, _now).map(StateData::Undead)
             },
         ),
         LEAF_CUT_STATE_ID => StateRecordLayout::typed(

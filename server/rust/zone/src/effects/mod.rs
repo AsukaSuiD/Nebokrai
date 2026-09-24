@@ -36,6 +36,7 @@ mod soulcollect;
 mod swordship;
 mod tianshenxiafan;
 mod time;
+mod undead;
 mod visualeffect;
 mod wangsheng;
 mod weak;
@@ -126,7 +127,8 @@ pub use tianshenxiafan::{
     TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanPlayerView,
     TianShenXiaFanState,
 };
-pub use time::timed_client_state_time;
+pub use time::{guarded_client_state_time, timed_client_state_time};
+pub use undead::{UNDEAD_STATE_ID, UNDEAD_STATE_PARAMETER_BYTES, UndeadState};
 pub use visualeffect::CVisualEffect;
 pub use wangsheng::{WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID, WangshengState};
 pub use weak::{WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState};

@@ -360,8 +360,6 @@ pub(crate) const SKILL_BASE_DEFENSE: u32 = 10;
 const SKILL_NOT_DISAPPEAR_AFTER_DEAD: u32 = 56;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
-const UNDEAD_STATE_ID: u32 = 0x38;
-const UNDEAD_STATE_PARAMETER_BYTES: usize = 72;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RegisteredSkillExecution {
@@ -491,245 +489,19 @@ impl SkillCollection {
     }
 }
 
-/// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
-/// Serialize (0x005d64f0) сохраняет остаток в живом keeptime без смены старта;
-/// AI (0x005d7c80) использует строгие абсолютные wrapping сроки.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct UndeadState {
+pub(crate) use nebokrai_zone::effects::{UNDEAD_STATE_ID, UndeadState};
+
+/// Тонкая оболочка переходного Game: фабрика навыков остаётся у старого
+/// владельца, а данные и 76-байтный кодек — в Zone `effects/undead.rs`.
+pub(crate) fn undead_state_from_factory(
     state_id: u32,
-    state_type: u16,
-    keep_time_ms: u32,
-    started_ms: u32,
-    last_item_tick_ms: u32,
-    // ClearAllStates сравнивает сохранённый байт строго с 1, не с нулём.
-    pub(crate) disappear_after_dead: u8,
-    pub(crate) percentage: bool,
-    pub(crate) maximum_hp: i16,
-    pub(crate) maximum_mp: i16,
-    pub(crate) minimum_attack: i16,
-    pub(crate) maximum_attack: i16,
-    pub(crate) element_modify: i16,
-    pub(crate) defense: i16,
-    pub(crate) element_resistance: i16,
-    pub(crate) blast_attack: i16,
-    pub(crate) blast_element_attack: i16,
-    pub(crate) strength: i32,
-    pub(crate) dexterity: i32,
-    pub(crate) constitution: i32,
-    pub(crate) intelligence: i32,
-    pub(crate) cch: i16,
-    pub(crate) full_miss: i16,
-    pub(crate) attack_avoid: i16,
-    pub(crate) element_avoid: i16,
-    pub(crate) hit: i16,
-    pub(crate) dodge: i16,
-    item_index: u32,
-    item_amount: u32,
-    frequency_ms: u32,
-    serialized_offset: Option<usize>,
-}
-
-impl UndeadState {
-    pub(crate) const SERIALIZED_BYTES: usize = 4 + UNDEAD_STATE_PARAMETER_BYTES;
-
-    pub(crate) const fn state_id(&self) -> u32 {
-        self.state_id
-    }
-
-    pub(crate) const fn state_type(&self) -> u16 {
-        self.state_type
-    }
-
-    pub(crate) const fn keep_time_ms(&self) -> u32 {
-        self.keep_time_ms
-    }
-
-    pub(crate) const fn started_ms(&self) -> u32 {
-        self.started_ms
-    }
-
-    pub(crate) fn begin_primary_at(&mut self, now_ms: u32) {
-        self.started_ms = now_ms;
-    }
-
-    pub(crate) fn client_state_time(&self, now: &mut dyn FnMut() -> u32) -> u32 {
-        crate::gameserver::appserver::states::state::extended_client_time(
-            self.started_ms, self.keep_time_ms, now,
-        )
-    }
-
-    pub(crate) fn commit_serialized_time(&mut self, remaining: u32) {
-        self.keep_time_ms = remaining;
-    }
-
-    pub(crate) fn from_factory(state_id: u32, factory: &CSkillFactory) -> Option<Self> {
-        let properties =
-            factory.query_skill_base_properties(SKILL_NOT_DISAPPEAR_AFTER_DEAD, state_id as i32)?;
-        let p = |usage| properties.query_property(usage);
-        Some(Self {
-            state_id,
-            state_type: p(SKILL_USAGE_CONST) as u16,
-            keep_time_ms: p(SKILL_USAGE_STATE_PERSIST_TIME),
-            started_ms: 0,
-            last_item_tick_ms: 0,
-            disappear_after_dead: u8::from(p(80_001) != 0),
-            percentage: p(80_002) != 0,
-            maximum_hp: p(118) as i16,
-            maximum_mp: p(119) as i16,
-            minimum_attack: p(116) as i16,
-            maximum_attack: p(117) as i16,
-            element_modify: p(115) as i16,
-            defense: p(109) as i16,
-            element_resistance: p(112) as i16,
-            blast_attack: p(125) as i16,
-            blast_element_attack: p(126) as i16,
-            strength: p(101) as i32,
-            dexterity: p(102) as i32,
-            constitution: p(103) as i32,
-            intelligence: p(104) as i32,
-            cch: p(108) as i16,
-            full_miss: p(127) as i16,
-            attack_avoid: p(128) as i16,
-            element_avoid: p(129) as i16,
-            hit: p(20_001) as i16,
-            dodge: p(110) as i16,
-            item_index: p(50_001),
-            item_amount: p(50_002),
-            frequency_ms: p(6_001),
-            serialized_offset: None,
-        })
-    }
-
-    pub(crate) fn decode_at(payload: &[u8], offset: usize, now_ms: u32) -> Option<Self> {
-        if read_u32(payload, offset) != Some(UNDEAD_STATE_ID) {
-            return None;
-        }
-        let base = offset.checked_add(4)?;
-        let _ = payload.get(base..base.checked_add(UNDEAD_STATE_PARAMETER_BYTES)?)?;
-        let state_id = read_u32(payload, base + 4)?;
-        Some(Self {
-                state_id,
-                state_type: read_u16(payload, base).unwrap_or_default(),
-                keep_time_ms: read_u32(payload, base + 8).unwrap_or_default(),
-                started_ms: now_ms,
-                last_item_tick_ms: now_ms,
-                disappear_after_dead: payload[base + 12],
-                percentage: payload[base + 13] != 0,
-                maximum_hp: read_i16(payload, base + 14).unwrap_or_default(),
-                maximum_mp: read_i16(payload, base + 16).unwrap_or_default(),
-                minimum_attack: read_i16(payload, base + 18).unwrap_or_default(),
-                maximum_attack: read_i16(payload, base + 20).unwrap_or_default(),
-                element_modify: read_i16(payload, base + 22).unwrap_or_default(),
-                defense: read_i16(payload, base + 24).unwrap_or_default(),
-                element_resistance: read_i16(payload, base + 26).unwrap_or_default(),
-                blast_attack: read_i16(payload, base + 28).unwrap_or_default(),
-                blast_element_attack: read_i16(payload, base + 30).unwrap_or_default(),
-                strength: read_i32(payload, base + 32).unwrap_or_default(),
-                dexterity: read_i32(payload, base + 36).unwrap_or_default(),
-                constitution: read_i32(payload, base + 40).unwrap_or_default(),
-                intelligence: read_i32(payload, base + 44).unwrap_or_default(),
-                cch: read_i16(payload, base + 48).unwrap_or_default(),
-                full_miss: read_i16(payload, base + 50).unwrap_or_default(),
-                attack_avoid: read_i16(payload, base + 52).unwrap_or_default(),
-                element_avoid: read_i16(payload, base + 54).unwrap_or_default(),
-                hit: read_i16(payload, base + 56).unwrap_or_default(),
-                dodge: read_i16(payload, base + 58).unwrap_or_default(),
-                item_index: read_u32(payload, base + 60).unwrap_or_default(),
-                item_amount: read_u32(payload, base + 64).unwrap_or_default(),
-                frequency_ms: read_u32(payload, base + 68).unwrap_or_default(),
-                serialized_offset: Some(offset),
-        })
-    }
-
-    pub(crate) fn encoded_for_install(&self) -> [u8; Self::SERIALIZED_BYTES] {
-        let mut record = [0; Self::SERIALIZED_BYTES];
-        self.update_serialized_record(&mut record, 0, self.keep_time_ms);
-        record
-    }
-
-    pub(crate) fn update_serialized_record(
-        &self, payload: &mut [u8], offset: usize, remaining: u32,
-    ) {
-        if offset.checked_add(Self::SERIALIZED_BYTES).is_none_or(|end| end > payload.len()) {
-            return;
-        }
-        let base = offset + 4;
-        write_u32(payload, offset, UNDEAD_STATE_ID);
-        write_u16(payload, base, self.state_type);
-        write_u32(payload, base + 4, self.state_id);
-        write_u32(payload, base + 8, remaining);
-        payload[base + 12] = self.disappear_after_dead;
-        // Native Serialize копирует исходный BOOL-байт, а не нормализует его.
-        if (payload[base + 13] != 0) != self.percentage {
-            payload[base + 13] = u8::from(self.percentage);
-        }
-        for (position, value) in [
-            (14, self.maximum_hp),
-            (16, self.maximum_mp),
-            (18, self.minimum_attack),
-            (20, self.maximum_attack),
-            (22, self.element_modify),
-            (24, self.defense),
-            (26, self.element_resistance),
-            (28, self.blast_attack),
-            (30, self.blast_element_attack),
-            (48, self.cch),
-            (50, self.full_miss),
-            (52, self.attack_avoid),
-            (54, self.element_avoid),
-            (56, self.hit),
-            (58, self.dodge),
-        ] {
-            write_i16(payload, base + position, value);
-        }
-        for (position, value) in [
-            (32, self.strength),
-            (36, self.dexterity),
-            (40, self.constitution),
-            (44, self.intelligence),
-        ] {
-            write_i32(payload, base + position, value);
-        }
-        write_u32(payload, base + 60, self.item_index);
-        write_u32(payload, base + 64, self.item_amount);
-        write_u32(payload, base + 68, self.frequency_ms);
-    }
-
-    fn serialized_span(&self) -> Option<(usize, usize)> {
-        self.serialized_offset
-            .map(|offset| (offset, 4 + UNDEAD_STATE_PARAMETER_BYTES))
-    }
-
-    fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
-        if let Some(offset) = &mut self.serialized_offset {
-            if *offset >= inserted_offset {
-                *offset += amount;
-            }
-        }
-    }
-
-    fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
-        if self
-            .serialized_offset
-            .is_some_and(|offset| removed_offset < offset)
-        {
-            self.serialized_offset = self.serialized_offset.map(|offset| offset - amount);
-        }
-    }
-
-    fn expired(&self, now_ms: u32) -> bool {
-        self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
-    }
-
-    fn item_due(&mut self, now_ms: u32) -> bool {
-        if self.last_item_tick_ms == 0 {
-            self.last_item_tick_ms = self.started_ms;
-        }
-        self.frequency_ms != 0
-            && self.item_index != 0
-            && self.item_amount != 0
-            && self.last_item_tick_ms.wrapping_add(self.frequency_ms) < now_ms
-    }
+    factory: &CSkillFactory,
+) -> Option<UndeadState> {
+    factory
+        .query_skill_base_properties(SKILL_NOT_DISAPPEAR_AFTER_DEAD, state_id as i32)
+        .map(|properties| UndeadState::from_properties(state_id, |usage| {
+            properties.query_property(usage)
+        }))
 }
 
 
@@ -2488,7 +2260,7 @@ impl CMoveShape {
 
     pub(crate) fn get_undead_state(&self, state_id: u32) -> u32 {
         self.state_entries.iter::<UndeadState>()
-            .any(|state| state.state_id == state_id)
+            .any(|state| state.state_id() == state_id)
             .then_some(state_id)
             .unwrap_or(0)
     }
@@ -2504,17 +2276,15 @@ impl CMoveShape {
         let Some(state) = self.applied_state_mut::<UndeadState>(key) else {
             return (false, None);
         };
-        if state.keep_time_ms != 0 && state.expired(now_milliseconds()) {
+        if state.keep_time_ms() != 0 && state.expired(now_milliseconds()) {
             return (true, None);
         }
-        if state.last_item_tick_ms == 0 {
-            state.last_item_tick_ms = state.started_ms;
-        }
-        if state.frequency_ms != 0 && state.item_index != 0 && state.item_amount != 0
+        state.ensure_item_clock_started();
+        if state.frequency_ms() != 0 && state.item_index() != 0 && state.item_amount() != 0
             && state.item_due(now_milliseconds())
         {
-            state.last_item_tick_ms = now_milliseconds();
-            return (false, Some((state.item_index, state.item_amount)));
+            state.set_last_item_tick(now_milliseconds());
+            return (false, Some((state.item_index(), state.item_amount())));
         }
         (false, None)
     }

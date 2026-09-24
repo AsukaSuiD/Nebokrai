@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и 76-байтная запись Undead 24 сентября 2026
+
+Данные, кодек и тик-правила `CNotDisappearAfterDead` (внешний ID `0x38`) перенесены в [`zone/effects/undead.rs`](../../server/rust/zone/src/effects/undead.rs); фабрика навыков остаётся в Game через тонкую `undead_state_from_factory`, живые Begin/AI/End и visual — у `notdisappearafterdead` и moveshape.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) машинный код подтверждает ранее описанные адреса: Serialize `0x005D64F0` (остаток getter-ом записывается в живой keep, затем 72-байтный блок), Unserialize `0x005D6530` (один clock на оба timestamp, затем блок), GetRemainedTime `0x005D6320` (без clock при нулевом сроке). Последний вариант вынесен в `zone/effects/time.rs` как `guarded_client_state_time`, общий с ExtendedState. Исправления Rust: decode читает часы после проверки ID вместо расхода до входа; обращения AI-тиков к полям заменены операциями Zone. Основания — в [описании Undead](../gameplay/attributes-and-states.md#undead-сохраняемый-набор-баффа).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,86 секунды; `rustfmt` новых Zone-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактический бафф и тик предмета не проверялись.
+
 ## Zone effects: данные и запись ParticularState 24 сентября 2026
 
 Данные и 8-байтная запись `CParticularState` (`0x186A5`) перенесены в [`zone/effects/particular.rs`](../../server/rust/zone/src/effects/particular.rs). Переходный Game сохраняет живые Begin/restart/AI/End и проверку товара у игрока.

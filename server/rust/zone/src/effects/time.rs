@@ -19,3 +19,17 @@ pub fn timed_client_state_time(
         deadline.wrapping_sub(now_milliseconds())
     }
 }
+
+/// Расширенный вариант `CNotDisappearAfterDead::GetRemainedTime` VA
+/// `0x005D6320` и `CExtendedState`: нулевой срок возвращает 0 без чтения
+/// часов; иначе одно чтение проверяет границу, второе — вычитание остатка.
+pub fn guarded_client_state_time(
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
+) -> u32 {
+    if keep_time_ms == 0 {
+        return 0;
+    }
+    timed_client_state_time(started_at_ms, keep_time_ms, now_milliseconds)
+}
