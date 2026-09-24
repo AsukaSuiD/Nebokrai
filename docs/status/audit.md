@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: ограничения регионов 25 сентября 2026
+
+Ограничения регионов `CRegionSetup` (записи ID/уровень/вклад, текстовый loader и двоичный wire-codec) перенесены из `src/setup/regionsetup.rs` в [`shared/src/resources/regionsetup.rs`](../../server/rust/shared/src/resources/regionsetup.rs). Обе роли используют одну реализацию; прежний `src/setup/regionsetup.rs` стал тонким реэкспортом. Правила сохранены: owner очищается до чтения, при некорректной записи сохраняется уже прочитанный префикс, wire пишет signed count и 12-байтные записи, ключ BTreeMap задаёт порядок и отдельно не сериализуется.
+
+Происхождение подтверждено заголовком: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходный owner `setup/regionsetup.cpp`; семантика результата файла загрузчика прежним владельцем отмечена как неподтверждённая. Новых свидетельств в этом шаге не добавлено; доставка записей в работающий Game и загрузка World этим переносом не проверялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,10 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: increment shop 25 сентября 2026
 
 Общая таблица `CIncrementShopList` (записи по страницам, affiche, loader и wire-codec) перенесена из `src/setup/incrementshoplist.rs` в [`shared/src/resources/incrementshoplist.rs`](../../server/rust/shared/src/resources/incrementshoplist.rs). Обе роли используют одну реализацию; прежний `src/setup/incrementshoplist.rs` стал тонким реэкспортом. Правила сохранены: 24-байтный item prefix с обнулённым padding, равные page keys сохраняют insertion order, невалидный основной/discount goods и пустые description/name завершают загрузку, overlap меньше 1 становится 1, поздний отказ оставляет уже добавленные items, signed count.

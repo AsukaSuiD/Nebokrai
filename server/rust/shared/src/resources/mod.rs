@@ -17,6 +17,7 @@ mod playerlist;
 mod quest;
 mod quest_text;
 mod quest_wire;
+mod regionsetup;
 mod rfile;
 mod source;
 mod stringtable;
@@ -76,6 +77,10 @@ pub use regionrouter::{
 pub use quest::{CQuestSystem, QuestEntry};
 pub use quest_text::{
     QuestSystemLoadCompletion, QuestSystemLoadReport, QuestTextError, QuestTextErrorKind,
+};
+pub use regionsetup::{
+    CRegionSetup, RegionSetupDecodeError, RegionSetupEntry, RegionSetupLoadError,
+    RegionSetupSerializeError,
 };
 pub use quest_wire::{
     QuestStringField, QuestSystemDecodeError, QuestSystemDecodeOutcome, QuestSystemSerializationBlock,
