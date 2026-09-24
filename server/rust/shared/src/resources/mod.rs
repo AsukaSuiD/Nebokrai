@@ -22,6 +22,7 @@ mod package;
 mod path;
 mod playerlist;
 mod preciousboxconf;
+mod prisonconf;
 mod quest;
 mod quest_text;
 mod quest_wire;
@@ -97,6 +98,10 @@ pub use preciousboxconf::{
     PreciousBox, PreciousBoxConf, PreciousBoxCount, PreciousBoxDecodeError,
     PreciousBoxDecodeField, PreciousBoxItem, PreciousBoxLoadDiagnostic, PreciousBoxLoadError,
     PreciousBoxLoadReport, PreciousBoxOdds, PreciousBoxSerializeError,
+};
+pub use prisonconf::{
+    PrisonConf, PrisonConfDecodeError, PrisonConfFileLoadError, PrisonConfFormatError,
+    PrisonConfSerializeError, PrisonParam,
 };
 pub use playerlist::{
     CPlayerList, PlayerBaseProperties, PlayerBasePropertiesMap, PlayerCreationPropertiesLookup,

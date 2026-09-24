@@ -1,5 +1,14 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: тюремная конфигурация 25 сентября 2026
+
+Тюремная конфигурация `PrisonConf` (Option PK-порог, signed-byte map `i8 → PrisonParam`, позиционный loader и wire-codec) перенесена из `src/setup/prisonconf.rs` в [`shared/src/resources/prisonconf.rs`](../../server/rust/shared/src/resources/prisonconf.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла. Установленный экземпляр и его потребители остаются у владельцев ролей.
+
+В этом шаге формат и цитируемые заголовком адреса сверены с машинным кодом зафиксированной пары сборок: `AddToByteArray@PrisonConf` (worldserver, секция 1:0x45040) пишет u32 threshold, u32 count и records byte country + u32 region + u16 x + u16 y + byte direction — десять байт без padding; `DecordFromByteArray@PrisonConf` (gameserver, секция 1:0x1c44f0) очищает map, читает threshold до count и вставляет records в том же порядке через `map::operator[]`. Тело operator[] (gameserver VA 0x4d0b60) подтверждает оба цитируемых заголовком диапазона: 0x004D0BA1..0x004D0BC8 обнуляют три DWORD (region/x/y/direction) перед вставкой для отсутствующего signed-byte ключа, а pair-copy обработчик (0x4d0560, вызываемый из operator[]) сохраняет поля без изменения; сравнение ключей — signed char (`jge`). Строки `data\PrisonConf.ini`, `PrisonConf`, `Load PrisonConf.ini...OK/FAILED` присутствуют в worldserver.exe; класс — singleton `get_inst/_inst` в обеих сборках.
+
+Правила сохранены: loader очищает map, но при ошибке открытия сохраняет прежний PK threshold, до первой загрузки `None`; duplicate country заменяет значение; decoder публикует threshold до count и только полные records; safe short-buffer сохраняет подтверждённый partial state; `get_param` через `entry().or_default()` воспроизводит zero-fill operator[]; внутренний NUL-режим строк не затрагивается. Счётчики чтений decoder-а используют signed JLE, что совпадает с семантикой `max(0)` — отдельной пометки класса JE/JBE здесь не требуется.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 37,32 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
 ## Shared resources: LingBao 25 сентября 2026
 
 Таблица `CLingBaoSetup` (multimap name → ticket + три секции records, позиционный loader и wire-codec) перенесена из `src/setup/lingbao.rs` в [`shared/src/resources/lingbao.rs`](../../server/rust/shared/src/resources/lingbao.rs). Обе роли используют одну реализацию через тонкий реэкспорт прежнего файла; информационная trace-строка после decode удалена вместе со счётчиком (Shared без `tracing`). Установленный экземпляр и его потребители остаются у владельцев ролей.
