@@ -1,5 +1,8 @@
 //! Состояние и правила игровых клиентских сессий Zone.
 
+pub mod cplug;
+pub mod csession;
+
 mod sequence;
 mod validation;
 

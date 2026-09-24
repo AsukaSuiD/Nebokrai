@@ -45,9 +45,9 @@
 //! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
 //! refresh index при последующей реконструкции другой версии.
 //! Inline `CSession::GetPlugList` RVA `0x00070910`, скомпилированный из этого
-//! же source-owner, также `IMPLEMENTED`: он возвращает ordered plug-list без
-//! копии; Rust slice сохраняет порядок и запрещает чужую мутацию во время
-//! around-send обхода.
+//! же source-owner, также `IMPLEMENTED` (материализация теперь у владельца типа
+//! в Zone sessions): он возвращает ordered plug-list без копии; Rust slice
+//! сохраняет порядок и запрещает чужую мутацию во время around-send обхода.
 //! `CreateAreaArray` после построения всего массива записывает в inherited
 //! father-slot `+0x40` один и тот же `CServerRegion*`, затем X/Y по
 //! `+0x44/+0x48`. Самоссылочный pointer выражен структурным
@@ -76,7 +76,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use super::baseobject::CBaseObject;
-use super::session::csession::CSession;
 use super::shape::{MonsterAreaClass, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView};
 use nebokrai_shared::values::CGuid;
 
@@ -801,19 +800,13 @@ impl PartialEq for CArea {
 
 impl Eq for CArea {}
 
-impl CSession {
-    pub(crate) fn get_plug_list(&self) -> &[i32] {
-        self.plug_ids_storage()
-    }
-}
-
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp
 
-// IMPLEMENTED: `CSession::GetPlugList` материализован выше; покрытый raw-блок
+// IMPLEMENTED: `CSession::GetPlugList` материализован владельцем типа в Zone sessions; покрытый raw-блок
 // удалён.
 
 // IMPLEMENTED: `CArea::GetNumShapes` материализован выше; покрытый raw-блок удалён.
