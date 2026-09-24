@@ -10,6 +10,7 @@ mod filesinfo;
 mod hitlevel;
 mod honorelimilateconfig;
 mod incrementshoplist;
+mod lingbao;
 mod globesetup;
 mod gmlist;
 mod goodsdestructionconfig;
@@ -53,6 +54,11 @@ pub use incrementshoplist::{
     CIncrementShopList, IncrementShopDecodeError, IncrementShopGoodsQuery,
     IncrementShopGoodsResult, IncrementShopItem, IncrementShopLoadError,
     IncrementShopLoadReport, IncrementShopSerializeError, IncrementShopStringField,
+};
+pub use lingbao::{
+    CLingBaoSetup, LingBaoDecodeError, LingBaoFirstNode, LingBaoLoadReport,
+    LingBaoNodeInfo, LingBaoNodeSection, LingBaoSecondNode, LingBaoSerializationBlock,
+    LingBaoThirdNode,
 };
 pub use hitlevel::{
     CHitLevelSetup, HitLevelDecodeError, HitLevelEntry, HitLevelFormatError,
