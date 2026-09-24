@@ -11,6 +11,9 @@
 //! принимает исторические unquoted ASCII attributes после узкой нормализации.
 //! Game decoder собирает группу во временный vector и лишь затем заменяет map
 //! entry. Safe NUL reader не воспроизводит overflow старого char[1024].
+//! Отрицательный signed count оригинальный decoder (decoder VA 0x5c46b0,
+//! выход по JBE/JE) принял бы за огромный unsigned loop с чтением за
+//! пределами буфера; Rust трактует его как пустой вход (`max(0)`).
 
 use std::collections::BTreeMap;
 use std::error::Error;
