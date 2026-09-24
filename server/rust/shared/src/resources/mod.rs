@@ -4,6 +4,7 @@ mod catalog;
 mod cbattlefairyexpconfig;
 mod changebody;
 mod contributesetup;
+mod dupliregionsetup;
 mod emotion;
 mod fairyexpconf;
 mod filesinfo;
@@ -48,6 +49,9 @@ pub use changebody::{
 pub use contributesetup::{
     CContributeSetup, ContributeItem, ContributeSetupDecodeError,
     ContributeSetupFileLoadError, ContributeSetupFormatError, ContributeSetupSerializeError,
+};
+pub use dupliregionsetup::{
+    CDupliRegionSetup, DupliRegionDecodeError, DupliRegionEntry, DupliRegionSerializeError,
 };
 pub use emotion::{
     CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
