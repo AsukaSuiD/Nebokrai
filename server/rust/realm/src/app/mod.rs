@@ -19,6 +19,7 @@ pub mod login_world_server;
 pub mod login_world_server_client;
 pub mod misc_client;
 pub mod misc_message;
+pub mod othermessage;
 pub mod setup;
 pub mod world_client;
 pub mod world_message;

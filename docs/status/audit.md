@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm app: ответные ветви othermessage 25 сентября 2026
+
+Обработчик `OnOtherMsg` MiscServer (два ответа по одному нулевому 32-битному полю без приоритета; без client-а `0x7F809` завершается до создания ответа, `0x7F80B` вызывает Send с нулевым результатом; остальные opcode — no-op) перенесён из `src/miscserver/miscserver/othermessage.rs` в [`realm/app/othermessage.rs`](../../server/rust/realm/src/app/othermessage.rs) — рядом с уже перенесённым misc direction. Все его типы уже имеют pub-владельцев в realm `app/misc_message` (`CMessage`, `MessageSender`, `SendMessageError`), поэтому швы не потребовались — только внутренний импорт. Единственный потребитель miscserver `game` работает через glob-шим без правок.
+
+Машинное основание на точной паре `miscserver.exe` + `MiscServer.pdb` (`F4426942`, RSDS match): `OnOtherMsg` `0x403CC0` — test-граница входного аргумента, сравнение message type с `0x7F809`, вариант `0x7F80B` через создание response `CMessage(0x5FA0C)`, нулевое long через тот же writer и дальнейший Send — та же последовательность, что в заголовке файла. Client-gate без отправки для `0x7F809` и гарантированный Send для `0x7F80B` сохраняют прежний статус и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Малые примитивы Realm и Zone 25 сентября 2026
 
 Четыре самодостаточных владельца перенесены одним связным классом: [`row.rs`](../../server/rust/realm/src/persistence/row.rs) (SQL row-помощники `get_value`/`get_integer` с ASCII case-insensitive разрешением имён колонки, без сужения types) → realm/persistence; [`CCountryIdentity`](../../server/rust/realm/src/organizations/countryidentity.rs) → realm/organizations; [`ServLogQueue`](../../server/rust/realm/src/access/servlogqueue.rs) → realm/access; [`CContainer`](../../server/rust/zone/src/items/ccontainer.rs) (базовый container lifecycle: ordered listener set, AddListener null/duplicate guard, RemoveListener по первому совпадению, opaque handle identity, `tagPreviousContainer` буквально) → новый `zone/src/items/`. Швов нет (Tiberius/parking_lot уже в манифестах; `indexmap` добавлен в zone той же версией, `Cargo.lock` одной строкой). Потребители поимённо (`dbgoods`, `rsjjcsys`, `rsplayer`; `officer`; loginserver `game`; container-семейство и session/message gameserver) работают через glob-шимы без правок.
