@@ -16,7 +16,7 @@
 
 Так сеть может обслуживать отправку во время длительной подготовки начальной конфигурации в `CGame`. Причина выделения задачи зафиксирована в [ADR-0002](../decisions/0002-semantic-boundary.md); период, исходящий Login-путь и остановка задачи — в [порядке циклов](runtime-ordering.md#сетевые-проходы-world-и-game). Реализация — [World runtime](../../server/rust/src/worldserver/worldserver/runtime.rs).
 
-Исходящее соединение устроено иначе. Конкретный `CMyNetClient` владеет `Option<TcpStream>`, накопителем, очередью отправки и очередью принятых сообщений. Общий [clients.rs](../../server/rust/src/nets/clients.rs) предоставляет connect, `ClientSendQueue` и счётчики, но не единый объект, который управлял бы reconnect всех служб. Например, [Login→Auth](../../server/rust/src/nets/netlogin/mynetclient_auth.rs) и [Misc→World](../../server/rust/realm/src/app/misc_client.rs) имеют собственные события закрытия и методы `run_io_once`.
+Исходящее соединение устроено иначе. Конкретный `CMyNetClient` владеет `Option<TcpStream>`, накопителем, очередью отправки и очередью принятых сообщений. Общий [clients.rs](../../server/rust/src/nets/clients.rs) предоставляет connect, `ClientSendQueue` и счётчики, но не единый объект, который управлял бы reconnect всех служб. Например, [Login→Auth](../../server/rust/realm/src/app/login_auth_client.rs) и [Misc→World](../../server/rust/realm/src/app/misc_client.rs) имеют собственные события закрытия и методы `run_io_once`.
 
 ## Один запрос: от TCP до ответа
 

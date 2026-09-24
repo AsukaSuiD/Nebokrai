@@ -6,4 +6,3 @@ pub(crate) mod mynetserver_client;
 pub(crate) mod mynetserver_world;
 pub(crate) mod mynetserverclient_client;
 pub(crate) mod mynetserverclient_world;
-pub(crate) mod myserverclient;

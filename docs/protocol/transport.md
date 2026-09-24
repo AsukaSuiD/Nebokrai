@@ -23,7 +23,7 @@
 
 | Направление | Владелец отправки | Подтверждённая точка приёма | Исходное свидетельство |
 | --- | --- | --- | --- |
-| AuthServer → LoginServer | [`auth_message.rs`](../../server/rust/realm/src/app/auth_message.rs) | [`netlogin/mynetclient_auth.rs`](../../server/rust/src/nets/netlogin/mynetclient_auth.rs) | Точные Auth и Login EXE/PDB; Auth `SendToLogin` VA `0x413830` без CS, полный handler pool — `InitMsgFuncPool 0x4141A0` |
+| AuthServer → LoginServer | [`auth_message.rs`](../../server/rust/realm/src/app/auth_message.rs) | [`login_auth_client.rs`](../../server/rust/realm/src/app/login_auth_client.rs) | Точные Auth и Login EXE/PDB; Auth `SendToLogin` VA `0x413830` без CS, полный handler pool — `InitMsgFuncPool 0x4141A0` |
 | LoginServer → AuthServer | [`login_message.rs`](../../server/rust/realm/src/app/login_message.rs) | [`auth_server_client.rs`](../../server/rust/realm/src/app/auth_server_client.rs) | Точные Login и Auth EXE/PDB; Login `SendToAS 0x4653E0` с одним CS `0x5E4864`, Run `0x465490` |
 | LoginServer → WorldServer | [`login_message.rs`](../../server/rust/realm/src/app/login_message.rs) | [`world_client.rs`](../../server/rust/realm/src/app/world_client.rs) | Точные Login и World EXE/PDB; Login world-send без CS (`SendToWorldSocket 0x465230`) |
 | BillingServer → GameServer | [`billing_message.rs`](../../server/rust/realm/src/app/billing_message.rs) | [`netserver/mynetclient.rs`](../../server/rust/src/nets/netserver/mynetclient.rs) | Точные Billing/Game EXE/PDB; Billing send-владелец дизассемблирован (`SendToGS 0x40F6F0`/`SendToAllGS 0x40F780` без CS), Game `OnReceive` RVA `0x0001A6A0` |
