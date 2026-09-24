@@ -26,6 +26,7 @@ mod rfile;
 mod source;
 mod stringtable;
 mod stringtable_wire;
+mod synthesis;
 mod tradelist;
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
@@ -108,6 +109,11 @@ pub use rfile::CRFile;
 pub use source::{ResourceOpenError, ResourceSource, open_resource};
 pub use stringtable::{StringTable, StringTableParseError, StringTableParseErrorKind};
 pub use stringtable_wire::{MyStringTable, MyStringTableDecodeError, MyStringTableDecodeOutcome};
+pub use synthesis::{
+    CSynthesis, SynthesisCount, SynthesisDecodeError, SynthesisDecodeField,
+    SynthesisFormula, SynthesisLoadError, SynthesisLoadReport, SynthesisRecipe,
+    SynthesisSerializeError, SynthesisString,
+};
 pub use tradelist::{
     CTradeList, Trade, TradeGoods, TradeListDecodeError, TradeListFileLoadError,
     TradeListFormatError, TradeListSerializeError,
