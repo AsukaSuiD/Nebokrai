@@ -2,6 +2,7 @@
 
 mod clientresource;
 pub mod goods;
+pub mod organizing;
 mod quests;
 mod scriptfiles;
 mod scripts;

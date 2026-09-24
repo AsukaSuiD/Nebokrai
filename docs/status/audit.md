@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm content: общие wire-структуры организаций 24 сентября 2026
+
+Общие структуры организаций (`tagMemInfo`-проекция `0xF0` с fixed именами, 11 permission states, region, `tagTime` и contribution; enums `EOperator/ECityState/EPurview/EPurviewOwnState`; mutation helpers и `UnterminatedMemberField`) перенесены из `src/worldserver/appworld/organizingsystem/organizing.rs` в [`realm/src/content/organizing.rs`](../../server/rust/realm/src/content/organizing.rs). Швы не потребовались; потребители двух ветвей старого пакета (appworld `organizingsystem/*`, `worldcityregion`, `organsysmessage` и `dbaccess/worlddb/{rsfaction, rsunion}`) работают через glob-шим без правок.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): `CFaction::AddMembersToByteArray` `0x4B53D0` пишет сначала число членов из owning registry, затем по каждому member два dword, NUL-name через cstring-writer, сырой блок ровно `0x2C` байт из `+0x80` — ровно 11 permission states по четыре байта, — второе имя тем же writer-ом и финальный byte contribution flag. Полная карта offsets `tagMemInfo` и размер `0xF0` сохранены из заголовка (подтверждение PDB layout) и подкреплены compile-time assert-ами Rust в перенесённом файле; переборка типов в этом проходе не выполнялась.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm content: serializer одной записи навыка 24 сентября 2026
 
 Описание одного навыка `CSkill` (wire-запись type/id/level/target, имя length+bytes без NUL, `usage_count` и пары `(usage, cost)`) перенесено из `src/worldserver/appworld/skills/skill.rs` в [`realm/src/content/skill.rs`](../../server/rust/realm/src/content/skill.rs) — World-side половина wire-контракта, чей парный `Rebuild` уже находится у `zone/skills/skillfactory`. Швы не потребовались; единственный прямой потребитель `appworld/skills/skillfactory.rs` работает через glob-шим без правок.
