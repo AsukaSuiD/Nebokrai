@@ -8,4 +8,3 @@ pub(crate) mod miscservermessage;
 pub(crate) mod onbillserver;
 pub(crate) mod onserversetup;
 pub(crate) mod othermessage;
-pub(crate) mod setup;

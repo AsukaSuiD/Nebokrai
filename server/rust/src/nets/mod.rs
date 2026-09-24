@@ -14,12 +14,6 @@ pub(crate) mod clients;
 
 #[allow(
     dead_code,
-    reason = "netmisc подключён до Linux transport и доменных обработчиков MiscServer"
-)]
-pub(crate) mod netmisc;
-
-#[allow(
-    dead_code,
     reason = "Auth message-owner подключён до доменных обработчиков и component worker"
 )]
 pub(crate) mod netauth;

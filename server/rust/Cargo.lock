@@ -927,6 +927,7 @@ dependencies = [
  "getrandom 0.4.3",
  "nebokrai-shared",
  "parking_lot",
+ "procfs",
  "reqwest",
  "rustix",
  "thiserror 2.0.20",

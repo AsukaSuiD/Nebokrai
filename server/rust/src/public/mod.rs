@@ -30,12 +30,6 @@ pub(crate) mod auctionlog;
 )]
 #[path = "auctionroom/auctionnode.rs"]
 pub(crate) mod auctionnode;
-#[allow(
-    dead_code,
-    reason = "stPlayerOptNode хранит доказанное use-self поле, которое текущий фильтр не читает"
-)]
-#[path = "auctionroom/auctionroom.rs"]
-pub(crate) mod auctionroom;
 
 pub(crate) mod md5;
 #[allow(

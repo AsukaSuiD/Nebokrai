@@ -22,3 +22,4 @@ tiberius = { version = "0.12.3", default-features = false, features = ["chrono",
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 tokio-util = { version = "0.7.16", features = ["compat"] }
 rustix = { version = "1.1.4", features = ["system", "time"] }
+procfs = { version = "0.18.0", default-features = false }
