@@ -6,6 +6,7 @@ mod changebody;
 mod contributesetup;
 mod dupliregionsetup;
 mod emotion;
+mod equipmentcomposelist;
 mod fairyexpconf;
 mod filesinfo;
 mod hitlevel;
@@ -55,6 +56,10 @@ pub use dupliregionsetup::{
 };
 pub use emotion::{
     CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
+};
+pub use equipmentcomposelist::{
+    EquipmentComposeDecodeError, EquipmentComposeList, EquipmentComposeSection,
+    EquipmentComposeSerializeError,
 };
 pub use fairyexpconf::{CFairyExpConf, FairyExpLoadError};
 pub use filesinfo::{FileInfo, FilesInfo, FilesInfoParseError, PackFileInfo};
