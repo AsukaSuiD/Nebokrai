@@ -5,6 +5,7 @@ mod emotion;
 mod filesinfo;
 mod hitlevel;
 mod marker;
+mod monsterlist;
 mod package;
 mod path;
 mod playerlist;
@@ -26,6 +27,14 @@ pub use hitlevel::{
     HitLevelSerializeError,
 };
 pub use marker::read_to_marker;
+pub use monsterlist::{
+    MonsterDrop, MonsterDropList, MonsterDropRegistry, MonsterListDecodeError,
+    MonsterListLoadError, MonsterListSerializeError, MonsterProperties, MonsterRegistry,
+    MonsterSkill, decode_monster_list, get_monster_property_by_origin_index,
+    get_monster_property_by_origin_name, get_monster_property_by_origin_name_mut,
+    get_monster_property_by_picture_id, load_drop_goods_list, load_monster_list,
+    serialize_monster_list,
+};
 pub use package::{PackageArchive, PackageFileIndex, PackageReadError};
 pub use path::{normalize_resource_path, resolve_resource_path};
 pub use playerlist::{

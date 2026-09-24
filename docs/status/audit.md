@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: общий формат обмена монстров 25 сентября 2026
+
+Формат `CMonsterList` (типы, реестры, текстовый загрузчик, сериализатор/декодер и lookup) перенесён из `src/setup/monsterlist.rs` в [`shared/src/resources/monsterlist.rs`](../../server/rust/shared/src/resources/monsterlist.rs). Обе роли используют одну реализацию: World сериализует и загружает тексты, Game принимает реестр и хранит экземпляр полем; прежний `src/setup/monsterlist.rs` стал тонким реэкспортом. Это перенос собственной реализации без изменения алгоритмов: порядка записей, очистки реестров, last-write-wins, line/NUL-правила строк и кодировки полей.
+
+Происхождение подтверждено заголовком прежнего файла и использованием парными владельцами: сериализатор World — `worldserver.exe/.pdb`, декодер Game — `gameserver.exe/.pdb`, исходник `server/setup/monsterlist.h/.cpp`. Новых свидетельств поведения в этом шаге не добавлено; runtime-доставка реестра Game и загрузка текстовых ресурсов World этим переносом не проверялись. Основания — в [реестре монстров](../gameplay/npc-ai.md#реестр-определений-монстров).
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 34,33 секунды без предупреждений; `rustfmt` нового Shared-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone content: полученный кэш runtime-свойств навыков 25 сентября 2026
 
 Изменяемый кэш свойств навыков — `CSkillBaseProperties`, composite key `id << 16 | level & 0xffff`, двоичный кодекс `rebuild` и реестр — перенесён в [`zone/content/skills.rs`](../../server/rust/zone/src/content/skills.rs). Переходный Game делегирует каталог через тонкую обёртку `CSkillFactory`; статический реестр владельцев `SkillOwner` и их политик остаётся в Game как диспетчер исполнения, без второй копии набора. Запросы свойств, типа, имени и предикаты делегированы Zone; `supports_skill_id`/свободные константы цвета и war-soul/float вычисляются из общих Zone-функций и прежнего реестра.
