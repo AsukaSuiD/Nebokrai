@@ -17223,6 +17223,12 @@ impl CGame {
     }
 }
 
+impl nebokrai_realm::activities::factionwarsys::EnemyFactionSink for CGame {
+    fn set_enemy_factions(&self, enemy_factions: VecDeque<Option<EnemyFactionSaveSnapshot>>) {
+        CGame::set_enemy_factions(self, enemy_factions);
+    }
+}
+
 pub(crate) fn create_game(
     game: &mut Option<Box<CGame>>,
 ) -> Result<WorldCreateGameReport, WorldCreateGameBlock> {

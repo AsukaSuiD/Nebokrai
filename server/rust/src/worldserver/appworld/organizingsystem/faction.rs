@@ -1568,12 +1568,7 @@ pub(crate) struct FactionEnemyMutationReport {
     pub(crate) war_log_written: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FactionEnemyMutationBlock {
-    pub(crate) state_changed: bool,
-    pub(crate) changed_flag_set: bool,
-    pub(crate) formatted_len: usize,
-}
+pub(crate) use nebokrai_realm::organizations::factionenemyblock::FactionEnemyMutationBlock;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FactionOwnedCityDelivery {
