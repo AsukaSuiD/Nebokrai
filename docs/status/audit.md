@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone activities/content: country-юнит 24 сентября 2026
+
+Country-war side state `CountryWarSys` (snapshot decoder, phase и victory chains, region side state, writer-before-region-callback) перенесён из `src/gameserver/appserver/country/countrywarsys.rs` в новый компонент [`zone/src/activities/`](../../server/rust/zone/src/activities/) — принятый таблицей компонентов дом локального исполнения войн. Параметры стран `CCountryParam` (39 позиционных scalar, return points, technology levels, exile rects, сохранённая асимметрия technology record) перенесены в [`zone/src/content/countryparam.rs`](../../server/rust/zone/src/content/countryparam.rs) — как полученные настройки игры. Швы не потребовались; потребители (`game`, `servermessage`, `countrymessage`, region-семейство) работают через glob-шимы без правок. Исследовательский хвост countrywarsys (строки 434–511) по конвенции не скопирован.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе проверено для двух decoder-ов: `CountryWarSys::DecordFromByteArray` `0x4EBD60` — map по `+4` сначала полностью очищается (erase + пустое tree-init) и лишь затем cursor читает count; `CCountryParam::DecordFromByteArray` `0x420AF0` — позиционное чтение scalar-параметров с последовательным cursor advance и записью по возрастающим смещениям, частичный префикс применяется. Цепочки phase/victory, vtable slots `+0x138..+0x150` и wire-странности сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметки обновлены в [карте проекта](../architecture/workspace.md) и в строке `activities` таблицы [realm-and-zone.md](../architecture/realm-and-zone.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone/Realm content: пара базовых свойств товара 24 сентября 2026
 
 Парный wire-контракт `CGoodsBaseProperties` перенесён к двум владельцам одним шагом: Game-side startup decoder в [`zone/src/content/goods.rs`](../../server/rust/zone/src/content/goods.rs), парный World-side serializer в [`realm/src/content/goods.rs`](../../server/rust/realm/src/content/goods.rs). Швы не потребовались; потребители проверены поимённо (Game-сторона 58 файлов, World-сторона 6), все имена доступны через glob-шимы без правок. Два мёртвых private `clear` у addon-структур Realm-стороны удалены (в старом пакете подавлялись `allow(dead_code)`); исследовательских заготовок в исходниках не было.

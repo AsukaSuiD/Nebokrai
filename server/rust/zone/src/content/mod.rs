@@ -1,5 +1,6 @@
 //! Полученные определения и ресурсы Zone; живые игровые экземпляры здесь не хранятся.
 
+pub mod countryparam;
 mod functions;
 pub mod goods;
 mod quests;
