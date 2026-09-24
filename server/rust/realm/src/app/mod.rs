@@ -5,6 +5,8 @@
 //!
 //! [карте владельцев]: ../../../../docs/architecture/realm-and-zone.md
 
+pub mod misc_client;
+pub mod misc_message;
 pub mod world_client;
 pub mod world_message;
 pub mod world_server;
