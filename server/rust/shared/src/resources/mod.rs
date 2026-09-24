@@ -2,6 +2,7 @@
 
 mod catalog;
 mod cbattlefairyexpconfig;
+mod changebody;
 mod contributesetup;
 mod emotion;
 mod fairyexpconf;
@@ -33,6 +34,9 @@ pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, Resour
 pub use cbattlefairyexpconfig::{
     BattleFairyExpDecodeError, BattleFairyExpFileLoadError, BattleFairyExpLoadError,
     BattleFairyExpLoadReport, BattleFairyExpSerializeError, CBattleFairyExpConfig,
+};
+pub use changebody::{
+    CChangeBodyConf, ChangeBodyDecodeError, ChangeBodyLoadError, ChangeBodySerializeError,
 };
 pub use contributesetup::{
     CContributeSetup, ContributeItem, ContributeSetupDecodeError,
