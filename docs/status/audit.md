@@ -1,5 +1,15 @@
 # Аудит готовности серверной реконструкции
 
+## Realm persistence/billing: DB-инициализация World и fill-log 25 сентября 2026
+
+Созданы два компонента realm по принятой таблице. В [`persistence`](../../server/rust/realm/src/persistence/) перенесена инициализация World DB [`rssetup.rs`](../../server/rust/realm/src/persistence/rssetup.rs) (настроенные TDS-соединения через Tiberius, курсоры `csl_setup` для playerID и LeaveWordID, порядок открытия и обязательность баз без скрытых retry/rollback). В [`billing`](../../server/rust/realm/src/billing/) перенесён [`CRsPlayerFillMgr`](../../server/rust/realm/src/billing/rsplayerfillmgr.rs) (основная Billing DB, отдельное соединение на вызов, точный `select top 50 * from TBL_NeedUpdate order by ID` с чтением только `Account` и signed long ID, один `delete ... where id in (...)` на snapshot, частичный prefix при ошибке recordset у caller). Швы не потребовались; в манифест добавлен только `futures-util` той же версии (`try_next` поверх потокового TDS-result).
+
+Потребители поимённо: к `rssetup` — 14 модулей `dbaccess/worlddb`, `public/auctionroom/auctionlog`, appworld (`countryhandler`, `incrementlog`, `player`, `variablelist`, message-семейство) и worldserver (`game`, `runtime`, `savedb`, `honorranks`, три worker-файла); к `rsplayerfillmgr` — `appbilling/playerfillmgr` и billingserver `game`. Все работают через glob-шимы без правок. `rsplayeraccount` остаётся за своим шагом вместе с billing manager.
+
+Машинное основание по двум точным парам. World (`F3AC454D`, RSDS match): `CRsSetup::SavePlayerID` `0x500300` — com-ptr соединение как аргумент с null-веткой ошибки перед write path. Billing (`FA32E3C0`, RSDS match): точная строка `TBL_NeedUpdate` присутствует в ресурсах той же сборки (два вхождения), статические `Start/End` `CPlayerFillMgr` и потоковый `s_hPlayerFillThread` в публичных символах. Чтение полей и форма delete сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений; rustfmt и `git diff --check` чисты. Смена видимости включила линт `async_fn_in_trait` на двух методах `RsSetupOwner`; устранён десугарингом в `fn -> impl Future + Send` (вызовы `.await` потребителей не изменились), не подавлением. Отметки обновлены в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm app: конфигурация MiscServer 25 сентября 2026
 
 Конфигурация MiscServer `CSetup` (`LoadIpPort` читает из `setup.ini` четыре позиционные пары World IP/порт и local bind/listen IP/port; поздний stream fail оставляет прочитанный prefix и общий успех, ошибка открытия не меняет прежнее состояние; неинициализированные поля как `None`) перенесена из `src/miscserver/miscserver/setup/setup.rs` в [`realm/src/app/setup.rs`](../../server/rust/realm/src/app/setup.rs) — принятую app-обязанность конфигурации роли. Зависимости только std и `thiserror`, уже присутствующие в Realm; потребитель miscserver `game` работает через glob-шим без правок.

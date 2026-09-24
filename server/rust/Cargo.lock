@@ -923,6 +923,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "freetype-rs",
+ "futures-util",
  "getrandom 0.4.3",
  "nebokrai-shared",
  "parking_lot",

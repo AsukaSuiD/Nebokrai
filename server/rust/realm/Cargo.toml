@@ -14,6 +14,7 @@ walkdir = "2.5.0"
 tracing = "0.1.44"
 encoding_rs = "0.8.35"
 freetype-rs = { version = "0.38.0", features = ["bundled"] }
+futures-util = "0.3.34"
 getrandom = "0.4.3"
 thiserror = "2.0.20"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "system-proxy"] }
