@@ -15,28 +15,29 @@
 //! не читается. Одно завершающее пространство сначала удаляется, но проход всё
 //! равно использует прежнюю длину и видит NUL, поэтому итог остаётся false;
 //! эта странная мутация сохранена безопасно.
+//! Установленный экземпляр и его потребители остаются у владельца роли.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CharRange {
-    pub(crate) first: u8,
-    pub(crate) last: u8,
+pub struct CharRange {
+    pub first: u8,
+    pub last: u8,
 }
 
 #[derive(Default)]
-pub(crate) struct CharCodeFilter {
+pub struct CharCodeFilter {
     ranges: Vec<CharRange>,
 }
 
 impl CharCodeFilter {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self { ranges: Vec::new() }
     }
 
-    pub(crate) fn ranges(&self) -> &[CharRange] {
+    pub fn ranges(&self) -> &[CharRange] {
         &self.ranges
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.ranges.clear();
     }
 
@@ -46,7 +47,7 @@ impl CharCodeFilter {
     }
 
     /// Дописывает пары точно в порядке formatted extraction исходного stream.
-    pub(crate) fn load(&mut self, source: Option<&[u8]>) -> bool {
+    pub fn load(&mut self, source: Option<&[u8]>) -> bool {
         let Some(source) = source else {
             return false;
         };
@@ -73,12 +74,7 @@ impl CharCodeFilter {
         true
     }
 
-    pub(crate) fn check(
-        &self,
-        value: &mut Vec<u8>,
-        _replace: bool,
-        reject_all_numbers: bool,
-    ) -> bool {
+    pub fn check(&self, value: &mut Vec<u8>, _replace: bool, reject_all_numbers: bool) -> bool {
         let original_len = value.len();
         if original_len == 0 {
             return false;
@@ -290,10 +286,6 @@ impl CharCodeFilter {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
 

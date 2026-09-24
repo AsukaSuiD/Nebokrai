@@ -37,11 +37,6 @@ pub(crate) mod auctionnode;
 #[path = "auctionroom/auctionroom.rs"]
 pub(crate) mod auctionroom;
 
-#[allow(
-    dead_code,
-    reason = "CharCodeFilter materialized for World name filtering before its snapshot serializer"
-)]
-pub(crate) mod char_code_filter;
 pub(crate) mod md5;
 #[allow(
     dead_code,

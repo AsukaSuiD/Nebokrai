@@ -3,6 +3,7 @@
 mod catalog;
 mod cbattlefairyexpconfig;
 mod changebody;
+mod char_code_filter;
 mod ciqing;
 mod contributesetup;
 mod dakongxiangqian;
@@ -41,6 +42,7 @@ mod stringtable_wire;
 mod synthesis;
 mod taozhuangsetup;
 mod tradelist;
+mod wordsfilter;
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
 pub use cbattlefairyexpconfig::{
@@ -50,6 +52,7 @@ pub use cbattlefairyexpconfig::{
 pub use changebody::{
     CChangeBodyConf, ChangeBodyDecodeError, ChangeBodyLoadError, ChangeBodySerializeError,
 };
+pub use char_code_filter::{CharCodeFilter, CharRange};
 pub use ciqing::{
     CCiQingSetup, CiQingComposeNode, CiQingCountSection, CiQingDecodeError,
     CiQingImproveNode, CiQingMakeNode, CiQingSerializationBlock,
@@ -184,4 +187,8 @@ pub use taozhuangsetup::{
 pub use tradelist::{
     CTradeList, Trade, TradeGoods, TradeListDecodeError, TradeListFileLoadError,
     TradeListFormatError, TradeListSerializeError,
+};
+pub use wordsfilter::{
+    CWordsFilter, WordsFilterDecodeError, WordsFilterDecodeSection,
+    WordsFilterSerializeError, WordsFilterSerializeSection,
 };
