@@ -754,6 +754,7 @@ pub(crate) mod baseattackruntime;
 
 use std::collections::{BTreeMap, BTreeSet};
 use nebokrai_zone::content::{QuestCatalog, ScriptFunctionRegistry, ScriptResourcePublication, ScriptResources};
+use nebokrai_zone::quests::append_client_quest_record;
 use nebokrai_zone::skills::battle_fairy_reset_notice_cost;
 use nebokrai_shared::scripting::FunctionListError;
 use std::convert::Infallible;
@@ -17435,20 +17436,9 @@ impl CGame {
         let quest = quest.expect("допуск Zone проверил наличие определения");
 
         let mut message = CMessage::new(0x000b_ff2c);
-        message.base_mut().add_short(quest_id as i16);
-        message.add_ulong(quest.old);
-        message.add_ulong(quest.quest_type);
-        message.add_ulong(quest.level);
-        message.add_ulong(quest.difficulty);
-        message.add_ulong(quest.track);
-        add_legacy_c_string(message.base_mut(), &quest.short_description);
-        add_legacy_c_string(message.base_mut(), &quest.name);
-        add_legacy_c_string(message.base_mut(), &quest.description);
-        message.add_byte(u8::from(quest.display));
-        message.add_long(quest.region_id);
-        message.add_long(quest.tile_x);
-        message.add_long(quest.tile_y);
-        message.add_long(quest.effect_id);
+        let mut record = Vec::new();
+        append_client_quest_record(&mut record, quest_id, quest);
+        message.base_mut().add(&record);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 

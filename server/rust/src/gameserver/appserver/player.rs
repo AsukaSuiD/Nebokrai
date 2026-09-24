@@ -522,7 +522,7 @@ use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use nebokrai_shared::resources::HitLevelEntry;
 use nebokrai_shared::resources::CQuestSystem;
-use nebokrai_zone::quests::{PlayerQuestAvailability, PlayerQuestProgress};
+use nebokrai_zone::quests::{PlayerQuestAvailability, PlayerQuestProgress, append_client_quest_record};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bitflags::bitflags;
@@ -3765,20 +3765,7 @@ impl CPlayer {
         writer.write_i32(quest_system.max_quest_count);
         writer.write_i32(i32::try_from(active.len()).ok()?);
         for (quest_id, quest) in active {
-            writer.write_u16(quest_id);
-            writer.write_u32(quest.old);
-            writer.write_u32(quest.quest_type);
-            writer.write_u32(quest.level);
-            writer.write_u32(quest.difficulty);
-            writer.write_u32(quest.track);
-            writer.write_c_string(&quest.short_description);
-            writer.write_c_string(&quest.name);
-            writer.write_c_string(&quest.description);
-            writer.write_u8(u8::from(quest.display));
-            writer.write_i32(quest.region_id);
-            writer.write_i32(quest.tile_x);
-            writer.write_i32(quest.tile_y);
-            writer.write_i32(quest.effect_id);
+            append_client_quest_record(destination, quest_id, quest);
         }
         Some(())
     }
@@ -15147,19 +15134,9 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::AddQuestDataByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11226
-// RVA: 0x00033310
-// ADDRESS: 00433310
-// PROTOTYPE: bool __thiscall AddQuestDataByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::AddQuestDataByteArray` (player.cpp:11226, RVA
+// 0x00033310) — карта заданий и её сохранение перенесены в Zone
+// `quests/progress.rs`; свидетельства — docs/gameplay/quests.md.
 
 // ============================================================================
 // FUNCTION: CPlayer::ReUseSkillItem
@@ -15474,19 +15451,9 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::AddQuestDataByteArray_ForClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11240
-// RVA: 0x0003E1C0
-// ADDRESS: 0043e1c0
-// PROTOTYPE: bool __thiscall AddQuestDataByteArray_ForClient(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::AddQuestDataByteArray_ForClient` (player.cpp:11240,
+// RVA 0x0003E1C0) — фильтр клиентского списка в Zone `quests/progress.rs`,
+// запись — в Zone `quests/client.rs`; свидетельства — docs/gameplay/quests.md.
 
 // ============================================================================
 // FUNCTION: CPlayer::AddItemToDelList
@@ -16416,19 +16383,10 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::RunQuestCompleteScript
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17798
-// RVA: 0x00058940
-// ADDRESS: 00458940
-// PROTOTYPE: long __thiscall RunQuestCompleteScript(ushort param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::RunQuestCompleteScript` (player.cpp:17798, RVA
+// 0x00058940) — локальный допуск complete-script перенесён в Zone
+// `quests/progress.rs`; очередь сценариев остаётся у Game, свидетельства —
+// docs/gameplay/quests.md.
 
 // ============================================================================
 // FUNCTION: CPlayer::CPlayer

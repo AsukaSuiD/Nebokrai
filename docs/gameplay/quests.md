@@ -89,7 +89,9 @@ World `dispatch_player_quest_command/dispatch_player_run_script` находят 
 
 ## Клиентский список и постоянное сохранение
 
-`CPlayer::append_client_quest_snapshot` пишет `i32 max_quest_count`, `i32 count`, затем записи с состоянием **не равным `1`**, разрешившиеся в каталоге. Флаг `display` передаётся, но не фильтрует этот список — в отличие от `GetValidQuestNum`. В записи идут `u16 id`, пять `u32` (`old`, type, level, difficulty, track), три C-строки (short description, name, description), `u8 display`, затем `i32 region/x/y/effect`. Порядок задаёт карта Zone. Такой же набор полей описания используется при добавлении в `0xBFF2C`.
+`CPlayer::append_client_quest_snapshot` пишет `i32 max_quest_count`, `i32 count`, затем записи с состоянием **не равным `1`**, разрешившиеся в каталоге. Флаг `display` передаётся, но не фильтрует этот список — в отличие от `GetValidQuestNum`. В записи идут `u16 id`, пять `u32` (`old`, type, level, difficulty, track), три C-строки (short description, name, description), `u8 display`, затем `i32 region/x/y/effect`. Порядок задаёт карта Zone, а саму запись пишет общий [`append_client_quest_record`](../../server/rust/zone/src/quests/client.rs): тот же набор и порядок полей используется при добавлении в `0xBFF2C`.
+
+`VERIFIED` для идентичности обоих клиентских записей по той же паре Game EXE/PDB: после фильтра `AddQuestDataByteArray_ForClient` (VA `0x0043E204–0x0043E229`) запись снимка собирается в VA `0x0043E229–0x0043E339`, а ветвь `0xBFF2C` в `CPlayer::AddQuest` — в VA `0x004453F4–0x004454FE`. Обе записывают u16 ID, пять u32 со смещений записи каталога `+0x88…+0x98`, три C-строки `+0xA0`, `+8`, `+0x24`, байт `+0x84` и четыре i32 в порядке `+0x78`, `+0x7C`, `+0x80`, затем `+0x74` (effect читается последним, несмотря на меньшее смещение). Различие только в обёртке: снимок идёт в общий буфер `0xBF401`, а `0xBFF2C` — отдельным сообщением игроку после вставки состояния `0`.
 
 Сохранение включает **всю карту состояний**, в том числе завершённые и отсутствующие в нынешнем каталоге ID:
 
