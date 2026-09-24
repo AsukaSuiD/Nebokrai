@@ -17504,8 +17504,9 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    /// Client `0x90127`: допуск complete-script принадлежит Zone quests;
-    /// обычная очередь сценариев и player/region context остаются у Game.
+    /// Локальный допуск complete-script принадлежит Zone quests; обычная
+    /// очередь сценариев и player/region context остаются у Game. Этот
+    /// Rust-вход используют клиентский `0x90127` и аукционный ответ.
     pub(crate) fn queue_player_quest_complete_script(
         &mut self,
         player_id: i32,
