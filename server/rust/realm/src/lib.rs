@@ -2,6 +2,7 @@
 //! Библиотека не зависит от прежних World/Auth/Login и не запускает процессы сама.
 
 pub mod access;
+pub mod activities;
 pub mod app;
 pub mod auction;
 pub mod billing;
