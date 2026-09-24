@@ -346,7 +346,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         BOSS_BLUE_FURY_STATE_ID => StateRecordLayout::typed(
             BOSS_BLUE_FURY_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::bossbluefurystate::BossBlueFuryState::decode(payload, offset, _now()).ok().map(StateData::BossBlueFury)
+                super::bossbluefurystate::BossBlueFuryState::decode(payload, offset, _now).ok().map(StateData::BossBlueFury)
             },
         ),
         0x212..=0x219 => StateRecordLayout::typed(

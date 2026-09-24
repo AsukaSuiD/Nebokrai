@@ -6,6 +6,7 @@ mod automaticrestore;
 mod battlefairy;
 mod bloodloss;
 mod blind;
+mod bossbluefury;
 mod callosity;
 mod cure;
 mod daubpoison;
@@ -58,6 +59,9 @@ pub use battlefairy::{
 };
 pub use bloodloss::{
     BLOOD_LOSS_STATE_BYTES, BLOOD_LOSS_STATE_ID, BloodLossAttackSeed, BloodLossState,
+};
+pub use bossbluefury::{
+    BOSS_BLUE_FURY_STATE_BYTES, BOSS_BLUE_FURY_STATE_ID, BossBlueFuryState,
 };
 pub use blind::{
     BLIND_STATE_BYTES, BLIND_STATE_ID, BOA_LOCK_STATE_BYTES, BOA_LOCK_STATE_ID,

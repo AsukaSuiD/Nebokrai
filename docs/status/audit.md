@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись BossBlueFury 24 сентября 2026
+
+Данные, срок слабой фазы и 12-байтная запись `CBossBlueFuryState` (`0x1F7`) перенесены в [`zone/effects/bossbluefury.rs`](../../server/rust/zone/src/effects/bossbluefury.rs). Переходный Game сохраняет живые restart/AI/End, запреты и пересчёт монстра.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) машинный код подтверждает ранее описанные адреса: конструктор `0x005E8A60` (три поля без часов, ID `0x1F7`), vtable `0x0065F994` с AI `0x005E8D50`, End `0x005E8D10`, Restart `0x005FD450`, OnUpdateProperties `0x005E8DC0`, getter `0x005D5F30`, Serialize `0x005E7330`, Unserialize `0x005D6190`. Инструкции AI подтверждают две раздельные проверки часов (слабая и общая границы) и снятие запретов на каждом проходе после слабой. Исправление Rust: decode читает часы после проверки ID вместо расхода до входа. Основания — в [описании ярости](../gameplay/attributes-and-states.md#bossbluefury-ярость-синего-босса).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,88 секунды; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическое усиление босса не проверялось.
+
 ## Zone effects: данные и асимметричная запись TianShenXiaFan 24 сентября 2026
 
 Данные, кодек и формулы свойств `CTianShenXiaFanState` (`0x335`) перенесены в [`zone/effects/tianshenxiafan.rs`](../../server/rust/zone/src/effects/tianshenxiafan.rs). Переходный Game сохраняет живые Begin/restart/AI/End, visual и связь с фабрикой навыков; формулы получили примитивный `TianShenXiaFanPlayerView`.
