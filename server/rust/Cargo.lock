@@ -964,6 +964,7 @@ name = "nebokrai-shared"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "chrono",
  "flate2",
  "getrandom 0.4.3",
  "lzo",
