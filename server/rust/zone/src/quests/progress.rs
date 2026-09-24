@@ -6,7 +6,11 @@
 //! VA 0x0043E204–0x0043E229 пропускает state 1 и неизвестные каталогу ID.
 //! `CPlayer::AddQuest` VA 0x00445397–0x00445531 удаляет прежнее ненулевое
 //! состояние до поиска определения и только затем вставляет новый ноль.
+//! `CPlayer::RunQuestCompleteScript` VA 0x00458940–0x004589AA допускает
+//! только запись с нулевым byte state, затем ищет определение и передаёт
+//! его complete-script в общий исполнитель.
 
+use nebokrai_shared::resources::CQuestSystem;
 use std::collections::BTreeMap;
 
 /// Состояние задания вложено в живого игрока; каталог определений хранится отдельно.
@@ -51,6 +55,18 @@ impl PlayerQuestProgress {
 
     pub fn state(&self, quest_id: u16) -> i32 {
         self.raw_state(quest_id).map_or(2, i32::from)
+    }
+
+    /// Локальный допуск complete-script; постановка и исполнение остаются у Game.
+    pub fn complete_script_path<'a>(
+        &self,
+        quest_id: u16,
+        catalog: &'a CQuestSystem,
+    ) -> Option<&'a [u8]> {
+        if self.raw_state(quest_id) != Some(0) {
+            return None;
+        }
+        catalog.complete_script_by_id(quest_id)
     }
 
     /// При отсутствии определения прежнее ненулевое состояние уже удалено.
