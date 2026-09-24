@@ -3,6 +3,7 @@
 mod catalog;
 mod cbattlefairyexpconfig;
 mod changebody;
+mod ciqing;
 mod contributesetup;
 mod dupliregionsetup;
 mod emotion;
@@ -46,6 +47,10 @@ pub use cbattlefairyexpconfig::{
 };
 pub use changebody::{
     CChangeBodyConf, ChangeBodyDecodeError, ChangeBodyLoadError, ChangeBodySerializeError,
+};
+pub use ciqing::{
+    CCiQingSetup, CiQingComposeNode, CiQingCountSection, CiQingDecodeError,
+    CiQingImproveNode, CiQingMakeNode, CiQingSerializationBlock,
 };
 pub use contributesetup::{
     CContributeSetup, ContributeItem, ContributeSetupDecodeError,
