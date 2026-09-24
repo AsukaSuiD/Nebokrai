@@ -16,6 +16,7 @@ mod godthunder;
 mod chaossphere;
 mod soulmirror;
 mod cure;
+mod daubpoison;
 mod fury;
 mod pillar;
 mod roar;
@@ -57,6 +58,7 @@ pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
 pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorArea, SoulMirrorSummonParameters,
     soul_mirror_scope_size, soul_mirror_scope_cell};
 pub use cure::{cure_threshold, is_cure_removable_state_id};
+pub use daubpoison::{DAUB_POISON_SKILL_ID, daub_poison_keep_time_ms};
 pub use fury::is_fury_conflicting_state_id;
 pub use pillar::{PILLAR_SKILL_ID, pillar_state_parameters};
 pub use roar::{ROAR_SKILL_ID, RoarBounds, roar_bounds};

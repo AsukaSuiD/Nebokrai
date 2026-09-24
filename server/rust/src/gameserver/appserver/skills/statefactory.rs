@@ -236,7 +236,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         DAUB_POISON_STATE_ID => StateRecordLayout::typed(
             DAUB_POISON_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::daubpoisonstate::DaubPoisonState::decode(payload, offset, _now()).ok().map(StateData::DaubPoison)
+                super::daubpoisonstate::DaubPoisonState::decode(payload, offset, _now).ok().map(StateData::DaubPoison)
             },
         ),
         BOSS_BLUE_QUAKE_STATE_ID => StateRecordLayout::typed(

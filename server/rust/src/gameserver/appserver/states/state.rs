@@ -938,7 +938,7 @@ state_callbacks! {
         |_, _, _, _, _| true,
         set_defense_shield_region
     ); visual = |state| { let once = matches!(state, StateData::DefenseShield(skills::shieldstate::DefenseShieldState::Promotion(_))); Some((if once { 0 } else { 1 }, once)) },
-    StateData::DaubPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_time(now) as i32) } => (
+    StateData::DaubPoison(_); client = |state, _team, now| { StateClientRecord::timed(state.client_state_time(now) as i32) } => (
         |game, region, target, key, runtime| {
             skills::daubpoisonstate::update_daub_poison_state(game, region, target, key, runtime.now_milliseconds());
         },

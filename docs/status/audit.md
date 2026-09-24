@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные и запись DaubPoison 24 сентября 2026
+
+Данные, срок и 8-байтная сохраняемая запись `CDaubPoisonState` (`0xDF`) перенесены в [`zone/effects/daubpoison.rs`](../../server/rust/zone/src/effects/daubpoison.rs), числовое правило запроса срока — в [`zone/skills/daubpoison.rs`](../../server/rust/zone/src/skills/daubpoison.rs). Переходный Game оставляет живые Begin/restart/update/End, visual и разрешение участников; применение навыка продолжает завершать первый слот `0xDF` до запроса срока и Begin.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) конструктор VA `0x005F17B0` записывает ID `0xDF` и срок из аргумента без чтения часов; взятая из него vtable `0x0066047C` подтверждает общие с `CCureState` writer `0x005F51E0`, reader `0x005EAAC0`, getter `0x005F2CD0`, AI `0x005D5BA0` и End `0x005FD420`. Открытый вопрос writer-а формата этим закрыт. Исправлено поведение Rust при загрузке: часы теперь читаются внутри decode после проверки ID, как в reader, а не вызывающей фабрикой до входа. Дублирующие константы `0xDF` и `0x131` в `heartlessarrow.rs` заменены общими Zone. Основания — в [описании DaubPoison](../gameplay/attributes-and-states.md#daubpoison-смазка-оружия-ядом).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 36,71 секунды; `rustfmt --check` новых Zone-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактическое наложение смазки и перенос яда ударом не проверялись.
+
 ## Zone quests: общая клиентская запись задания 24 сентября 2026
 
 Запись одного задания для клиента выделена в [`zone/quests/client.rs`](../../server/rust/zone/src/quests/client.rs); её используют и снимок входа `append_client_quest_snapshot` в Game `player.rs`, и уведомление добавления `0xBFF2C` в Game `game.rs`, ранее дублировавшие порядок полей. Владелец формата записи — Zone quests; преамбула `max_quest_count`/count, выбор получателя и момент отправки остаются у переходного Game.

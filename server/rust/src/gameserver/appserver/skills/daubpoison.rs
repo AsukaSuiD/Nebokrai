@@ -11,14 +11,15 @@
 //! Существующий state owner хранит единственный payload и обслуживает wire,
 //! DB и снятие. Результат установки не отменяет завершение навыка End(1).
 
-use super::daubpoisonstate::{DAUB_POISON_STATE_ID, begin_primary_daub_poison_state};
+use super::daubpoisonstate::begin_primary_daub_poison_state;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_and_destroy_state_at, resolve_state_move_shape};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use nebokrai_zone::effects::DAUB_POISON_STATE_ID;
+use nebokrai_zone::skills::daub_poison_keep_time_ms;
 
-pub(crate) const DAUB_POISON_SKILL_ID: u32 = DAUB_POISON_STATE_ID;
-const STATE_PERSIST_TIME: u32 = 10_002;
+pub(crate) use nebokrai_zone::skills::DAUB_POISON_SKILL_ID;
 
 pub(super) fn apply_daub_poison<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, source: (i32, ShapeIdentity),
@@ -29,6 +30,6 @@ pub(super) fn apply_daub_poison<Runtime: GameMainLoopRuntime>(
     {
         let _ = end_and_destroy_state_at(game, source.0, source.1, position);
     }
-    let keep = properties.query_property(STATE_PERSIST_TIME);
+    let keep = daub_poison_keep_time_ms(|key| properties.query_property(key));
     let _ = begin_primary_daub_poison_state(game, source, keep, &mut || runtime.now_milliseconds());
 }

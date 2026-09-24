@@ -183,6 +183,10 @@ Player-ветвь callback сначала ограничивает потерю 
 
 При загрузке Rust теперь читает часы после проверки ID и до полей срока и прибавки, как это делает reader VA `0x004F9D80` после разбора ID внешней фабрикой. Прежний Rust-путь вызывал часы перед проверкой ID и расходовал их даже на неподходящую запись. Порядок создания состояния навыком описан в [навыках](skills.md#создание-состояния-hearten).
 
+## DaubPoison: смазка оружия ядом
+
+Данные, срок и сохраняемая запись `CDaubPoisonState` (`0xDF`) находятся в [`Zone effects`](../../server/rust/zone/src/effects/daubpoison.rs), числовое правило запроса срока — в [`Zone skills`](../../server/rust/zone/src/skills/daubpoison.rs); живые Begin/restart/End, visual и участники остаются у [переходного Game](../../server/rust/src/gameserver/appserver/skills/daubpoisonstate.rs). По совпадающей паре Game EXE/PDB `VERIFIED`: конструктор VA `0x005F17B0` записывает ID `0xDF` и срок из аргумента без чтения часов. Его vtable `0x0066047C` разделяет с `CCureState` writer `0x005F51E0` (8 байт: ID, затем остаток через getter), reader `0x005EAAC0` (часы после внешнего ID и до сохранённого остатка), getter срока `0x005F2CD0`, AI `0x005D5BA0` (завершение только при `now > start + keep`) и End `0x005FD420`. При переносе Rust decoder стал читать часы после проверки ID: раньше вызывающая фабрика расходовала их до входа в decode, включая чужую запись. Магические числа `0xDF`/`0x131` в [heartlessarrow](../../server/rust/src/gameserver/appserver/skills/heartlessarrow.rs) заменены общими константами Zone. Фактическое наложение смазки, перенос яда ударом и клиентский visual не запускались.
+
 ## Сценарий: паутина и несколько запретов одновременно
 
 [`SpiderWebState`](../../server/rust/src/gameserver/appserver/skills/spiderwebstate.rs) использует общий жизненный цикл [`blindstate`](../../server/rust/src/gameserver/appserver/skills/blindstate.rs). `begin_primary_blind_state_at` разрешает участников, отправляет начало visual, увеличивает запреты движения и боя, затем публикует запись состояния. Повторный вход запускает `restart_blind_state`, который восстанавливает эти запреты для загруженного экземпляра.

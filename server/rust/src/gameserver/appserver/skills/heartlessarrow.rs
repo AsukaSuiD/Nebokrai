@@ -33,6 +33,8 @@
 use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::fightdefense::truncate_original;
+use nebokrai_zone::effects::CURE_STATE_SKILL_ID;
+use nebokrai_zone::skills::DAUB_POISON_SKILL_ID;
 use super::heartlessarrow2::check_heartless_cast;
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::playercast::execute_registered_player_cast;
@@ -56,7 +58,6 @@ use crate::gameserver::gameserver::game::{
 use crate::public::tools::get_line_direction;
 
 pub(crate) const HEARTLESS_ARROW_SKILL_ID: u32 = 0xca;
-const DAUB_POISON_SKILL_ID: u32 = 0xdf;
 const ACTION_INTERVAL: u32 = 10_009;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const TARGET_DAMAGE_FACTORS: [u32; 4] = [20_003, 20_021, 20_022, 20_023];
@@ -153,7 +154,7 @@ fn apply_daub_poison_between(
     let Some(sufferer) = resolve_state_move_shape(game, target.0, target.1) else { return; };
     let source = (user.shape().get_region_id(), user.shape().identity());
     let target = (sufferer.shape().get_region_id(), sufferer.shape().identity());
-    if sufferer.has_state_by_skill_id(0x131) || !user.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return; }
+    if sufferer.has_state_by_skill_id(CURE_STATE_SKILL_ID) || !user.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return; }
     let Some(skill) = user.skill(DAUB_POISON_SKILL_ID, game.skill_factory()) else { return; };
     let Some(properties) = game.skill_base_properties(skill.id(), skill.level()).cloned() else { return; };
     if source.1.object_type != 400 { return; }
