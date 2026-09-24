@@ -5,6 +5,7 @@ mod contributesetup;
 mod emotion;
 mod filesinfo;
 mod hitlevel;
+mod incrementshoplist;
 mod globesetup;
 mod gmlist;
 mod marker;
@@ -31,6 +32,11 @@ pub use emotion::{
     CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
 };
 pub use filesinfo::{FileInfo, FilesInfo, FilesInfoParseError, PackFileInfo};
+pub use incrementshoplist::{
+    CIncrementShopList, IncrementShopDecodeError, IncrementShopGoodsQuery,
+    IncrementShopGoodsResult, IncrementShopItem, IncrementShopLoadError,
+    IncrementShopLoadReport, IncrementShopSerializeError, IncrementShopStringField,
+};
 pub use hitlevel::{
     CHitLevelSetup, HitLevelDecodeError, HitLevelEntry, HitLevelFormatError,
     HitLevelSerializeError,
