@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone activities: состояние CJJcSystem 24 сентября 2026
+
+Process-owned состояние арены `CJJcSystem` (две ordered map: region→пара участников и player→сведения соперника и точка возврата) перенесено из `src/gameserver/appserver/jjcsystem.rs` в [`zone/src/activities/jjcsystem.rs`](../../server/rust/zone/src/activities/jjcsystem.rs) — принятый таблицей компонентов дом локального исполнения арен. Швы не потребовались; потребители (`game`, `jjcsystemmessage`) работают через glob-шим без правок. Исследовательский хвост (строки 118–363) по конвенции не скопирован. Вопрос дома, по которому файл ранее откладывался, закрыт строкой `activities` в принятой таблице — не новым предположением.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе проверено для двух тел: ctor `CJJcSystem` `0x4DABD0` создаёт пустые ordered map (sentinel head node с `IsNil=1`, self-links); `IsJJcRegion` `0x4D9590` — проверка ID региона по диапазону двух глобальных configuration-значений, внутри — `1`, иначе `0`. Callbacks `OnJJcPKOver`, `WeekUpdate`, `SeasonUpdate` и входы `ApplyJJc/QuitJJc` сохраняют прежний статус заголовка и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка владельца обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone activities/content: country-юнит 24 сентября 2026
 
 Country-war side state `CountryWarSys` (snapshot decoder, phase и victory chains, region side state, writer-before-region-callback) перенесён из `src/gameserver/appserver/country/countrywarsys.rs` в новый компонент [`zone/src/activities/`](../../server/rust/zone/src/activities/) — принятый таблицей компонентов дом локального исполнения войн. Параметры стран `CCountryParam` (39 позиционных scalar, return points, technology levels, exile rects, сохранённая асимметрия technology record) перенесены в [`zone/src/content/countryparam.rs`](../../server/rust/zone/src/content/countryparam.rs) — как полученные настройки игры. Швы не потребовались; потребители (`game`, `servermessage`, `countrymessage`, region-семейство) работают через glob-шимы без правок. Исследовательский хвост countrywarsys (строки 434–511) по конвенции не скопирован.
