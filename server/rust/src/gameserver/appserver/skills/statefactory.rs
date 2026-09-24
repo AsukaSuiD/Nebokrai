@@ -286,7 +286,7 @@ fn record_layout(payload: &[u8], cursor: usize, state_id: u32) -> Option<StateRe
         ),
         HEAL_SKILL_ID | HEAL_2_SKILL_ID | SUPER_HEAL_SKILL_ID | SUPER_HEAL_2_SKILL_ID => StateRecordLayout::typed(
             HEAL_STATE_BYTES, |payload, offset, _owner, _factory, _now| {
-                super::healstate::HealState::decode(payload, offset, _now()).ok().map(StateData::Heal)
+                super::healstate::HealState::decode(payload, offset, _now).ok().map(StateData::Heal)
             },
         ),
         CURE_STATE_SKILL_ID => StateRecordLayout::typed(

@@ -193,6 +193,12 @@ Player-ветвь callback сначала ограничивает потерю 
 
 При переносе decoders KnightCut/KnockOut/BoaLock стали читать часы после проверки ID, как общий Unserialize: раньше фабрика расходовала их до входа в decode. Ручная сериализация KnockOut в сохранении заменена общим `encoded` с тем же байтовым результатом; вызовы конструктора с явным нулевым началом (`new(0, keep)`) сведены к исходной duration-форме `new(keep)`. Фактические Begin/End, запреты и клиентский visual этим переносом не запускались.
 
+## Периодическое лечение Heal
+
+Данные, срок, правило тика и 16-байтная запись четырёх состояний лечения — `CHealState` (`0xD3`), `CHeal2State` (`0xE3`), `CSuperHealState` (`0xD9`), `CSuperHeal2State` (`0xE4`) — находятся в [`Zone effects`](../../server/rust/zone/src/effects/heal.rs); живые Begin/restart/AI/End, множитель Promotion и публикация HP остаются у [переходного Game](../../server/rust/src/gameserver/appserver/skills/healstate.rs). По совпадающей паре Game EXE/PDB `VERIFIED`: конструкторы четырёх классов записывают свой ID без чтения часов, а все четыре vtable разделяют AI VA `0x005EEDF0`, End VA `0x005EEBA0`, GetRemainedTime VA `0x005F2CD0`, Serialize VA `0x005F65F0` (ID, затем остаток через getter, частота, объём) и Unserialize VA `0x005EEC70` (часы после внешнего ID и до трёх оставшихся DWORD). Адреса конструкторов перечислены в заголовке Zone-файла.
+
+Машинный AI подтверждает порядок тика: разрешение S, проверка смерти до часов, чтение Promotion (WORD множителя, ×0.001) перед первым clock, строгое `start + frequency * count < now` даёт не более одного тика, увеличение счётчика до чтения HP/MAX, `FISTP`-усечение произведения unsigned gain на f32-множитель, DWORD-сложение с HP, повторное чтение MAX при ограничении, SetHP и OnChangeStates, и лишь затем отдельные часы для проверки `now > start + keep`. При переносе decode стал читать часы после первого поля записи вместо расхода до входа, как исходный Unserialize. Фактический тик лечения, множитель Promotion и клиентский visual не запускались.
+
 ## Сценарий: паутина и несколько запретов одновременно
 
 [`SpiderWebState`](../../server/rust/src/gameserver/appserver/skills/spiderwebstate.rs) использует общий жизненный цикл [`blindstate`](../../server/rust/src/gameserver/appserver/skills/blindstate.rs). `begin_primary_blind_state_at` разрешает участников, отправляет начало visual, увеличивает запреты движения и боя, затем публикует запись состояния. Повторный вход запускает `restart_blind_state`, который восстанавливает эти запреты для загруженного экземпляра.

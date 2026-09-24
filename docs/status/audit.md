@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone effects: данные, тик и запись периодического лечения 24 сентября 2026
+
+Данные, срок, правило тика и 16-байтная запись четырёх состояний лечения (`0xD3/0xE3/0xD9/0xE4`) перенесены в [`zone/effects/heal.rs`](../../server/rust/zone/src/effects/heal.rs). Переходный Game сохраняет живые Begin/restart/AI/End, чтение Promotion и публикацию HP.
+
+По совпадающей паре Game EXE/PDB (SHA-256 `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`, RSDS GUID `5bee6dd1-bf90-49b8-8be9-eb25c4038d53`, age `2`) найдены конструкторы всех четырёх классов (адреса — в заголовке Zone-файла) и их vtable: общие AI `0x005EEDF0`, End `0x005EEBA0`, GetRemainedTime `0x005F2CD0`, Serialize `0x005F65F0` и Unserialize `0x005EEC70`. Инструкции writer подтверждают порядок ID → getter остатка → частота → объём; reader читает часы до трёх оставшихся полей; AI — разрешение S, проверку смерти, WORD Promotion ×0.001 до первого clock, строгое расписание тика, FISTP-усечение, DWORD-сложение HP, повторное чтение MAX и поздние часы истечения. Ранее адреса этого семейства нигде не были зафиксированы. Исправление Rust: decode читает часы после первого поля записи вместо расхода до входа. Основания — в [описании лечения](../gameplay/attributes-and-states.md#периодическое-лечение-heal).
+
+`cargo check --locked -p nebokrai-zone --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл за 35,97 секунды; `rustfmt` нового Zone-файла и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались; фактический тик лечения и клиентский visual не проверялись.
+
 ## Zone effects: данные и запись blind-семейства 24 сентября 2026
 
 Данные и 8-байтная запись восьми состояний blind-семейства перенесены в [`zone/effects/blind.rs`](../../server/rust/zone/src/effects/blind.rs): общий payload `BlindState<ID, BLOCKS_FIGHTING>` обслуживает Blind (`0x76`), Rush (`0x73`), Rush2 (`0x7C`), Seal (`0x138`), Strike (`0xDD`), KnightCut (`0x67`), KnockOut (`0x192`) и BoaLock (`0xD2`, с `BLOCKS_FIGHTING = false`). Переходный Game сохраняет живой lifecycle, запреты движения/боя, visual и обходы состояний; blanket-адаптер payload покрывает все типы семейства.
