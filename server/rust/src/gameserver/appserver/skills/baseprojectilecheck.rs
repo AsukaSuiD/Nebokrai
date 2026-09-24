@@ -39,6 +39,7 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const PLAYER_TYPE: i32 = 400;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;

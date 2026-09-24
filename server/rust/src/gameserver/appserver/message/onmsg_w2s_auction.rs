@@ -34,6 +34,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::nets::netserver::message::SendMessageError;
 use crate::public::auctionlog::{AuctionLogNode, AuctionLogSystemTime};
 use crate::public::auctionnode::{CGoodsNode, GoodsNodeSerializeError, GoodsNodeUnserializeError};

@@ -30,6 +30,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 /// Поле цели в подтверждённых вариантах пакета применения.
 pub(crate) enum StateSkillVisualTarget {

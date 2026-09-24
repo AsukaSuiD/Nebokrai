@@ -14,6 +14,7 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) fn publish_ghost_cut_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
     if !matches!(skill.owner(), SkillOwner::CGhostCut | SkillOwner::CGhostCut2 | SkillOwner::CGhostCut3)

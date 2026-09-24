@@ -29,6 +29,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::auctionnode::{AuctionListingNodeFields, CGoodsNode};
 
 const CLIENT_AUCTION_CLOSE_MESSAGE: i32 = 0x0009_0A01;

@@ -34,6 +34,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, MaterializedSkillEndCause, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::trace;
 
 const USE_PLAYER_SKILL: u32 = 0x0009_0001;

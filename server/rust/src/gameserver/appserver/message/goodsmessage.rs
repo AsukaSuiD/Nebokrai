@@ -35,6 +35,7 @@ use crate::gameserver::gameserver::game::{
     EquipmentUpgradeContext, GameContainerMessageRuntime,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const ASSIGN_HOTKEY: u32 = 0x0008_fc08;

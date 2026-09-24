@@ -40,6 +40,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
 
 const MISSILE_TIME: u32 = 10_008;

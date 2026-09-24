@@ -1342,6 +1342,7 @@ use crate::gameserver::gameserver::playerranks::{
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime, SendMessageError};
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::nets::netserver::mynetclient::{
     CMyNetClient, GameClientIoError, GameClientIoStep, ServerType,
 };

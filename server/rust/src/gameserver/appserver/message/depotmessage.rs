@@ -14,6 +14,7 @@
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::{debug, trace};
 
 const DEPOT_CLIENT_FAMILY: u32 = 0x0008_FE00;

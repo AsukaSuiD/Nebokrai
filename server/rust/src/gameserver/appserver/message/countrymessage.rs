@@ -23,6 +23,7 @@ use super::super::country::countrywarsys::{
 use crate::gameserver::gameserver::game::{CGame, ScriptRegionChangeContext, ServerRegionOwner};
 use nebokrai_shared::protocol::LegacyReader;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use std::mem::size_of;
 
 pub(crate) trait GameCountryWarRuntime: ScriptRegionChangeContext {}

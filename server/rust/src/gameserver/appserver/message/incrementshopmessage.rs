@@ -17,6 +17,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_YUANBAO_DIKOU
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::setup::incrementshoplist::IncrementShopItem;
 use tracing::{debug, trace};
 

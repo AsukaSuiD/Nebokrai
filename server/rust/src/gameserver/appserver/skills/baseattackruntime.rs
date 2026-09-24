@@ -13,6 +13,7 @@ use super::{
     ShapeIdentity, SkillStage, get_line_direction, truncate_original,
 };
 use crate::gameserver::appserver::moveshape::MoveShapeSkill;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use crate::gameserver::appserver::skills::kernel::SkillTermination;

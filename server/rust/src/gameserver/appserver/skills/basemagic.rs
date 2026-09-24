@@ -14,6 +14,7 @@ use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;

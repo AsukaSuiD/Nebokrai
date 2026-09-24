@@ -56,6 +56,7 @@ use crate::gameserver::gameserver::game::{
     format_legacy_text_fields, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::date::TagTime;
 use nebokrai_shared::values::CGuid;
 

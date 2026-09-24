@@ -12,6 +12,7 @@
 use super::function::SCRIPT_FUNCTION_ARGUMENT_CAPACITY;
 use crate::gameserver::gameserver::game::{CGame, game_wall_time_seconds};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const FIRST_JJC_SCRIPT_FUNCTION: i32 = 10_000;
 const LAST_JJC_SCRIPT_FUNCTION: i32 = 10_009;

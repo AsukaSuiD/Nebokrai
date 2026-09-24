@@ -74,6 +74,7 @@ use crate::gameserver::gameserver::game::{
     colored_text_message,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::trace;
 
 const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0007_FC12;

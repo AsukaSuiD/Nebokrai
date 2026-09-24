@@ -38,6 +38,7 @@ use crate::gameserver::gameserver::game::{
     ServerRegionOwner,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) const INFERNOL_SKILL_ID: u32 = 0x135;
 

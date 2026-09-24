@@ -35,6 +35,7 @@ use crate::gameserver::gameserver::game::{
     QueuedSkillExecutionState, ServerRegionOwner,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;

@@ -11,6 +11,7 @@
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::{debug, warn};
 
 const GMA_FAMILY: u32 = 0x0008_0000;

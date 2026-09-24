@@ -10,6 +10,7 @@
 use crate::gameserver::appserver::jjcsystem::JjcInfo;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::{debug, trace};
 
 const APPLICATION_RESPONSE: u32 = 0x0008_0502;

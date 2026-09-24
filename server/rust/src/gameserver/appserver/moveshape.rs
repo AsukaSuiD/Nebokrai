@@ -350,6 +350,7 @@ use crate::gameserver::appserver::states::automaticrestore::{
     AutomaticRestoreState, AUTOMATIC_RESTORE_STATE_BYTES,
 };
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
 
 const NPC_TYPE: i32 = 500;

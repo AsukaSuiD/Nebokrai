@@ -78,6 +78,7 @@ use crate::gameserver::gameserver::game::{
     format_legacy_mixed, format_legacy_text_fields, game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
 use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_string_to_file};
 use tracing::trace;

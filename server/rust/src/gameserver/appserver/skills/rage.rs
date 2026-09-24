@@ -48,6 +48,7 @@ use crate::gameserver::gameserver::game::{
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) const RAGE_SKILL_ID: u32 = 0x6d;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;

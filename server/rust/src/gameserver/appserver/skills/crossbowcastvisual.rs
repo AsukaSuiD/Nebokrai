@@ -17,6 +17,7 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) fn publish_crossbow_cast_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
     let poison_moth = match skill.owner() {

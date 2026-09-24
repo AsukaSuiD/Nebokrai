@@ -31,6 +31,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::auctionlog::AuctionLogSystemTime;
 use crate::public::date::TagTime;
 use crate::public::tools::put_string_to_file;

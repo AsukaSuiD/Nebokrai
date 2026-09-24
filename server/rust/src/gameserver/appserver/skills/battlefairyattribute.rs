@@ -47,6 +47,7 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_DELAY_TIME: u32 = 10_001;

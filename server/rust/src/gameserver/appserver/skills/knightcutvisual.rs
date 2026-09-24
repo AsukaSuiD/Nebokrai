@@ -16,6 +16,7 @@ use crate::gameserver::appserver::states::state::resolve_state_move_shape;
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) fn publish_knight_cut_visual(game: &CGame, skill: &MoveShapeSkill, mode: u32) {
     if skill.owner() != SkillOwner::CKnightCut

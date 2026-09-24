@@ -22,6 +22,7 @@ use thiserror::Error;
 
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::nets::netserver::mynetserver::CMyNetServer;
 
 const PLAYER_RANKS_MESSAGE: i32 = 0x000B_FF30;

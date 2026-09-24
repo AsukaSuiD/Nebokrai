@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::gameserver::gameserver::game::CGame;
 use nebokrai_shared::protocol::LegacyReader;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const GOODS_WAR_WORLD_MESSAGE: i32 = 0x0006_0139;
 const GOODS_WAR_CLIENT_COUNTS: i32 = 0x000C_0316;

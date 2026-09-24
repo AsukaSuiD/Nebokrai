@@ -35,6 +35,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) const IGNITION_SKILL_ID: u32 = 0xf2;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;

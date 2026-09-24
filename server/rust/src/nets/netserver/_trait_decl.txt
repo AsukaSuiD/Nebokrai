@@ -1,0 +1,57 @@
+pub(crate) use nebokrai_zone::app::game_message::{
+    CMessage, CreateMessageError, SendMessageError,
+};
+
+/// Способ вызова старого `nets/netserver/message.cpp` поверх общего владельца
+/// сообщения: доменные операции, RLE send-family и `Run` сохраняют тот же текст
+/// и то же владение, что до переноса типа в Zone app. Старый пакет реализует
+/// их trait-приёмом; ни один вызов домена не изменён.
+pub(crate) trait GameMessageDomainOps {
+    /// Материализует lazy numeric lookup prefix `Run` у общего владельца.
+    fn resolve_player_context(&mut self, game: &CGame);
+    /// Exact selector с ещё не материализованным route.
+    fn select_game_route(&mut self, game: &CGame) -> Option<GameMessageRoute>;
+    /// RLE frame `[total_len, rle(message)]` исходного client send.
+    fn rle_send_frame(&self) -> Vec<u8>;
+    /// Server CRC-envelope с двумя DataCrc32 и проверкой длины.
+    fn server_envelope(&self) -> Result<Vec<u8>, SendMessageError>;
+    /// Пишет oversized-строку в `MsgLen.log` при превышении кадром лимита.
+    fn log_oversized_rle(&self, route: &str, subject: i32, frame_len: usize);
+    /// RLE отправка одному transport socket.
+    fn send_to_socket(&self, net_server: &CMyNetServer, socket_id: i32) -> i32;
+    /// RLE отправка по numeric player/map identity.
+    fn send_to_player(&self, net_server: &CMyNetServer, player_id: i32) -> i32;
+    /// RLE-broadcast с исходным nullable server.
+    fn send_all(&self, net_server: Option<&CMyNetServer>) -> Result<i32, SendMessageError>;
+    /// Server CRC-envelope в очередь WorldServer-клиента.
+    fn send(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError>;
+    /// Тот же server envelope в BillingServer-клиент.
+    fn send_to_bs(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError>;
+    /// Обходит все areas region-а в исходном storage order.
+    fn send_to_region(&self, server_region: Option<&CServerRegion>, excluded_player_id: Option<i32>, game: &CGame) -> i32;
+    /// То же через recipient-snapshot.
+    fn send_to_region_snapshot(&self, server_region: &ServerRegionRecipientsSnapshot, excluded_player_id: Option<i32>, game: &CGame) -> i32;
+    /// Отправляет игрокам одной area region-а.
+    fn send_to_area(&self, area: Option<(&CServerRegion, &CArea)>, excluded_player_id: Option<i32>, game: &CGame) -> i32;
+    /// Сравнение signed argument с zero-extended `m_btCountry`.
+    fn send_to_region_contry_player(&self, server_region: Option<&CServerRegion>, country: i32, game: &CGame) -> i32;
+    /// Обходит девять areas в исходном порядке с исходным tile X/Y.
+    fn send_to_around(&self, server_region: Option<&CServerRegion>, origin: &CShape, excluded_player_id: Option<i32>, runtime: &GameServerAroundRuntime<'_>) -> Result<i32, ShapeCoordinateBlock>;
+    /// То же с его recipient-snapshot.
+    fn send_to_around_snapshot(&self, server_region: &ServerRegionRecipientsSnapshot, origin: &CShape, excluded_player_id: Option<i32>, runtime: &GameServerAroundRuntime<'_>) -> Result<i32, ShapeCoordinateBlock>;
+    /// То же с прямой координатой центра.
+    fn send_to_around_position(&self, server_region: Option<&CServerRegion>, tile_x: i32, tile_y: i32, excluded_player_id: Option<i32>, runtime: &GameServerAroundRuntime<'_>) -> i32;
+
+    /// Общий recipient-путь send-family.
+    fn send_to_region_recipients(&self, server_region: RegionMessageRecipients<'_>, excluded_player_id: Option<i32>, game: &CGame) -> i32;
+
+    /// Общий around-путь send-family.
+    fn send_to_around_at(&self, server_region: Option<RegionMessageRecipients<'_>>, tile_x: i32, tile_y: i32, main_shape: Option<&CShape>, excluded_player_id: Option<i32>, runtime: &GameServerAroundRuntime<'_>) -> i32;
+
+    /// Общий broadcast-путь по спискам map-identity.
+    fn send_player_ids(&self, player_ids: &[i32], excluded_player_id: Option<i32>, game: &CGame, frame: &[u8]);
+    /// Присваивает metadata принятого Game-клиента непосредственному сообщению.
+    fn apply_client_context(&mut self, context: ServerClientMessageContext<'_>);
+}
+
+impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {

@@ -44,6 +44,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
 
 pub(crate) const CHAIN_LIGHTNING_SKILL_ID: u32 = 0x13e;

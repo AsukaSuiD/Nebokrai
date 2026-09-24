@@ -25,6 +25,7 @@ use crate::gameserver::gameserver::game::{
     CGame, colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::date::TagTime;
 use crate::public::tools::{add_game_error_log_text, put_string_to_file};
 use crate::setup::gmlist::GmInfo;

@@ -21,6 +21,7 @@ use crate::gameserver::gameserver::game::{
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::get_line_direction;
 
 pub(crate) const BLIND_SKILL_ID: u32 = 0x76;

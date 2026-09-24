@@ -69,17 +69,14 @@
 //! `GameMessageRoute` — узкая typed-граница ещё сырых domain handlers, не их
 //! реализация и не новый общий protocol framework.
 
-use std::fmt;
-
 use crate::gameserver::appserver::area::CArea;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionRecipientsSnapshot};
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeCoordinateBlock};
 use crate::gameserver::gameserver::game::CGame;
-use crate::nets::basemessage::{CBaseMessage, RleDecodeError, decode_rle, encode_rle};
+use crate::nets::basemessage::encode_rle;
 use crate::nets::netserver::mynetserver::CMyNetServer;
-use crate::nets::serverclient::ServerClientMessageContext;
 use crate::public::crc32static::data_crc32;
 use crate::public::tools::put_string_to_file;
 
@@ -102,7 +99,7 @@ pub(crate) const AROUND_SEND_AREA_OFFSETS: [(i32, i32); 9] = [
     (1, 1),
 ];
 
-enum RegionMessageRecipients<'a> {
+pub(crate) enum RegionMessageRecipients<'a> {
     Live(&'a CServerRegion),
     Snapshot(&'a ServerRegionRecipientsSnapshot),
 }
@@ -136,44 +133,6 @@ impl RegionMessageRecipients<'_> {
         }
     }
 }
-
-/// Ошибка восстановления Game-сообщения из wire-буфера.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CreateMessageError {
-    /// Нулевой decode-result либо нулевой несжатый вход не создаёт сообщение.
-    EmptyInput,
-    /// Реакция C++ на ненулевой buffer короче header безопасно не определена.
-    HeaderTooShortReactionUnknown,
-    /// Размер не представим 32-битным `unsigned long` исходного API.
-    InputOutsideLegacyRange,
-    /// `compressed_len * 8` переполнял старую 32-битную арифметику.
-    RleCapacityOverflowReactionUnknown,
-    /// Декодер отклонил поток либо достиг malformed-границы своего owner-а.
-    Rle(RleDecodeError),
-}
-
-/// Локальная safe-граница reached Game send-family.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SendMessageError {
-    /// Итоговый server envelope не представим положительным Windows `long`.
-    LengthOutsideLegacyRange,
-    /// BLOCKED_MISSING_FACT: oversized `SendAll` читает неинициализированный
-    /// constructor-ом inherited `m_lIndexID` до самой отправки.
-    SendAllIndexIdUninitialized,
-}
-
-impl fmt::Display for SendMessageError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LengthOutsideLegacyRange => formatter
-                .write_str("длина GameServer envelope не представима положительным Windows long"),
-            Self::SendAllIndexIdUninitialized => formatter
-                .write_str("oversized SendAll требует недоказанное значение CMySocket::m_lIndexID"),
-        }
-    }
-}
-
-impl std::error::Error for SendMessageError {}
 
 /// Конкретный handler-owner, выбранный exact Game `CMessage::Run`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,159 +235,157 @@ impl<'a> GameServerAroundRuntime<'a> {
             .as_ref()
             .filter(|player| player.player_id == player_id)
             .map(GameServerAroundPlayerRef::Detached)
-            .or_else(|| self.game.find_player(player_id).map(GameServerAroundPlayerRef::Live))
+            .or_else(|| {
+                self.game
+                    .find_player(player_id)
+                    .map(GameServerAroundPlayerRef::Live)
+            })
     }
 }
 
-pub(crate) struct CMessage {
-    base: CBaseMessage,
-    region_id: Option<i32>,
-    player_id: Option<i32>,
-    map_id: i32,
-    socket_id: i32,
-    ip: u32,
+pub(crate) use nebokrai_zone::app::game_message::{CMessage, CreateMessageError, SendMessageError};
+
+/// Способ вызова старого `nets/netserver/message.cpp` поверх общего владельца
+/// сообщения: доменные операции, RLE send-family и `Run` сохраняют тот же текст
+/// и то же владение, что до переноса типа в Zone app. Старый пакет реализует
+/// их trait-приёмом; ни один вызов домена не изменён.
+pub(crate) trait GameMessageDomainOps {
+    /// Материализует lazy numeric lookup prefix `Run` у общего владельца.
+    fn resolve_player_context(&mut self, game: &CGame);
+    /// Exact selector с ещё не материализованным route.
+    fn select_game_route(&mut self, game: &CGame) -> Option<GameMessageRoute>;
+    /// RLE frame `[total_len, rle(message)]` исходного client send.
+    fn rle_send_frame(&self) -> Vec<u8>;
+    /// Server CRC-envelope с двумя DataCrc32 и проверкой длины.
+    fn server_envelope(&self) -> Result<Vec<u8>, SendMessageError>;
+    /// Пишет oversized-строку в `MsgLen.log` при превышении кадром лимита.
+    fn log_oversized_rle(&self, route: &str, subject: i32, frame_len: usize);
+    /// RLE отправка одному transport socket.
+    fn send_to_socket(&self, net_server: &CMyNetServer, socket_id: i32) -> i32;
+    /// RLE отправка по numeric player/map identity.
+    fn send_to_player(&self, net_server: &CMyNetServer, player_id: i32) -> i32;
+    /// RLE-broadcast с исходным nullable server.
+    fn send_all(&self, net_server: Option<&CMyNetServer>) -> Result<i32, SendMessageError>;
+    /// Server CRC-envelope в очередь WorldServer-клиента.
+    fn send(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError>;
+    /// Тот же server envelope в BillingServer-клиент.
+    fn send_to_bs(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError>;
+    /// Обходит все areas region-а в исходном storage order.
+    fn send_to_region(
+        &self,
+        server_region: Option<&CServerRegion>,
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+    ) -> i32;
+    /// То же через recipient-snapshot.
+    fn send_to_region_snapshot(
+        &self,
+        server_region: &ServerRegionRecipientsSnapshot,
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+    ) -> i32;
+    /// Отправляет игрокам одной area region-а.
+    fn send_to_area(
+        &self,
+        area: Option<(&CServerRegion, &CArea)>,
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+    ) -> i32;
+    /// Сравнение signed argument с zero-extended `m_btCountry`.
+    fn send_to_region_contry_player(
+        &self,
+        server_region: Option<&CServerRegion>,
+        country: i32,
+        game: &CGame,
+    ) -> i32;
+    /// Обходит девять areas в исходном порядке с исходным tile X/Y.
+    fn send_to_around(
+        &self,
+        server_region: Option<&CServerRegion>,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        runtime: &GameServerAroundRuntime<'_>,
+    ) -> Result<i32, ShapeCoordinateBlock>;
+    /// То же с его recipient-snapshot.
+    fn send_to_around_snapshot(
+        &self,
+        server_region: &ServerRegionRecipientsSnapshot,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        runtime: &GameServerAroundRuntime<'_>,
+    ) -> Result<i32, ShapeCoordinateBlock>;
+    /// То же с прямой координатой центра.
+    fn send_to_around_position(
+        &self,
+        server_region: Option<&CServerRegion>,
+        tile_x: i32,
+        tile_y: i32,
+        excluded_player_id: Option<i32>,
+        runtime: &GameServerAroundRuntime<'_>,
+    ) -> i32;
+
+    /// Общий recipient-путь send-family.
+    fn send_to_region_recipients(
+        &self,
+        server_region: RegionMessageRecipients<'_>,
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+    ) -> i32;
+
+    /// Общий around-путь send-family.
+    fn send_to_around_at(
+        &self,
+        server_region: Option<RegionMessageRecipients<'_>>,
+        tile_x: i32,
+        tile_y: i32,
+        main_shape: Option<&CShape>,
+        excluded_player_id: Option<i32>,
+        runtime: &GameServerAroundRuntime<'_>,
+    ) -> i32;
+
+    /// Общий broadcast-путь по спискам map-identity.
+    fn send_player_ids(
+        &self,
+        player_ids: &[i32],
+        excluded_player_id: Option<i32>,
+        game: &CGame,
+        frame: &[u8],
+    );
 }
 
-impl CMessage {
-    pub(crate) fn new(message_type: i32) -> Self {
-        let mut base = CBaseMessage::new();
-        base.set_message_type(message_type);
-        Self {
-            base,
-            region_id: None,
-            player_id: None,
-            map_id: 0,
-            socket_id: 0,
-            ip: 0,
-        }
-    }
-
-    /// Декодирует legacy RLE и создаёт внутреннее Game-сообщение.
-    pub(crate) fn create(compressed: &[u8]) -> Result<Self, CreateMessageError> {
-        if compressed.is_empty() {
-            return Err(CreateMessageError::EmptyInput);
-        }
-        if compressed.len() > u32::MAX as usize {
-            return Err(CreateMessageError::InputOutsideLegacyRange);
-        }
-        let output_capacity = if compressed.len() < SMALL_RLE_INPUT_LIMIT {
-            SMALL_RLE_OUTPUT_CAPACITY
-        } else {
-            compressed
-                .len()
-                .checked_mul(8)
-                .filter(|capacity| *capacity <= u32::MAX as usize)
-                .ok_or(CreateMessageError::RleCapacityOverflowReactionUnknown)?
-        };
-        let decoded = decode_rle(compressed, output_capacity).map_err(CreateMessageError::Rle)?;
-        Self::create_without_rle(&decoded)
-    }
-
-    /// Создаёт входящее сообщение из несжатых header + payload.
-    pub(crate) fn create_without_rle(wire: &[u8]) -> Result<Self, CreateMessageError> {
-        if wire.is_empty() {
-            return Err(CreateMessageError::EmptyInput);
-        }
-        if wire.len() > u32::MAX as usize {
-            return Err(CreateMessageError::InputOutsideLegacyRange);
-        }
-        if wire.len() < MESSAGE_HEADER_LEN {
-            // BLOCKED_MISSING_FACT: Game RVA 0x00013850 проверяет только
-            // ненулевые pointer/len, затем читает header[0..16] и вызывает
-            // Add(wire + 16, len - 16). Реакция для 1..15 bytes не доказана.
-            return Err(CreateMessageError::HeaderTooShortReactionUnknown);
-        }
-        let header = wire[..MESSAGE_HEADER_LEN]
-            .try_into()
-            .expect("длина Game header уже проверена");
-        Ok(Self::from_parts(header, &wire[MESSAGE_HEADER_LEN..]))
-    }
-
-    pub(crate) fn add_byte(&mut self, value: u8) {
-        self.base.add_byte(value);
-    }
-
-    pub(crate) fn add_short(&mut self, value: i16) {
-        self.base.add_short(value);
-    }
-
-    pub(crate) fn add_long(&mut self, value: i32) {
-        self.base.add_long(value);
-    }
-
-    pub(crate) fn add_ulong(&mut self, value: u32) {
-        self.base.add_ulong(value);
-    }
-
-    pub(crate) fn as_wire_bytes(&self) -> &[u8] {
-        self.base.as_wire_bytes()
-    }
-
-    pub(crate) fn unread_bytes(&self) -> &[u8] {
-        self.base.unread_bytes()
-    }
-
-    pub(crate) fn base_mut(&mut self) -> &mut CBaseMessage {
-        &mut self.base
-    }
-
-    /// Присваивает metadata принятого игрового client-соединения.
-    pub(crate) fn apply_client_context(&mut self, context: ServerClientMessageContext<'_>) {
-        self.socket_id = context.socket_id;
-        self.map_id = context.map_id;
-        self.ip = context.peer_ipv4;
-    }
-
-    pub(crate) const fn map_id(&self) -> i32 {
-        self.map_id
-    }
-
-    pub(crate) const fn socket_id(&self) -> i32 {
-        self.socket_id
-    }
-
-    pub(crate) const fn ip(&self) -> u32 {
-        self.ip
-    }
-
-    pub(crate) const fn player_id(&self) -> Option<i32> {
-        self.player_id
-    }
-
-    pub(crate) const fn region_id(&self) -> Option<i32> {
-        self.region_id
-    }
-
-    /// Присваивает уже доказанные raw pointer identities локального caller-а.
-    pub(crate) const fn apply_player_context(&mut self, player_id: i32, region_id: Option<i32>) {
-        self.player_id = Some(player_id);
-        self.region_id = region_id;
-    }
-
+impl GameMessageDomainOps for nebokrai_zone::app::game_message::CMessage {
     /// Exact lazy numeric lookup prefix `Run`, доступный concrete handler-ам,
     /// которые материализованы раньше общего route boundary.
-    pub(crate) fn resolve_player_context(&mut self, game: &CGame) {
-        if self.player_id.is_none() && self.map_id != 0 {
-            self.player_id = game
-                .find_player(self.map_id)
-                .map(|player| player.player_id());
+    fn resolve_player_context(&mut self, game: &CGame) {
+        if self.player_id().is_none() && self.map_id() != 0 {
+            if let Some(player_id) = game
+                .find_player(self.map_id())
+                .map(|player| player.player_id())
+            {
+                let region_id = game
+                    .find_player(player_id)
+                    .and_then(|player| player.server_region_id());
+                self.apply_player_context(player_id, region_id);
+            }
         }
-        if self.region_id.is_none() {
-            self.region_id = self
-                .player_id
-                .and_then(|player_id| game.find_player(player_id))
-                .and_then(|player| player.server_region_id());
+        if self.region_id().is_none() {
+            if let Some(player_id) = self.player_id() {
+                let region_id = game
+                    .find_player(player_id)
+                    .and_then(|player| player.server_region_id());
+                self.apply_player_context(player_id, region_id);
+            }
         }
     }
 
     /// Выполняет exact selector и возвращает ещё не материализованный route.
     /// Уже восстановленные family-dispatcher-ы вызываются `CGame` раньше этой
     /// точки, поэтому результат честно обозначает оставшийся gameplay owner.
-    pub(crate) fn select_game_route(&mut self, game: &CGame) -> Option<GameMessageRoute> {
+    fn select_game_route(&mut self, game: &CGame) -> Option<GameMessageRoute> {
         self.resolve_player_context(game);
 
         let family = self.message_type() as u32 & 0xFFFF_FF00;
-        let player_region = self.player_id.zip(self.region_id);
+        let player_region = self.player_id().zip(self.region_id());
         let route = match family {
             0x0006_F900 | 0x0007_F800 => Some(GameMessageRoute::Server),
             0x0006_FA00 | 0x0007_F900 | 0x0008_F700 => Some(GameMessageRoute::Log),
@@ -479,33 +436,22 @@ impl CMessage {
         route
     }
 
-    pub(crate) fn message_type(&self) -> i32 {
-        self.base.message_type()
-    }
-
-    pub(crate) fn set_message_type(&mut self, message_type: i32) {
-        self.base.set_message_type(message_type);
-    }
-
     /// RLE-отправка одному transport socket; возвращает exact queue result.
-    pub(crate) fn send_to_socket(&self, net_server: &CMyNetServer, socket_id: i32) -> i32 {
+    fn send_to_socket(&self, net_server: &CMyNetServer, socket_id: i32) -> i32 {
         let frame = self.rle_send_frame();
         self.log_oversized_rle("SendToSocket", socket_id, frame.len());
         net_server.send_to_socket(socket_id, &frame)
     }
 
     /// RLE-отправка по numeric player/map identity.
-    pub(crate) fn send_to_player(&self, net_server: &CMyNetServer, player_id: i32) -> i32 {
+    fn send_to_player(&self, net_server: &CMyNetServer, player_id: i32) -> i32 {
         let frame = self.rle_send_frame();
         self.log_oversized_rle("SendToPlayer", player_id, frame.len());
         net_server.send_to_player(player_id, &frame)
     }
 
     /// RLE-broadcast с исходным nullable `s_pNetServer`.
-    pub(crate) fn send_all(
-        &self,
-        net_server: Option<&CMyNetServer>,
-    ) -> Result<i32, SendMessageError> {
+    fn send_all(&self, net_server: Option<&CMyNetServer>) -> Result<i32, SendMessageError> {
         let Some(net_server) = net_server else {
             return Ok(0);
         };
@@ -520,7 +466,7 @@ impl CMessage {
     }
 
     /// Строит server CRC-envelope и ставит его WorldServer-клиенту.
-    pub(crate) fn send(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError> {
+    fn send(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError> {
         let Some(client) = game.world_client() else {
             return Ok(0);
         };
@@ -532,11 +478,7 @@ impl CMessage {
     }
 
     /// Строит тот же server CRC-envelope и ставит его BillingServer-клиенту.
-    pub(crate) fn send_to_bs(
-        &self,
-        game: &CGame,
-        prioritized: bool,
-    ) -> Result<i32, SendMessageError> {
+    fn send_to_bs(&self, game: &CGame, prioritized: bool) -> Result<i32, SendMessageError> {
         let Some(client) = game.billing_client() else {
             return Ok(0);
         };
@@ -548,7 +490,7 @@ impl CMessage {
     }
 
     /// Обходит все areas region-а в исходном storage order.
-    pub(crate) fn send_to_region(
+    fn send_to_region(
         &self,
         server_region: Option<&CServerRegion>,
         excluded_player_id: Option<i32>,
@@ -564,7 +506,7 @@ impl CMessage {
         )
     }
 
-    pub(crate) fn send_to_region_snapshot(
+    fn send_to_region_snapshot(
         &self,
         server_region: &ServerRegionRecipientsSnapshot,
         excluded_player_id: Option<i32>,
@@ -592,7 +534,7 @@ impl CMessage {
     }
 
     /// Отправляет игрокам одной area; owning region заменяет старый father ptr.
-    pub(crate) fn send_to_area(
+    fn send_to_area(
         &self,
         area: Option<(&CServerRegion, &CArea)>,
         excluded_player_id: Option<i32>,
@@ -610,7 +552,7 @@ impl CMessage {
     }
 
     /// Сохраняет исходную опечатку имени и сравнение `int` с unsigned country.
-    pub(crate) fn send_to_region_contry_player(
+    fn send_to_region_contry_player(
         &self,
         server_region: Option<&CServerRegion>,
         country: i32,
@@ -634,7 +576,7 @@ impl CMessage {
         1
     }
 
-    pub(crate) fn send_to_around(
+    fn send_to_around(
         &self,
         server_region: Option<&CServerRegion>,
         origin: &CShape,
@@ -653,7 +595,7 @@ impl CMessage {
         ))
     }
 
-    pub(crate) fn send_to_around_snapshot(
+    fn send_to_around_snapshot(
         &self,
         server_region: &ServerRegionRecipientsSnapshot,
         origin: &CShape,
@@ -672,7 +614,7 @@ impl CMessage {
         ))
     }
 
-    pub(crate) fn send_to_around_position(
+    fn send_to_around_position(
         &self,
         server_region: Option<&CServerRegion>,
         tile_x: i32,
@@ -773,7 +715,7 @@ impl CMessage {
     }
 
     fn rle_send_frame(&self) -> Vec<u8> {
-        let compressed = encode_rle(self.base.as_wire_bytes())
+        let compressed = encode_rle(self.as_wire_bytes())
             .expect("CMessage всегда содержит непустой 16-байтовый header");
         let total_len = compressed.len().wrapping_add(4) as i32;
         let mut frame = Vec::with_capacity(compressed.len().saturating_add(4));
@@ -784,7 +726,6 @@ impl CMessage {
 
     fn server_envelope(&self) -> Result<Vec<u8>, SendMessageError> {
         let total_length = self
-            .base
             .as_wire_bytes()
             .len()
             .checked_add(SERVER_ENVELOPE_LEN)
@@ -794,8 +735,8 @@ impl CMessage {
         let mut envelope = Vec::with_capacity(total_length);
         envelope.extend_from_slice(&total_length_bytes);
         envelope.extend_from_slice(&data_crc32(&total_length_bytes).to_le_bytes());
-        envelope.extend_from_slice(&data_crc32(self.base.as_wire_bytes()).to_le_bytes());
-        envelope.extend_from_slice(self.base.as_wire_bytes());
+        envelope.extend_from_slice(&data_crc32(self.as_wire_bytes()).to_le_bytes());
+        envelope.extend_from_slice(self.as_wire_bytes());
         Ok(envelope)
     }
 
@@ -807,7 +748,7 @@ impl CMessage {
             "MsgType {:>10} ; {route} {:>10} ; OriginSize {:>10} ; CompressedSize {:>10}.",
             self.message_type() as u32,
             subject,
-            self.base.as_wire_bytes().len() as u32,
+            self.as_wire_bytes().len() as u32,
             frame_len as i32,
         );
         put_string_to_file("MsgLen.log", line.as_bytes());
@@ -830,35 +771,4 @@ impl CMessage {
             let _ = game.net_server().send_to_player(player.player_id(), frame);
         }
     }
-
-    fn from_parts(header: [u8; MESSAGE_HEADER_LEN], payload: &[u8]) -> Self {
-        Self {
-            base: CBaseMessage::from_header_and_payload(header, payload),
-            region_id: None,
-            player_id: None,
-            map_id: 0,
-            socket_id: 0,
-            ip: 0,
-        }
-    }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\nets\netserver\message.cpp
-
-// IMPLEMENTED: `CMessage::~CMessage` выражен `Drop` Rust и деструктором
-// `CBaseMessage`; покрытый raw-блок удалён.
-
-// IMPLEMENTED: `CMessage::CMessage(long)` материализован выше; покрытый
-// raw-блок удалён.
-
-// IMPLEMENTED: обе входящие фабрики и `Run` материализованы выше; покрытый
-// raw-псевдокод удалён после сверки точного selector-а и metadata writers.
-
-// CLASSIFIED_TECHNICAL_NOISE: `CMyNetClient` deleting thunk и homogeneous
-// constructor/destructor unwind покрыты `Drop`/RAII соответствующего owner-а.
-
-// COMPONENT_VARIANT_END: GameServer

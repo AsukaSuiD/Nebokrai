@@ -9,6 +9,7 @@
 
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::{debug, trace};
 
 const PET_MODE: u32 = 0x0009_0401;

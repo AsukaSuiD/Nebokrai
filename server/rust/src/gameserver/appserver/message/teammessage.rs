@@ -21,6 +21,7 @@ use crate::gameserver::gameserver::game::{
     game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use tracing::trace;
 
 const SET_RECRUITMENT_STATE: u32 = 0x0008_ff08;

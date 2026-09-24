@@ -20,6 +20,7 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::tools::put_string_to_file;
 
 const PLAYER_LOGIN: u32 = 0x0007_f901;

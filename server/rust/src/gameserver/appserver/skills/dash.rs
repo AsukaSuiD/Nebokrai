@@ -25,6 +25,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::public::tools::get_line_direction;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 

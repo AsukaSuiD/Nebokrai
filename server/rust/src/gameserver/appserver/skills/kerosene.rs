@@ -33,6 +33,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, RegionShapeResolver};
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 
 pub(crate) const KEROSENE_SKILL_ID: u32 = 0xf1;
 const PLAYER_TYPE: i32 = 400;

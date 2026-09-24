@@ -28,6 +28,7 @@ use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::shape::SHAPE_CHANGE_REGION;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::setup::regionrouter::RegionRoutePoint;
 use tracing::{debug, trace};
 

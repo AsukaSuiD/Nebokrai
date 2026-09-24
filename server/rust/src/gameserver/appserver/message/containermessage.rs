@@ -47,6 +47,7 @@ use crate::gameserver::gameserver::game::{
     HandContainerMoveBlock, PlayerHandMoveBlock,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::GameMessageDomainOps;
 use nebokrai_shared::values::CGuid;
 
 const CONTAINER_OBJECT_MOVE: u32 = 0x0009_0301;

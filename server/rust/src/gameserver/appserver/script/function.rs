@@ -460,6 +460,7 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message, colored_text_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::GameMessageDomainOps;
 use crate::public::date::TagTime;
 use nebokrai_shared::values::CGuid;
 use crate::public::tools::put_debug_string;
