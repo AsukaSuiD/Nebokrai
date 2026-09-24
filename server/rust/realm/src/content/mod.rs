@@ -11,6 +11,7 @@ mod scripts;
 pub mod skill;
 pub mod skillfactory;
 mod timetoreturn;
+pub mod variablelist;
 
 pub use clientresource::{
     DefaultClientResourceOwner, DefaultClientResourceReplacement, LOAD_SERVER_RESOURCE_SUCCESS_LOG,
