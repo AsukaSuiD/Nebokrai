@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Zone sessions: CTeam и CTeamate 24 сентября 2026
+
+Сеанс команды `CTeam` (локальные создание/вступление, идентичность, распределение, точная сериализация, AI-контроль проекции) и командный разъём `CTeamate` (приглашение/вход, снимок региона и имени, `Serialize` для `0xBFD03`, пятиминутное окно восстановления) перенесены из `src/gameserver/appserver/session/` в [`zone/src/sessions/`](../../server/rust/zone/src/sessions/). Все зависимости уже были в Zone/Shared, швы не потребовались; старые файлы — тонкие glob-реэкспорты, единственный кодовый потребитель `csessionfactory` работает без правок. Все `pub(crate)` стали `pub`; код перенесён дословно, кроме строк владельца, трёх импортов и переносов rustfmt.
+
+Машинное основание по точной паре GameServer `gameserver.exe` + `GameServer.pdb` в этом проходе проверено для `GetTeamatesAmount` `0x507590`: обход ordered plug-list через два вызова `GetPlugList` `0x470910` (итераторы begin/end), payload plug ID по узлу `+0x8`, виртуальный `QueryPlugByID` по `vtable+0x4C`, счёт только успешных без ended/owner-фильтра. Остальные поведения заголовков (сериализация `0xBFD03..0xBFD09`, окно `PLAYER_LOSE_TIMEOUT_MS 300000`, AI-контроль проекции) сохраняют прежний статус и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Отметка владельца обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Zone replication: around-runtime 24 сентября 2026
 
 Around-runtime GameServer (`GameServerAroundPlayer/Ref`, runtime со span-границей `Option` и snapshot-first разрешением точного ID) перенесён из `src/nets/netserver/message.rs` в [`zone/src/replication/around.rs`](../../server/rust/zone/src/replication/around.rs). Прямые ссылки на `CGame` и `CSessionFactory` заменены typed-швами: `AroundPlayerLookup` (`around_player_view` + `team_session_id`) и `AroundSessionLookup` (`query_session`/`query_plug`) реализованы старым пакетом прямой делегацией через полный путь, без рекурсии на одноимённые inherent методы. Порядок рассылки, фильтры и team-хвост `send_to_around_at` не тронуты; type alias старого пакета с параметрами по умолчанию сохраняет прежние подписи `moveshape`/`player`/`serverregion` без правок, а три вызова `with_player` приняли скалярную форму.
