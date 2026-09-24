@@ -1,8 +1,10 @@
 //! Общие форматы ресурсов; выбор корня и публикация остаются у владельца роли.
 
 mod catalog;
+mod cbattlefairyexpconfig;
 mod contributesetup;
 mod emotion;
+mod fairyexpconf;
 mod filesinfo;
 mod hitlevel;
 mod incrementshoplist;
@@ -25,6 +27,10 @@ mod stringtable_wire;
 mod tradelist;
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
+pub use cbattlefairyexpconfig::{
+    BattleFairyExpDecodeError, BattleFairyExpFileLoadError, BattleFairyExpLoadError,
+    BattleFairyExpLoadReport, BattleFairyExpSerializeError, CBattleFairyExpConfig,
+};
 pub use contributesetup::{
     CContributeSetup, ContributeItem, ContributeSetupDecodeError,
     ContributeSetupFileLoadError, ContributeSetupFormatError, ContributeSetupSerializeError,
@@ -32,6 +38,7 @@ pub use contributesetup::{
 pub use emotion::{
     CEmotion, EmotionDecodeError, EmotionFormatError, EmotionSerializeError,
 };
+pub use fairyexpconf::{CFairyExpConf, FairyExpLoadError};
 pub use filesinfo::{FileInfo, FilesInfo, FilesInfoParseError, PackFileInfo};
 pub use incrementshoplist::{
     CIncrementShopList, IncrementShopDecodeError, IncrementShopGoodsQuery,

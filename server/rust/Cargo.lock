@@ -968,6 +968,7 @@ dependencies = [
  "getrandom 0.4.3",
  "lzo",
  "nom",
+ "quick-xml",
  "uuid",
 ]
 

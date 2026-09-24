@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Shared resources: таблицы опыта fairy и battle fairy 25 сентября 2026
+
+Общие таблицы опыта `CBattleFairyExpConfig` (ordered owner-level map, XML-loader через `quick-xml`, wire-codec) и наследуемый `CFairyExpConf` перенесены из `src/setup/` в [`shared/src/resources/cbattlefairyexpconfig.rs`](../../server/rust/shared/src/resources/cbattlefairyexpconfig.rs) и [`fairyexpconf.rs`](../../server/rust/shared/src/resources/fairyexpconf.rs). Обе роли используют одну реализацию; `quick-xml` добавлен зависимостью Shared с той же версией, прежние `src/setup/*` стали тонкими реэкспортами. Правила сохранены: duplicate level или неполная группа очищает всю map, минимум `MaxLevel - 1` значений, Game decoder создаёт key только при первом exp value и дописывает повторную wire-группу, signed counts.
+
+Происхождение подтверждено заголовками: точные `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`, исходные owners `setup/cbattlefairyexpconfig.*` и `setup/fairyexpconf.*`. Новых свидетельств оригинального поведения в этом шаге не добавлено; доставка таблиц в работающий Game и загрузка XML World этим переносом не проверялись. Изменение сборочной границы ограничено добавлением `quick-xml 0.39.2` в зависимости Shared; версии остальных пакетов в lockfile не менялись.
+
+`cargo check --locked -p nebokrai-shared --lib` в Windows прошёл. Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; `rustfmt` новых Shared-файлов и `git diff --check` прошли. Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Shared resources: ограничения регионов 25 сентября 2026
 
 Ограничения регионов `CRegionSetup` (записи ID/уровень/вклад, текстовый loader и двоичный wire-codec) перенесены из `src/setup/regionsetup.rs` в [`shared/src/resources/regionsetup.rs`](../../server/rust/shared/src/resources/regionsetup.rs). Обе роли используют одну реализацию; прежний `src/setup/regionsetup.rs` стал тонким реэкспортом. Правила сохранены: owner очищается до чтения, при некорректной записи сохраняется уже прочитанный префикс, wire пишет signed count и 12-байтные записи, ключ BTreeMap задаёт порядок и отдельно не сериализуется.
