@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm content: параметры стран WorldServer 25 сентября 2026
+
+World-side `CCountryParam` (Load resource с очисткой шести start/main maps и wire serializer 39 DWORD с main/technology/exile maps) перенесён из `src/worldserver/appworld/country/countryparam.rs` в [`realm/src/content/countryparam.rs`](../../server/rust/realm/src/content/countryparam.rs). Зависимости только в Shared; потребители поимённо (world `runtime`/`game`, `country`, `king`, `handler`, `player`, `worldregion`, `worldcityregion`, `servermessage`, `countrymessage`, `logmessage`, `organsysmessage`, `dbaccess/worlddb/dbcountry`) работают через glob-шим без правок. Game-сторона страны уже находится у `zone/content`, парным потребителем wire остаётся.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): `CCountryParam::AddToByteArray` `0x441F70` позиционно сериализует скаляры — последовательность `[this+Δ]` через writer `0x4A3340` с возрастающими смещениями, как заявляет layout 39 DWORD. Отличающийся порядок technology record (`level, country_power, country_tech_exp` — отличный от порядка загрузки) и семантика Load (шесть maps уже пусты на ошибке ресурса при прежних scalars) сохраняют прежний статус заголовка и заново не дизассемблировались.
+
+Штатный Linux `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошёл без предупреждений; rustfmt и `git diff --check` чисты. Ссылка обновлена в [regions-and-organizations.md](../gameplay/regions-and-organizations.md), отметка в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm content: skill cache CSkillFactory 25 сентября 2026
 
 Skill cache `CSkillFactory` (producer initial-config skill wire: ordered composite-key map `id<<16|level&0xffff`, signed count, slot `u32 length + record`, null slots нулевой длины; usage map byte-key last-write-wins с sentinel `0x7fffffff`) перенесён из `src/worldserver/appworld/skills/skillfactory.rs` в [`realm/src/content/skillfactory.rs`](../../server/rust/realm/src/content/skillfactory.rs) — рядом с уже перенесённой записью одного навыка. Единственная зависимость находится у того же владельца; швы не потребовались. Потребители (world `runtime`, `game`, `servermessage`, `gmmessage`) работают через glob-шим без правок. С этим шагом прежний шим записи навыка в worldserver потерял последнего потребителя: `appworld/skills/skill.rs` удалён вместе с его объявлением модуля и изжившим себя подавлением `dead_code`; сам тип записи остаётся у своего владельца `realm/content/skill.rs`.

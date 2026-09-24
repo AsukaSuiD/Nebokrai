@@ -34,7 +34,7 @@ World связывает территорию, государство и объ�
 
 ## Страна: должности, ресурсы и смена дня
 
-[CCountryHandler](../../server/rust/src/worldserver/appworld/country/countryhandler.rs) хранит страны по `u8` ID и общий поток сообщений top-info. Его `run` сначала удаляет истёкшие сообщения по wrapping ticks, затем вызывает AI стран с королём. При инициализации обновление локального дня следует только за успешной загрузкой БД. [CCountryParam](../../server/rust/src/worldserver/appworld/country/countryparam.rs) задаёт лимиты, должностные требования, технологию и точки возврата; [CCountry](../../server/rust/src/worldserver/appworld/country/country.rs) хранит текущие значения.
+[CCountryHandler](../../server/rust/src/worldserver/appworld/country/countryhandler.rs) хранит страны по `u8` ID и общий поток сообщений top-info. Его `run` сначала удаляет истёкшие сообщения по wrapping ticks, затем вызывает AI стран с королём. При инициализации обновление локального дня следует только за успешной загрузкой БД. [CCountryParam](../../server/rust/realm/src/content/countryparam.rs) задаёт лимиты, должностные требования, технологию и точки возврата; [CCountry](../../server/rust/src/worldserver/appworld/country/country.rs) хранит текущие значения.
 
 В `set_new_day` сначала обнуляются счётчики silence/PK. При первом дне лишь запоминается дата. В дальнейшие дни при наличии короля начисляется доход деревень, затем `new_term` сбрасывает признаки назначения и получения жалованья короля/министров, обрабатывается должность 7 и меняется день. Ошибка начисления может оставить ранние обнуления без завершения остальных стадий.
 

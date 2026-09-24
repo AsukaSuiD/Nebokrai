@@ -2,6 +2,7 @@
 
 pub mod battlefairyproperty;
 mod clientresource;
+pub mod countryparam;
 pub mod goods;
 pub mod organizing;
 mod quests;
