@@ -3515,6 +3515,16 @@ impl nebokrai_realm::activities::leiting::LeiTingPlayerCodec for CPlayer {
     }
 }
 
+impl nebokrai_realm::activities::jjcsystem::JjcPlayerView for CPlayer {
+    fn get_level(&self) -> u8 {
+        self.get_level()
+    }
+
+    fn get_jjc_level(&self) -> u32 {
+        self.get_jjc_level()
+    }
+}
+
 impl nebokrai_realm::characters::playerloadworker::WorldPlayerLoadFactory for CPlayer {
     fn new_database_load_player() -> Self {
         CPlayer::with_clone_decode_constructor_state()

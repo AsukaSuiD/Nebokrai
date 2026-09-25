@@ -4,6 +4,7 @@ pub mod attackcitysys;
 pub mod factionwarsys;
 pub mod fournationwarsys;
 pub mod jjcmaintenanceworker;
+pub mod jjcsystem;
 pub mod leiting;
 pub mod leitingreset;
 pub mod leitingresetworker;

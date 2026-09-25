@@ -17023,6 +17023,56 @@ impl nebokrai_realm::activities::leiting::LeiTingGameView for CGame {
     }
 }
 
+impl nebokrai_realm::activities::jjcsystem::JjcGameView for CGame {
+    fn jjc_online_player(
+        &self,
+        player_id: u32,
+    ) -> Option<&dyn nebokrai_realm::activities::jjcsystem::JjcPlayerView> {
+        self.online_player_by_id(player_id)
+            .map(|player| player as &dyn nebokrai_realm::activities::jjcsystem::JjcPlayerView)
+    }
+
+    fn jjc_map_player(
+        &self,
+        map_key: u32,
+    ) -> Option<&dyn nebokrai_realm::activities::jjcsystem::JjcPlayerView> {
+        self.map_player(map_key)
+            .map(|player| player as &dyn nebokrai_realm::activities::jjcsystem::JjcPlayerView)
+    }
+
+    fn jjc_region_exists(&self, region_id: i32) -> bool {
+        self.region(region_id).is_some()
+    }
+
+    fn jjc_region_game_server(
+        &self,
+        region_id: i32,
+    ) -> Option<nebokrai_realm::activities::jjcsystem::JjcGameServerSnapshot> {
+        self.get_region_game_server(region_id).map(|entry| {
+            nebokrai_realm::activities::jjcsystem::JjcGameServerSnapshot {
+                connected: entry.connected,
+                index: entry.index,
+            }
+        })
+    }
+
+    fn jjc_player_game_server(
+        &self,
+        player_id: i32,
+    ) -> Option<nebokrai_realm::activities::jjcsystem::JjcGameServerSnapshot> {
+        self.player_game_server(player_id).map(|entry| {
+            nebokrai_realm::activities::jjcsystem::JjcGameServerSnapshot {
+                connected: entry.connected,
+                index: entry.index,
+            }
+        })
+    }
+
+    fn jjc_game_server_sender(&self) -> Option<ServerCommandHandle> {
+        self.current_game_server_sender()
+    }
+}
+
 pub(crate) fn create_game(
     game: &mut Option<Box<CGame>>,
 ) -> Result<WorldCreateGameReport, WorldCreateGameBlock> {
