@@ -131,7 +131,7 @@ use super::game::{
     WorldMainLoopConfiguration, WorldMainLoopOwners, WorldMainLoopResourceContext,
     WorldMainLoopResourceSnapshot, WorldRefreshExternalCounts,
     WorldMainLoopLargessState, WorldMainLoopLoginReleaseState, WorldMainLoopProfileState,
-    WorldMainLoopStateOwners, WorldMainLoopTailClockState, WorldPlayerDataLoadOwner,
+    WorldMainLoopStateOwners, WorldMainLoopTailClockState,
     WorldPlayerLoadDataAdapter, WorldPlayerRanksRequestState, WorldProcessMessageStageState,
     WorldRegionOwner, WorldReloadContext, WorldReloadProfileFlags, WorldRunSaveTriggerState,
     WorldSaveRuntimeContext, WorldSaveThreadHandleState,
@@ -150,6 +150,7 @@ use super::jjcmaintenanceworker::{
 use super::leitingresetworker::{
     WorldLeiTingResetWorker, WorldLeiTingResetWorkerEvent,
 };
+use super::playerloadworker::WorldPlayerDataLoadOwner;
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
 
 /// Стабильные typed-ключи всех callback-ов единственного World timer-owner-а.
@@ -2284,7 +2285,7 @@ impl WorldGameInitContext for WorldProcessInitContext {
     }
 }
 
-impl WorldPlayerDataLoadOwner for WorldProcessPlayerLoadDatabase {
+impl WorldPlayerDataLoadOwner<CPlayer> for WorldProcessPlayerLoadDatabase {
     fn load_player_data<'a>(
         &'a mut self,
         player: &'a mut CPlayer,

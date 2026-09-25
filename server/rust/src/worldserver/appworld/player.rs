@@ -3524,6 +3524,22 @@ impl nebokrai_realm::characters::honorranks::HonorRankPlayerView for CPlayer {
     }
 }
 
+impl nebokrai_realm::characters::playerdataqueue::PlayerDataResetHonorEliminate for CPlayer {
+    fn reset_honor_eliminate_info(&mut self, rank_mask: u32) {
+        CPlayer::reset_honor_eliminate_info(self, rank_mask);
+    }
+}
+
+impl nebokrai_realm::characters::playerloadworker::WorldPlayerLoadFactory for CPlayer {
+    fn new_database_load_player() -> Self {
+        CPlayer::with_clone_decode_constructor_state()
+    }
+
+    fn set_database_load_identity(&mut self, player_id: i32, account: &[u8]) {
+        CPlayer::set_database_load_identity(self, player_id, account);
+    }
+}
+
 fn append_player_count(
     destination: &mut Vec<u8>,
     field: &'static str,

@@ -55,9 +55,7 @@ use crate::dbaccess::worlddb::largess::{
     CostDatabaseSettings, CostDatabaseSettingsParts, LargessOwner, LoadLargessBlock,
     LoadLargessReport, TiberiusLargess,
 };
-use crate::dbaccess::worlddb::playerdataqueue::{
-    CPlayerDataQueue, PlayerDataQueueEntry,
-};
+use crate::dbaccess::worlddb::playerdataqueue::CPlayerDataQueue;
 use crate::dbaccess::worlddb::playerloadqueue::{
     CPlayerLoadQueue, PLAYER_LOAD_CDKEY_CAPACITY, PlayerLoadPushOutcome,
     PlayerLoadQueueEntry,
@@ -488,7 +486,11 @@ use crate::worldserver::worldserver::leitingresetworker::{
 use crate::worldserver::worldserver::jjcmaintenanceworker::{
     WorldJjcWeekClearWorker, WorldJjcWeekClearWorkerEvent,
 };
-use crate::worldserver::worldserver::playerloadworker::WorldPlayerLoadWorkerPool;
+use crate::worldserver::worldserver::playerloadworker::{
+    WorldGameInitWorkerHandleState, WorldPlayerDataLoadOwner, WorldPlayerLoadBatchBlock,
+    WorldPlayerLoadBatchReport, WorldPlayerLoadWorkerBlock, WorldPlayerLoadWorkerPool,
+    WorldPlayerLoadWorkerReport, WorldPlayerLoadWorkerSpec,
+};
 use crate::worldserver::worldserver::writelogworker::{
     WorldWriteLogWorker, WorldWriteLogWorkerSpec,
 };
@@ -669,12 +671,6 @@ pub(crate) enum WorldGameInitBooleanOwner {
     InitializeAttackCity,
     InitializeFourNationWar,
     InitializeVillageWar,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldGameInitWorkerHandleState {
-    Open,
-    Empty,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -870,7 +866,7 @@ pub(crate) trait WorldGameInitContext {
     type UnionDatabase: RsUnionOwner;
     type FactionDatabase: RsFactionOwner;
     type CountryDatabase: DbCountryOwner;
-    type PlayerLoadDatabase: WorldPlayerDataLoadOwner + Send + 'static;
+    type PlayerLoadDatabase: WorldPlayerDataLoadOwner<CPlayer> + Send + 'static;
     type PlayerLoadLargess: FnMut(&mut CPlayer) + Send + 'static;
     type PlayerLoadClock: FnMut() -> u32 + Send + 'static;
 
@@ -2307,13 +2303,6 @@ pub(crate) enum WorldPlayerLoadRequestOutcome {
     Duplicate,
 }
 
-pub(crate) trait WorldPlayerDataLoadOwner {
-    fn load_player_data<'a>(
-        &'a mut self,
-        player: &'a mut CPlayer,
-    ) -> impl Future<Output = bool> + 'a;
-}
-
 /// Связывает полный `CPlayer::LoadData` с bool-контрактом фонового World worker-а.
 ///
 /// DB-owner, player-list и setup snapshots остаются явно принадлежащими
@@ -2342,7 +2331,7 @@ impl<'owner, Loader> WorldPlayerLoadDataAdapter<'owner, Loader> {
     }
 }
 
-impl<Loader> WorldPlayerDataLoadOwner for WorldPlayerLoadDataAdapter<'_, Loader>
+impl<Loader> WorldPlayerDataLoadOwner<CPlayer> for WorldPlayerLoadDataAdapter<'_, Loader>
 where
     Loader: PlayerLoadDataOwner,
 {
@@ -2397,242 +2386,6 @@ where
                     false
                 }
             }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerLoadBatchRecordOutcome {
-    SkippedZeroPlayerId,
-    Loaded,
-    LoadFailed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerLoadBatchRecordReport {
-    pub(crate) player_id: i32,
-    pub(crate) client_ip: u32,
-    pub(crate) started_at_ms: Option<u32>,
-    pub(crate) finished_at_ms: Option<u32>,
-    pub(crate) elapsed_ms: Option<u32>,
-    pub(crate) outcome: WorldPlayerLoadBatchRecordOutcome,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerLoadBatchReport {
-    pub(crate) worker_index: u32,
-    pub(crate) drained_records: usize,
-    pub(crate) records: Vec<WorldPlayerLoadBatchRecordReport>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerLoadBatchBlock {
-    pub(crate) worker_index: u32,
-    pub(crate) player_id: i32,
-    pub(crate) processed_records: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerLoadWorkerExit {
-    GameThread,
-    PlayerLoadThreads,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerLoadWorkerReport {
-    pub(crate) worker_index: u32,
-    pub(crate) completed_batches: u32,
-    pub(crate) drained_records: u32,
-    pub(crate) exit: WorldPlayerLoadWorkerExit,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerLoadWorkerBlock {
-    pub(crate) worker_index: u32,
-    pub(crate) completed_batches: u32,
-    pub(crate) drained_records: u32,
-    pub(crate) source: WorldPlayerLoadBatchBlock,
-}
-
-/// Cloneable queue-owner, который можно безопасно передать системному
-/// `LoadPlayerDataFromDB` потоку без передачи всего mutable `CGame`.
-#[derive(Clone)]
-pub(crate) struct WorldPlayerLoadWorkerSpec {
-    player_load_queue: CPlayerLoadQueue,
-    player_data_queue: CPlayerDataQueue,
-}
-
-impl WorldPlayerLoadWorkerSpec {
-    pub(crate) const fn new(
-        player_load_queue: CPlayerLoadQueue,
-        player_data_queue: CPlayerDataQueue,
-    ) -> Self {
-        Self {
-            player_load_queue,
-            player_data_queue,
-        }
-    }
-
-    pub(crate) async fn process_batch<Loader, LoadLargess, GetTick>(
-        &self,
-        worker_index: u32,
-        loader: &mut Loader,
-        load_largess: &mut LoadLargess,
-        mut get_tick: GetTick,
-    ) -> Result<WorldPlayerLoadBatchReport, WorldPlayerLoadBatchBlock>
-    where
-        Loader: WorldPlayerDataLoadOwner + ?Sized,
-        LoadLargess: FnMut(&mut CPlayer) + ?Sized,
-        GetTick: FnMut() -> u32,
-    {
-        let mut drained = self.player_load_queue.pop_player_load_data_to_list();
-        let drained_records = drained.len();
-        if drained_records != 0 {
-            put_string_to_file(
-                "TemptLoadDataLog",
-                format!(
-                    "Thread {} Need To Process {} DB Request.",
-                    worker_index as i32, drained_records as u32 as i32,
-                )
-                .as_bytes(),
-            );
-        }
-
-        let mut records = Vec::with_capacity(drained_records);
-        while let Some(entry) = drained.pop_front() {
-            let player_id = entry.player_id();
-            let client_ip = entry.client_ip();
-            if player_id == 0 {
-                records.push(WorldPlayerLoadBatchRecordReport {
-                    player_id,
-                    client_ip,
-                    started_at_ms: None,
-                    finished_at_ms: None,
-                    elapsed_ms: None,
-                    outcome: WorldPlayerLoadBatchRecordOutcome::SkippedZeroPlayerId,
-                });
-                continue;
-            }
-            let Some(account) = entry.cdkey().map(<[u8]>::to_vec) else {
-                return Err(WorldPlayerLoadBatchBlock {
-                    worker_index,
-                    player_id,
-                    processed_records: records.len(),
-                });
-            };
-
-            let started_at_ms = get_tick();
-            put_string_to_file(
-                "TemptLoadDataLog",
-                format!(
-                    "{} Request Read DB Start. (PID:{})",
-                    player_id, worker_index as i32,
-                )
-                .as_bytes(),
-            );
-
-            let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
-            player.set_database_load_identity(player_id, &account);
-            let loaded = loader.load_player_data(&mut player).await;
-            let mut player = if loaded {
-                Some(player)
-            } else {
-                put_string_to_file(
-                    "debug-DB",
-                    format!("Read Player DB Error. (ID:{player_id})").as_bytes(),
-                );
-                None
-            };
-
-            if let Some(player) = player.as_deref_mut() {
-                load_largess(player);
-            }
-            let fixed_account = entry.fixed_cdkey();
-            let _ = self
-                .player_data_queue
-                .push_player_data(PlayerDataQueueEntry::new(
-                    fixed_account,
-                    player_id as u32,
-                    client_ip,
-                    player,
-                ));
-
-            let finished_at_ms = get_tick();
-            let elapsed_ms = finished_at_ms.wrapping_sub(started_at_ms);
-            put_string_to_file(
-                "TemptLoadDataLog",
-                format!(
-                    "{} Read DB End. (PID:{}) (time:{})",
-                    player_id, worker_index as i32, elapsed_ms,
-                )
-                .as_bytes(),
-            );
-            records.push(WorldPlayerLoadBatchRecordReport {
-                player_id,
-                client_ip,
-                started_at_ms: Some(started_at_ms),
-                finished_at_ms: Some(finished_at_ms),
-                elapsed_ms: Some(elapsed_ms),
-                outcome: if loaded {
-                    WorldPlayerLoadBatchRecordOutcome::Loaded
-                } else {
-                    WorldPlayerLoadBatchRecordOutcome::LoadFailed
-                },
-            });
-        }
-
-        Ok(WorldPlayerLoadBatchReport {
-            worker_index,
-            drained_records,
-            records,
-        })
-    }
-
-    pub(crate) async fn run<Loader, LoadLargess, GetTick>(
-        &self,
-        worker_index: u32,
-        game_thread_exit: &AtomicBool,
-        player_load_threads_exit: &AtomicBool,
-        loader: &mut Loader,
-        load_largess: &mut LoadLargess,
-        mut get_tick: GetTick,
-    ) -> Result<WorldPlayerLoadWorkerReport, WorldPlayerLoadWorkerBlock>
-    where
-        Loader: WorldPlayerDataLoadOwner + ?Sized,
-        LoadLargess: FnMut(&mut CPlayer) + ?Sized,
-        GetTick: FnMut() -> u32,
-    {
-        let mut completed_batches = 0_u32;
-        let mut drained_records = 0_u32;
-        loop {
-            let exit = if game_thread_exit.load(Ordering::Relaxed) {
-                Some(WorldPlayerLoadWorkerExit::GameThread)
-            } else if player_load_threads_exit.load(Ordering::Relaxed) {
-                Some(WorldPlayerLoadWorkerExit::PlayerLoadThreads)
-            } else {
-                None
-            };
-            if let Some(exit) = exit {
-                return Ok(WorldPlayerLoadWorkerReport {
-                    worker_index,
-                    completed_batches,
-                    drained_records,
-                    exit,
-                });
-            }
-
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            let batch = self
-                .process_batch(worker_index, loader, load_largess, &mut get_tick)
-                .await
-                .map_err(|source| WorldPlayerLoadWorkerBlock {
-                    worker_index,
-                    completed_batches,
-                    drained_records,
-                    source,
-                })?;
-            completed_batches = completed_batches.wrapping_add(1);
-            drained_records = drained_records.wrapping_add(batch.drained_records as u32);
         }
     }
 }
@@ -16700,7 +16453,7 @@ impl CGame {
         get_tick: GetTick,
     ) -> Result<WorldPlayerLoadBatchReport, WorldPlayerLoadBatchBlock>
     where
-        Loader: WorldPlayerDataLoadOwner + ?Sized,
+        Loader: WorldPlayerDataLoadOwner<CPlayer> + ?Sized,
         LoadLargess: FnMut(&mut CPlayer) + ?Sized,
         GetTick: FnMut() -> u32,
     {
@@ -16719,7 +16472,7 @@ impl CGame {
         get_tick: GetTick,
     ) -> Result<WorldPlayerLoadWorkerReport, WorldPlayerLoadWorkerBlock>
     where
-        Loader: WorldPlayerDataLoadOwner + ?Sized,
+        Loader: WorldPlayerDataLoadOwner<CPlayer> + ?Sized,
         LoadLargess: FnMut(&mut CPlayer) + ?Sized,
         GetTick: FnMut() -> u32,
     {
