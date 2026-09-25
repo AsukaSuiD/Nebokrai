@@ -2,3 +2,4 @@
 
 pub mod playerexploit;
 pub mod playerloadqueue;
+pub mod playerranks;

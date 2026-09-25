@@ -7401,6 +7401,34 @@ impl COrganizingCtrl {
     }
 }
 
+impl nebokrai_realm::characters::playerranks::PlayerRankOrganizingLookup for COrganizingCtrl {
+    fn faction_lookup_of_player(
+        &self,
+        player_id: i32,
+    ) -> nebokrai_realm::characters::playerranks::PlayerRankFactionLookup {
+        match self.is_free_player(player_id) {
+            FreePlayerLookup::NoFaction => {
+                nebokrai_realm::characters::playerranks::PlayerRankFactionLookup::NoFaction
+            }
+            FreePlayerLookup::Faction(faction_id) => {
+                nebokrai_realm::characters::playerranks::PlayerRankFactionLookup::Faction(
+                    faction_id,
+                )
+            }
+            FreePlayerLookup::BlockedNullFaction { map_key } => {
+                nebokrai_realm::characters::playerranks::PlayerRankFactionLookup::NullFaction {
+                    map_key,
+                }
+            }
+        }
+    }
+
+    fn faction_name_of_id(&self, faction_id: i32) -> Option<Vec<u8>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.name().to_vec())
+    }
+}
+
 impl FactionOperationAuthorityContext for COrganizingCtrl {
     type Block = FactionUnionMembershipLookupBlock;
 
