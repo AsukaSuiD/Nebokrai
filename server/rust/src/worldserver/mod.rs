@@ -152,7 +152,6 @@ pub(crate) mod appworld {
     }
     pub(crate) mod player;
     pub(crate) mod region;
-    pub(crate) mod shape;
     pub(crate) mod script {
         #[allow(
             dead_code,
@@ -182,7 +181,6 @@ pub(crate) mod appworld {
     )]
     pub(crate) mod worldregion;
     pub(crate) mod worldvillageregion;
-    pub(crate) mod worldwarregion;
 }
 
 #[allow(

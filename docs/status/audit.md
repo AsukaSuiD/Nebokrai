@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm regions: city-надстройка — семья мировых регионов собрана 25 сентября 2026
+
+`CWorldCityRegion` перенесён в [`realm/regions/worldcityregion.rs`](../../server/rust/realm/src/regions/worldcityregion.rs): war-base с символами `3/3/2`, `.city` с 0x2C scalar bytes и resolved name/script ворот, пять читаемых полей defence setup против восьми в serializer (неинициализированные DWORD конструктора получают нули safe-заменой вместо исходного UB), `Load` успешен только при успешных War/City loaders, включённом return setup и совпадении обоих return region IDs; `set_enter_pos_xy` с active-state guard, defender/defence RECT против attacker base return point с сохранённой странностью нулевых span-регистров и no-op decoder без движения cursor. Все зависимости уже имели realm-владельцев (CWorldWarRegion прошлой волной; `CAttackCitySys`, `ECityState`, `CCountryParam`, игрок и region/shape-типы — ранее), старый файл стал glob-шимом. Каскадом удалены мёртвые shim-пути `appworld/shape.rs` и `appworld/worldwarregion.rs` с их mod-декларациями — последних потребителей не осталось. Семья `appworld/world*region.rs` собрана полностью: base, war, village, country-war, city.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): публичные символы сборки содержат семейство city-региона. Формат tagBuild, список пяти читаемых defence-полей и return-guard сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений после отклика на два каскадных мёртвых shim-пути. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm regions: country-war надстройка мирового региона 25 сентября 2026
 
 `WorldCountryWarRegion` перенесён в [`realm/regions/worldcountrywarregion.rs`](../../server/rust/realm/src/regions/worldcountrywarregion.rs): после base Load owner читает `regions/{id}.country`, missing resource сохраняет прежние списки; парсер defend/attack секций gates/flags/areas с `<end>`-терминатором и wire — base, шесть signed counts и ordered records (gate 0x2C с двумя C-строками, flag 0x28, area 0x14), имена/scripts byte-exact без StringTable. Зависимости уже имели realm-владельцев (CWorldRegion и resource-контекст прошлыми волнами); старый файл стал glob-шимом, потребитель world game dispatch работает без правок. City-надстройка остаётся последним файлом семьи за своим шагом.
