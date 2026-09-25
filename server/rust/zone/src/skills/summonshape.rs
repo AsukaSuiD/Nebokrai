@@ -68,9 +68,11 @@
 //!   `[esi+0xD8]`. Расширенный хвост: счётчик
 //!   `n = ([esi+0xB0] / [esi+0xC4]) * k2(level) * k1(level)`, где k1/k2
 //!   выбираются по уровню 1/2/3 (иначе k1(1)/k2(1)) из глобальных RVA
-//!   `0x2A52C4`/`0x2A52CC`/`0x2A52D4` (k1) и `0x2A52C8`/`0x2A52D0`/
-//!   `0x2A52D8` (k2). Префикс совпадает, расширение не перенесено; смысл
-//!   таблиц коэффициентов — UNKNOWN.
+//!   `0x2A52C4`/`0x2A52CC`/`0x2A52D4` (k1 = `g_dwLevelOne/Two/ThreeLength`)
+//!   и `0x2A52C8`/`0x2A52D0`/`0x2A52D8` (k2 = `…Height`); семантика
+//!   снята машинно: это размеры области по уровням, для этой сборки 5×5
+//!   на всех уровнях → `n = ticks·25` независимо от уровня. Префикс
+//!   совпадает, расширение не перенесено.
 //! - RVA `0x1F9750` (VA `0x5F9750`): `CFallingStarPhalanx`,
 //!   `CMeteorArrowPhalanx`; уровень `[esi+0xEC]`. Расширенный хвост:
 //!   счётчик `n = [esi+0xE4]`. Префикс совпадает, расширение не перенесено.
@@ -90,9 +92,23 @@
 //! `[esi+0xC4]` как i32, счётчик `n` как i32 и `8*n` сырых байт по
 //! указателю из `[esi+0xBC]` через helper RVA `0x7AD90` (VA `0x47AD90`) —
 //! raw-append `(vector, ptr, byte_count)`; различается только вычисление
-//! `n`. Семантика полей `[esi+0xB0/0xBC/0xC4/0xDC/0xE4]` и content массива
-//! — UNKNOWN, устанавливается per-phalanx порциями владельцев. Символов
-//! `*Masked*` в PDB этой сборки нет.
+//! `n`. Семантика полей снята машинно (PDB TPI + дизассембл write-sites):
+//! `+0xB0` = `m_dwLifeTime` (полный срок жизни, мс timeGetTime-шкалы),
+//! `+0xBC` = `tagCell* m_pCells` (массив клеток `{long lX, long lY}` —
+//! абсолютные tile-координаты точек удара; источник raw-блока — сам
+//! указатель, не двойное разыменование), `+0xC4` = `m_dwFrequency`
+//! (период тика, мс; из `QueryProperty(6001)`), `+0xDC` = `m_dwNumTargets`
+//! (клеток на тик; из `QueryProperty(20010)`; у FallingStar-семейства то
+//! же смещение — `m_lCCH`), `+0xE4` = `m_dwNumArrows` (FallingStar/Meteor;
+//! у GT-семейства — `m_lCCH`). Серверный массив имеет страйд `H·L` на
+//! тик; wire-счётчик GT = `ticks·NumTargets` — самосогласован при конфиге
+//! `NumTargets == Length·Height` (INFERRED: значения конфига вне машинного
+//! основания). Wire-dword после префикса сериализуется, но на декоде
+//! пропускается (skip 8 байт — читается `m_dwFrequency`); `NumTargets`,
+//! `NumArrows`, `m_dwAttackCount`, `m_pScope` декодом НЕ восстанавливаются
+//! (особенность оригинала). Клиентское визуальное чтение массива —
+//! UNKNOWN (клиентская сборка не разбиралась). Символов `*Masked*` в PDB
+//! этой сборки нет.
 //!
 //! Двойное чтение часов: VERIFIED_DISASSEMBLY. `GetRemainedTime` обращается
 //! к часам дважды через IAT `0x64B264` (это `WINMM!timeGetTime`): первое
@@ -107,6 +123,13 @@
 //! End, `CScope`, decode) пока остаётся у прежнего владельца; метаданные её
 //! исследования хранятся в evidence-блоке
 //! `src/gameserver/appserver/summonshape.rs`.
+//!
+//! Ветви диспетчера живых форм `SummonedSkillShape` для ChaosSphere,
+//! GodThunder, MaskedElement (FireWall и YinYang), FireBall и GodPunishment
+//! порцией замыкания оканчиваются в владельцах `chaossphere`, `godthunder`,
+//! `masked_area` и `projectile`: живые композиты перенесены туда буквально.
+//! Сам enum и правило счётчика ID остаются у прежнего владельца `CGame` до
+//! последней per-phalanx порции.
 
 use crate::regions::shape::CShape;
 use nebokrai_shared::protocol::LegacyWriter;
