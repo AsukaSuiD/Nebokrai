@@ -149,10 +149,13 @@
 //! Ядра weather tick/change, return-setup fallback и war-фазовые с
 //! ownership/state accessors делегированы Zone
 //! `regions/serverregion/{weather,returnsetup,war}` без смены сигнатур.
-//! NPC/monster setup data-контракты и ядро инициализации создаваемого NPC
-//! делегированы Zone `regions/serverregion/spawnsetup` через write-шов
-//! `SpawnedNpcAccess`; factory-ветвь `CreateObject(500, id)` остаётся в
-//! `appserver/baseobject.rs`, batch-цикл `AddNpc` — у этого агрегата.
+//! NPC/monster setup data-контракты, ядро инициализации создаваемого NPC и
+//! batch-ядра `AddNpc`/`AddMonsterRect` с телом `AddMonster` делегированы Zone
+//! `regions/serverregion/spawnsetup` через write-швы `SpawnedNpcAccess`/
+//! `SpawnedMonsterAccess` и store-трейты над хранилищами этого агрегата;
+//! factory-ветви `CreateObject(500/600, id)` остаются в
+//! `appserver/baseobject.rs`, а context log/send/guard-обвязки и trace —
+//! у этого агрегата в исходном порядке.
 //! Достигнутый player-leave call из `RemoveObject` попадает в тот же exact
 //! `ret 4` RVA `0x00201A70`, поэтому отдельного наблюдаемого эффекта не имеет.
 //! Packet↔ground проход владеет созданными им `CGoods`, точной 49-cell
@@ -185,8 +188,8 @@ use super::moveshape::{
 use super::npc::CNpc;
 use super::player::CPlayer;
 use super::region::{
-    CRegion, RegionCellAccessBlock, RegionDecodeError, RegionRandomContext, RegionResourceWrite,
-    RegionReturnPoint, RegionStorageBlock,
+    CRegion, RegionCellAccessBlock, RegionDecodeError, RegionRandomContext, RegionRandomPosition,
+    RegionResourceWrite, RegionReturnPoint, RegionStorageBlock,
 };
 use super::shape::{
     BaseShapePositionDispatch, CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeFigure,
@@ -199,9 +202,7 @@ use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::public::netsession::{
     NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
 };
-use crate::setup::monsterlist::{
-    MonsterProperties, MonsterRegistry, get_monster_property_by_origin_name,
-};
+use crate::setup::monsterlist::{MonsterProperties, MonsterRegistry};
 
 pub(crate) use nebokrai_zone::regions::regionparam::RegionParamState;
 pub(crate) use nebokrai_zone::regions::serverregion::{
@@ -412,6 +413,190 @@ impl SpawnedNpcAccess for CNpc {
     }
 }
 
+/// Write-шов Zone-ядер batch spawn монстров: делегирует тем же
+/// inherent-methods `CMonster` без изменения их сигнатур и порядка.
+impl SpawnedMonsterAccess for CMonster {
+    fn spawned_monster_shape(&mut self) -> &mut CShape {
+        self.move_shape_mut().shape_mut()
+    }
+
+    fn bind_monster_spawn_property(&mut self, property: &MonsterProperties) {
+        self.bind_spawn_property(property);
+    }
+
+    fn initialize_spawn_skills(
+        &mut self,
+        property: &MonsterProperties,
+        factory: &CSkillFactory,
+        random: &mut impl FnMut(i32) -> i32,
+    ) {
+        self.initialize_skills(property, factory, random);
+    }
+
+    fn initialize_spawn_ai(&mut self, property: &MonsterProperties, now_ms: u32) {
+        self.initialize_ai(property, now_ms);
+    }
+
+    fn assign_spawn_speed(&mut self, property: &MonsterProperties) {
+        self.set_spawn_speed(property);
+    }
+
+    fn spawn_figure(property: &MonsterProperties) -> ShapeFigure {
+        CMonster::figure(property)
+    }
+
+    fn set_spawn_refresh_data(
+        &mut self,
+        sign: u16,
+        leader_sign: u16,
+        leader_distance: u16,
+        refresh_index: i32,
+    ) {
+        self.set_refresh_data(sign, leader_sign, leader_distance, refresh_index);
+    }
+
+    fn set_spawn_script_file(&mut self, script: &[u8]) {
+        self.set_script_file(script);
+    }
+}
+
+/// Store-шов Zone-ядра batch-цикла `AddNpc` над переходными хранилищами
+/// агрегата: factory type `500`, монотонные счётчики и membership-вход через
+/// `add_object` с прежним RTTI-фактом и entry-effects обвязки.
+impl ServerRegionNpcSpawnStore for CServerRegion {
+    type Npc = CNpc;
+
+    fn remember_npc_setup(&mut self, setup: &ServerRegionNpcSetup) {
+        self.npc_setups.push(setup.clone());
+    }
+
+    fn take_next_npc_id(&mut self) -> i32 {
+        self.next_npc_id.take()
+    }
+
+    fn create_spawned_npc(&mut self, id: i32) -> CNpc {
+        crate::gameserver::appserver::baseobject::create_npc(id)
+    }
+
+    fn bump_total_spawned_npcs(&mut self) {
+        self.total_spawned_npcs = self.total_spawned_npcs.wrapping_add(1);
+    }
+
+    fn random_npc_position<Context: RegionRandomContext>(
+        &self,
+        left: i32,
+        top: i32,
+        range_width: i32,
+        range_height: i32,
+        context: &mut Context,
+    ) -> Result<RegionRandomPosition, RegionCellAccessBlock> {
+        self.region
+            .get_random_pos_in_range(left, top, range_width, range_height, context)
+    }
+
+    fn enter_spawned_npc<Context: RegionRandomContext>(
+        &mut self,
+        npc: &mut CNpc,
+        facts: ShapeRuntimeFacts,
+        area_width: i32,
+        area_height: i32,
+        spawn_tick_ms: u32,
+        context: &mut Context,
+    ) -> Result<(), RegionMembershipBlock> {
+        self.add_object(
+            npc.move_shape_mut(),
+            facts,
+            area_width,
+            area_height,
+            spawn_tick_ms,
+            context,
+        )
+    }
+
+    fn publish_owned_npc(&mut self, id: i32, npc: CNpc) {
+        self.owned_npcs.insert(id, npc);
+    }
+
+    fn owned_npc(&self, id: i32) -> Option<&CNpc> {
+        self.owned_npcs.get(&id)
+    }
+}
+
+/// Store-шов Zone-ядер `AddMonsterRect`/`AddMonster` над переходными
+/// хранилищами агрегата: живые setup-записи с их living счётчиками, factory
+/// type `600`, монотонные счётчики, membership-вход через `add_object` и
+/// owned `MonsterWorld`.
+impl ServerRegionMonsterSpawnStore for CServerRegion {
+    type Monster = CMonster;
+
+    fn remember_monster_setup(&mut self, setup: &ServerRegionMonsterSetup) {
+        self.monster_setups.push(setup.clone());
+    }
+
+    fn monster_setup_index(&self, index: i32) -> Option<usize> {
+        self.monster_setups
+            .iter()
+            .position(|candidate| candidate.index == index)
+    }
+
+    fn monster_setup(&self, setup_index: usize) -> &ServerRegionMonsterSetup {
+        &self.monster_setups[setup_index]
+    }
+
+    fn bump_monster_living_count(&mut self, setup_index: usize) {
+        let setup = &mut self.monster_setups[setup_index];
+        setup.living_count = setup.living_count.wrapping_add(1);
+    }
+
+    fn take_next_monster_id(&mut self) -> i32 {
+        self.next_monster_id.take()
+    }
+
+    fn create_spawned_monster(&mut self, id: i32) -> CMonster {
+        crate::gameserver::appserver::baseobject::create_monster(id)
+    }
+
+    fn bump_total_spawned_monsters(&mut self) {
+        self.total_spawned_monsters = self.total_spawned_monsters.wrapping_add(1);
+    }
+
+    fn random_monster_position<Context: RegionRandomContext>(
+        &self,
+        left: i32,
+        top: i32,
+        range_width: i32,
+        range_height: i32,
+        context: &mut Context,
+    ) -> Result<RegionRandomPosition, RegionCellAccessBlock> {
+        self.region
+            .get_random_pos_in_range(left, top, range_width, range_height, context)
+    }
+
+    fn enter_spawned_monster<Context: RegionRandomContext>(
+        &mut self,
+        monster: &mut CMonster,
+        facts: ShapeRuntimeFacts,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<(), RegionMembershipBlock> {
+        self.add_object(monster, facts, area_width, area_height, now_ms, context)
+    }
+
+    fn publish_owned_monster(&mut self, id: i32, monster: CMonster) {
+        self.owned_monsters.insert(id, monster);
+    }
+
+    fn owned_monster(&self, id: i32) -> Option<&CMonster> {
+        self.owned_monsters.get(&id)
+    }
+
+    fn owned_monster_mut(&mut self, id: i32) -> Option<&mut CMonster> {
+        self.owned_monsters.get_mut(&id)
+    }
+}
+
 pub(crate) trait ServerRegionNpcSpawnEffectsContext: ServerRegionMembershipContext {
     /// Сохраняет `GS0233` owner-side log при отсутствии свободной позиции.
     fn log_npc_position_failure(&mut self, npc_name: &[u8]);
@@ -440,13 +625,6 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMonsterEffectsContext {
     /// Virtual `AddGuardIndex(refreshIndex)` после записи refresh metadata
     /// для guard AI 10/11; это регистрация, не немедленный region refresh.
     fn register_guard_index(&mut self, refresh_index: i32);
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ServerRegionMonsterRectBlock {
-    MissingRefreshSetup { index: i32 },
-    RandomPosition(RegionCellAccessBlock),
-    Membership(RegionMembershipBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -766,101 +944,32 @@ impl CServerRegion {
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
-        if remember_setup {
-            self.monster_setups.push(setup.clone());
-        }
-        let Some(setup_index) = self
-            .monster_setups
-            .iter()
-            .position(|candidate| candidate.index == setup.index)
-        else {
-            return Err(ServerRegionMonsterRectBlock::MissingRefreshSetup { index: setup.index });
-        };
-
-        let mut created = 0usize;
-        let mut missing_properties = 0usize;
-        let mut remaining = amount;
-        while remaining > 0 {
-            let random_odds = context.random_below(100);
-            let selected = self.monster_setups[setup_index]
-                .variants
-                .iter()
-                .find(|variant| random_odds < i32::from(variant.cumulative_odds))
-                .cloned();
-            let Some(selected) = selected else {
-                let refresh_index = self.monster_setups[setup_index].index;
-                context.log_monster_variant_failure(self.id, refresh_index);
-                remaining = remaining.wrapping_sub(1);
-                continue;
-            };
-
-            let refresh = &self.monster_setups[setup_index];
-            let position = self
-                .region
-                .get_random_pos_in_range(
-                    refresh.left,
-                    refresh.top,
-                    refresh.right.wrapping_sub(refresh.left),
-                    refresh.bottom.wrapping_sub(refresh.top),
-                    context,
-                )
-                .map_err(ServerRegionMonsterRectBlock::RandomPosition)?;
-            if !position.found {
-                context.log_monster_position_failure(&selected.name);
-            }
-
-            let Some(property) =
-                get_monster_property_by_origin_name(monster_registry, &selected.name).cloned()
-            else {
-                missing_properties = missing_properties.wrapping_add(1);
-                remaining = remaining.wrapping_sub(1);
-                continue;
-            };
-            let direction = self.monster_setups[setup_index].direction;
-            let id = self
-                .add_monster(
-                    &property,
-                    position.x,
-                    position.y,
-                    direction,
-                    remember_setup,
-                    suppress_guard_registration,
-                    now_ms,
-                    area_width,
-                    area_height,
-                    skill_factory,
-                    context,
-                )
-                .map_err(ServerRegionMonsterRectBlock::Membership)?;
-
-            let refresh_index = self.monster_setups[setup_index].index;
-            self.monster_setups[setup_index].living_count = self.monster_setups[setup_index]
-                .living_count
-                .wrapping_add(1);
-            let monster = self
-                .owned_monsters
-                .get_mut(&id)
-                .expect("успешный AddMonster публикует owned monster");
-            monster.set_refresh_data(
-                selected.sign,
-                selected.leader_sign,
-                selected.leader_distance,
-                refresh_index,
-            );
-            if !selected.script.is_empty() && selected.script != b"0" {
-                monster.set_script_file(&selected.script);
-            }
-            created = created.wrapping_add(1);
-            if matches!(property.ai, 10 | 11) && !suppress_guard_registration {
-                context.register_guard_index(refresh_index);
-            }
-            remaining = remaining.wrapping_sub(1);
-        }
+        let outcome = add_monster_rect_batch(
+            self,
+            self.id,
+            setup,
+            amount,
+            remember_setup,
+            suppress_guard_registration,
+            now_ms,
+            area_width,
+            area_height,
+            monster_registry,
+            skill_factory,
+            context,
+            |region_id, refresh_index, context| {
+                context.log_monster_variant_failure(region_id, refresh_index);
+            },
+            |original_name, context| context.log_monster_position_failure(original_name),
+            |monster_id, context| context.register_guard_monster(monster_id),
+            |refresh_index, context| context.register_guard_index(refresh_index),
+            |region, monster, context| context.send_monster_entered_around(region, monster),
+        )?;
         tracing::trace!(
             region_id = self.id,
             refresh_index = setup.index,
-            created,
-            missing_properties,
+            created = outcome.created,
+            missing_properties = outcome.missing_properties,
             "завершено создание группы монстров"
         );
         Ok(())
@@ -884,62 +993,25 @@ impl CServerRegion {
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<i32, RegionMembershipBlock> {
-        let id = self.next_monster_id.take();
-        let mut monster = crate::gameserver::appserver::baseobject::create_monster(id);
-        monster.bind_spawn_property(property);
-        monster.initialize_skills(property, skill_factory, &mut |bound| {
-            context.random_below(bound)
-        });
-        monster.initialize_ai(property, now_ms);
-        monster
-            .move_shape_mut()
-            .shape_mut()
-            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        if matches!(property.ai, 10 | 11) && !suppress_guard_registration {
-            context.register_guard_monster(id);
-        }
-        monster.set_spawn_speed(property);
-        let direction = if (0..8).contains(&direction) {
-            direction
-        } else {
-            context.random_below(8)
-        };
-        monster
-            .move_shape_mut()
-            .shape_mut()
-            .set_direction(direction);
-
-        let facts = ShapeRuntimeFacts {
-            monster: Some(
-                if property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
-                    super::shape::MonsterAreaClass::Carriage
-                } else {
-                    super::shape::MonsterAreaClass::Active
-                },
-            ),
-            is_move_shape: true,
-            blocks_region_cell: true,
-            figure: CMonster::figure(property),
-            ..ShapeRuntimeFacts::default()
-        };
-        self.add_object(
-            &mut monster,
-            facts,
+        // Ядро принадлежит Zone `regions/serverregion/spawnsetup` (`add_monster`);
+        // guard-регистрация и around-send остаются context-обвязками старого
+        // пакета в исходном порядке.
+        add_monster(
+            self,
+            property,
+            tile_x,
+            tile_y,
+            direction,
+            _unused_legacy_flag,
+            suppress_guard_registration,
+            now_ms,
             area_width,
             area_height,
-            now_ms,
+            skill_factory,
             context,
-        )?;
-        self.owned_monsters.insert(id, monster);
-        // Compatibility quirk exact EXE 0x0047EC50: пятый bool не читается,
-        // а enter message отправляется безусловно.
-        let entered = self
-            .owned_monsters
-            .get(&id)
-            .expect("monster опубликован непосредственно перед send");
-        context.send_monster_entered_around(self, entered);
-        self.total_spawned_monsters = self.total_spawned_monsters.wrapping_add(1);
-        Ok(id)
+            |monster_id, context| context.register_guard_monster(monster_id),
+            |region, monster, context| context.send_monster_entered_around(region, monster),
+        )
     }
 
     /// Создаёт `CSummonedCreature` сразу в каноническом `MonsterWorld`.
@@ -2351,85 +2423,33 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         context: &mut Context,
-        mut now_ms: impl FnMut(&mut Context) -> u32,
-        mut after_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
-        mut send_entry: impl FnMut(&CNpc, &mut Context),
+        now_ms: impl FnMut(&mut Context) -> u32,
+        after_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
+        send_entry: impl FnMut(&CNpc, &mut Context),
     ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
-        if remember_setup {
-            self.npc_setups.push(setup.clone());
-        }
-
-        let mut created = 0usize;
-        let mut first_created_id = None;
-        let mut remaining = setup.count;
-        while remaining > 0 {
-            let position = self
-                .region
-                .get_random_pos_in_range(
-                    setup.left,
-                    setup.top,
-                    setup.right.wrapping_sub(setup.left),
-                    setup.bottom.wrapping_sub(setup.top),
-                    context,
-                )
-                .map_err(ServerRegionNpcSpawnBlock::RandomPosition)?;
-            if !position.found {
-                context.log_npc_position_failure(&setup.name);
-                remaining = remaining.wrapping_sub(1);
-                continue;
-            }
-
-            let id = self.next_npc_id.take();
-            let mut npc = crate::gameserver::appserver::baseobject::create_npc(id);
-            let spawn_tick = initialize_created_npc(
-                &mut npc,
-                setup,
-                position.x,
-                position.y,
-                context,
-                &mut now_ms,
-            );
-
-            self.total_spawned_npcs = self.total_spawned_npcs.wrapping_add(1);
-            let facts = ShapeRuntimeFacts {
-                is_npc: true,
-                is_move_shape: true,
-                blocks_region_cell: true,
-                figure: ShapeFigure::default(),
-                ..ShapeRuntimeFacts::default()
-            };
-            self.add_object(
-                npc.move_shape_mut(),
-                facts,
-                area_width,
-                area_height,
-                spawn_tick,
-                context,
-            )
-            .map_err(ServerRegionNpcSpawnBlock::Membership)?;
-
-            self.owned_npcs.insert(id, npc);
-            after_entry(self, id, context);
-            created = created.wrapping_add(1);
-            first_created_id.get_or_insert(id);
-            if send_around {
-                send_entry(
-                    self.owned_npcs
-                        .get(&id)
-                        .expect("NPC опубликован непосредственно перед send"),
-                    context,
-                );
-            }
-            remaining = remaining.wrapping_sub(1);
-        }
+        // Ядро принадлежит Zone `regions/serverregion/spawnsetup` (`add_npc_batch`);
+        // owner-side log `GS0233` остаётся context-обвязкой старого пакета.
+        let outcome = add_npc_batch(
+            self,
+            setup,
+            remember_setup,
+            send_around,
+            area_width,
+            area_height,
+            context,
+            now_ms,
+            after_entry,
+            send_entry,
+            |npc_name, context| context.log_npc_position_failure(npc_name),
+        )?;
         tracing::trace!(
             region_id = self.id,
-            created,
+            created = outcome.created,
             requested = setup.count,
             send_around,
             "завершено создание NPC региона"
         );
-        Ok(ServerRegionNpcSpawnOutcome { first_created_id })
+        Ok(outcome)
     }
 
     pub(crate) fn find_npc_by_id(&self, id: i32) -> Option<&CNpc> {

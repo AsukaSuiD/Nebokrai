@@ -1,15 +1,17 @@
 //! Data-типы, позиционное ядро, spatial-запросы, membership-ядро,
 //! weather/return-setup/war действия и spawn setup `CServerRegion`
 //! исторического GameServer, перенесённые в Zone `regions/` волной
-//! serverregion (порции 1-5 и spawn setup). Исходный владелец —
+//! serverregion (порции 1-5 и spawn setup порции 1-2). Исходный владелец —
 //! `appserver/serverregion.h/.cpp`.
 //! Переходный агрегат `CServerRegion` остаётся в старом пакете, хранит те же
 //! хранилища и делегирует им area-grid, war-soul, block-refresh, shape-lookup,
 //! ids/find/registered запросы, add/remove, позиционную регистрацию,
 //! staging/plan/commit смены области, налоговые, погодные, return-point
-//! и war-фазовые действия этого компонента
-//! без изменения сигнатур методов; entry-effects входа, доменные классы и
-//! lifecycle вернутся в Zone последующими порциями.
+//! и war-фазовые действия этого компонента, а также batch spawn NPC/monster
+//! (setup-контракты, инициализация созданного NPC и batch-циклы
+//! `AddNpc`/`AddMonsterRect` с телом `AddMonster`) без изменения сигнатур
+//! методов; entry-effects входа, доменные классы и lifecycle вернутся в Zone
+//! последующими порциями.
 //!
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
@@ -29,8 +31,10 @@
 //! tick/change-действия погоды, `returnsetup` — return-setup типы и
 //! fallback-цепочка точки возврата, `war` — war-фаза и city-ownership
 //! действия, `tax` — data-контракты и скалярные state-owner действия налогов,
-//! `spawnsetup` — NPC/monster setup data-контракты, spawn outcome/block типы
-//! и ядро инициализации создаваемого NPC над trait-швом доменного `CNpc`.
+//! `spawnsetup` — NPC/monster setup data-контракты, spawn outcome/block типы,
+//! ядро инициализации создаваемого NPC и batch-циклы `AddNpc`/`AddMonsterRect`
+//! с телом `AddMonster` над trait-швами доменных `CNpc`/`CMonster` и
+//! store-швами переходных хранилищ.
 
 pub mod areagrid; // area-grid: построение, доступ и war-soul карты.
 pub mod blocks; // block-refresh клеток, spatial shape-lookup и skill-cell формула блока.
@@ -39,7 +43,7 @@ pub mod membership; // отказ и gate членства, ядра add/remove 
 pub mod queries; // observable traversal старых hash-хранилищ и ids/find/registered запросы regions.
 pub mod registry; // identity-регистр фигур и монотонные счётчики ID.
 pub mod returnsetup; // return-setup типы и fallback-цепочка точки возврата игрока.
-pub mod spawnsetup; // NPC/monster setup типы и ядро инициализации создаваемого NPC.
+pub mod spawnsetup; // NPC/monster setup типы, ядро инициализации NPC и batch-циклы spawn.
 pub mod tax; // data-контракты и скалярные state-owner действия налогов региона.
 pub mod transitions; // transition-контракт, staging-очереди и plan/commit смены области.
 pub mod war; // war-фазовые и city-ownership действия над скалярами переходного агрегата.
