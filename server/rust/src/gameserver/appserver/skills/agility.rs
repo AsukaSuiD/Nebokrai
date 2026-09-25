@@ -8,7 +8,7 @@
 //! Begin(U,U), visual, append и безусловный UpdateProperty принадлежат владельцу
 //! состояния. Отдельной публикации после замены нет.
 
-pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
+pub(crate) use nebokrai_zone::effects::AGILITY_2_SKILL_ID;
 use super::agilitystate::{PersistentAgilityFamilyState, replace_persistent_agility_state};
 use super::agilitystate2::{AgilityState2, replace_agility_state_2};
 use super::natural::{NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN};

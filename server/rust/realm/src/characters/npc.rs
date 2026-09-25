@@ -15,7 +15,7 @@ use crate::regions::moveshape::CMoveShape;
 ///
 /// В исследованном World-корпусе нет writer/reader этого списка, поэтому
 /// хранится только host-address без выдуманного типа или ownership pointee.
-#[allow(dead_code)]
+#[allow(dead_code, reason = "host-адрес opaque layout-поля m_listScript; читателей нет намеренно")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct NpcScriptLink {
     address: usize,

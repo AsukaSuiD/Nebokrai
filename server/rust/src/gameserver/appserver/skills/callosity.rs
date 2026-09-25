@@ -21,7 +21,7 @@
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-pub(crate) use super::callosity2::CALLOSITY_2_SKILL_ID;
+pub(crate) use nebokrai_zone::effects::CALLOSITY_2_SKILL_ID;
 use super::callositystate::{CallosityFamilyState, replace_callosity_state};
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::playercast::execute_registered_player_cast;

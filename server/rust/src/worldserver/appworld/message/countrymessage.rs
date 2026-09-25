@@ -69,7 +69,7 @@ use super::super::country::countrywarsys::{
     CountryWarVictoryContext, CountryWarVictoryReport,
 };
 
-pub use nebokrai_realm::app::countrymessage::*;
+pub(crate) use nebokrai_realm::app::countrymessage::*;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
