@@ -1,4 +1,5 @@
-//! Номинальный minister owner исторического `WorldServer`.
+//! Номинальный minister owner исторического `WorldServer`, перенесённый в
+//! Realm `organizations/`.
 //!
 //! Constructor создаёт country identity и обнуляет четыре
 //! officer bytes; destructor не добавляет наблюдаемого эффекта поверх
@@ -9,7 +10,7 @@
 use super::officer::COfficer;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CMinister {
+pub struct CMinister {
     officer: COfficer,
 }
 
@@ -20,17 +21,17 @@ impl Default for CMinister {
 }
 
 impl CMinister {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             officer: COfficer::with_constructor_defaults(),
         }
     }
 
-    pub(crate) const fn officer(&self) -> &COfficer {
+    pub const fn officer(&self) -> &COfficer {
         &self.officer
     }
 
-    pub(crate) fn officer_mut(&mut self) -> &mut COfficer {
+    pub fn officer_mut(&mut self) -> &mut COfficer {
         &mut self.officer
     }
 }

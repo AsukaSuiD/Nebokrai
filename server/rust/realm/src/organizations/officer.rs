@@ -1,4 +1,5 @@
-//! Четыре officer-поля country owner-а исторического `WorldServer`.
+//! Четыре officer-поля country owner-а исторического `WorldServer`,
+//! перенесённые в Realm `organizations/`.
 //!
 //! `CKing::CKing` и `CMinister::CMinister` оба сначала
 //! создают `CCountryIdentity`, затем обнуляют ровно четыре bytes по `+0x20`;
@@ -12,7 +13,7 @@
 use super::countryidentity::CCountryIdentity;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct COfficer {
+pub struct COfficer {
     identity: CCountryIdentity,
     id_type: u8,
     quest_switch: bool,
@@ -27,7 +28,7 @@ impl Default for COfficer {
 }
 
 impl COfficer {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             identity: CCountryIdentity::with_constructor_defaults(),
             id_type: 0,
@@ -37,43 +38,43 @@ impl COfficer {
         }
     }
 
-    pub(crate) const fn identity(&self) -> &CCountryIdentity {
+    pub const fn identity(&self) -> &CCountryIdentity {
         &self.identity
     }
 
-    pub(crate) fn identity_mut(&mut self) -> &mut CCountryIdentity {
+    pub fn identity_mut(&mut self) -> &mut CCountryIdentity {
         &mut self.identity
     }
 
-    pub(crate) const fn id_type(&self) -> u8 {
+    pub const fn id_type(&self) -> u8 {
         self.id_type
     }
 
-    pub(crate) const fn set_id_type(&mut self, id_type: u8) {
+    pub const fn set_id_type(&mut self, id_type: u8) {
         self.id_type = id_type;
     }
 
-    pub(crate) const fn quest_switch(&self) -> bool {
+    pub const fn quest_switch(&self) -> bool {
         self.quest_switch
     }
 
-    pub(crate) const fn set_quest_switch(&mut self, enabled: bool) {
+    pub const fn set_quest_switch(&mut self, enabled: bool) {
         self.quest_switch = enabled;
     }
 
-    pub(crate) const fn appointed(&self) -> bool {
+    pub const fn appointed(&self) -> bool {
         self.appointed
     }
 
-    pub(crate) const fn set_appointed(&mut self, appointed: bool) {
+    pub const fn set_appointed(&mut self, appointed: bool) {
         self.appointed = appointed;
     }
 
-    pub(crate) const fn salary_received(&self) -> bool {
+    pub const fn salary_received(&self) -> bool {
         self.salary_received
     }
 
-    pub(crate) const fn set_salary_received(&mut self, salary_received: bool) {
+    pub const fn set_salary_received(&mut self, salary_received: bool) {
         self.salary_received = salary_received;
     }
 }

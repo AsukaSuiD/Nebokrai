@@ -1,4 +1,6 @@
-//! DB-владелец стран WorldServer из `dbcountry.cpp`.
+//! DB-владелец стран WorldServer из `dbcountry.cpp`; трейт `DbCountryOwner` и
+//! его data-семья перенесены в Realm `organizations/dbcountry`, здесь остаётся
+//! Tiberius-реализация и их реэкспорт для переходных потребителей.
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Save/load сохраняют byte country ID, ordered ministers, technology и exile
@@ -21,30 +23,13 @@ use crate::worldserver::appworld::country::countryhandler::{
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 
 pub(crate) use nebokrai_realm::organizations::dbcountry::{
-    CountryKingSaveSnapshot, CountryMinisterSaveSnapshot, CountrySaveSnapshot, DbCountryLoadFailure,
-    DbCountryNotice,
+    CountryMinisterSaveSnapshot, CountrySaveSnapshot, DbCountryLoadFailure, DbCountryNotice,
+    DbCountryOwner,
 };
 
 const COUNTRY_SELECT_SQL: &str = "SELECT TOP 1 id FROM CSL_Countrys WHERE id = @P1";
 const COUNTRY_LOAD_SQL: &str = "SELECT * FROM CSL_Countrys";
 const COUNTRY_UPDATE_SQL: &str = "UPDATE TOP (1) CSL_Countrys SET treasury = @P1, power = @P2, tech_exp = @P3, tech_lel = @P4, king_id = @P5, king_name = @P6, king_appoint = @P7, king_salary = @P8, control_point = @P9, material_point = @P10, war_point = @P11, war_res = @P12, minister_2_id = @P13, minister_2_name = @P14, minister_2_appoint = @P15, minister_2_salary = @P16, minister_3_id = @P17, minister_3_name = @P18, minister_3_appoint = @P19, minister_3_salary = @P20, minister_4_id = @P21, minister_4_name = @P22, minister_4_appoint = @P23, minister_4_salary = @P24, minister_5_id = @P25, minister_5_name = @P26, minister_5_appoint = @P27, minister_5_salary = @P28, minister_6_id = @P29, minister_6_name = @P30, minister_6_appoint = @P31, minister_6_salary = @P32, minister_7_id = @P33, minister_7_name = @P34, minister_7_appoint = @P35, minister_7_salary = @P36 WHERE id = @P37";
-
-pub(crate) trait DbCountryOwner {
-    async fn load(
-        &mut self,
-        country_handler: &mut CCountryHandler,
-        country_parameters: &mut CCountryParam,
-        active_connection: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    async fn save(
-        &mut self,
-        snapshot: Option<&CountrySaveSnapshot>,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    fn pop_notice(&mut self) -> Option<DbCountryNotice>;
-}
 
 #[derive(Default)]
 pub(crate) struct TiberiusDbCountry {

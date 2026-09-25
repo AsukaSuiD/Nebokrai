@@ -10,11 +10,6 @@ pub(crate) mod appworld {
         pub(crate) mod country;
         #[allow(
             dead_code,
-            reason = "identity/officer-prefix восстановлен до подключения nominal country owner-ов к CCountry snapshot"
-        )]
-        pub(crate) mod countryidentity;
-        #[allow(
-            dead_code,
             reason = "country generator подключён перед единым CGame::GenerateDBData"
         )]
         pub(crate) mod countryhandler;
@@ -28,16 +23,6 @@ pub(crate) mod appworld {
             reason = "king point setters подключены к country scalar-sync перед остальным lifecycle"
         )]
         pub(crate) mod king;
-        #[allow(
-            dead_code,
-            reason = "nominal minister owner восстановлен отдельно от уже materialized country snapshot"
-        )]
-        pub(crate) mod minister;
-        #[allow(
-            dead_code,
-            reason = "officer prefix восстановлен для связанных country owner-ов"
-        )]
-        pub(crate) mod officer;
         #[allow(
             dead_code,
             reason = "country victory producer подключён через World/Game message boundary перед phase scheduler"

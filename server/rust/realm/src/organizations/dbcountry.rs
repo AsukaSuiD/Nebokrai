@@ -1,18 +1,28 @@
 //! DB-проекции стран WorldServer из `dbcountry.cpp`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`. Data-уровень перенесён в Realm
-//! `organizations/`.
+//! `worldserver.exe` и `worldserver.pdb`. Data-уровень и трейт владельца
+//! перенесены в Realm `organizations/`.
 //!
 //! Save/load сохраняют byte country ID, ordered ministers, technology и exile
 //! records, исходные значения bool и порядок SQL-команд. Tiberius, `BTreeMap`
 //! и owned snapshots заменяют ADO/COM и MSVC containers; транзакция, rollback
 //! и нормализация provider-order поверх исходного контракта не добавляются.
 //!
-//! Трейт `DbCountryOwner` и `TiberiusDbCountry` остаются в worldserver до
-//! волны владельца: сигнатуры `load`/`save` ссылаются на ещё не перенесённый
-//! `CCountryHandler`, а inherent impl неотделим от типа правилом орфанов.
+//! Трейт `DbCountryOwner` перенесён волной владельца после `CCountryHandler`;
+//! `TiberiusDbCountry` остаётся facade impl в старом
+//! `dbaccess/worlddb/dbcountry` по прецеденту rsunion/rsfaction и там же
+//! реэкспортирует этот модуль.
+//!
+//! Async-методы трейта записаны в desugared-форме по ADR-0013. Каждое future
+//! захватывает только `&mut self`, Sync-ссылки snapshot/handler/parameters и
+//! Send-соединение `&mut WorldTdsClient`, поэтому `load`/`save` помечены
+//! `+ Send`.
 
 use std::error::Error;
 use std::fmt;
+
+use crate::content::countryparam::CCountryParam;
+use crate::organizations::countryhandler::CCountryHandler;
+use crate::persistence::rssetup::WorldTdsClient;
 
 #[derive(Clone, Debug)]
 pub struct CountryKingSaveSnapshot {
@@ -83,4 +93,21 @@ impl From<tiberius::error::Error> for DbCountryDatabaseError {
     fn from(error: tiberius::error::Error) -> Self {
         Self(error)
     }
+}
+
+pub trait DbCountryOwner {
+    fn load(
+        &mut self,
+        country_handler: &mut CCountryHandler,
+        country_parameters: &mut CCountryParam,
+        active_connection: Option<&mut WorldTdsClient>,
+    ) -> impl std::future::Future<Output = bool> + Send;
+
+    fn save(
+        &mut self,
+        snapshot: Option<&CountrySaveSnapshot>,
+        active_transaction: Option<&mut WorldTdsClient>,
+    ) -> impl std::future::Future<Output = bool> + Send;
+
+    fn pop_notice(&mut self) -> Option<DbCountryNotice>;
 }

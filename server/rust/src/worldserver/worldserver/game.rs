@@ -16074,6 +16074,12 @@ impl nebokrai_realm::activities::factionwarsys::EnemyFactionSink for CGame {
     }
 }
 
+impl nebokrai_realm::organizations::countryhandler::CountrySaveSink for CGame {
+    fn append_db_country(&self, country: CountrySaveSnapshot) {
+        CGame::append_db_country(self, country);
+    }
+}
+
 impl nebokrai_realm::characters::honorranks::HonorRanksGameView for CGame {
     fn queue_honor_ranks_world_message(
         &self,
