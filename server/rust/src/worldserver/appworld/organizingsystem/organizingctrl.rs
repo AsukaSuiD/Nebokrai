@@ -1522,18 +1522,9 @@ pub(crate) struct ConfederationCreationSessionRequest {
     pub(crate) union_name: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConfederationCreationTerminal {
-    Approved,
-    Denied,
-    NonResult { kind: NetSessionAsyncResultKind },
-}
+pub(crate) use nebokrai_realm::organizations::union::ConfederationCreationTerminal;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConfederationCreationEndpointBlock {
-    BeginPayloadType,
-    ResultPayloadType,
-}
+pub(crate) use nebokrai_realm::organizations::union::ConfederationCreationEndpointBlock;
 
 pub(crate) trait ConfederationCreationSessionRuntime: Send + Sync {
     fn send_confederation_creation_confirmation(
@@ -1858,18 +1849,9 @@ pub(crate) struct CityTransferSessionRequest {
     pub(crate) region_name: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CityTransferTerminal {
-    Approved,
-    Denied,
-    NonResult { kind: NetSessionAsyncResultKind },
-}
+pub(crate) use nebokrai_realm::organizations::union::CityTransferTerminal;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CityTransferEndpointBlock {
-    BeginPayloadType,
-    ResultPayloadType,
-}
+pub(crate) use nebokrai_realm::organizations::union::CityTransferEndpointBlock;
 
 pub(crate) trait CityTransferSessionRuntime: Send + Sync {
     fn send_city_transfer_confirmation(&self, recipient_player_id: i32, message: &CMessage);

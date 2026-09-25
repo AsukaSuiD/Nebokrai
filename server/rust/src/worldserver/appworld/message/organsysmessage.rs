@@ -221,68 +221,12 @@ const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
 
 static FACTION_BILLBOARD_TITLES: OnceLock<[Vec<u8>; 3]> = OnceLock::new();
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct QueuedUnionApplicationTerminal {
-    pub(crate) union_id: i32,
-    pub(crate) applicant_faction_id: i32,
-    pub(crate) terminal: UnionApplicationTerminal,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct QueuedUnionInvitationTerminal {
-    pub(crate) union_id: i32,
-    pub(crate) inviter_faction_id: i32,
-    pub(crate) invited_faction_id: i32,
-    pub(crate) terminal: UnionApplicationTerminal,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct UnionApplicationConfirmationDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct QueuedCityTransferTerminal {
-    pub(crate) source_faction_id: i32,
-    pub(crate) target_faction_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) region_name: Vec<u8>,
-    pub(crate) terminal: CityTransferTerminal,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct QueuedConfederationCreationTerminal {
-    pub(crate) first_player_id: i32,
-    pub(crate) second_player_id: i32,
-    pub(crate) first_faction_id: i32,
-    pub(crate) second_faction_id: i32,
-    pub(crate) union_name: Vec<u8>,
-    pub(crate) terminal: ConfederationCreationTerminal,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum QueuedOrganizingSessionTerminal {
-    Union(QueuedUnionApplicationTerminal),
-    UnionInvitation(QueuedUnionInvitationTerminal),
-    ConfederationCreation(QueuedConfederationCreationTerminal),
-    CityTransfer(QueuedCityTransferTerminal),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CityTransferConfirmationDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ConfederationCreationConfirmationDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
-}
+pub(crate) use nebokrai_realm::app::organsysmessage::{
+    CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
+    QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
+    QueuedOrganizingSessionTerminal, QueuedUnionApplicationTerminal,
+    QueuedUnionInvitationTerminal, UnionApplicationConfirmationDelivery,
+};
 
 #[derive(Default)]
 struct WorldUnionApplicationRuntimeState {

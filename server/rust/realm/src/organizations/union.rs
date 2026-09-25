@@ -367,6 +367,34 @@ pub enum UnionApplicationTerminal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfederationCreationEndpointBlock {
+    BeginPayloadType,
+    ResultPayloadType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CityTransferEndpointBlock {
+    BeginPayloadType,
+    ResultPayloadType,
+}
+
+/// Терминалы ConfederationCreation `/ CityTransfer сессий, разделённых от
+/// organizingctrl и нужные диспетчеру очередей в Realm app.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfederationCreationTerminal {
+    Approved,
+    Denied,
+    NonResult { kind: NetSessionAsyncResultKind },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CityTransferTerminal {
+    Approved,
+    Denied,
+    NonResult { kind: NetSessionAsyncResultKind },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnionApplicationEndpointBlock {
     BeginPayloadType,
     ResultPayloadType,
