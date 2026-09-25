@@ -81,8 +81,14 @@
 //! `CPlayer::DecordFromByteArray(..., true)` layout: shape/base/combat,
 //! skills/states, containers, variables, timers, companions, quests, country,
 //! organization и session. Обратный `AddGameSaveToByteArray` использует те же
-//! owned поля и live pet/carriage snapshot; container codec failure прекращает
-//! wire строго на первом false, как исходная цепочка. После чтения base-wire
+//! owned поля и live pet/carriage snapshot; машинная досверка той же точной
+//! пары показала, что результаты `CShape::AddToByteArray`, всех 15 container
+//! serialize и `CVariableList::AddToByteArray` не тестируются, а функция
+//! безусловно возвращает 1 (`0x00441399`). false-подрезультаты цепочки
+//! поэтому отбрасываются, а ошибками encode остаются только безопасные
+//! границы Rust. Первым шагом encode оригинал вызывает `DelAllItemInDelList`
+//! (`0x00440DDC` → `0x0043E4E0`): сущности del-list в Rust нет, её pre-effect
+//! не воспроизводится (UNKNOWN). После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
 //! Quest-map, skill-list, friend-list и три organization-list decoder-а
@@ -128,7 +134,12 @@
 //! nobility rank: reset меняет owned state и возвращает точный признак
 //! `AdjustHonorRank`, который `CGame` связывает с общим script scheduler.
 //! Silence-timeout, как и оригинал, проверяется лениво при query по
-//! инъецируемому wrapping `timeGetTime`-значению; reached `OnExit` отдельно
+//! инъецируемому wrapping `timeGetTime`-значению. Decode GameSave
+//! восстанавливает полную машинную пару (`0x0044C0A7..0x0044C0E1`): wire>0
+//! сохраняет minutes и начало `timeGetTime()/60_000` (магический делитель
+//! `0x45E7B273`, shr `0xE`), wire≤0 обнуляет оба поля — та же семантика, что
+//! exact `SetSilence`; отрицательный wire более не wrap-ит в бесконечный
+//! silence. Reached `OnExit` отдельно
 //! сохраняет исходные один либо три clock-read и пересчитывает остаток перед
 //! GameSave. GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
@@ -1347,8 +1358,6 @@ pub(crate) enum PlayerGameSaveCodecError {
     WrongObjectType { object_type: i32 },
     #[error("player save отклонил equipment position {position}")]
     EquipmentRejected { position: u32 },
-    #[error("player save codec {field} вернул false")]
-    CodecReturnedFalse { field: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2741,6 +2750,12 @@ impl CPlayer {
             &mut *ordinary_threshold,
             &mut *battle_threshold,
         )?;
+        // D1 машинной разведки: оригинал выполняет auction tail контейнера
+        // (семья CleanCell/HaveCell, виртуалы `+0x80`/`+0x84` в
+        // `0x0044C3AF/0x0044C3C6`) только после всего decoder-а; побайтовая
+        // эквивалентность этого Rust-пути зависит от Unserialize-маркировки
+        // самого container и отложена в container-порцию (запись «Zone player:
+        // машинная разведка GameSave» в docs/status/audit.md).
         player.auction_goods.set_all_inactive();
         if pack_add_enabled {
             let inactive = player
@@ -2847,7 +2862,14 @@ impl CPlayer {
         player
             .variable_list
             .decode_world_snapshot(variable_definitions, source, cursor)?;
-        player.silence_minutes = read_player_game_save_i32(source, cursor, "m_lSilenceTime")?;
+        // Машина восстанавливает всю silence-пару (`0x0044C0A7..0x0044C0E1` по
+        // той же точной паре gameserver.exe + GameServer.pdb): wire>0 пишет
+        // minutes и начало `timeGetTime()/60_000` (магический делитель
+        // `0x45E7B273`, shr `0xE`), wire≤0 обнуляет оба поля. Контракт совпадает
+        // с exact `SetSilence`; текущий tick уже передан как `now_ms`, общий
+        // setter сохраняет ту же арифметику без системных часов в player.rs.
+        let silence_minutes = read_player_game_save_i32(source, cursor, "m_lSilenceTime")?;
+        player.set_silence(silence_minutes, now_ms);
         let murderer_state = read_player_game_save_u8(source, cursor, "murderer state")? != 0;
         let murderer_remain = read_player_game_save_u32(source, cursor, "murderer remain time")?;
         player.restore_murderer_timestamp(
@@ -2915,6 +2937,11 @@ impl CPlayer {
         player.jjc_pk_state = read_player_game_save_u8(source, cursor, "bJJcPkState")? != 0;
         player.decode_organizing_snapshot(source, cursor)?;
         player.session_id = read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
+        // D8 машинной разведки: SetOwner-цикл контейнеров и UpdateProperty
+        // оригинал выполняет в других точках того же прохода (UpdateProperty —
+        // виртуал `+0x9C` в самом хвосте decoder-а, `0x0044C3D0`); Rust
+        // группирует owner-refresh здесь, а тот же UpdateProperty исполняет
+        // `CGame::complete_world_player_login` — итоговое состояние совпадает.
         player.refresh_reached_container_owners(player.player_id());
 
         let consumed_bytes = cursor.saturating_sub(start);
@@ -2928,6 +2955,12 @@ impl CPlayer {
 
     /// `AddGameSaveToByteArray`: тот же persisted layout без organization
     /// snapshot (World обновляет его самостоятельно перед следующим handoff).
+    /// Результаты `CShape::AddToByteArray`, всех 15 container serialize и
+    /// `CVariableList::AddToByteArray` машина не тестирует и всегда возвращает
+    /// 1 (`0x00441399`): false-подрезультаты цепочки отбрасываются, ошибки
+    /// ограничены безопасными границами Rust. Отдельный первый шаг оригинала
+    /// `DelAllItemInDelList` (`0x00440DDC` → `0x0043E4E0`) не воспроизводится —
+    /// сущности del-list в Rust нет (UNKNOWN).
     pub(crate) fn encode_game_save(
         &mut self,
         destination: &mut Vec<u8>,
@@ -2939,9 +2972,10 @@ impl CPlayer {
         carriage: &PlayerUncreatedCarriage,
         recreate_carriage: bool,
     ) -> Result<bool, PlayerGameSaveCodecError> {
-        if !self.shape().add_to_byte_array(destination, true) {
-            return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: "CShape" });
-        }
+        // Оригинал не тестирует false-подрезультаты этой serialize-цепочки и
+        // всегда возвращает 1 (`0x00441399`): все результаты ниже отбрасываются
+        // именованными discard-ами, как того требует машинный факт.
+        let _shape_serialized = self.shape().add_to_byte_array(destination, true);
         destination.extend_from_slice(&self.synchronized_base_property_wire());
         append_player_game_save_string(destination, "strAccount", &self.account, 0x100)?;
         append_player_game_save_string(destination, "strTitle", &self.title, 0x100)?;
@@ -2970,80 +3004,47 @@ impl CPlayer {
         }
         destination.extend_from_slice(&self.encode_lei_ting());
 
-        if !self.hand.serialize(destination, goods_factory) {
-            return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: "m_cHand" });
-        }
-        let mut equipment_serialized = true;
+        let _hand_serialized = self.hand.serialize(destination, goods_factory);
         self.equipment.serialize_with(
             destination,
             goods_factory,
             true,
             |goods, include_child, destination| {
-                equipment_serialized &= goods.serialize(destination, include_child);
+                let _goods_serialized = goods.serialize(destination, include_child);
             },
         );
-        if !equipment_serialized {
-            return Err(PlayerGameSaveCodecError::CodecReturnedFalse {
-                field: "m_cEquipment",
-            });
-        }
-        macro_rules! serialize_container {
-            ($field:literal, $serialized:expr) => {
-                if !$serialized {
-                    return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: $field });
-                }
-            };
-        }
-        serialize_container!(
-            "m_cPacket",
-            self.packet.serialize(destination, goods_factory)
-        );
-        serialize_container!(
-            "m_cAuctionGoodsContainer",
-            self.auction_goods.serialize(destination, goods_factory)
-        );
-        serialize_container!(
-            "m_cAuctionContainer",
-            self.auction_listing.serialize(destination, goods_factory)
-        );
-        serialize_container!("m_cWallet", self.wallet.serialize(destination));
-        serialize_container!(
-            "m_cAuctionWallet",
-            self.auction_wallet.serialize(destination)
-        );
-        serialize_container!("m_cYuanBao", self.yuan_bao.serialize(destination));
-        serialize_container!("m_cJiFen", self.ji_fen.serialize(destination));
+        let _packet_serialized = self.packet.serialize(destination, goods_factory);
+        let _auction_goods_serialized =
+            self.auction_goods.serialize(destination, goods_factory);
+        let _auction_listing_serialized =
+            self.auction_listing.serialize(destination, goods_factory);
+        let _wallet_serialized = self.wallet.serialize(destination);
+        let _auction_wallet_serialized = self.auction_wallet.serialize(destination);
+        let _yuan_bao_serialized = self.yuan_bao.serialize(destination);
+        let _ji_fen_serialized = self.ji_fen.serialize(destination);
         append_player_game_save_string(
             destination,
             "m_strDepotPassword",
             &self.depot_password,
             0x6c,
         )?;
-        serialize_container!("m_cBank", self.bank.serialize(destination));
-        serialize_container!("m_cDepot", self.depot.serialize(destination, goods_factory));
-        serialize_container!(
-            "m_cFairy",
-            self.fairy_container.serialize(destination, goods_factory)
-        );
-        serialize_container!(
-            "m_cBF",
-            self.battle_fairy_container
-                .serialize(destination, goods_factory)
-        );
-        serialize_container!(
-            "m_cCiQing",
-            self.ci_qing.serialize(destination, goods_factory)
-        );
-        serialize_container!(
-            "m_cComposeCiQing",
-            self.ci_qing_compose.serialize(destination, goods_factory)
-        );
-        if !self.variable_list.encode_world_snapshot(destination) {
-            return Err(PlayerGameSaveCodecError::CodecReturnedFalse {
-                field: "m_pVariableList",
-            });
-        }
+        let _bank_serialized = self.bank.serialize(destination);
+        let _depot_serialized = self.depot.serialize(destination, goods_factory);
+        let _fairy_serialized = self.fairy_container.serialize(destination, goods_factory);
+        let _battle_fairy_serialized = self
+            .battle_fairy_container
+            .serialize(destination, goods_factory);
+        let _ci_qing_serialized = self.ci_qing.serialize(destination, goods_factory);
+        let _ci_qing_compose_serialized =
+            self.ci_qing_compose.serialize(destination, goods_factory);
+        let _variables_serialized = self.variable_list.encode_world_snapshot(destination);
         LegacyWriter::new(destination).write_i32(self.silence_minutes);
+        // Оригинал round-trip-ит сырой byte murderer state (`+0x100`, запись в
+        // `0x00441034..0x00441048`), сохранённый decoder-ом; Rust не хранит
+        // отдельный флаг и пересчитывает его из pk_count и timestamp.
+        // Расхождение наблюдаемо только на грязном wire (byte не согласован с
+        // этой парой) — сознательная нормализация; записанный ниже remainder
+        // побайтово совпадает с машинным clamp (`0x0044104C..0x00441077`).
         let murderer_state = self.base_properties.pk_count != 0 && self.murderer_time_stamp_ms != 0;
         LegacyWriter::new(destination).write_u8(u8::from(murderer_state));
         let murderer_remain = if self.murderer_time_stamp_ms == 0 {
