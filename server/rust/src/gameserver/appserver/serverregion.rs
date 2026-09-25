@@ -168,7 +168,6 @@ use encoding_rs::WINDOWS_1251;
 use indexmap::IndexSet;
 
 use super::area::{AreaAiContext, AreaWokenMonsterClass, CArea, WarSoulPoint};
-use super::baseobject::CBaseObject;
 use super::build::BuildBlockUpdate;
 use super::country::countryparam::CCountryParam;
 use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
@@ -498,9 +497,7 @@ impl ShapeResolver for RegionSummonShapeResolver<'_> {
     }
 }
 
-pub(crate) use nebokrai_zone::replication::recipients::{
-    ServerRegionRecipientArea, ServerRegionRecipientsSnapshot,
-};
+pub(crate) use nebokrai_zone::replication::recipients::ServerRegionRecipientsSnapshot;
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerRegion {
@@ -2974,47 +2971,43 @@ impl CServerRegion {
 
     /// Собирает player IDs одной area без чтения их координат: исходный
     /// `CArea::FindShapes(400)` использовал только RTTI и inherited socket ID.
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn find_player_ids_in_area(
         &self,
         area_x: i32,
         area_y: i32,
         destination: &mut Vec<i32>,
     ) {
-        let Some(area) = self.get_area(area_x, area_y) else {
-            return;
-        };
-        self.append_registered_player_ids(area, destination);
+        find_player_ids_in_area(
+            &self.areas,
+            self.area_x,
+            self.area_y,
+            area_x,
+            area_y,
+            &self.registry,
+            destination,
+        )
     }
 
     /// Обходит все `CArea` в физическом row-major storage order и сохраняет
     /// exact `FindShapes(400)` filtering через registry owning region-а.
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn find_all_player_ids(&self, destination: &mut Vec<i32>) {
-        for area in &self.areas {
-            self.append_registered_player_ids(area, destination);
-        }
+        find_all_player_ids(&self.areas, &self.registry, destination)
     }
 
+    /// Собирает per-area списки player identities; ядро принадлежит Zone
+    /// `regions/serverregion/queries`, snapshot-тип — Zone
+    /// `replication/recipients`.
     pub(crate) fn recipients_snapshot(&self) -> ServerRegionRecipientsSnapshot {
-        let areas = self
-            .areas
-            .iter()
-            .map(|area| {
-                let mut player_ids = Vec::new();
-                self.append_registered_player_ids(area, &mut player_ids);
-                ServerRegionRecipientArea {
-                    x: area.x(),
-                    y: area.y(),
-                    player_ids,
-                }
-            })
-            .collect();
-        ServerRegionRecipientsSnapshot::from_parts(self.id, self.area_x, self.area_y, areas)
+        recipients_snapshot(self.id, self.area_x, self.area_y, &self.areas, &self.registry)
     }
 
     /// Exact `m_vPlayers` storage order, который Nation kick обходит
     /// напрямую, не через area scan `FindAllPlayer`.
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn registered_player_ids(&self) -> Vec<i32> {
-        self.registry.players.clone()
+        registered_player_ids(&self.registry)
     }
 
     /// Регистрирует уже созданный factory-объект без выдуманного второго
@@ -3046,80 +3039,34 @@ impl CServerRegion {
 
     /// Owned identity snapshot для проверки полноты resolver-а перед
     /// pointer-sensitive `OnGMMessage 0x7FC07` scan.
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn registered_shape_identities(&self) -> Vec<ShapeIdentity> {
-        let mut identities = Vec::with_capacity(
-            self.registry.monsters.len()
-                + self.registry.players.len()
-                + self.registry.npcs.len()
-                + self.registry.goods.len()
-                + self.registry.other_shapes.len(),
-        );
-        identities.extend(self.registry.monsters.iter().map(|id| ShapeIdentity {
-            object_type: MONSTER_TYPE,
-            id: *id,
-            ex_id: CGuid::GUID_INVALID,
-        }));
-        identities.extend(self.registry.players.iter().map(|id| ShapeIdentity {
-            object_type: PLAYER_TYPE,
-            id: *id,
-            ex_id: CGuid::GUID_INVALID,
-        }));
-        identities.extend(self.registry.npcs.iter().map(|id| ShapeIdentity {
-            object_type: NPC_TYPE,
-            id: *id,
-            ex_id: CGuid::GUID_INVALID,
-        }));
-        identities.extend(self.registry.goods.iter().map(|ex_id| ShapeIdentity {
-            object_type: GOODS_TYPE,
-            id: 0,
-            ex_id: *ex_id,
-        }));
-        identities.extend(self.registry.other_shapes.iter().map(|hash| ShapeIdentity {
-            object_type: CBaseObject::calculate_type(*hash),
-            id: CBaseObject::calculate_id(*hash),
-            ex_id: CGuid::GUID_INVALID,
-        }));
-        identities
+        registered_shape_identities(&self.registry)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn has_registered_shape(&self, identity: ShapeIdentity) -> bool {
-        self.registry.contains(identity)
+        has_registered_shape(&self.registry, identity)
     }
 
     /// Безопасно заменяет исходный `CArea::m_pFather`: пара принимается только
     /// если area действительно принадлежит этому server-region.
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn find_player_ids_in_area_object(
         &self,
         area: &CArea,
         destination: &mut Vec<i32>,
     ) -> bool {
-        let Some(owned_area) = self
-            .areas
-            .iter()
-            .find(|owned_area| std::ptr::eq(*owned_area, area))
-        else {
-            return false;
-        };
-        self.append_registered_player_ids(owned_area, destination);
-        true
+        find_player_ids_in_area_object(&self.areas, area, &self.registry, destination)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/queries`; обвязка нужна
+    /// девяти-area обходу `player_ids_around_area`.
     fn append_registered_player_ids(&self, area: &CArea, destination: &mut Vec<i32>) {
-        let mut area_player_ids = Vec::new();
-        if !area.append_player_ids(&mut area_player_ids) {
-            return;
-        }
-        for player_id in area_player_ids {
-            if self.registry.contains(ShapeIdentity {
-                object_type: PLAYER_TYPE,
-                id: player_id,
-                ex_id: CGuid::GUID_INVALID,
-            }) {
-                destination.push(player_id);
-            }
-        }
+        append_registered_player_ids(&self.registry, area, destination)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn find_child_object<Resolver: ShapeResolver>(
         &self,
         object_type: i32,
@@ -3127,33 +3074,21 @@ impl CServerRegion {
         ex_id: CGuid,
         resolver: &Resolver,
     ) -> Option<ShapeView> {
-        let identity = ShapeIdentity {
-            object_type,
-            id: if object_type == GOODS_TYPE { 0 } else { id },
-            ex_id: if object_type == GOODS_TYPE {
-                ex_id
-            } else {
-                CGuid::GUID_INVALID
-            },
-        };
-        if !self.registry.contains(identity) {
-            return None;
-        }
-        resolver.resolve_shape(identity)
+        find_child_object(&self.registry, object_type, id, ex_id, resolver)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn contains_child_object<Resolver: ShapeResolver>(
         &self,
         shape: &CShape,
         resolver: &Resolver,
     ) -> bool {
-        let identity = shape.identity();
-        self.find_child_object(identity.object_type, identity.id, identity.ex_id, resolver)
-            .is_some()
+        contains_child_object(&self.registry, shape, resolver)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/queries`.
     pub(crate) fn get_player_amount(&self) -> u32 {
-        self.registry.players.len() as u32
+        get_player_amount(&self.registry)
     }
 
     pub(crate) fn add_object<Member: RegionMembershipShape, Context: ServerRegionMembershipContext>(

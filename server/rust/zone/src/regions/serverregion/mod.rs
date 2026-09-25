@@ -1,11 +1,12 @@
 //! Data-типы, позиционное ядро, spatial-запросы, membership-ядро и
 //! weather/return-setup/war действия `CServerRegion` исторического
 //! GameServer, перенесённые в Zone `regions/` волной serverregion
-//! (порции 1-4). Исходный владелец — `appserver/serverregion.h/.cpp`.
+//! (порции 1-5). Исходный владелец — `appserver/serverregion.h/.cpp`.
 //! Переходный агрегат `CServerRegion` остаётся в старом пакете, хранит те же
 //! хранилища и делегирует им area-grid, war-soul, block-refresh, shape-lookup,
-//! add/remove, позиционную регистрацию, staging/plan/commit смены области,
-//! налоговые, погодные, return-point и war-фазовые действия этого компонента
+//! ids/find/registered запросы, add/remove, позиционную регистрацию,
+//! staging/plan/commit смены области, налоговые, погодные, return-point
+//! и war-фазовые действия этого компонента
 //! без изменения сигнатур методов; entry-effects входа, доменные классы и
 //! lifecycle вернутся в Zone последующими порциями.
 //!
@@ -22,7 +23,8 @@
 //! с owner-обвязками позиционной регистрации, `transitions` — transition-
 //! контракт, staging-очереди и plan/commit смены области, `registry` —
 //! identity-регистр фигур и счётчики ID, `queries` — observable порядок
-//! старого MSVC hash-обхода NPC-кэша, `weather` — data-контракты и
+//! старого MSVC hash-обхода NPC-кэша и ids/find/registered запросы над
+//! area-grid и registry, `weather` — data-контракты и
 //! tick/change-действия погоды, `returnsetup` — return-setup типы и
 //! fallback-цепочка точки возврата, `war` — war-фаза и city-ownership
 //! действия, `tax` — data-контракты и скалярные state-owner действия налогов.
@@ -31,7 +33,7 @@ pub mod areagrid; // area-grid: построение, доступ и war-soul �
 pub mod blocks; // block-refresh клеток, spatial shape-lookup и skill-cell формула блока.
 pub mod geometry; // типы объектов, area/drop/city-state константы и арифметика координат.
 pub mod membership; // отказ и gate членства, ядра add/remove и owner-обвязки позиции move-shape.
-pub mod queries; // observable traversal-контракты запросов старых hash-хранилищ.
+pub mod queries; // observable traversal старых hash-хранилищ и ids/find/registered запросы regions.
 pub mod registry; // identity-регистр фигур и монотонные счётчики ID.
 pub mod returnsetup; // return-setup типы и fallback-цепочка точки возврата игрока.
 pub mod tax; // data-контракты и скалярные state-owner действия налогов региона.
