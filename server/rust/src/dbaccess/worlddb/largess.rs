@@ -1,5 +1,15 @@
-//! DB-владелец и worker подарков `CLargess` WorldServer из `largess.cpp`.
-//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
+//! DB-владелец и worker подарков `CLargess` WorldServer из `largess.cpp`;
+//! трейт `LargessOwner` и его data-семья (исходы очередей transfer/cycle-load,
+//! настройки Cost DB, notice-семья сохранения) перенесены в Realm
+//! `persistence/largess`, здесь остаётся Tiberius-реализация
+//! `TiberiusLargess` и их реэкспорт для переходных потребителей.
+//! Источник контракта — точная пара `Nworldserver.exe` и `WorldServer.pdb`.
+//!
+//! Со структурой здесь остаются load-ветка `LoadLargess`/`AddOneLargess` и
+//! worker lifecycle transfer/cycle-load (`StartWorkerThread`, `Drop`,
+//! вспомогательные SQL-шаги): load-ветка работает с `CPlayer`/`CGoods` и
+//! фабрикой товаров старого владельца, а worker разделяет с ней очереди
+//! `m_mapLargess` и обе настройки Cost DB этой же структуры.
 //!
 //! Owner сохраняет lifecycle Init/UnInit, очереди transfer/cycle-load, порядок
 //! `AddOneLargess`, календарные поля и обе формы `SaveLoadDetails`. Worker
@@ -8,9 +18,6 @@
 //! records заменяют Win32/ADO/STL, сохраняя locks, partial success и shutdown.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::error::Error;
-use std::fmt;
-use std::io;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -18,7 +25,7 @@ use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
 use parking_lot::Mutex;
-use tiberius::{AuthMethod, Client, Config, EncryptionLevel, Query, Row};
+use tiberius::{Client, Config, Query, Row};
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
@@ -33,6 +40,7 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerCodecError};
 
+pub(crate) use nebokrai_realm::persistence::largess::*;
 pub(crate) use nebokrai_realm::persistence::writelog::LargessWriteLog;
 
 const ERROR_GOODS_ID: &[u8] = b"error goodsID!";
@@ -69,111 +77,6 @@ pub(crate) enum LoadLargessBlock {
     Player(PlayerCodecError),
     Guid(getrandom::Error),
     ZeroMaximumStack { goods_index: u32 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AppendLargessOutcome {
-    Inserted,
-    DuplicateSendId,
-    ExistingPlayerKept,
-}
-
-#[derive(Debug)]
-pub(crate) enum CycleLoadLargessFailure {
-    Connection(LargessDatabaseError),
-    Database {
-        row_index: usize,
-        source: tiberius::error::Error,
-    },
-    MissingRequiredValue {
-        row_index: usize,
-        column: &'static str,
-    },
-    NumericOutsideLegacyRange {
-        row_index: usize,
-        column: &'static str,
-        value: i64,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum CycleLoadLargessOutcome {
-    ReturnedTrue {
-        row_count: usize,
-        inserted: usize,
-        duplicate_send_ids: usize,
-        existing_players_kept: usize,
-    },
-    ReturnedFalse(CycleLoadLargessFailure),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TransferLargessDatabaseStage {
-    BeginWorkingTransaction,
-    InsertWorkingRow,
-    MarkIncomingRowProcessed,
-    CommitWorkingTransaction,
-}
-
-#[derive(Debug)]
-pub(crate) enum TransferLargessFailure {
-    IncomingConnection(LargessDatabaseError),
-    WorkingConnection(LargessDatabaseError),
-    IncomingQuery(tiberius::error::Error),
-    MissingRequiredValue {
-        row_index: usize,
-        column: &'static str,
-    },
-    NumericOutsideLegacyRange {
-        row_index: usize,
-        column: &'static str,
-        value: i64,
-    },
-    IncomingRow {
-        row_index: usize,
-        column: &'static str,
-        source: tiberius::error::Error,
-    },
-    Database {
-        row_index: usize,
-        stage: TransferLargessDatabaseStage,
-        source: tiberius::error::Error,
-        rollback: Option<tiberius::error::Error>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) enum TransferLargessOutcome {
-    ReturnedTrue { row_count: usize },
-    ReturnedFalse(TransferLargessFailure),
-}
-
-#[derive(Debug)]
-pub(crate) struct LargessWorkerReport {
-    pub(crate) transfer: TransferLargessOutcome,
-    pub(crate) cycle_load: CycleLoadLargessOutcome,
-}
-
-#[derive(Debug)]
-pub(crate) enum LargessWorkerCompletion {
-    Returned(LargessWorkerReport),
-    Panicked,
-}
-
-#[derive(Debug)]
-pub(crate) enum LargessWorkerStartOutcome {
-    Disabled,
-    Busy,
-    Started {
-        previous: Option<LargessWorkerCompletion>,
-    },
-    MissingRuntime {
-        previous: Option<LargessWorkerCompletion>,
-    },
-    SpawnFailed {
-        previous: Option<LargessWorkerCompletion>,
-        source: io::Error,
-    },
 }
 
 pub(crate) fn add_gold_coin(
@@ -213,143 +116,6 @@ pub(crate) fn add_one_largess(
         position = position.wrapping_add(1);
     }
     Ok(LargessDepotAddOutcome::Rejected { position: limit })
-}
-
-#[derive(Clone)]
-pub(crate) struct CostDatabaseSettings {
-    _provider: Vec<u8>,
-    host: Vec<u8>,
-    database: Vec<u8>,
-    user: Vec<u8>,
-    password: Vec<u8>,
-}
-
-pub(crate) struct CostDatabaseSettingsParts {
-    pub(crate) provider: Vec<u8>,
-    pub(crate) host: Vec<u8>,
-    pub(crate) database: Vec<u8>,
-    pub(crate) user: Vec<u8>,
-    pub(crate) password: Vec<u8>,
-}
-
-impl CostDatabaseSettings {
-    pub(crate) fn from_parts(parts: CostDatabaseSettingsParts) -> Self {
-        Self {
-            _provider: parts.provider,
-            host: parts.host,
-            database: parts.database,
-            user: parts.user,
-            password: parts.password,
-        }
-    }
-
-    fn tds_config(&self) -> Config {
-        let mut config = Config::new();
-        config.host(decode_ansi_c_string(&self.host));
-        config.database(decode_ansi_c_string(&self.database));
-        config.authentication(AuthMethod::sql_server(
-            decode_ansi_c_string(&self.user),
-            decode_ansi_c_string(&self.password),
-        ));
-        config.encryption(EncryptionLevel::NotSupported);
-        config
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct LargessSnapshot {
-    pub(crate) send_id: i32,
-    pub(crate) goods_index: u32,
-    pub(crate) send_num: i32,
-    pub(crate) obtained_num: i32,
-    pub(crate) goods_level: i32,
-    pub(crate) sent_time: Vec<u8>,
-    pub(crate) failed_reason: Vec<u8>,
-}
-
-#[derive(Clone)]
-pub(crate) struct SensitiveCdKey(Vec<u8>);
-
-impl SensitiveCdKey {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl fmt::Debug for SensitiveCdKey {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("SensitiveCdKey(<скрыто>)")
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum SaveLoadDetailsOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-}
-
-#[derive(Debug)]
-pub(crate) enum LargessNotice {
-    AddPresentDetail {
-        cd_key: SensitiveCdKey,
-        send_id: i32,
-        obtained_num: i32,
-        error: LargessDatabaseError,
-    },
-    UpdateObtainedNum {
-        cd_key: SensitiveCdKey,
-        send_id: i32,
-        player_id: i32,
-        obtained_num: i32,
-        error: LargessDatabaseError,
-    },
-    SaveLoadDetails(LargessDatabaseError),
-}
-
-#[derive(Debug)]
-pub(crate) enum LargessDatabaseError {
-    MissingConnection,
-    Connect(io::Error),
-    Tds(tiberius::error::Error),
-}
-
-impl fmt::Display for LargessDatabaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingConnection => formatter.write_str("не передано соединение Cost DB"),
-            Self::Connect(error) => write!(formatter, "не установлено соединение Cost DB: {error}"),
-            Self::Tds(error) => write!(formatter, "ошибка TDS Cost DB: {error}"),
-        }
-    }
-}
-
-impl Error for LargessDatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::MissingConnection => None,
-            Self::Connect(error) => Some(error),
-            Self::Tds(error) => Some(error),
-        }
-    }
-}
-
-impl From<tiberius::error::Error> for LargessDatabaseError {
-    fn from(error: tiberius::error::Error) -> Self {
-        Self::Tds(error)
-    }
-}
-
-pub(crate) trait LargessOwner {
-    async fn save_load_details_with_connection(
-        &mut self,
-        cd_key: &[u8],
-        player_id: i32,
-        connection: Option<&mut WorldTdsClient>,
-    ) -> SaveLoadDetailsOutcome;
-
-    async fn save_load_details(&mut self, cd_key: &[u8], player_id: i32) -> SaveLoadDetailsOutcome;
-
-    fn pop_notice(&mut self) -> Option<LargessNotice>;
 }
 
 pub(crate) struct TiberiusLargess {
@@ -1297,11 +1063,6 @@ fn c_string_prefix(bytes: &[u8]) -> &[u8] {
         .iter()
         .position(|byte| *byte == 0)
         .map_or(bytes, |end| &bytes[..end])
-}
-
-fn decode_ansi_c_string(bytes: &[u8]) -> String {
-    let (decoded, _, _) = WINDOWS_1251.decode(c_string_prefix(bytes));
-    decoded.into_owned()
 }
 
 fn format_local_time() -> String {

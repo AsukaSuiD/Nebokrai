@@ -1,6 +1,7 @@
 //! Координация сохранения и DB-инфраструктура World Realm.
 
 pub mod dbmisc;
+pub mod largess;
 pub mod row;
 pub mod rsgenvar;
 pub mod rsplayer;
