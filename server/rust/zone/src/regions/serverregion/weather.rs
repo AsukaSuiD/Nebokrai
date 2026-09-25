@@ -3,9 +3,9 @@
 //! сами tick/change-действия (порция 4): periodic fragment `CServerRegion::AI`
 //! и exact `ChangeWeather`. Исходный владелец — `appserver/serverregion.h/.cpp`;
 //! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
-//! `ChangeWeather` (`0x0007F210`) собирает единственную запись с нулевым
+//! `ChangeWeather` (`0x00080210`) собирает единственную запись с нулевым
 //! цветом тумана, заменяет ей `m_vectorWeather +0x200` и вызывает
-//! `SendWeatherInfo(player=0)` (`0x0007B610`), сериализующий `0xBF507`;
+//! `SendWeatherInfo(player=0)` (`0x0007C610`), сериализующий `0xBF507`;
 //! публикацией настоящих сеансов владеет достигнутый `CGame` caller.
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -93,7 +93,7 @@ pub fn advance_weather_tick(
     }
 }
 
-/// Тело exact `CServerRegion::ChangeWeather` (`0x0007F210`) без publish-хвоста:
+/// Тело exact `CServerRegion::ChangeWeather` (`0x00080210`) без publish-хвоста:
 /// единственная запись с нулевым цветом тумана заменяет `m_vectorWeather`.
 pub fn change_weather(current: &mut Vec<ServerRegionWeather>, weather_index: i32) {
     current.clear();
