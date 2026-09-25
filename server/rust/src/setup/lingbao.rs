@@ -2,5 +2,5 @@
 //! Здесь реэкспорт для переходных потребителей обеих ролей.
 
 pub(crate) use nebokrai_shared::resources::{
-    CLingBaoSetup, LingBaoDecodeError, LingBaoSerializationBlock,
+    CLingBaoSetup, LingBaoDecodeError,
 };

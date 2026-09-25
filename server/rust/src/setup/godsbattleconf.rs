@@ -4,5 +4,5 @@
 pub(crate) use nebokrai_shared::resources::{
     CGodsBattleConf, GodsBattleDecodeError, GodsBattleFactionNpcName,
     GodsBattleFactionXydUpdate, GodsBattleLoadError, GodsBattleNpcFactionUpdate,
-    GodsBattleSerializeError, GodsBattleSzlCalculation,
+    GodsBattleSzlCalculation,
 };

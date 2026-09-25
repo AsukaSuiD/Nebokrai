@@ -3,5 +3,5 @@
 
 pub(crate) use nebokrai_shared::resources::{
     CIncrementShopList, IncrementShopDecodeError, IncrementShopGoodsQuery,
-    IncrementShopGoodsResult, IncrementShopItem, IncrementShopSerializeError,
+    IncrementShopGoodsResult, IncrementShopItem,
 };

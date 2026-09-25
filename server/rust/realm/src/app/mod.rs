@@ -33,6 +33,7 @@ pub mod onmsg_m2w_auction;
 pub mod organsysmessage;
 pub mod playermessage;
 pub mod player_base;
+pub mod servermessage;
 pub mod teammessage;
 pub mod world_client;
 pub mod world_game_view;

@@ -3,7 +3,7 @@
 
 pub(crate) use nebokrai_shared::resources::{
     MonsterDropRegistry, MonsterListDecodeError,
-    MonsterListSerializeError, MonsterProperties, MonsterRegistry, MonsterSkill,
+    MonsterProperties, MonsterRegistry, MonsterSkill,
     decode_monster_list, get_monster_property_by_origin_index, get_monster_property_by_origin_name,
     get_monster_property_by_origin_name_mut, get_monster_property_by_picture_id,
     load_drop_goods_list, load_monster_list, serialize_monster_list,

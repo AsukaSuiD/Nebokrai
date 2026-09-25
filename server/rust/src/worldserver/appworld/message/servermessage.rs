@@ -24,13 +24,17 @@
 //! Runtime spawn request `0x5FA0B` валидируется вместе с source/region route,
 //! меняет только тип на `0x7F80A` и передаёт неизменный payload целевому
 //! GameServer; там существующий concrete handler создаёт NPC/monster owner-а.
+//!
+//! Наблюдаемые outcome/report-типы ветвей без связей с владельцем игры
+//! вынесены в `nebokrai_realm::app::servermessage`; ниже их реэкспорт для
+//! переходных потребителей старого пакета.
 
 use std::error::Error;
 use std::fmt;
 use std::net::Ipv4Addr;
 
 use crate::dbaccess::worlddb::rsgodsbattle::{
-    GodsBattleNpcFactionSnapshot, RsGodsBattleNotice, RsGodsBattleOwner, TiberiusRsGodsBattle,
+    GodsBattleNpcFactionSnapshot, RsGodsBattleOwner, TiberiusRsGodsBattle,
 };
 use crate::dbaccess::worlddb::rsplayer::HonorRanksType;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
@@ -38,75 +42,45 @@ use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
-use crate::public::ciqing::CiQingSerializationBlock;
-use crate::public::dupliregionsetup::DupliRegionSerializeError;
-use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
-use crate::public::taozhuangsetup::TaoZhuangSerializationBlock;
-use crate::public::wordsfilter::WordsFilterSerializeError;
-use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
-use crate::setup::contributesetup::ContributeSetupSerializeError;
-use nebokrai_shared::resources::EmotionSerializeError;
+use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
-use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
-use crate::setup::godsbattleconf::{
-    CGodsBattleConf, GodsBattleFactionXydUpdate, GodsBattleNpcFactionUpdate,
-    GodsBattleSerializeError,
-};
-use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
-use nebokrai_shared::resources::HitLevelSerializeError;
+use crate::setup::gmlist::CGMList;
+use crate::setup::godsbattleconf::CGodsBattleConf;
+use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
-use crate::setup::incrementshoplist::IncrementShopSerializeError;
-use crate::setup::leitingsetup::ThingSetupCodecError;
-use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
-use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
-use crate::setup::monsterlist::{
-    MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
-};
-use crate::setup::newskillmonsterlist::{NewSkillMonsterConf, NewSkillMonsterSerializeError};
-use nebokrai_shared::resources::{CPlayerList, PlayerListSerializeError};
+use crate::setup::lingbao::CLingBaoSetup;
+use crate::setup::logsystem::CLogSystem;
+use crate::setup::monsterlist::{MonsterDropRegistry, MonsterRegistry, serialize_monster_list};
+use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
+use nebokrai_shared::resources::CPlayerList;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
-use crate::setup::prisonconf::PrisonConfSerializeError;
-use nebokrai_shared::resources::QuestSystemSerializationBlock;
-use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
-use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
-use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
-use crate::setup::tradelist::TradeListSerializeError;
+use crate::setup::preciousboxconf::PreciousBoxConf;
+use crate::setup::regionrouter::RegionRouter;
+use crate::setup::regionsetup::CRegionSetup;
+use crate::setup::synthesis::CSynthesis;
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryHandlerSerializeError,
 };
-use crate::worldserver::appworld::country::countryparam::{
-    CCountryParam, CountryParamSerializationBlock,
-};
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
-use crate::worldserver::appworld::goods::cbattlefairyproperty::{
-    BattleFairyComposeWireError, CBattleFairyProperty,
-};
+use crate::worldserver::appworld::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
+    GoodsBasePropertiesRegistry, serialize_goods_registry,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
-use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationWarSerializationBlock,
-};
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
-use crate::worldserver::appworld::player::{
-    PlayerCodecError, PlayerMurderCounterUpdate, PlayerPropertyCoefficients,
-};
-use crate::worldserver::appworld::script::variablelist::{
-    CVariableList, VariableListSerializationBlock, VariableSetOutcome,
-};
+use crate::worldserver::appworld::player::{PlayerCodecError, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::script::variablelist::{CVariableList, VariableSetOutcome};
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
-use crate::worldserver::appworld::skills::skillfactory::{
-    CSkillFactory, SkillFactorySerializeError,
-};
+use crate::worldserver::appworld::skills::skillfactory::CSkillFactory;
 use crate::worldserver::worldserver::game::{
     CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
@@ -118,10 +92,12 @@ use crate::worldserver::worldserver::game::{
     WorldSaveThreadLaunchRequest, WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner,
     prepare_save_thread_launch,
 };
-use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
-use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRanksSerializationBlock};
+use crate::worldserver::worldserver::honorranks::CHonorRanks;
+use crate::worldserver::worldserver::playerranks::CPlayerRanks;
 use crate::worldserver::worldserver::savedb::SaveDataLifecycleState;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
+
+pub use nebokrai_realm::app::servermessage::*;
 
 #[derive(Debug)]
 pub(crate) struct WorldLoginClientReplacement {
@@ -129,13 +105,6 @@ pub(crate) struct WorldLoginClientReplacement {
     pub(crate) connected_notice: bool,
     pub(crate) cdkey_snapshot: WorldCdkeySnapshot,
     pub(crate) registration: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerConnectedLog {
-    pub(crate) peer_ipv4: u32,
-    pub(crate) game_server_index: u32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Debug)]
@@ -167,28 +136,6 @@ pub(crate) enum WorldServerMessageOutcome {
     RegionChanged(WorldRegionChangeMessage),
     RegionMessageRelayed(WorldRegionMessageRelay),
     SpawnRouted(WorldSpawnRoutingOutcome),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldSpawnRoutingOutcome {
-    Rejected {
-        source_map_id: i32,
-        region_id: Option<i32>,
-        reason: &'static str,
-    },
-    Forwarded {
-        source_map_id: i32,
-        target_map_id: i32,
-        region_id: i32,
-        kind: u8,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WorldSpawnRoutingCommand {
-    kind: u8,
-    region_id: i32,
 }
 
 fn decode_spawn_routing_i32(payload: &[u8], cursor: &mut usize) -> Option<i32> {
@@ -269,109 +216,6 @@ pub(crate) struct WorldLoginServerClosed {
 }
 
 #[derive(Debug)]
-pub(crate) struct WorldGodsBattleMessage {
-    pub(crate) subtype: i8,
-    pub(crate) subtype_complete: bool,
-    pub(crate) disposition: WorldGodsBattleDisposition,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldGodsBattleDisposition {
-    Query {
-        faction_a_xyd: u32,
-        faction_b_xyd: u32,
-        message_type: i32,
-        socket_id: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    UpdateFaction {
-        faction: i32,
-        faction_complete: bool,
-        xyd: u32,
-        xyd_complete: bool,
-        update: GodsBattleFactionXydUpdate,
-        faction_a_xyd: u32,
-        faction_b_xyd: u32,
-        response_marker: i8,
-        message_type: i32,
-        socket_id: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    UpdateNpc {
-        name: Vec<u8>,
-        faction: i32,
-        faction_complete: bool,
-        update: Option<GodsBattleNpcFactionUpdate>,
-        save: WorldGodsBattleNpcSave,
-    },
-    Ignored,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldGodsBattleNpcSave {
-    DatabaseOwnerUnavailable,
-    Completed {
-        snapshot_records: usize,
-        save_returned: bool,
-        notices: Vec<RsGodsBattleNotice>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldGodsBattleTopTenMessage {
-    pub(crate) socket_id: i32,
-    pub(crate) disposition: WorldGodsBattleTopTenDisposition,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldGodsBattleTopTenDisposition {
-    DatabaseOwnerUnavailable,
-    FactionFiveFailed {
-        notices: Vec<RsGodsBattleNotice>,
-    },
-    FactionSixFailed {
-        faction_five_payload_bytes: usize,
-        notices: Vec<RsGodsBattleNotice>,
-    },
-    Sent {
-        faction_five_payload_bytes: usize,
-        faction_six_payload_bytes: usize,
-        terminal_marker: i32,
-        payload_bytes: usize,
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-        notices: Vec<RsGodsBattleNotice>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldGeneralVariableUpdate {
-    pub(crate) variable_type: i32,
-    pub(crate) type_complete: bool,
-    pub(crate) name: Vec<u8>,
-    pub(crate) value: Option<WorldGeneralVariableValue>,
-    pub(crate) disposition: WorldGeneralVariableUpdateDisposition,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldGeneralVariableValue {
-    Integer { value: i32, complete: bool },
-    String(Vec<u8>),
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldGeneralVariableUpdateDisposition {
-    UnsupportedTypeLegacyUndefined,
-    VariableListUnavailable,
-    MutationRejected(VariableSetOutcome),
-    Broadcast {
-        mutation: VariableSetOutcome,
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug)]
 pub(crate) struct WorldRegionChangeMessage {
     pub(crate) player_id: i32,
     pub(crate) player_id_complete: bool,
@@ -379,16 +223,6 @@ pub(crate) struct WorldRegionChangeMessage {
     pub(crate) target_region_complete: bool,
     pub(crate) socket_id: i32,
     pub(crate) disposition: WorldRegionChangeDisposition,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionChangePrefix {
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) direction: i32,
-    pub(crate) use_goods: i32,
-    pub(crate) range: i32,
-    pub(crate) complete: [bool; 5],
 }
 
 #[derive(Debug)]
@@ -451,14 +285,6 @@ pub(crate) enum WorldPlayerSavePacket {
 }
 
 #[derive(Debug)]
-pub(crate) struct WorldPlayerSaveCompletion {
-    pub(crate) game_server_index: i32,
-    pub(crate) advertised_player_count: i32,
-    pub(crate) message_size: i32,
-    pub(crate) log: AddLogTextDisposition,
-}
-
-#[derive(Debug)]
 pub(crate) enum WorldPlayerSaveMaterialization {
     NotTriggered,
     Launched(WorldCompletedSaveResponseLaunchReport),
@@ -492,24 +318,6 @@ pub(crate) struct WorldPlayerSaveBatchMessage {
     pub(crate) advertised_player_count: i32,
     pub(crate) player_count_complete: bool,
     pub(crate) disposition: WorldPlayerSaveBatchDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMurderReport {
-    pub(crate) fields: [i32; 4],
-    pub(crate) fields_complete: [bool; 4],
-    pub(crate) game_server_number: i32,
-    pub(crate) disposition: WorldMurderReportDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMurderReportDisposition {
-    Relayed {
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    CountersIncremented(PlayerMurderCounterUpdate),
-    MissingOnlinePlayer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -555,82 +363,6 @@ pub(crate) enum WorldPlayerDataSyncDisposition {
     Ignored,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerNameMessageRelay {
-    pub(crate) requested_name: Vec<u8>,
-    pub(crate) text: Vec<u8>,
-    pub(crate) values: [i32; 3],
-    pub(crate) values_complete: [bool; 3],
-    pub(crate) resolved_named_player_id: u32,
-    pub(crate) disposition: WorldPlayerNameMessageDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerNameMessageDisposition {
-    Suppressed(WorldPlayerNameMessageSuppression),
-    MissingNamedPlayer {
-        target_player_id: i32,
-        game_server_number: i32,
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    NamedPlayer {
-        player_id: i32,
-        game_server_number: i32,
-        displayed_target: Vec<u8>,
-        target_online: bool,
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerNameMessageSuppression {
-    TargetPlayerNotOnline,
-    TargetRouteMissing,
-    NamedPlayerRouteMissing,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldGameServerConnectionContinuation {
-    NotConfigured,
-    NetworkOwnerUnavailable,
-    AuctionStateUnavailable,
-    LegacyIpv4SyntaxUnknown,
-    InitialConfigurationPending {
-        socket_id: i32,
-        game_server_index: u32,
-    },
-    InitialConfigurationComplete {
-        socket_id: i32,
-        game_server_index: u32,
-    },
-    InitialConfigurationBlocked {
-        socket_id: i32,
-        game_server_index: u32,
-        owner: &'static str,
-    },
-    ReconnectPlayerDataPending {
-        socket_id: i32,
-        game_server_index: u32,
-        remaining_payload: Vec<u8>,
-    },
-    ReconnectPlayerDataComplete {
-        socket_id: i32,
-        game_server_index: u32,
-    },
-    RegistryPortUnavailable {
-        game_server_index: u32,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerAuctionBroadcast {
-    pub(crate) message_type: i32,
-    pub(crate) enabled: bool,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
 #[derive(Debug)]
 pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) sync_flag: i8,
@@ -651,269 +383,6 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) continuation: WorldGameServerConnectionContinuation,
 }
 
-pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
-    pub(crate) da_kong_xiang_qian: &'a [u8],
-    pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldInitialConfigurationTarget {
-    Socket(i32),
-    AllGameServers,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldInitialConfigurationDelivery {
-    pub(crate) subtype: i32,
-    pub(crate) payload_length: usize,
-    pub(crate) target: WorldInitialConfigurationTarget,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldInitialConfigurationRunCompletion {
-    Complete,
-    Blocked { owner: &'static str },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldInitialConfigurationRunReport {
-    pub(crate) deliveries: Vec<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldInitialConfigurationRunCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldInitialConfigurationPrefixCompletion {
-    WordsFilter(WordsFilterSerializeError),
-    GoodsRegistry(GoodsRegistrySerializeError),
-    ThingSetup(ThingSetupCodecError),
-    MonsterListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldInitialConfigurationPrefixReport {
-    pub(crate) deliveries: Vec<WorldInitialConfigurationDelivery>,
-    pub(crate) language_notice: bool,
-    pub(crate) words_filter_notice: bool,
-    pub(crate) completion: WorldInitialConfigurationPrefixCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldMonsterConfigurationCompletion {
-    MonsterList(MonsterListSerializeError),
-    HitLevelSetupPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldMonsterConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldMonsterConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldHitLevelConfigurationCompletion {
-    HitLevelSetup(HitLevelSerializeError),
-    PlayerListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldHitLevelConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldHitLevelConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerListConfigurationCompletion {
-    PlayerList(PlayerListSerializeError),
-    EmotionPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerListConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldPlayerListConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldEmotionConfigurationCompletion {
-    Emotion(EmotionSerializeError),
-    SkillFactoryPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldEmotionConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldEmotionConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldSkillConfigurationCompletion {
-    SkillFactory(SkillFactorySerializeError),
-    TradeListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldSkillConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldSkillConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldTradeListConfigurationCompletion {
-    TradeList(TradeListSerializeError),
-    IncrementShopListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldTradeListConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldTradeListConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldIncrementShopConfigurationCompletion {
-    IncrementShop(IncrementShopSerializeError),
-    ContributeSetupPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldIncrementShopConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldIncrementShopConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldContributeConfigurationCompletion {
-    ContributeSetup(ContributeSetupSerializeError),
-    PrisonConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldContributeConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldContributeConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldPrisonConfigurationCompletion {
-    PrisonConf(PrisonConfSerializeError),
-    PreciousBoxConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPrisonConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldPrisonConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldPreciousBoxConfigurationCompletion {
-    PreciousBox(PreciousBoxSerializeError),
-    FairyExpConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPreciousBoxConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldPreciousBoxConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldFairyExpConfigurationCompletion {
-    FairyExp(BattleFairyExpSerializeError),
-    SynthesisConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFairyExpConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldFairyExpConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldSynthesisConfigurationCompletion {
-    Synthesis(SynthesisSerializeError),
-    EquipmentComposeConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldSynthesisConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldSynthesisConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldEquipmentComposeConfigurationCompletion {
-    EquipmentCompose(EquipmentComposeSerializeError),
-    NewSkillMonsterConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldEquipmentComposeConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldEquipmentComposeConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldNewSkillMonsterConfigurationCompletion {
-    NewSkillMonster(NewSkillMonsterSerializeError),
-    GoodsDestroyConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldNewSkillMonsterConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldNewSkillMonsterConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGoodsDestroyConfigurationCompletion {
-    GoodsDestroy(GoodsDestroySerializeError),
-    GlobeSetupConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGoodsDestroyConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldGoodsDestroyConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGlobeSetupConfigurationCompletion {
-    RegionRouter(RegionRouterSerializeError),
-    LogSystemConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGlobeSetupConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldGlobeSetupConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldLogSystemConfigurationCompletion {
-    LogSystem(LogSystemSerializeError),
-    CountryParamConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldLogSystemConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldLogSystemConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryParamConfigurationCompletion {
-    CountryParam(CountryParamSerializationBlock),
-    CountryHandlerConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryParamConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldCountryParamConfigurationCompletion,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryHandlerConfigurationCompletion {
     CountryHandler(CountryHandlerSerializeError),
@@ -924,18 +393,6 @@ pub(crate) enum WorldCountryHandlerConfigurationCompletion {
 pub(crate) struct WorldCountryHandlerConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldCountryHandlerConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGodsBattleConfigurationCompletion {
-    GodsBattle(GodsBattleSerializeError),
-    RegionSnapshotsPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGodsBattleConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldGodsBattleConfigurationCompletion,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -957,282 +414,6 @@ pub(crate) enum WorldRegionConfigurationCompletion {
 pub(crate) struct WorldRegionConfigurationReport {
     pub(crate) deliveries: Vec<WorldRegionConfigurationDelivery>,
     pub(crate) completion: WorldRegionConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldRegionSetupConfigurationCompletion {
-    RegionSetup(RegionSetupSerializeError),
-    DupliRegionSetupPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionSetupConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldRegionSetupConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldDupliRegionConfigurationCompletion {
-    DupliRegionSetup(DupliRegionSerializeError),
-    HonorEliminateConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldDupliRegionConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldDupliRegionConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldHonorEliminateConfigurationCompletion {
-    HonorRanksPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldHonorEliminateConfigurationReport {
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-    pub(crate) completion: WorldHonorEliminateConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldHonorRanksConfigurationDelivery {
-    pub(crate) rank_type: HonorRanksType,
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldHonorRanksConfigurationCompletion {
-    HonorRanks(HonorRanksSerializationBlock),
-    FunctionListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldHonorRanksConfigurationReport {
-    pub(crate) deliveries: Vec<WorldHonorRanksConfigurationDelivery>,
-    pub(crate) completion: WorldHonorRanksConfigurationCompletion,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldRawScriptListKind {
-    Function,
-    Variable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldRawScriptListConfigurationBlock {
-    pub(crate) kind: WorldRawScriptListKind,
-    pub(crate) length: usize,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRawScriptListConfigurationDelivery {
-    pub(crate) kind: WorldRawScriptListKind,
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldRawScriptListsConfigurationCompletion {
-    FileSize(WorldRawScriptListConfigurationBlock),
-    GeneralVariableListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRawScriptListsConfigurationReport {
-    pub(crate) deliveries: Vec<WorldRawScriptListConfigurationDelivery>,
-    pub(crate) completion: WorldRawScriptListsConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGeneralVariableConfigurationCompletion {
-    VariableList(VariableListSerializationBlock),
-    ScriptFilesPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGeneralVariableConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldGeneralVariableConfigurationCompletion,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldScriptFileConfigurationBlock {
-    pub(crate) path: Vec<u8>,
-    pub(crate) length: usize,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldScriptFileConfigurationDelivery {
-    pub(crate) path: Vec<u8>,
-    pub(crate) declared_length: i32,
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldScriptFilesConfigurationCompletion {
-    FileSize(WorldScriptFileConfigurationBlock),
-    QuestSystemPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldScriptFilesConfigurationReport {
-    pub(crate) deliveries: Vec<WorldScriptFileConfigurationDelivery>,
-    pub(crate) completion: WorldScriptFilesConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldQuestConfigurationCompletion {
-    QuestSystem(QuestSystemSerializationBlock),
-    PlayerRanksPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldQuestConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldQuestConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerRanksConfigurationCompletion {
-    PlayerRanks(PlayerRanksSerializationBlock),
-    GmListPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerRanksConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldPlayerRanksConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGmListConfigurationCompletion {
-    GmList(GmListSerializationBlock),
-    GameServerIndexPending {
-        socket_id: i32,
-        game_server_index: u32,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGmListConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldGmListConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGameServerIndexConfigurationCompletion {
-    FourNationWarPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerIndexConfigurationReport {
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-    pub(crate) completion: WorldGameServerIndexConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldFourNationWarConfigurationCompletion {
-    FourNationWar(FourNationWarSerializationBlock),
-    BattleFairyExpConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationWarConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldFourNationWarConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldBattleFairyExpConfigurationCompletion {
-    BattleFairyExp(BattleFairyExpSerializeError),
-    BattleFairyPropertyPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldBattleFairyExpConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldBattleFairyExpConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldBattleFairyPropertyConfigurationCompletion {
-    BattleFairyProperty(BattleFairyComposeWireError),
-    CiQingLingBaoConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldBattleFairyPropertyConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldBattleFairyPropertyConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCiQingLingBaoConfigurationCompletion {
-    CiQing(CiQingSerializationBlock),
-    LingBao(LingBaoSerializationBlock),
-    TaoZhuangConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCiQingLingBaoConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldCiQingLingBaoConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldTaoZhuangConfigurationCompletion {
-    TaoZhuang(TaoZhuangSerializationBlock),
-    AttackCityConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldTaoZhuangConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldTaoZhuangConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldAttackCityConfigurationCompletion {
-    VillageWarConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldAttackCityConfigurationReport {
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-    pub(crate) completion: WorldAttackCityConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldVillageWarConfigurationCompletion {
-    CountryWarConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldVillageWarConfigurationReport {
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-    pub(crate) completion: WorldVillageWarConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryWarConfigurationCompletion {
-    GameServerIdentityPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryWarConfigurationReport {
-    pub(crate) delivery: WorldInitialConfigurationDelivery,
-    pub(crate) completion: WorldCountryWarConfigurationCompletion,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldGameServerIdentityCompletion {
-    InitialConfigurationComplete { socket_id: i32 },
-    MissingWorldNumber { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerIdentityReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldGameServerIdentityCompletion,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1278,70 +459,9 @@ pub(crate) struct WorldGameServerReconnectReport {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerBroadcast {
-    pub(crate) message_type: i32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldGameServerPingStart {
-    pub(crate) cleared_responses: usize,
-    pub(crate) started_at_ms: u32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerPingResponse {
     pub(crate) response: WorldPingGameServerInfo,
     pub(crate) response_count: usize,
-    pub(crate) payload_complete: bool,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldLoginServerTupleRelay {
-    WorldNumberUnavailable {
-        map_id: i32,
-        value: i32,
-        payload_complete: bool,
-    },
-    Suppressed {
-        world_number: u32,
-        map_id: i32,
-        value: i32,
-        payload_complete: bool,
-    },
-    Forwarded {
-        world_number: u32,
-        map_id: i32,
-        value: i32,
-        payload_complete: bool,
-        message_type: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldOpaqueServerFields {
-    pub(crate) value: i32,
-    pub(crate) numeric_complete: bool,
-    pub(crate) text: Vec<u8>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldRegionMessageRelay {
-    pub(crate) ignored_selector: i8,
-    pub(crate) selector_complete: bool,
-    pub(crate) region_id: i32,
-    pub(crate) region_complete: bool,
-    pub(crate) game_server_number: i32,
-    pub(crate) message_type: i32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldLoginServerIdentity {
-    pub(crate) previous_login_server_id: i32,
-    pub(crate) login_server_id: i32,
     pub(crate) payload_complete: bool,
 }
 

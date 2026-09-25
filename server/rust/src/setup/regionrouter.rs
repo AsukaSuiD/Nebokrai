@@ -3,5 +3,4 @@
 
 pub(crate) use nebokrai_shared::resources::{
     RegionRoutePoint, RegionRouter, RegionRouterChangeOutcome,
-    RegionRouterSerializeError,
 };
