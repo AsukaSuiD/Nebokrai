@@ -6892,19 +6892,6 @@ impl CFaction {
     }
 }
 
-pub fn goods_war_check_for_faction<F>(
-    faction: Option<&CFaction>,
-    is_in_faction_id_list: F,
-) -> bool
-where
-    F: FnOnce(i32) -> bool,
-{
-    let Some(faction) = faction else {
-        return false;
-    };
-    goods_war_check_for_faction_id(faction.faction_id(), is_in_faction_id_list)
-}
-
 pub fn goods_war_check_for_faction_id<F>(
     faction_id: i32,
     is_in_faction_id_list: F,

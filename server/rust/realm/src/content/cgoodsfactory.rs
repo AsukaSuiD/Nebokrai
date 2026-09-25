@@ -19,9 +19,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::CStr;
 use std::fmt;
-use std::path::Path;
-
-use crate::content::cgoods::{CGoods, FirstAddonModifierAdjustment, GoodsCodecError};
+use crate::content::cgoods::{CGoods, GoodsCodecError};
 use crate::content::goods::{
     CGoodsBaseProperties, GoodsBasePropertiesCodecError, GoodsBasePropertiesRegistry,
     ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED, ICON_TYPE_GROUND,
@@ -96,28 +94,6 @@ pub fn release_goods_registry(
     name_index.clear();
 }
 
-pub fn load_goods_registry_from_file<ResolveString>(
-    path: impl AsRef<Path>,
-    registry: &mut GoodsBasePropertiesRegistry,
-    original_name_index: &mut GoodsOriginalNameIndex,
-    name_index: &mut GoodsNameIndex,
-    resolve_string_id: &mut ResolveString,
-) -> Result<(), GoodsRegistryFileLoadError>
-where
-    ResolveString: FnMut(&[u8]) -> Option<Vec<u8>>,
-{
-    release_goods_registry(registry, original_name_index, name_index);
-    let source = std::fs::read(path).map_err(GoodsRegistryFileLoadError::Io)?;
-    load_goods_registry(
-        &source,
-        registry,
-        original_name_index,
-        name_index,
-        resolve_string_id,
-    )
-    .map_err(GoodsRegistryFileLoadError::Format)
-}
-
 pub fn load_goods_registry<ResolveString>(
     source: &[u8],
     registry: &mut GoodsBasePropertiesRegistry,
@@ -177,45 +153,6 @@ pub fn serialize_goods_registry(
             .map_err(GoodsRegistrySerializeError::BaseProperties)?;
     }
     Ok(())
-}
-
-/// Создаёт private `CGoodsFactory::Upgrade`.
-///
-/// `random` вызывается ровно тогда, когда source upper-value положительно,
-/// с signed wrapping `upper - lower`; callback несёт уже действующую
-/// legacy-семантику `random(bound)`. Non-zero `increase` исходника выражен
-/// bool-границей. Пустой destination value-vector был оригинал dereference и
-/// становится typed block без mutation.
-pub fn upgrade_goods_addon<Random>(
-    goods: &mut CGoods,
-    source_property_type: i32,
-    destination_property_type: i32,
-    increase: bool,
-    random: &mut Random,
-) -> Result<bool, GoodsUpgradeBlock>
-where
-    Random: FnMut(i32) -> i32,
-{
-    let lower = goods.get_addon_property_value(source_property_type, 1);
-    if lower < 1 {
-        return Ok(false);
-    }
-    let upper = goods.get_addon_property_value(source_property_type, 2);
-    let delta = if upper > 0 {
-        lower.wrapping_add(random(upper.wrapping_sub(lower)))
-    } else {
-        lower
-    };
-
-    match goods.adjust_first_addon_modifier(destination_property_type, delta, increase) {
-        FirstAddonModifierAdjustment::MissingProperty => Ok(false),
-        FirstAddonModifierAdjustment::MissingValue => {
-            Err(GoodsUpgradeBlock::DestinationAddonHasNoValues {
-                property_type: destination_property_type,
-            })
-        }
-        FirstAddonModifierAdjustment::Adjusted => Ok(true),
-    }
 }
 
 fn load_base_properties<ResolveString>(

@@ -2744,40 +2744,6 @@ where
     }
 }
 
-/// Выполняет Save Region Data DB-вызовы в исходном live list-order.
-///
-/// Для каждого обычного bool-результата commit вызывается безусловно. Caller
-/// обязан применить entry-cleanup без удаления node, а после всего traversal —
-/// единый `clear`; этот порядок отличает region-list от faction/union-list.
-pub async fn save_regions<R: RsRegionOwner>(
-    snapshot: SaveRegionListSnapshot<'_>,
-    region_database: &mut R,
-    connection: &mut WorldTdsClient,
-) -> SaveRegionSaveReport {
-    let mut entries = Vec::with_capacity(snapshot.regions.len());
-    let mut log_events = vec![add_log_event(b"Save Region Data...".to_vec())];
-
-    for region_snapshot in snapshot.regions {
-        entries
-            .push(save_region_entry(region_snapshot.as_ref(), region_database, connection).await);
-    }
-
-    log_events.push(add_log_event(
-        format!(
-            "++Save {} Region Data SUCCESS.",
-            snapshot.logged_count as i32
-        )
-        .into_bytes(),
-    ));
-    SaveRegionSaveReport {
-        entries,
-        clear: SaveRegionFinalClear {
-            logged_count: snapshot.logged_count,
-        },
-        log_events,
-    }
-}
-
 pub async fn save_regions_from_world_snapshot<R: RsRegionOwner>(
     world: &mut WorldDbDataSaveSession<'_>,
     region_database: &mut R,
@@ -3085,41 +3051,6 @@ pub async fn save_enemy_factions_from_world_snapshot<E: RsEnemyFactionsOwner>(
             .push(add_log_event(b"++Save EnemyFactions SUCCESS.".to_vec()));
     }
     report
-}
-
-/// Выполняет Update Country Data DB-вызовы в исходном live list-order.
-///
-/// Для каждого обычного bool-результата commit вызывается безусловно. Caller
-/// обязан удалить текущий node, затем уничтожить non-null snapshot; после
-/// traversal он очищает оставшиеся nodes и пишет success-log с исходным count.
-pub async fn save_countries<C: DbCountryOwner>(
-    snapshot: SaveCountryListSnapshot<'_>,
-    country_database: &mut C,
-    connection: &mut WorldTdsClient,
-) -> SaveCountrySaveReport {
-    let mut entries = Vec::with_capacity(snapshot.countries.len());
-    let mut log_events = vec![add_log_event(b"Update Country Data...".to_vec())];
-
-    for country_snapshot in snapshot.countries {
-        entries.push(
-            save_country_entry(country_snapshot.as_ref(), country_database, connection).await,
-        );
-    }
-
-    log_events.push(add_log_event(
-        format!(
-            "++Update {} Country Data SUCCESS.",
-            snapshot.logged_count as i32
-        )
-        .into_bytes(),
-    ));
-    SaveCountrySaveReport {
-        entries,
-        clear: SaveCountryFinalClear {
-            logged_count: snapshot.logged_count,
-        },
-        log_events,
-    }
 }
 
 pub async fn save_countries_from_world_snapshot<C: DbCountryOwner>(
