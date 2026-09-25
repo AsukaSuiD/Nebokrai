@@ -149,6 +149,10 @@
 //! Ядра weather tick/change, return-setup fallback и war-фазовые с
 //! ownership/state accessors делегированы Zone
 //! `regions/serverregion/{weather,returnsetup,war}` без смены сигнатур.
+//! NPC/monster setup data-контракты и ядро инициализации создаваемого NPC
+//! делегированы Zone `regions/serverregion/spawnsetup` через write-шов
+//! `SpawnedNpcAccess`; factory-ветвь `CreateObject(500, id)` остаётся в
+//! `appserver/baseobject.rs`, batch-цикл `AddNpc` — у этого агрегата.
 //! Достигнутый player-leave call из `RemoveObject` попадает в тот же exact
 //! `ret 4` RVA `0x00201A70`, поэтому отдельного наблюдаемого эффекта не имеет.
 //! Packet↔ground проход владеет созданными им `CGoods`, точной 49-cell
@@ -202,7 +206,7 @@ use crate::setup::monsterlist::{
 pub(crate) use nebokrai_zone::regions::regionparam::RegionParamState;
 pub(crate) use nebokrai_zone::regions::serverregion::{
     areagrid::*, blocks::*, geometry::*, membership::*, queries::*, registry::*, returnsetup::*,
-    tax::*, transitions::*, war::*, weather::*,
+    spawnsetup::*, tax::*, transitions::*, war::*, weather::*,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -339,47 +343,6 @@ pub(crate) enum ServerRegionDecodeError {
     Monster(ServerRegionMonsterRectBlock),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionNpcSetup {
-    pub(crate) show_list: bool,
-    pub(crate) picture_id: i32,
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-    pub(crate) count: i32,
-    pub(crate) direction: i32,
-    pub(crate) time: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) script: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionMonsterVariant {
-    pub(crate) cumulative_odds: u16,
-    pub(crate) sign: u16,
-    pub(crate) leader_sign: u16,
-    pub(crate) leader_distance: u16,
-    pub(crate) name: Vec<u8>,
-    pub(crate) script: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionMonsterSetup {
-    pub(crate) index: i32,
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-    pub(crate) count: i32,
-    pub(crate) reset_time: i32,
-    pub(crate) start_time: i32,
-    pub(crate) direction: i32,
-    pub(crate) living_count: i32,
-    pub(crate) last_reset_time_ms: u32,
-    pub(crate) variants: Vec<ServerRegionMonsterVariant>,
-}
-
 pub(crate) trait ServerRegionDecodeEffectsContext:
     ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterEffectsContext
 {
@@ -425,6 +388,30 @@ impl RegionMembershipShape for CPlayer {
     fn after_entered_area(&mut self) { self.auto_start_passive_skills(); }
 }
 
+/// Write-шов Zone-ядра инициализации spawned NPC: делегирует тем же
+/// inherent-methods `CNpc` без изменения их сигнатур и порядка.
+impl SpawnedNpcAccess for CNpc {
+    fn spawned_npc_shape(&mut self) -> &mut CShape {
+        self.move_shape_mut().shape_mut()
+    }
+
+    fn spawn_show_list(&mut self, show_list: bool) {
+        self.set_show_list(show_list);
+    }
+
+    fn spawn_script_file(&mut self, script: &[u8]) {
+        self.set_script_file(script);
+    }
+
+    fn spawn_live_time(&mut self, live_time_ms: u32) {
+        self.set_live_time(live_time_ms);
+    }
+
+    fn spawn_born_time(&mut self, born_time_ms: u32) {
+        self.set_born_time(born_time_ms);
+    }
+}
+
 pub(crate) trait ServerRegionNpcSpawnEffectsContext: ServerRegionMembershipContext {
     /// Сохраняет `GS0233` owner-side log при отсутствии свободной позиции.
     fn log_npc_position_failure(&mut self, npc_name: &[u8]);
@@ -460,17 +447,6 @@ pub(crate) enum ServerRegionMonsterRectBlock {
     MissingRefreshSetup { index: i32 },
     RandomPosition(RegionCellAccessBlock),
     Membership(RegionMembershipBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ServerRegionNpcSpawnBlock {
-    RandomPosition(RegionCellAccessBlock),
-    Membership(RegionMembershipBlock),
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionNpcSpawnOutcome {
-    pub(crate) first_created_id: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2405,23 +2381,14 @@ impl CServerRegion {
 
             let id = self.next_npc_id.take();
             let mut npc = crate::gameserver::appserver::baseobject::create_npc(id);
-            let shape = npc.move_shape_mut().shape_mut();
-            shape.base_object_mut().set_name(&setup.name);
-            shape.base_object_mut().set_graphics_id(setup.picture_id);
-            shape.set_pos_xy_move_order(position.x as f32 + 0.5, position.y as f32 + 0.5);
-            let direction = if (0..8).contains(&setup.direction) {
-                setup.direction
-            } else {
-                context.random_below(8)
-            };
-            shape.set_direction(direction);
-            npc.set_show_list(setup.show_list);
-            npc.set_script_file(&setup.script);
-            npc.set_live_time(setup.time as u32);
-            let spawn_tick = now_ms(context);
-            if setup.time != 0 {
-                npc.set_born_time(spawn_tick);
-            }
+            let spawn_tick = initialize_created_npc(
+                &mut npc,
+                setup,
+                position.x,
+                position.y,
+                context,
+                &mut now_ms,
+            );
 
             self.total_spawned_npcs = self.total_spawned_npcs.wrapping_add(1);
             let facts = ShapeRuntimeFacts {

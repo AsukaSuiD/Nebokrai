@@ -1,7 +1,8 @@
-//! Data-типы, позиционное ядро, spatial-запросы, membership-ядро и
-//! weather/return-setup/war действия `CServerRegion` исторического
-//! GameServer, перенесённые в Zone `regions/` волной serverregion
-//! (порции 1-5). Исходный владелец — `appserver/serverregion.h/.cpp`.
+//! Data-типы, позиционное ядро, spatial-запросы, membership-ядро,
+//! weather/return-setup/war действия и spawn setup `CServerRegion`
+//! исторического GameServer, перенесённые в Zone `regions/` волной
+//! serverregion (порции 1-5 и spawn setup). Исходный владелец —
+//! `appserver/serverregion.h/.cpp`.
 //! Переходный агрегат `CServerRegion` остаётся в старом пакете, хранит те же
 //! хранилища и делегирует им area-grid, war-soul, block-refresh, shape-lookup,
 //! ids/find/registered запросы, add/remove, позиционную регистрацию,
@@ -27,7 +28,9 @@
 //! area-grid и registry, `weather` — data-контракты и
 //! tick/change-действия погоды, `returnsetup` — return-setup типы и
 //! fallback-цепочка точки возврата, `war` — war-фаза и city-ownership
-//! действия, `tax` — data-контракты и скалярные state-owner действия налогов.
+//! действия, `tax` — data-контракты и скалярные state-owner действия налогов,
+//! `spawnsetup` — NPC/monster setup data-контракты, spawn outcome/block типы
+//! и ядро инициализации создаваемого NPC над trait-швом доменного `CNpc`.
 
 pub mod areagrid; // area-grid: построение, доступ и war-soul карты.
 pub mod blocks; // block-refresh клеток, spatial shape-lookup и skill-cell формула блока.
@@ -36,6 +39,7 @@ pub mod membership; // отказ и gate членства, ядра add/remove 
 pub mod queries; // observable traversal старых hash-хранилищ и ids/find/registered запросы regions.
 pub mod registry; // identity-регистр фигур и монотонные счётчики ID.
 pub mod returnsetup; // return-setup типы и fallback-цепочка точки возврата игрока.
+pub mod spawnsetup; // NPC/monster setup типы и ядро инициализации создаваемого NPC.
 pub mod tax; // data-контракты и скалярные state-owner действия налогов региона.
 pub mod transitions; // transition-контракт, staging-очереди и plan/commit смены области.
 pub mod war; // war-фазовые и city-ownership действия над скалярами переходного агрегата.
