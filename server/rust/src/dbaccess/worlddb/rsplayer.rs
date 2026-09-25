@@ -1300,6 +1300,41 @@ impl nebokrai_realm::app::world_game_view::WorldRenameDbView for TiberiusRsPlaye
     }
 }
 
+impl nebokrai_realm::app::world_game_view::WorldDeleteRoleDbView for TiberiusRsPlayer {
+    fn get_player_country_by_id<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = u8> + 'a>> {
+        Box::pin(async move {
+            RsPlayerOwner::<CPlayer>::get_player_country_by_id(self, player_id, active_transaction)
+                .await
+        })
+    }
+
+    fn get_player_deletion_date<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = i32> + 'a>> {
+        Box::pin(async move {
+            RsPlayerOwner::<CPlayer>::get_player_deletion_date(self, player_id, active_transaction)
+                .await
+        })
+    }
+
+    fn get_player_name_by_id<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<u8>> + 'a>> {
+        Box::pin(async move {
+            RsPlayerOwner::<CPlayer>::get_player_name_by_id(self, player_id, active_transaction)
+                .await
+        })
+    }
+}
+
 impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
     fn load_player<J, G, WeekDay>(
         &mut self,

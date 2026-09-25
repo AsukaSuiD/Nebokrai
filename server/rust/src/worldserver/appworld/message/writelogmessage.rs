@@ -31,7 +31,7 @@ pub(crate) use nebokrai_realm::persistence::writelog::{
     WorldCarriageLogWrite, WorldChangeMapLogWrite, WorldChatLogWrite, WorldCiqingLogWrite,
     WorldFactionLogWrite, WorldFairyLogEvent, WorldFairyLogWrite, WorldGoodsCraftLogEvent,
     WorldGoodsCraftLogWrite, WorldGoodsLogWrite, WorldGoodsTradeLogWrite, WorldIncrementLogWrite,
-    WorldPlainLogWrite, WorldPlayerDeleteLogWrite, WorldPlayerProgressLogEvent,
+    WorldPlainLogWrite, WorldPlayerProgressLogEvent,
     WorldPlayerProgressLogWrite, WorldPlayerRelationLogEvent, WorldPlayerRelationLogWrite,
     WorldWriteLogCommand,
 };

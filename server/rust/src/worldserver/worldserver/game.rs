@@ -16945,6 +16945,14 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::creation_player_by_name(self, name).map(|found| found.is_some())
     }
 
+    fn format_world_string(
+        &self,
+        string_id: &[u8],
+        arguments: &[nebokrai_realm::organizations::union::UnionFormatArgument<'_>],
+    ) -> Vec<u8> {
+        CGame::format_world_string(self, string_id, arguments)
+    }
+
 
     fn replace_online_player_silience_time(
         &mut self,

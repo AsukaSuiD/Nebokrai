@@ -24,6 +24,7 @@ use crate::characters::player::{
     PlayerPropertyCoefficients,
 };
 use crate::organizations::faction::CFaction;
+use crate::organizations::union::UnionFormatArgument;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::skillfactory::CSkillFactory;
 use crate::sessions::csessionfactory::CSessionFactory;
@@ -223,6 +224,11 @@ pub trait WorldGameView {
 
     fn is_name_exist_in_db_data(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError>;
 
+    /// Форматирование строки live StringTable владельца игры: реализация
+    /// делегирует inherent `CGame::format_world_string` с тем списком
+    /// аргументов, который формирует вызывающая сторона шва.
+    fn format_world_string(&self, string_id: &[u8], arguments: &[UnionFormatArgument<'_>]) -> Vec<u8>;
+
     fn check_create_role_name(
         &self,
         name: &mut Vec<u8>,
@@ -291,5 +297,47 @@ pub trait WorldRenameDbView {
         player_name: &'a [u8],
         active_transaction: Option<&'a mut WorldTdsClient>,
     ) -> Pin<Box<dyn Future<Output = bool> + 'a>>;
+}
+
+/// Узкий dyn-заменитель трёх DB-запросов ветви удаления роли: страна
+/// игрока, дата постановки на удаление и имя для журнала удаления. По той
+/// же причине dyn-несовместимости `RsPlayerOwner`, что и у
+/// [`WorldRenameDbView`], каждый запрос публикуется boxed future по
+/// ADR-0013; реализация живёт у владельца игрока в старом пакете и
+/// делегирует `RsPlayerOwner::<CPlayer>` одноимённым методам.
+#[allow(clippy::type_complexity, reason = "boxed-формы повторяют параметры owner-методов один к одному")]
+pub trait WorldDeleteRoleDbView {
+    fn get_player_country_by_id<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = u8> + 'a>>;
+
+    fn get_player_deletion_date<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = i32> + 'a>>;
+
+    fn get_player_name_by_id<'a>(
+        &'a mut self,
+        player_id: u32,
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = Vec<u8>> + 'a>>;
+}
+
+/// Узкий dyn-шов проверки должности игрока в стране к владельцу страновых
+/// состояний: `CCountryHandler` держит live-таблицу, а контекст текста
+/// короля получает игру извне — поэтому метод принимает `&dyn WorldGameView`
+/// коротким перезаймом от обработчика. Реализация живёт в адаптере у
+/// dispatcher-а старого пакета и повторяет исходную цепочку
+/// `get_country → has_job` с effects-структурой кода delete-role.
+pub trait WorldDeleteRoleCountryGate {
+    fn country_has_job(
+        &mut self,
+        game: &dyn WorldGameView,
+        country: u8,
+        player_id: i32,
+    ) -> bool;
 }
 

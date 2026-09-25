@@ -32,7 +32,6 @@ use super::faction::{
     FactionApplyForJoinOutcome, FactionContributorContext, FactionDoJoinBlock,
     FactionDoJoinContext, FactionDoJoinEffects, FactionDoJoinOutcome,
     FactionContributorOutcome, FactionDeleteOrganizingBuildError,
-    FactionDelMemberBlock, FactionDelMemberReport,
     FactionDeleteOrganizingOutcome, FactionDisbandBlock, FactionDisbandContext,
     FactionDisbandOutcome, FactionDisbandProgress, FactionDisbandRejection,
     FactionExperienceBlock, FactionExperienceUpdate,
@@ -1373,73 +1372,10 @@ pub(crate) enum PlayerExitGameOutcome {
     Dispatched(FactionExitDispatch),
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum UnionMemberDetachOutcome {
-    NonPositiveFactionId,
-    FactionEntryMissing,
-    NullFactionPointer,
-    Detached {
-        deliveries: Vec<FactionPropertyDelivery>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UnionMemberDetachBlockSource {
-    SuperiorOrganizing(FactionSuperiorOrganizingBlock),
-    Property(FactionInitialPropertyBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct UnionMemberDetachBlock {
-    pub(crate) faction_id: i32,
-    pub(crate) source: UnionMemberDetachBlockSource,
-}
-
-/// Наблюдаемый результат `COrganizingCtrl::OnDeleteRole` до wire-ответа
-/// LoginServer. Числа совпадают с switch `0..=4`.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeleteRoleOutcome {
-    AllowedNoFaction,
-    CountryJob,
-    MemberRemoved {
-        faction_id: i32,
-        removal: Option<FactionDelMemberReport>,
-    },
-    FactionMaster {
-        faction_id: i32,
-    },
-    UnionMissing {
-        faction_id: i32,
-        union_id: i32,
-    },
-    UnionDetached {
-        faction_id: i32,
-        union_id: i32,
-        detach: UnionMemberDetachOutcome,
-    },
-}
-
-impl OrganizingDeleteRoleOutcome {
-    pub(crate) const fn legacy_code(&self) -> i32 {
-        match self {
-            Self::AllowedNoFaction | Self::MemberRemoved { .. } | Self::UnionMissing { .. } => 0,
-            Self::FactionMaster { .. } => 1,
-            Self::UnionDetached { .. } => 3,
-            Self::CountryJob => 4,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeleteRoleBlock {
-    NullFactionDuringMembershipScan { map_key: i32 },
-    MemberRemoval {
-        faction_id: i32,
-        source: FactionDelMemberBlock,
-    },
-    MissingFactionProperty { faction_id: i32 },
-    UnionDetach(UnionMemberDetachBlock),
-}
+pub(crate) use nebokrai_realm::organizations::organizingctrl::{
+    OrganizingDeleteRoleBlock, OrganizingDeleteRoleOutcome, UnionMemberDetachBlock,
+    UnionMemberDetachBlockSource, UnionMemberDetachOutcome,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingOtherFactionUpdate {
@@ -5030,7 +4966,7 @@ impl COrganizingCtrl {
 
     pub(crate) fn detach_union_member(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         faction_id: i32,
     ) -> Result<UnionMemberDetachOutcome, UnionMemberDetachBlock> {
@@ -5071,7 +5007,7 @@ impl COrganizingCtrl {
  /// возвращает true, поэтому точный результат равен `3`, а не `2`.
     pub(crate) fn on_delete_role(
         &mut self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         parameters: &COrganizingParam,
         player_id: i32,
         country_has_job: bool,
@@ -7391,6 +7327,21 @@ impl nebokrai_realm::characters::playerranks::PlayerRankOrganizingLookup for COr
     fn faction_name_of_id(&self, faction_id: i32) -> Option<Vec<u8>> {
         self.faction_by_id(faction_id)
             .map(|faction| faction.name().to_vec())
+    }
+}
+
+/// Делегирует inherent `on_delete_role`: шов передаёт игру view-трейтом,
+/// а его единственный игровой путь — refresh свойств фракции при отвязке
+/// от союза — уже живёт на `&dyn WorldGameView` внутри `detach_union_member`.
+impl nebokrai_realm::organizations::organizingctrl::WorldDeleteRoleOrganizingGate for COrganizingCtrl {
+    fn apply_delete_role(
+        &mut self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        parameters: &COrganizingParam,
+        player_id: i32,
+        country_has_job: bool,
+    ) -> Result<OrganizingDeleteRoleOutcome, OrganizingDeleteRoleBlock> {
+        self.on_delete_role(game, parameters, player_id, country_has_job)
     }
 }
 
