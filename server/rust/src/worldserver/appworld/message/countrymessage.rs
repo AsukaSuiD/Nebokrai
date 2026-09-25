@@ -19,399 +19,38 @@
 //! Player lists сохраняют page arithmetic и GM filter. War branches не вводят
 //! source/tail checks. Явный main-loop context и safe codec заменяют singleton
 //! и overread без изменения вызовов.
+//!
+//! Наблюдаемые data-контракты ветвей перенесены в
+//! `nebokrai_realm::app::countrymessage` и здесь реэкспортированы. У этого
+//! владельца временно остаются `WorldCountryWarDeclarationSync`,
+//! `WorldCountryWarVictorySync` и связка
+//! `WorldCountryMessageOutcome`/`WorldCountryMessageDispatch`: они цитируют
+//! `CountryWarDeclarationReport`/`CountryWarVictoryReport` из
+//! `countrywarsys.rs` до переноса war-систем.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
-    CountryAbsolveReport, CountryAppointMinisterReport, CountryBaseInfoDisposition,
-    CountryCanAbsolveDisposition,
-    CountryCanAppointMinisterDisposition, CountryCanExileDisposition,
-    CountryCanDemiseDisposition, CountryCanDeposeMinisterDisposition, CountryCanSilenceDisposition,
-    CountryDemiseReport, CountryGovernanceContextBlock, CountryInitialKingReport,
-    CountryDeposeMinisterReport, CountryExileRequestDisposition,
-    CountryExileResultContext, CountryExileTimeLookup, CountryQuestSwitchUpdate,
-    CountryPlayersListContext, CountryPlayersListContextBlock, CountryPlayersListReport,
-    CountrySetKingReport, CountrySetNewDayContext,
-    CountryScalarUpdate, CountrySilenceReport, CountrySuccessExiledReport,
+    CountryCanAbsolveDisposition, CountryCanAppointMinisterDisposition,
+    CountryCanDemiseDisposition, CountryCanDeposeMinisterDisposition, CountryCanExileDisposition,
+    CountryCanSilenceDisposition, CountryExileRequestDisposition, CountryExileResultContext,
+    CountryPlayersListContext, CountrySetNewDayContext,
 };
-use crate::worldserver::appworld::country::countryhandler::{
-    CCountryHandler, CountryHandlerNewDayReport,
-};
-use crate::worldserver::appworld::country::countryparam::{
-    CCountryParam, CountryParameterUnavailable,
-};
-use crate::worldserver::appworld::country::king::{KingPointUpdate, set_control_point};
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
+use crate::worldserver::appworld::country::countryparam::CCountryParam;
+use crate::worldserver::appworld::country::king::set_control_point;
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::{
-    CFourNationWarSys, FourNationCountryFailContext, FourNationCountryFailReport,
-    FourNationExploitLoadedReport, FourNationSignUpDisposition, FourNationWarResultContext,
-    FourNationWarResultReport, FourNationWarTimeReport,
+    CFourNationWarSys, FourNationCountryFailContext, FourNationWarResultContext,
 };
-use crate::worldserver::appworld::player::PlayerCountryChangeReport;
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
-use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 use super::super::country::countrywarsys::{
     CountryWarDeclarationContext, CountryWarDeclarationReport, CountryWarSys,
     CountryWarVictoryContext, CountryWarVictoryReport,
 };
 
-const COUNTRY_RELAY_FIRST: i32 = 0x0006_0310;
-const COUNTRY_RELAY_SECOND: i32 = 0x0006_0311;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryRelayOutcome {
-    pub(crate) request_type: i32,
-    pub(crate) response_type: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryPlayerChangeDisposition {
-    PlayerMissing,
-    Responded {
-        change: PlayerCountryChangeReport,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryPlayerChangeSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) player_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryPlayerChangeDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryNewDaySync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) report: CountryHandlerNewDayReport,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryScalarDisposition {
-    CountryMissing,
-    SelectorIgnored,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Updated(CountryScalarUpdate),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryScalarSync {
-    pub(crate) country_id: u8,
-    pub(crate) country_id_complete: bool,
-    pub(crate) selector: i8,
-    pub(crate) selector_complete: bool,
-    pub(crate) value: i32,
-    pub(crate) value_complete: bool,
-    pub(crate) disposition: WorldCountryScalarDisposition,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryQuestSwitchDisposition {
-    CountryMissing,
-    OfficerMissing,
-    Updated(CountryQuestSwitchUpdate),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryQuestSwitchLog {
-    pub(crate) country_name_complete: bool,
-    pub(crate) line: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryQuestSwitchSync {
-    pub(crate) country_id: u8,
-    pub(crate) country_id_complete: bool,
-    pub(crate) job: u8,
-    pub(crate) job_complete: bool,
-    pub(crate) raw_switch: u8,
-    pub(crate) raw_switch_complete: bool,
-    pub(crate) disposition: WorldCountryQuestSwitchDisposition,
-    pub(crate) log: Option<WorldCountryQuestSwitchLog>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryExileTimeDisposition {
-    CountryMissing,
-    ParameterUnavailable(CountryParameterUnavailable),
-    PlayerMissing {
-        lookup: CountryExileTimeLookup,
-    },
-    Broadcast {
-        lookup: CountryExileTimeLookup,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryExileTimeSync {
-    pub(crate) player_id: i32,
-    pub(crate) player_id_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_id_complete: bool,
-    pub(crate) disposition: WorldCountryExileTimeDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryExileResultDisposition {
-    CountryMissing,
-    PlayerListTruncated {
-        advertised_count: i32,
-        available_complete_ids: usize,
-    },
-    PlayerListAllocationBlocked {
-        advertised_count: i32,
-    },
-    Broadcast {
-        advertised_count: i32,
-        player_ids: Vec<i32>,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryExileResultSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) player_id_complete: bool,
-    pub(crate) raw_success: i8,
-    pub(crate) success_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_id_complete: bool,
-    pub(crate) country_report: Option<CountrySuccessExiledReport>,
-    pub(crate) count_complete: Option<bool>,
-    pub(crate) disposition: WorldCountryExileResultDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryExileRequestDisposition {
-    CountryMissing,
-    KingRejected,
-    OperationRejected(CountryCanExileDisposition),
-    Requested {
-        operation: CountryCanExileDisposition,
-        legacy_result: i32,
-        request: CountryExileRequestDisposition,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryExileRequestSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) target_player_id: i32,
-    pub(crate) target_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryExileRequestDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountrySilenceRequestDisposition {
-    CountryMissing,
-    KingRejected,
-    OperationRejected(CountryCanSilenceDisposition),
-    Applied {
-        operation: CountryCanSilenceDisposition,
-        report: CountrySilenceReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountrySilenceRequestSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) target_player_id: i32,
-    pub(crate) target_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountrySilenceRequestDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryAbsolveRequestDisposition {
-    CountryMissing,
-    KingRejected,
-    OperationRejected(CountryCanAbsolveDisposition),
-    Applied {
-        operation: CountryCanAbsolveDisposition,
-        report: CountryAbsolveReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryAbsolveRequestSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) target_player_id: i32,
-    pub(crate) target_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryAbsolveRequestDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryDeposeMinisterDisposition {
-    CountryMissing,
-    KingRejected,
-    OperationRejected(CountryCanDeposeMinisterDisposition),
-    MinisterRejected,
-    Applied {
-        operation: CountryCanDeposeMinisterDisposition,
-        report: CountryDeposeMinisterReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryDeposeMinisterSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) target_player_id: i32,
-    pub(crate) target_complete: bool,
-    pub(crate) job: u8,
-    pub(crate) job_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryDeposeMinisterDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryAppointMinisterDisposition {
-    CountryMissing,
-    KingRejected,
-    OperationRejected(CountryCanAppointMinisterDisposition),
-    Applied {
-        operation: CountryCanAppointMinisterDisposition,
-        report: CountryAppointMinisterReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryAppointMinisterSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) target_player_id: i32,
-    pub(crate) target_complete: bool,
-    pub(crate) job: u8,
-    pub(crate) job_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryAppointMinisterDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryDemiseDisposition {
-    CountryMissing,
-    KingRejected,
-    OperationRejected(CountryCanDemiseDisposition),
-    Applied {
-        operation: CountryCanDemiseDisposition,
-        report: CountryDemiseReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryDemiseSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) target_player_id: i32,
-    pub(crate) target_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryDemiseDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryDirectAppointmentDisposition {
-    CountryMissing,
-    ParameterUnavailable(CountryParameterUnavailable),
-    ContextBlocked(CountryGovernanceContextBlock),
-    King {
-        initial_control_point: KingPointUpdate,
-        set: CountrySetKingReport,
-        register: CountryInitialKingReport,
-    },
-    Minister {
-        depose: CountryDeposeMinisterReport,
-        appoint: CountryAppointMinisterReport,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryDirectAppointmentSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) player_id: i32,
-    pub(crate) player_complete: bool,
-    pub(crate) appoint: u8,
-    pub(crate) appoint_complete: bool,
-    pub(crate) disposition: WorldCountryDirectAppointmentDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryInfoDisposition {
-    CountryMissing,
-    KingRejected,
-    Sent(CountryBaseInfoDisposition),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryInfoSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryInfoDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryPlayersListDisposition {
-    CountryMissing,
-    KingRejected,
-    ContextBlocked(CountryPlayersListContextBlock),
-    Sent(CountryPlayersListReport),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryPlayersListSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) page: i32,
-    pub(crate) page_complete: bool,
-    pub(crate) king_player_id: i32,
-    pub(crate) king_complete: bool,
-    pub(crate) country_id: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) disposition: WorldCountryPlayersListDisposition,
-}
+pub use nebokrai_realm::app::countrymessage::*;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarDeclarationSync {
@@ -423,64 +62,6 @@ pub(crate) struct WorldCountryWarDeclarationSync {
     pub(crate) declaration: CountryWarDeclarationReport,
     pub(crate) response_wire: Vec<u8>,
     pub(crate) response_delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationWarResultSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) report: FourNationWarResultReport,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationExploitRequest {
-    pub(crate) player_id: i32,
-    pub(crate) player_id_complete: bool,
-    pub(crate) increment: i32,
-    pub(crate) increment_complete: bool,
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldFourNationExploitDatabaseDisposition {
-    NotRequired,
-    ConnectionUnavailable { log: AddLogTextDisposition },
-    Applied,
-    ExecutionFailed { error: String },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationExploitSync {
-    pub(crate) request: WorldFourNationExploitRequest,
-    pub(crate) initial: FourNationExploitLoadedReport,
-    pub(crate) database: WorldFourNationExploitDatabaseDisposition,
-    pub(crate) after_database: Option<FourNationExploitLoadedReport>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationSignUpSync {
-    pub(crate) country: i32,
-    pub(crate) country_complete: bool,
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) disposition: FourNationSignUpDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationWarTimeSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) numeric_payload_complete: [bool; 3],
-    pub(crate) report: FourNationWarTimeReport,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldFourNationCountryFailSync {
-    pub(crate) source_map_id: i32,
-    pub(crate) source_socket_id: i32,
-    pub(crate) numeric_payload_complete: [bool; 2],
-    pub(crate) report: FourNationCountryFailReport,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -692,28 +273,11 @@ pub(crate) fn on_country_message(
     ))
 }
 
-fn country_quest_switch_log_line(country_name: &[u8], job: u8, raw_switch: u8) -> Vec<u8> {
-    let mut line = Vec::with_capacity(country_name.len() + 40);
-    line.extend_from_slice(country_name);
-    line.extend_from_slice(b" : Country Task: ");
-    line.extend_from_slice(job.to_string().as_bytes());
-    line.extend_from_slice(b" ( ");
-    line.extend_from_slice(raw_switch.to_string().as_bytes());
-    line.extend_from_slice(b" )");
-    line.extend_from_slice(&[0xa1, 0xa3]);
-    line
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryWarVictorySync {
     pub(crate) country: u8,
     pub(crate) country_complete: bool,
     pub(crate) report: CountryWarVictoryReport,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryWarVictoryDispatchError<ContextBlock> {
-    pub(crate) source: ContextBlock,
 }
 
 pub(crate) fn dispatch_country_exile_result_message<

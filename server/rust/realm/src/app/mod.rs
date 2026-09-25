@@ -11,6 +11,7 @@ pub mod auth_server_client;
 pub mod billing_message;
 pub mod billing_server;
 pub mod billing_server_client;
+pub mod countrymessage;
 pub mod login_auth_client;
 pub mod login_message;
 pub mod login_server;
