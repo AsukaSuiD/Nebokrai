@@ -79,27 +79,39 @@
 //! (`fmul dword ptr [0xEF3E5C]`) и передаётся параметром `critical_rate`
 //! живого чтения владельца, как у элементной формулы.
 //!
-//! Элементная формула: VERIFIED_DISASSEMBLY по двум телам семьи —
-//! `CFireBoltPhalanx::CalculateAttackPower` (RVA `0x1FC970`) и
-//! `CBaseMagicPhalanx::CalculateAttackPower` (RVA `0x201240`). Живой
-//! element_modify игрока читается первым, до трёх записей снимка; затем
-//! уровень цели (vtable `+0x110`) и живой weapon modifier (vtable `+0x184`,
-//! float в `damage_factor`), `hit_modifier = 100`, знаковое
-//! `element_modifier * element_modify / 100`, ширина `abs(max - min) + 1`,
-//! RNG, сохранённый MIN, живой AddElementAtk (vtable `+0x118`),
-//! необязательное усиление душами и нижняя граница ноль; единственная
-//! атака вида Element. Критический хвост общий: живой CCH (vtable `+0x114`,
-//! movzx u16), RNG(100), затем флаг `critical` и масштабирование компонентов
-//! видов 1/3/4 (Physical/Element/Soul) float-множителем с усечением FISTP.
-//! Тела различаются только смещением байта уровня (`+0xCC` у BaseMagic,
-//! `+0xD4` у FireBolt) и наличием усилителя у FireBolt, что соответствует
-//! снимку `souls`; сумма трёх слагаемых по модулю 2^32 не зависит от
-//! порядка сложения.
+//! Элементная формула: VERIFIED_DISASSEMBLY по четырём телам семьи —
+//! `CFireBoltPhalanx::CalculateAttackPower` (RVA `0x1FC970`),
+//! `CBaseMagicPhalanx::CalculateAttackPower` (RVA `0x201240`),
+//! `CFireBallPhalanx::CalculateAttackPower` (pub `1:001f6df0`, RVA
+//! `0x1F7DF0`) и `CGodPunishmentPhalanx::CalculateAttackPower` (pub
+//! `1:001fce10`, RVA `0x1FDE10`). Живой element_modify игрока читается
+//! первым (прямая загрузка `[player+0x3F0]`, до трёх записей снимка), живой
+//! таблицы навыка в этих телах нет — min/max/element_modifier берутся из
+//! снимка; затем уровень цели (vtable `+0x110`) и живой weapon modifier
+//! (vtable `+0x184`, float в `damage_factor`), `hit_modifier = 100`,
+//! знаковое `element_modifier * element_modify / 100` (магия 0x51EB851F),
+//! ширина `abs(max - min) + 1`, RNG, сохранённый MIN, живой AddElementAtk
+//! (vtable `+0x118`), необязательное усиление душами и нижняя граница ноль;
+//! единственная атака вида Element (исходное kind=3). Критический хвост
+//! общий: живой CCH (vtable `+0x114`, movzx u16), RNG(100), затем флаг
+//! `critical` и масштабирование компонентов видов 1/3/4 (Physical/Element/
+//! Soul) float-множителем с усечением FISTP. Тела различаются только
+//! смещениями боевых слотов снимка и наличием усилителя: FireBolt и
+//! FireBall — один профиль (min/max/element `+0xC0/+0xC4/+0xC8`, souls
+//! count/variable `+0xCC/+0xD0`, уровень `+0xD4`, усилитель есть);
+//! BaseMagic — те же min/max/element, уровень `+0xCC`, без souls;
+//! GodPunishment — уровень `+0xC8`, min/max/element `+0xBC/+0xC0/+0xC4`,
+//! без souls. Сумма трёх слагаемых по модулю 2^32 не зависит от порядка
+//! сложения.
 //!
-//! Усилитель душами: VERIFIED_DISASSEMBLY (RVA `0x1FDAC0`..`0x1FDB14`):
-//! обе нулевые проверки `count == 0` / `variable == 0`, затем x87-цепочка
-//! `fild variable`, `fimul count`, `fmul float(0.01)`, `fadd float(1.0)`,
-//! `fimul damage` и одно усечение FISTP без промежуточной float-записи.
+//! Усилитель душами: VERIFIED_DISASSEMBLY (участок RVA `0x1FDAC0`..`0x1FDB14`
+//! у FireBolt; идентичная цепочка в теле FireBall RVA `0x1F7DF0`, обе
+//! ссылаются на одни адреса констант `0x64DBD0` и `0x64DB50`, прочитанные
+//! из EXE как 0.01f и 1.0f): обе нулевые проверки `count == 0` /
+//! `variable == 0`, затем x87-цепочка `fild variable`, `fimul count`,
+//! `fmul float(0.01)`, `fadd float(1.0)`, `fimul damage` и одно усечение
+//! FISTP без промежуточной float-записи. У BaseMagic и GodPunishment
+//! усилителя в теле нет (между суммой и нижней границей ничего).
 //!
 //! Клиентский снимок `encode_client_snapshot` делегируется общему конверту
 //! `summonshape` (master type/id вложенного `tagMasterInfo`, не сохранённая
@@ -122,15 +134,22 @@
 //! caller-а у оригинала нет; часы приходят параметром, как у клиентского
 //! encoder-а.
 //!
-//! PARTIAL: боевые значения и souls снимков BaseMagic и FireBolt (включая
-//! их смещения уровня и souls) унаследованы от прежнего Rust-адаптера без
-//! отдельной сверки layout в этой порции; для Archery layout сверен выше
-//! только по её собственному ctor, а подтверждённые слоты уровня weak
-//! (`+0xC8`) и firebolt (`+0xD4`) из шапки `summonshape` относятся к их
-//! собственным телам encoder-ов. Точные имена полей PDB не фиксировались.
-//! Семейность формул FireBall и GodPunishment в этой порции не сверялась
-//! (их тела `CalculateAttackPower` адресно не совпадают с проверенной парой)
-//! — предмет follow-up.
+//! Боевые слоты снимков BaseMagic и FireBolt: VERIFIED_DISASSEMBLY
+//! перекрёстной сверкой ctor↔CAP (ctor BaseMagic pub `1:002010b0`, FireBolt
+//! pub `1:001fc7d0`; контрольно FireBall pub `1:001f6cc0` и GodPunishment
+//! pub `1:001fcd80`): каждый читаемый CAP боевой слот пишется ctor из
+//! собственного J-аргумента (порядок аргументов между слотами перемешан,
+//! семантику слота фиксируют чтения CAP; для Archery layout сверен выше по
+//! её собственному ctor). Аргументы-остатки, не читаемые CAP: у BaseMagic
+//! три лишних слота `+0xD0/+0xD4/+0xD8`, у FireBolt `+0xD8/+0xDC/+0xE0` —
+//! Archery-quirk неиспользуемых MIN/MAX/ELEMENT сюда не распространяется,
+//! у этих типов min/max/element читаются CAP. Литерал навыка кладётся в
+//! `+0xB8`: BaseMagic 3, FireBolt 0x132, FireBall 0x13D, GodPunishment
+//! 0x13A. BaseMagic, FireBolt и FireBall выделяют CScope (`+0xBC`, остаётся
+//! у владельца AI), у FireBall ctor дополнительно копирует вектор клеток
+//! области (пятый аргумент) в `+0xDC..+0xE4` — тоже не переносится; у
+//! GodPunishment CScope нет, и layout сдвинут на слот (min в `+0xBC`).
+//! Точные имена полей PDB не фиксировались.
 
 use super::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo, truncate_original};
