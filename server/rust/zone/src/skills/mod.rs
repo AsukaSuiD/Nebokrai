@@ -20,7 +20,7 @@ mod lifecycle; // база и стадии живого навыка.
 mod masked_area; // маска неподвижных областей FireWall и YinYang.
 mod pillar; // параметры создаваемой стойки CPillar.
 mod poisonfog; // данные живой области CPoisonFogPhalanx.
-mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery и общий серверный decoder.
+mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall и общий серверный decoder.
 mod roar; // границы обхода клеток CRoar.
 pub mod skillfactory; // фабричные владельцы и реестр runtime-свойств навыков.
 mod snowstorm; // данные области CSnowStormPhalanx и окна выбранных клеток.
@@ -79,4 +79,5 @@ pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,
     encode_related_phalanx_snapshot, next_summon_shape_id};
 pub use projectile::{ARCHERY_HIT_MODIFIER_PROPERTY, ArcheryProjectileAttack,
     ArcheryProjectileLiveField, BaseProjectileFlight, ElementProjectileAttack,
-    ElementProjectileLiveField, ProjectileServerSnapshotPrefix, SoulProjectileAmplification};
+    ElementProjectileLiveField, FireBallPath,
+    ProjectileServerSnapshotPrefix, SoulProjectileAmplification};

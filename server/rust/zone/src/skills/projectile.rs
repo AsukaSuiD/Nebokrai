@@ -21,8 +21,13 @@
 //! `CArcheryPhalanx::AI` `1:00201000`,
 //! `CBaseMagicPhalanx::CalculateAttackPower` `1:00201240`,
 //! `CFireBoltPhalanx::CalculateAttackPower` `1:001fc970`,
-//! `CFireBoltPhalanx::AddToByteArray` `1:001fad20`,
+//! `CFireBoltPhalanx::AddToByteArray` `1:001fad20` (то же тело у FireBall),
+//! `CGodPunishmentPhalanx::AddToByteArray` `1:001f44d0`
+//! (оба encoder-а читают общий `CSummonShape::GetRemainedTime` `1:001e8870`),
+//! `CFireBallPhalanx::AI` `1:001f75f0`,
 //! `CArcheryPhalanx::DecordFromByteArray` `1:001ea070` (RVA `0x1EB070`),
+//! серверные декодеры FireBall `1:001fafa0` (RVA `0x1FBFA0`) и
+//! GodPunishment `1:001ff7c0` (RVA `0x2007C0`),
 //! базовый `CSummonShape` ctor `1:001e87a0`, `CShape::DecordFromByteArray`
 //! pub offset `0x5a280`.
 //!
@@ -134,6 +139,17 @@
 //! caller-а у оригинала нет; часы приходят параметром, как у клиентского
 //! encoder-а.
 //!
+//! Серверные декодеры FireBall (pub `1:001fafa0`, RVA `0x1FBFA0`) и
+//! GodPunishment (pub `1:001ff7c0`, RVA `0x2007C0`): VERIFIED_DISASSEMBLY.
+//! Линкер оставил каждому своё тело, но оба повторяют общую форму
+//! decoder-а семьи: пять DWORD (skill id → `+0xB8`, уровень → слот
+//! профиля `+0xD4` FireBall и `+0xC8` GodPunishment, master `+0x84/+0x88`,
+//! остаток → `+0xB0`), одно чтение часов через IAT `0x64B264` в `+0xB4`
+//! и хвост `CShape::DecordFromByteArray` (pub offset `0x5a280`). Общий
+//! префикс `decode_server_snapshot` покрывает оба тела: `skill_level`
+//! префикса владелец относит к слоту своего профиля. Достижимого caller-а
+//! у оригинала нет.
+//!
 //! Боевые слоты снимков BaseMagic и FireBolt: VERIFIED_DISASSEMBLY
 //! перекрёстной сверкой ctor↔CAP (ctor BaseMagic pub `1:002010b0`, FireBolt
 //! pub `1:001fc7d0`; контрольно FireBall pub `1:001f6cc0` и GodPunishment
@@ -146,9 +162,21 @@
 //! у этих типов min/max/element читаются CAP. Литерал навыка кладётся в
 //! `+0xB8`: BaseMagic 3, FireBolt 0x132, FireBall 0x13D, GodPunishment
 //! 0x13A. BaseMagic, FireBolt и FireBall выделяют CScope (`+0xBC`, остаётся
-//! у владельца AI), у FireBall ctor дополнительно копирует вектор клеток
-//! области (пятый аргумент) в `+0xDC..+0xE4` — тоже не переносится; у
-//! GodPunishment CScope нет, и layout сдвинут на слот (min в `+0xBC`).
+//! у владельца AI; у FireBall статические шаблоны `g_bScope` заменяет
+//! итератор `FireBallPath::scope_cells` окном 3×3 X→Y), у FireBall ctor
+//! дополнительно копирует вектор клеток области (аргумент) в `+0xDC..+0xE8`
+//! — он хранится независимым снимком `FireBallPath`; у GodPunishment CScope
+//! нет, и layout сдвинут на слот (min в `+0xBC`).
+//!
+//! Оставшиеся слоты движения FireBall: VERIFIED_DISASSEMBLY по ctor
+//! `1:001f6cc0` и AI `1:001f75f0`. Ctor кладёт аргумент speed в `+0xD8`
+//! и обнуляет `+0xEC` (текущая позиция), `+0xF0/+0xF4` (endpoint) и
+//! `+0xF8` (признак ForceMove). AI считает дедлайн очередной клетки
+//! dword-сложением `+0xB4 + позиция · speed`, пишет endpoint перед
+//! BLOCK3-областью, растит позицию после неё и однократно отправляет
+//! ForceMove последней клетки с длительностью `len · speed`, ставя
+//! признак после callback. Независимый `Vec` заменяет исходный STL-вектор;
+//! endpoint клиентскому encoder-у не нужен.
 //! Точные имена полей PDB не фиксировались.
 
 use super::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
@@ -194,9 +222,24 @@ impl BaseProjectileFlight {
         }
     }
 
+    /// Снимок полёта областей без прицела (FireBall, GodPunishment): общими
+    /// с прицельными снарядами остаются форма, часы и конверт `CSummonShape`;
+    /// их конструкторы слотов задержки атаки и цели не содержат, поэтому они
+    /// и не задаются.
+    pub fn new_untargeted(id: i32, started_at_ms: u32, lifetime_ms: u32) -> Self {
+        Self::new(
+            id, started_at_ms, lifetime_ms, 0,
+            ShapeIdentity { object_type: 0, id: 0, ex_id: CGuid::GUID_INVALID },
+        )
+    }
+
     pub const fn shape(&self) -> &CShape { &self.shape }
     pub const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub const fn target(&self) -> ShapeIdentity { self.target }
+
+    /// Общая стартовая отметка полёта (слот `+0xB4`); движение FireBall
+    /// считает от неё дедлайн очередной клетки.
+    pub const fn started_at_ms(&self) -> u32 { self.started_at_ms }
 
     pub fn expired_at(&self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms
@@ -245,6 +288,65 @@ impl BaseProjectileFlight {
             read_projectile_u32(source, cursor, "прицельный снаряд: остаток времени")?;
         self.started_at_ms = now_milliseconds();
         self.shape.decode_from_byte_array(source, cursor, include_child)
+    }
+}
+
+/// Движение области FireBall по пути клеток: независимый снимок пути,
+/// курсор и однократный ForceMove. Слоты и назначение — по ctor
+/// `1:001f6cc0` и AI `1:001f75f0` (шапка модуля): speed лежит в `+0xD8`
+/// между souls и уровнем профиля, вектор клеток — в `+0xDC`, текущая
+/// позиция, endpoint и флаг обнуляются конструктором; срок жизни читает
+/// свои часы отдельно — у полёта композита.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FireBallPath {
+    path: Vec<(i32, i32)>,
+    speed_ms: u32,
+    current_position: u32,
+    destination: (i32, i32),
+    force_moved: bool,
+}
+
+impl FireBallPath {
+    /// Курсор, endpoint и флаг начинаются нулевым состоянием конструктора;
+    /// путь сохраняется независимо от владельца cast-а.
+    pub fn new(path: Vec<(i32, i32)>, speed_ms: u32) -> Self {
+        Self { path, speed_ms, current_position: 0, destination: (0, 0), force_moved: false }
+    }
+
+    pub fn is_empty(&self) -> bool { self.path.is_empty() }
+
+    /// Готовность очередной клетки: дедлайн считается dword-сложением
+    /// `started + позиция · speed` от общей стартовой отметки полёта.
+    pub fn cell_due_at(&self, started_at_ms: u32, now_ms: u32) -> bool {
+        started_at_ms.wrapping_add(
+            self.current_position.wrapping_mul(self.speed_ms)
+        ) <= now_ms
+    }
+
+    pub fn current_cell(&self) -> Option<(i32, i32)> {
+        self.path.get(self.current_position as usize).copied()
+    }
+
+    /// Endpoint допущенной клетки; клиентский конверт его не содержит.
+    pub fn set_destination(&mut self, cell: (i32, i32)) { self.destination = cell; }
+
+    pub fn advance(&mut self) { self.current_position = self.current_position.wrapping_add(1); }
+
+    /// Один раз за жизнь области: последняя клетка пути и длительность
+    /// `len · speed`; флаг владелец ставит после callback.
+    pub fn pending_force_move(&self) -> Option<(i32, i32, u32)> {
+        if self.force_moved { return None; }
+        let &(x, y) = self.path.last()?;
+        Some((x, y, (self.path.len() as u32).wrapping_mul(self.speed_ms)))
+    }
+
+    pub fn mark_force_moved(&mut self) { self.force_moved = true; }
+
+    /// Статическая маска области 3×3 X→Y, заменяющая CScope конструктора.
+    pub fn scope_cells(center_x: i32, center_y: i32) -> impl Iterator<Item = (i32, i32)> {
+        (0..3).flat_map(move |x| (0..3).map(move |y| {
+            (center_x.wrapping_add(x - 1), center_y.wrapping_add(y - 1))
+        }))
     }
 }
 
