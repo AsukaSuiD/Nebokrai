@@ -1,11 +1,9 @@
-//! Runtime-состояние городских ворот GameServer `CCityGate`.
+//! Городские ворота CCityGate (0x4B0) поверх постройки CBuild.
+//! Источник: gameserver.exe + GameServer.pdb, appserver/citygate.cpp.
 //!
-//! Конструктор RVA `0x001DDB00` и override `SetAction` RVA `0x001DDB30`
-//! имеют статус `IMPLEMENTED`; исходник `citygate.cpp` и объявления PDB,
-//! точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`. `CCityGate`
-//! наследовал `CBuild`, получал type `0x4B0` через factory и отличался от
-//! обычной постройки тем, что action `6` и `7` освобождают footprint, а любой
-//! другой action ставит block `3`.
+//! Определения данных и скалярные правила перенесены в Zone
+//! `regions/citygate`; здесь переходный агрегат `CCityGate` с прежними
+//! сигнатурами, реэкспорт семейства для старого пакета и evidence-блок.
 //!
 //! Rust хранит derived-owner поверх canonical `CBuild/CMoveShape`: identity,
 //! позиция, action/state и общий property block не дублируются. `BuildBlockUpdate`
@@ -18,36 +16,11 @@
 //! также заменяет inherited `CBuild::OnDied` точным no-op `0x00485540`, так
 //! что сохранённое script-поле ворот не исполняется из death pipeline.
 
+pub(crate) use nebokrai_zone::regions::citygate::*;
+
 use super::build::{BuildBlockUpdate, BuildInit, CBuild};
 use super::moveshape::CMoveShape;
-use super::shape::{ShapeIdentity, ShapeView};
-
-pub(crate) const CITY_GATE_OBJECT_TYPE: u32 = 0x4B0;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CityGateHurtOwnerUpdate {
-    pub(crate) region_id: i32,
-    pub(crate) attacker_type: i32,
-    pub(crate) attacker_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CityGateInit {
-    pub(crate) id: i32,
-    pub(crate) graphics_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) direction: i32,
-    pub(crate) action: u16,
-    pub(crate) max_hp: i32,
-    pub(crate) defence: i32,
-    pub(crate) width_increment: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) height_increment: i32,
-    pub(crate) element_resistance: i32,
-    pub(crate) script: Vec<u8>,
-}
+use super::shape::ShapeView;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CCityGate {
@@ -57,7 +30,8 @@ pub(crate) struct CCityGate {
 impl CCityGate {
     /// Создаёт локальное представление уже успешно созданного factory-объекта.
     /// Начальный `SetAction` выполнил сам factory boundary, поэтому повторный
-    /// tile-map effect здесь не выдаётся.
+    /// tile-map effect здесь не выдаётся; identity-перезапись `0x4B0` и выбор
+    /// начального action принадлежат общим правилам Zone citygate.
     pub(crate) fn from_created(init: CityGateInit) -> Self {
         let mut build = CBuild::from_created(BuildInit {
             id: init.id,
@@ -74,31 +48,33 @@ impl CCityGate {
             element_resistance: init.element_resistance,
             script: init.script,
         });
-        build.move_shape_mut().shape_mut().set_identity(ShapeIdentity {
-            object_type: CITY_GATE_OBJECT_TYPE as i32,
-            id: init.id,
-            ex_id: nebokrai_shared::values::CGuid::GUID_INVALID,
-        });
-        build.move_shape_mut().shape_mut().set_action(init.action);
+        build
+            .move_shape_mut()
+            .shape_mut()
+            .set_identity(nebokrai_zone::regions::citygate::created_identity(init.id));
+        build
+            .move_shape_mut()
+            .shape_mut()
+            .set_action(nebokrai_zone::regions::citygate::created_action(init.action));
         Self { build }
     }
 
     /// Меняет action и возвращает точный отложенный эффект старого `SetBlock`.
-    /// При неизменившемся action оригинал не трогал ни change-state, ни карту.
+    /// При неизменившемся action оригинал не трогал ни change-state, ни карту;
+    /// решение и block-эффект принадлежат общей операции Zone citygate.
     pub(crate) fn set_action(&mut self, action: u16) -> Option<BuildBlockUpdate> {
-        if self.action() == action {
-            return None;
-        }
+        let update = nebokrai_zone::regions::citygate::decide_set_action_update(
+            self.action(),
+            action,
+            self.region_id(),
+            self.build.tile_x(),
+            self.build.tile_y(),
+            self.build.width_increment,
+            self.build.height_increment,
+        )?;
         self.build.move_shape_mut().shape_mut().set_change_state(0);
         self.build.move_shape_mut().shape_mut().set_action(action);
-        Some(BuildBlockUpdate {
-            region_id: self.region_id(),
-            tile_x: self.build.tile_x(),
-            tile_y: self.build.tile_y(),
-            width_increment: self.build.width_increment as u8,
-            height_increment: self.build.height_increment as u8,
-            block: if action == 6 || action == 7 { 0 } else { 3 },
-        })
+        Some(update)
     }
 
     pub(crate) fn refresh_hp(&mut self) {
@@ -114,20 +90,22 @@ impl CCityGate {
         attacker_present: bool,
         region_allows: impl FnOnce() -> bool,
     ) -> bool {
-        attacker_present
-            && self.action() != 7
-            && self.build.is_attackable_in_region(region_allows)
+        nebokrai_zone::regions::citygate::is_attackable_in_region(
+            attacker_present,
+            self.action(),
+            self.build.hp(),
+            region_allows,
+        )
     }
 
     pub(crate) fn footprint(&self) -> BuildBlockUpdate {
-        BuildBlockUpdate {
-            region_id: self.region_id(),
-            tile_x: self.build.tile_x(),
-            tile_y: self.build.tile_y(),
-            width_increment: self.build.width_increment as u8,
-            height_increment: self.build.height_increment as u8,
-            block: 0,
-        }
+        nebokrai_zone::regions::citygate::footprint_snapshot(
+            self.region_id(),
+            self.build.tile_x(),
+            self.build.tile_y(),
+            self.build.width_increment,
+            self.build.height_increment,
+        )
     }
 
     pub(crate) fn shape_view(&self) -> ShapeView {
@@ -135,18 +113,14 @@ impl CCityGate {
     }
 
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
-        BuildBlockUpdate {
-            region_id: self.region_id(),
-            tile_x: self.build.tile_x(),
-            tile_y: self.build.tile_y(),
-            width_increment: self.build.width_increment as u8,
-            height_increment: self.build.height_increment as u8,
-            block: if self.action() == 6 || self.action() == 7 {
-                0
-            } else {
-                3
-            },
-        }
+        nebokrai_zone::regions::citygate::block_snapshot(
+            self.action(),
+            self.region_id(),
+            self.build.tile_x(),
+            self.build.tile_y(),
+            self.build.width_increment,
+            self.build.height_increment,
+        )
     }
 
     /// Exact `CCityGate::OnBeenHurted`: сами ворота не меняют HP/action и
@@ -156,11 +130,11 @@ impl CCityGate {
         attacker_type: i32,
         attacker_id: i32,
     ) -> CityGateHurtOwnerUpdate {
-        CityGateHurtOwnerUpdate {
-            region_id: self.region_id(),
+        nebokrai_zone::regions::citygate::hurt_owner_update(
+            self.region_id(),
             attacker_type,
             attacker_id,
-        }
+        )
     }
 
     pub(crate) const fn move_shape(&self) -> &CMoveShape {

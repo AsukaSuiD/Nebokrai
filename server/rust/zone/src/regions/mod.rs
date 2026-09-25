@@ -3,6 +3,7 @@
 pub mod area; // CArea: storage-часть ячеек области.
 pub mod baseobject; // CBaseObject: базовая идентичность type/ID/GUID и имя объекта.
 pub mod build; // CBuild: data-семья и скалярные правила постройки.
+pub mod citygate; // CCityGate: data-семья и скалярные правила городских ворот.
 mod identity; // ShapeIdentity: локальная игровая ссылка type/ID/GUID.
 pub mod monster; // CMonster: скалярная база и правила монстра (script/tame/pet, защита первого удара).
 pub mod moveshape; // CMoveShape: пространственное ядро и скалярные колонки (запреты, направления, питомцы).
