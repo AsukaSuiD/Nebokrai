@@ -174,8 +174,7 @@ use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
 use super::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapePositionDispatch, MoveShapePositionFacts,
-    MoveShapeResolver,
+    CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts, MoveShapeResolver,
 };
 use super::npc::CNpc;
 use super::player::CPlayer;
@@ -185,7 +184,7 @@ use super::region::{
 };
 use super::shape::{
     BaseShapePositionDispatch, CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeFigure,
-    ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts, ShapeView,
+    ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use super::summonshape::{SUMMON_SHAPE_TYPE, SummonedSkillShape};
 use crate::nets::netserver::message::GameServerAroundRuntime;
@@ -690,54 +689,17 @@ impl CServerRegion {
         &self.current_weather
     }
 
-    /// State-owner `AddTaxMoney`: доля superior использует исходное signed
-    /// wrapping-произведение и x87-усечение, вычитается до доставки, а локальный
-    /// дневной итог clamp-ится к legacy 4_000_000_000.
+    /// State-owner ядро `AddTaxMoney` принадлежит Zone
+    /// `regions/serverregion/tax`; World-публикация superior-доли остаётся у
+    /// достигнутого `CGame` caller-а.
     pub(crate) fn add_tax_money(&mut self, amount: u32) -> RegionTaxAddition {
-        let superior_region_id =
-            (0 < self.param.superior_region_id).then_some(self.param.superior_region_id);
-        let superior_share = superior_region_id.map_or(0, |_| {
-            let product = self
-                .param
-                .turn_in_tax_rate
-                .wrapping_mul(amount as i32);
-            (f64::from(product) * f64::from(0.01_f32)).trunc() as i32 as u32
-        });
-        let retained = amount.wrapping_sub(superior_share);
-        self.param.today_total_tax = self
-            .param
-            .today_total_tax
-            .wrapping_add(retained)
-            .min(4_000_000_000);
-        RegionTaxAddition {
-            region_id: self.param.region_id,
-            retained,
-            superior_region_id,
-            superior_share,
-            today_total_tax: self.param.today_total_tax,
-            total_tax: self.param.total_tax,
-            current_tax_rate: self.param.current_tax_rate,
-        }
+        add_tax_money(&mut self.param, amount)
     }
 
-    /// Exact `CollectTodayTax`: сначала переносит дневной итог в общий через
-    /// DWORD wrapping-add и legacy clamp, затем обнуляет дневной счётчик.
+    /// Exact `CollectTodayTax` принадлежит Zone `regions/serverregion/tax`.
     /// Лог и World-публикация принадлежат достигнутому `CGame` caller-у.
     pub(crate) fn collect_today_tax(&mut self) -> RegionTaxCollection {
-        let collected = self.param.today_total_tax;
-        self.param.total_tax = self
-            .param
-            .total_tax
-            .wrapping_add(collected)
-            .min(4_000_000_000);
-        self.param.today_total_tax = 0;
-        RegionTaxCollection {
-            region_id: self.param.region_id,
-            collected,
-            today_total_tax: self.param.today_total_tax,
-            total_tax: self.param.total_tax,
-            current_tax_rate: self.param.current_tax_rate,
-        }
+        collect_today_tax(&mut self.param)
     }
     /// Сохраняет caller-side gate начала exact `CServerRegion::AI`: signed
     /// `1000 / g_ms`, затем unsigned `s_lAITick % period`.
@@ -3267,6 +3229,10 @@ impl CServerRegion {
         )
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/membership`; RTTI-факт
+    /// derived owner-а приходит через `RegionMembershipShape`, entry-effects
+    /// (hook перед входом и virtual `AfterEnteredArea`) выполняет эта обвязка
+    /// над всем переходным агрегатом в исходном порядке.
     pub(crate) fn add_object_with_area_entry<Member: RegionMembershipShape, Context: ServerRegionMembershipContext>(
         &mut self,
         member: &mut Member,
@@ -3277,98 +3243,39 @@ impl CServerRegion {
         context: &mut Context,
         mut before_move_shape_entry: impl FnMut(&mut CServerRegion, usize, &mut Context),
     ) -> Result<(), RegionMembershipBlock> {
-        validate_area_span(area_width, area_height)?;
-        let shape = member.membership_shape_mut();
-        let mut tile_x = shape
-            .get_tile_x()
-            .map_err(RegionMembershipBlock::ShapeCoordinate)?;
-        let mut tile_y = shape
-            .get_tile_y()
-            .map_err(RegionMembershipBlock::ShapeCoordinate)?;
-        shape.assign_to_server_region();
-        shape.set_region_id(self.id);
-
-        if (tile_x < 0 || tile_x >= self.region.width || tile_y < 0 || tile_y >= self.region.height)
-            && !self.region.cells.is_empty()
-        {
-            let position = self
-                .region
-                .get_random_pos(context)
-                .map_err(RegionMembershipBlock::RegionCell)?;
-            tile_x = position.x;
-            tile_y = position.y;
-        }
-        if facts.is_move_shape {
-            let mut dispatch = MoveShapePositionDispatch {
-                facts: MoveShapePositionFacts {
-                    current_hit_points: u32::from(facts.blocks_region_cell),
-                    figure: facts.figure,
-                    current_area: None,
-                    area_width,
-                    area_height,
-                },
-            };
-            shape
-                .set_tile_xy(&mut self.region, tile_x, tile_y, &mut dispatch)
-                .map_err(RegionMembershipBlock::MoveShape)?;
-        } else {
-            shape
-                .set_tile_xy(&mut self.region, tile_x, tile_y, &mut BaseShapePositionDispatch)
-                .expect("базовая запись координат CShape не может завершиться ошибкой");
-        }
-
-        let identity = shape.identity();
-        self.registry.add(identity, facts);
-        let area_index = self.area_index_for_tile(tile_x, tile_y, area_width, area_height);
-        if let Some(area_index) = area_index {
-            self.areas[area_index].add_object(identity, facts, now_ms);
-            shape.set_area_index(Some(area_index));
-
+        let entered = add_object_with_area_entry(
+            &mut self.region,
+            &mut self.areas,
+            self.area_x,
+            self.area_y,
+            &mut self.registry,
+            self.id,
+            member.membership_shape_mut(),
+            facts,
+            area_width,
+            area_height,
+            now_ms,
+            context,
+        )?;
+        if let AreaEntryOutcome::EnteredArea { area_index } = entered {
             before_move_shape_entry(self, area_index, context);
             if facts.is_move_shape {
                 member.after_entered_area();
             }
-        } else {
-            self.remove_object(shape, facts)?;
         }
-
         Ok(())
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/membership`.
     pub(crate) fn remove_object(
         &mut self,
         shape: &mut CShape,
         facts: ShapeRuntimeFacts,
     ) -> Result<(), RegionMembershipBlock> {
-        let identity = shape.identity();
-        if let Some(area_index) = shape.area_index() {
-            let available = self.areas.len();
-            let area =
-                self.areas
-                    .get_mut(area_index)
-                    .ok_or(RegionMembershipBlock::StaleAreaIndex {
-                        index: area_index,
-                        available,
-                    })?;
-            area.remove_object(identity, facts);
-            shape.set_area_index(None);
-
-            if matches!(identity.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE) {
-                let tile_x = shape
-                    .get_tile_x()
-                    .map_err(RegionMembershipBlock::ShapeCoordinate)?;
-                let tile_y = shape
-                    .get_tile_y()
-                    .map_err(RegionMembershipBlock::ShapeCoordinate)?;
-                shape
-                    .set_block(&mut self.region, tile_x, tile_y, 0, facts.figure)
-                    .map_err(RegionMembershipBlock::ShapeBlock)?;
-            }
-        }
-        self.registry.remove(identity);
-        Ok(())
+        remove_object(&mut self.region, &mut self.areas, &mut self.registry, shape, facts)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/membership`.
     pub(crate) fn set_move_shape_position(
         &mut self,
         shape: &mut CShape,
@@ -3376,13 +3283,10 @@ impl CServerRegion {
         y: f32,
         facts: MoveShapePositionFacts,
     ) -> Result<(), RegionMembershipBlock> {
-        let facts = self.complete_move_shape_position_facts(shape, facts)?;
-        let mut dispatch = MoveShapePositionDispatch { facts };
-        dispatch
-            .set_pos_xy(&mut self.region, shape, x, y)
-            .map_err(RegionMembershipBlock::MoveShape)
+        set_move_shape_position(&mut self.region, &self.areas, shape, x, y, facts)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/membership`.
     pub(crate) fn set_move_shape_tile_position(
         &mut self,
         shape: &mut CShape,
@@ -3390,11 +3294,7 @@ impl CServerRegion {
         tile_y: i32,
         facts: MoveShapePositionFacts,
     ) -> Result<(), RegionMembershipBlock> {
-        let facts = self.complete_move_shape_position_facts(shape, facts)?;
-        let mut dispatch = MoveShapePositionDispatch { facts };
-        shape
-            .set_tile_xy(&mut self.region, tile_x, tile_y, &mut dispatch)
-            .map_err(RegionMembershipBlock::MoveShape)
+        set_move_shape_tile_position(&mut self.region, &self.areas, shape, tile_x, tile_y, facts)
     }
 
     /// Временно освобождает значение generational slot, чтобы его virtual
@@ -3539,114 +3439,52 @@ impl CServerRegion {
         Some(result)
     }
 
-    fn complete_move_shape_position_facts(
-        &self,
-        shape: &CShape,
-        mut facts: MoveShapePositionFacts,
-    ) -> Result<MoveShapePositionFacts, RegionMembershipBlock> {
-        facts.current_area = match shape.area_index() {
-            Some(index) => {
-                let available = self.areas.len();
-                let area = self
-                    .areas
-                    .get(index)
-                    .ok_or(RegionMembershipBlock::StaleAreaIndex { index, available })?;
-                Some(ShapeAreaCoordinates {
-                    x: area.x(),
-                    y: area.y(),
-                })
-            }
-            None => None,
-        };
-        Ok(facts)
-    }
-
     /// Pointer-unique append area AI scan; marker сбрасывает caller только
     /// после `true`, потому что duplicate исходник оставлял неизменным.
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn stage_area_transition(&mut self, identity: ShapeIdentity) -> bool {
-        self.change_area_shapes.insert(identity)
+        stage_area_transition(&mut self.change_area_shapes, identity)
     }
 
     /// Возвращает ordered snapshot, не очищая исходный list до применения всех
     /// `OnShapeChangeArea`, как в конце original region AI.
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn staged_area_transitions(&self) -> Vec<ShapeIdentity> {
-        self.change_area_shapes.iter().copied().collect()
+        staged_area_transitions(&self.change_area_shapes)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn clear_staged_area_transitions(&mut self) {
-        self.change_area_shapes.clear();
+        clear_staged_area_transitions(&mut self.change_area_shapes);
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn stage_region_transition(&mut self, identity: ShapeIdentity) -> bool {
-        self.change_region_shapes.insert(identity)
+        stage_region_transition(&mut self.change_region_shapes, identity)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn take_staged_region_transitions(&mut self) -> Vec<ShapeIdentity> {
-        std::mem::take(&mut self.change_region_shapes)
-            .into_iter()
-            .collect()
+        take_staged_region_transitions(&mut self.change_region_shapes)
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn plan_area_transition<Resolver: ShapeResolver>(
         &self,
         shape: &CShape,
         resolver: &Resolver,
     ) -> Result<Option<AreaTransitionPlan>, AreaTransitionBlock> {
-        let Some(current_index) = shape.area_index() else {
-            return Ok(None);
-        };
-        let available = self.areas.len();
-        let current_area =
-            self.areas
-                .get(current_index)
-                .ok_or(AreaTransitionBlock::StaleAreaIndex {
-                    index: current_index,
-                    available,
-                })?;
-        let current = ShapeAreaCoordinates {
-            x: current_area.x(),
-            y: current_area.y(),
-        };
-        let next = shape.next_area_coordinates();
-        if current == next {
-            return Ok(None);
-        }
-
-        let old_neighbors = self.neighbor_area_indices(current);
-        let mut new_exclusive = self.neighbor_area_indices(next);
-        new_exclusive.retain(|index| !old_neighbors.contains(index));
-
-        let moving = shape.identity();
-        let registered = RegisteredShapeResolver {
-            registry: &self.registry,
+        plan_area_transition(
+            &self.areas,
+            self.area_x,
+            self.area_y,
+            &self.registry,
+            shape,
             resolver,
-        };
-        let mut audience = Vec::new();
-        for area_index in new_exclusive {
-            let area = &self.areas[area_index];
-            if area.get_num_shapes() == 0 {
-                continue;
-            }
-            let mut shapes_for_moving_player = Vec::new();
-            if moving.object_type == PLAYER_TYPE {
-                area.get_all_shapes(&registered, &mut shapes_for_moving_player);
-                shapes_for_moving_player.retain(|shape| shape.identity != moving);
-            }
-            audience.push(AreaTransitionAudience {
-                area_x: area.x(),
-                area_y: area.y(),
-                shapes_for_moving_player,
-            });
-        }
-
-        Ok(Some(AreaTransitionPlan {
-            moving,
-            current_index,
-            target_index: self.area_index_by_coordinates(next),
-            audience,
-        }))
+        )
     }
 
+    /// Ядро принадлежит Zone `regions/serverregion/transitions`.
     pub(crate) fn commit_area_transition(
         &mut self,
         shape: &mut CShape,
@@ -3654,13 +3492,7 @@ impl CServerRegion {
         now_ms: u32,
         plan: &AreaTransitionPlan,
     ) -> bool {
-        let Some(target_index) = plan.target_index else {
-            return false;
-        };
-        self.areas[plan.current_index].remove_object(plan.moving, facts);
-        self.areas[target_index].add_object(plan.moving, facts, now_ms);
-        shape.set_area_index(Some(target_index));
-        true
+        commit_area_transition(&mut self.areas, shape, facts, now_ms, plan)
     }
 
     pub(crate) fn plan_owned_monster_area_transition<Resolver: ShapeResolver>(
