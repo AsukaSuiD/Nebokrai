@@ -23,18 +23,24 @@
 //! делегирующие обёртки с теми же именами с отображением исходов один к
 //! одному.
 //!
-//! В старом `appworld/message/countrymessage.rs` остаются war-обработчики
-//! вместе со связкой `WorldCountryWarDeclarationSync`,
-//! `WorldCountryWarVictorySync`, `WorldCountryMessageOutcome` и
-//! `WorldCountryMessageDispatch`: их поля и варианты цитируют
-//! `CountryWarDeclarationReport`/`CountryWarVictoryReport` из старого
-//! `countrywarsys.rs`, который переносится вместе с war-системами. Старый
-//! файл делегирует хвостовые ветви [`on_country_message`] и реэкспортирует
-//! оба семейства для переходных потребителей.
+//! Финальной war-волной сюда перенесены ветви `0x60317` и `0x60318`
+//! ([`dispatch_country_war_declaration_message`],
+//! [`dispatch_country_war_victory_message`]) вместе с типами
+//! [`WorldCountryWarDeclarationSync`], [`WorldCountryWarVictorySync`] и
+//! агрегатом [`WorldCountryMessageOutcome`]/[`WorldCountryMessageDispatch`]:
+//! владелец [`CountryWarSys`](crate::activities::countrywarsys::CountryWarSys)
+//! уже в Realm, переходный `WorldCountryMessageTailOutcome` слит в общий
+//! агрегат. В старом `appworld/message/countrymessage.rs` остаются только
+//! маршрутные обёртки и адаптеры швов `CCountryHandler`/`CGame`; имена
+//! доступны старым потребителям через его glob-реэкспорт.
 
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 use nebokrai_shared::runtime::put_string_to_file;
 
+use crate::activities::countrywarsys::{
+    CountryWarDeclarationContext, CountryWarDeclarationReport, CountryWarSys,
+    CountryWarVictoryContext, CountryWarVictoryReport,
+};
 use crate::activities::fournationwarsys::{
     CFourNationWarSys, FourNationCountryFailContext, FourNationCountryFailReport,
     FourNationExploitContext, FourNationExploitLoadedDisposition, FourNationExploitLoadedReport,
@@ -477,15 +483,47 @@ pub struct WorldFourNationCountryFailSync {
     pub report: FourNationCountryFailReport,
 }
 
-/// Исходы хвостового диспетчера [`on_country_message`]: relay-ветви
-/// `0x60310`/`0x60311`, подтверждённо игнорируемый `0x6030F`, no-op по
-/// неизвестному opcode, four-nation sign-up `0x6031B`, scalar sync
-/// `0x60314`, quest-switch sync `0x60315` и exile-time sync `0x60316`.
-/// Общий `WorldCountryMessageOutcome` с governance- и war-вариантами
-/// остаётся в старом пакете до переноса war-систем; dispatcher старого
-/// пакета отображает эти исходы на его варианты один к одному.
+/// Исход ветви `0x60317` объявления войны: декодированная пара
+/// `[player, target country]`, отчёт владельца `CountryWarSys::player_declare`
+/// и исходная отправка ответа `0x7FF16` на source map.
 #[derive(Debug, Eq, PartialEq)]
-pub enum WorldCountryMessageTailOutcome {
+pub struct WorldCountryWarDeclarationSync {
+    pub player_id: i32,
+    pub player_id_complete: bool,
+    pub target_country: i32,
+    pub target_country_complete: bool,
+    pub source_map_id: i32,
+    pub declaration: CountryWarDeclarationReport,
+    pub response_wire: Vec<u8>,
+    pub response_delivery: Result<i32, SendMessageError>,
+}
+
+/// Исход ветви `0x60318` победы в войне: декодированная страна-флагоносец и
+/// отчёт владельца `CountryWarSys::on_flag_destory`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldCountryWarVictorySync {
+    pub country: u8,
+    pub country_complete: bool,
+    pub report: CountryWarVictoryReport,
+}
+
+/// Ошибка диспетчера ветви `0x60318`: прозрачная обёртка над `Block`
+/// victory-контекста вызывающей стороны, сохраняющая исходную error-форму
+/// `Result<Option<..>, DispatchError>`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CountryWarVictoryDispatchError<ContextBlock> {
+    pub source: ContextBlock,
+}
+
+/// Исходы диспетчера [`on_country_message`] и специализированных
+/// обработчиков country-ветвей: no-op по неизвестному opcode, подтверждённо
+/// игнорируемый `0x6030F`, relay `0x60310`/`0x60311`, governance `0x60301`,
+/// `0x60304`, `0x60306..0x6030E` и `0x60313`, scalar/quest-switch/exile-time
+/// sync `0x60314..0x60316`, war `0x60317`/`0x60318` и four-nation
+/// `0x60319`..`0x6031D`. Переходный хвостовой под-тип слит сюда при
+/// переносе war-ветвей: варианты хвоста сохраняют прежние имена.
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldCountryMessageOutcome {
     NoOp {
         request_type: i32,
     },
@@ -493,10 +531,35 @@ pub enum WorldCountryMessageTailOutcome {
         request_type: i32,
     },
     Relay(WorldCountryRelayOutcome),
+    PlayerCountryChanged(WorldCountryPlayerChangeSync),
+    NewDaySet(WorldCountryNewDaySync),
     ScalarSynchronized(WorldCountryScalarSync),
     QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
     ExileTimeSynchronized(WorldCountryExileTimeSync),
+    ExileRequested(WorldCountryExileRequestSync),
+    ExileResultSynchronized(WorldCountryExileResultSync),
+    SilenceRequested(WorldCountrySilenceRequestSync),
+    AbsolveRequested(WorldCountryAbsolveRequestSync),
+    MinisterDeposed(WorldCountryDeposeMinisterSync),
+    MinisterAppointed(WorldCountryAppointMinisterSync),
+    KingDemised(WorldCountryDemiseSync),
+    CountryAppointedDirectly(WorldCountryDirectAppointmentSync),
+    CountryInfoSent(WorldCountryInfoSync),
+    CountryPlayersListed(WorldCountryPlayersListSync),
+    CountryWarDeclared(WorldCountryWarDeclarationSync),
+    CountryWarVictory(WorldCountryWarVictorySync),
+    FourNationWarResult(WorldFourNationWarResultSync),
+    FourNationExploit(WorldFourNationExploitSync),
     FourNationSignUp(WorldFourNationSignUpSync),
+    FourNationWarTime(WorldFourNationWarTimeSync),
+    FourNationCountryFail(WorldFourNationCountryFailSync),
+}
+
+/// Результат хвостового каскада: обработанный исход или сообщение,
+/// возвращённое внешнему диспетчеру для следующих владельцев opcode.
+pub enum WorldCountryMessageDispatch {
+    Handled(WorldCountryMessageOutcome),
+    Pending(CMessage),
 }
 
 pub fn country_quest_switch_log_line(country_name: &[u8], job: u8, raw_switch: u8) -> Vec<u8> {
@@ -523,17 +586,17 @@ pub fn on_country_message(
     country_parameters: &CCountryParam,
     globe_setup: &GlobeSetupSnapshot,
     mut message: CMessage,
-) -> WorldCountryMessageTailOutcome {
+) -> WorldCountryMessageOutcome {
     let request_type = message.message_type();
     if request_type == 0x0006_030f {
-        return WorldCountryMessageTailOutcome::IgnoredGovernanceRequest { request_type };
+        return WorldCountryMessageOutcome::IgnoredGovernanceRequest { request_type };
     }
     if request_type == 0x0006_031b {
         let source_map_id = message.map_id();
         let source_socket_id = message.socket_id();
         let decoded_country = message.base_mut().get_long();
         let country = decoded_country.unwrap_or(0);
-        return WorldCountryMessageTailOutcome::FourNationSignUp(WorldFourNationSignUpSync {
+        return WorldCountryMessageOutcome::FourNationSignUp(WorldFourNationSignUpSync {
             country,
             country_complete: decoded_country.is_some(),
             source_map_id,
@@ -555,7 +618,7 @@ pub fn on_country_message(
                 Some(Ok(None)) => WorldCountryScalarDisposition::SelectorIgnored,
                 Some(Err(block)) => WorldCountryScalarDisposition::ParameterUnavailable(block),
             };
-        return WorldCountryMessageTailOutcome::ScalarSynchronized(WorldCountryScalarSync {
+        return WorldCountryMessageOutcome::ScalarSynchronized(WorldCountryScalarSync {
             country_id,
             country_id_complete: decoded_country_id.is_some(),
             selector,
@@ -594,7 +657,7 @@ pub fn on_country_message(
                 )
             }
         };
-        return WorldCountryMessageTailOutcome::QuestSwitchSynchronized(
+        return WorldCountryMessageOutcome::QuestSwitchSynchronized(
             WorldCountryQuestSwitchSync {
                 country_id,
                 country_id_complete: decoded_country_id.is_some(),
@@ -634,7 +697,7 @@ pub fn on_country_message(
                     }
                 }
             };
-        return WorldCountryMessageTailOutcome::ExileTimeSynchronized(
+        return WorldCountryMessageOutcome::ExileTimeSynchronized(
             WorldCountryExileTimeSync {
                 player_id,
                 player_id_complete: decoded_player_id.is_some(),
@@ -648,13 +711,13 @@ pub fn on_country_message(
         COUNTRY_RELAY_FIRST => 0x0007_FF11,
         COUNTRY_RELAY_SECOND => 0x0007_FF12,
         _ => {
-            return WorldCountryMessageTailOutcome::NoOp { request_type };
+            return WorldCountryMessageOutcome::NoOp { request_type };
         }
     };
     message.set_message_type(response_type);
     let wire = message.as_wire_bytes().to_vec();
     let delivery = message.send_all(game.current_game_server_sender().as_ref());
-    WorldCountryMessageTailOutcome::Relay(WorldCountryRelayOutcome {
+    WorldCountryMessageOutcome::Relay(WorldCountryRelayOutcome {
         request_type,
         response_type,
         wire,
@@ -1620,6 +1683,77 @@ pub fn dispatch_country_exile_result_message(
     })
 }
 
+/// Ветвь `0x60317`: объявление войны государству. Decode пары long, вызов
+/// владельца `CountryWarSys::player_declare` с его authority-гейтами
+/// (`online_player_country → declaration_authority` внутри владельца) и
+/// исходная отправка ответа `0x7FF16` `[accepted byte, player, target]` на
+/// source map после отчёта владельца — в этой же позиции каскада.
+pub fn dispatch_country_war_declaration_message<
+    Context: CountryWarDeclarationContext + ?Sized,
+>(
+    message: &mut CMessage,
+    country_war_sys: &mut CountryWarSys,
+    context: &mut Context,
+) -> Option<WorldCountryWarDeclarationSync> {
+    if message.message_type() != 0x60317 {
+        return None;
+    }
+
+    let source_map_id = message.map_id();
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_target_country = message.base_mut().get_long();
+    let target_country = decoded_target_country.unwrap_or(0);
+    let declaration = country_war_sys.player_declare(player_id, target_country, context);
+
+    let mut response = CMessage::new(0x7ff16);
+    response
+        .base_mut()
+        .add_char(if declaration.accepted() { 1 } else { 0 });
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_long(target_country);
+    let response_wire = response.as_wire_bytes().to_vec();
+    let response_delivery = context.send_to_map_id(&response, source_map_id);
+
+    Some(WorldCountryWarDeclarationSync {
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        target_country,
+        target_country_complete: decoded_target_country.is_some(),
+        source_map_id,
+        declaration,
+        response_wire,
+        response_delivery,
+    })
+}
+
+/// Ветвь `0x60318`: победа в войне по уничтоженному флагу. Decode одного
+/// байта страны и вызов владельца `CountryWarSys::on_flag_destory`, который
+/// для каждой активной пары проставляет `set_country_war_result` победителю
+/// 2 и проигравшему 1 через victory-gate вызывающей стороны. Error-форма
+/// `CountryWarVictoryDispatchError` сохраняет исходную обёртку над `Block`
+/// контекста; у машинного владельца ошибки dispatch-уровня нет.
+pub fn dispatch_country_war_victory_message<Context: CountryWarVictoryContext + ?Sized>(
+    message: &mut CMessage,
+    country_war_sys: &mut CountryWarSys,
+    context: &mut Context,
+) -> Result<Option<WorldCountryWarVictorySync>, CountryWarVictoryDispatchError<Context::Block>> {
+    if message.message_type() != 0x60318 {
+        return Ok(None);
+    }
+
+    let decoded_country = message.base_mut().get_byte();
+    let country = decoded_country.unwrap_or(0);
+    let report = country_war_sys
+        .on_flag_destory(i32::from(country), context)
+        .map_err(|source| CountryWarVictoryDispatchError { source })?;
+    Ok(Some(WorldCountryWarVictorySync {
+        country,
+        country_complete: decoded_country.is_some(),
+        report,
+    }))
+}
+
 /// Ветвь `0x60319`: приём результата four-nation войны от GameServer и
 /// публикация morale по маршрутам стран в исходном interleaving-е.
 pub fn dispatch_four_nation_war_result_message<Context: FourNationWarResultContext + ?Sized>(
@@ -1839,9 +1973,4 @@ pub async fn dispatch_four_nation_exploit_message(
         database,
         after_database,
     })
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CountryWarVictoryDispatchError<ContextBlock> {
-    pub source: ContextBlock,
 }

@@ -20,24 +20,23 @@
 //! source/tail checks. Явный main-loop context и safe codec заменяют singleton
 //! и overread без изменения вызовов.
 //!
-//! Наблюдаемые data-контракты ветвей, обработчики независимых ветвей
-//! (хвостовой `on_country_message`: `0x6030F`, `0x6031B`, `0x60314..0x60316`,
-//! relay `0x60310`/`0x60311`, no-op; four-nation dispatch
-//! `0x60319`/`0x6031C`/`0x6031D`; decode `0x6031A`) и governance-ветви
-//! `0x60301`, `0x60304`, `0x60306..0x6030E`, `0x60313` перенесены в
-//! `nebokrai_realm::app::countrymessage`. Независимые и хвостовые ветви здесь
-//! реэкспортированы, governance-ветви делегированы обёртками с теми же
-//! именами и с отображением исходов один к одному. Хвостовой вызов идёт через
-//! адаптер [`WorldCountryMutGate`] поверх живого `CCountryHandler`,
-//! governance — через адаптер [`WorldCountryGovernanceGate`] поверх того же
-//! живого `CCountryHandler`, ветвь `0x60301` — через
-//! [`WorldCountryPlayerChangeView`] на `CGame` и [`WorldCountryView`] поверх
-//! `CCountryHandler`; exploit `0x6031A` целиком обслуживается realm
-//! async-обработчиком от точки вызова в `game.rs`. У этого владельца временно
-//! остаются `WorldCountryWarDeclarationSync`, `WorldCountryWarVictorySync` и
-//! связка `WorldCountryMessageOutcome`/`WorldCountryMessageDispatch`: они
-//! цитируют `CountryWarDeclarationReport`/`CountryWarVictoryReport` из
-//! `countrywarsys.rs` до переноса war-систем.
+//! Наблюдаемые data-контракты ветвей, все обработчики и агрегаты исходов
+//! перенесены в `nebokrai_realm::app::countrymessage`: хвостовой
+//! `on_country_message` (`0x6030F`, `0x6031B`, `0x60314..0x60316`, relay
+//! `0x60310`/`0x60311`, no-op), four-nation dispatch
+//! `0x60319`/`0x6031C`/`0x6031D`, decode `0x6031A`, governance-ветви
+//! `0x60301`, `0x60304`, `0x60306..0x6030E`, `0x60313`, war-ветви `0x60317`
+//! и `0x60318`, sync-типы и связка
+//! `WorldCountryMessageOutcome`/`WorldCountryMessageDispatch`. Этот файл
+//! только маршрутизирует и адаптирует: имена доступны через glob-реэкспорт,
+//! governance-ветви делегированы обёртками с теми же именами. Хвостовой
+//! вызов идёт через адаптер [`WorldCountryMutGate`] поверх живого
+//! `CCountryHandler`, governance — через адаптер
+//! [`WorldCountryGovernanceGate`] поверх того же живого `CCountryHandler`,
+//! ветвь `0x60301` — через [`WorldCountryPlayerChangeView`] на `CGame` и
+//! [`WorldCountryView`] поверх `CCountryHandler`; war-ветви и exploit
+//! `0x6031A` вызываются из `game.rs` напрямую по реэкспортированным именам
+//! с bridge-контекстами `WorldCountryWarEffects` там же.
 
 use nebokrai_realm::app::world_game_view::{WorldCountryMutGate, WorldCountryView};
 use nebokrai_realm::content::countryparam::CountryParameterUnavailable;
@@ -45,7 +44,7 @@ use nebokrai_realm::organizations::country::{
     CountryExileTimeLookup, CountryQuestSwitchUpdate, CountryScalarUpdate, KingPointUpdate,
 };
 
-use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::nets::networld::message::CMessage;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::worldserver::appworld::country::country::{
     CountryAbsolveReport, CountryAppointMinisterReport, CountryBaseInfoDisposition,
@@ -64,62 +63,7 @@ use crate::worldserver::appworld::country::king::set_control_point;
 use crate::worldserver::appworld::player::PlayerCountryChangeReport;
 use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
-use super::super::country::countrywarsys::{
-    CountryWarDeclarationContext, CountryWarDeclarationReport, CountryWarSys,
-    CountryWarVictoryContext, CountryWarVictoryReport,
-};
-
 pub(crate) use nebokrai_realm::app::countrymessage::*;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryWarDeclarationSync {
-    pub(crate) player_id: i32,
-    pub(crate) player_id_complete: bool,
-    pub(crate) target_country: i32,
-    pub(crate) target_country_complete: bool,
-    pub(crate) source_map_id: i32,
-    pub(crate) declaration: CountryWarDeclarationReport,
-    pub(crate) response_wire: Vec<u8>,
-    pub(crate) response_delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryMessageOutcome {
-    NoOp {
-        request_type: i32,
-    },
-    IgnoredGovernanceRequest {
-        request_type: i32,
-    },
-    Relay(WorldCountryRelayOutcome),
-    PlayerCountryChanged(WorldCountryPlayerChangeSync),
-    NewDaySet(WorldCountryNewDaySync),
-    ScalarSynchronized(WorldCountryScalarSync),
-    QuestSwitchSynchronized(WorldCountryQuestSwitchSync),
-    ExileTimeSynchronized(WorldCountryExileTimeSync),
-    ExileRequested(WorldCountryExileRequestSync),
-    ExileResultSynchronized(WorldCountryExileResultSync),
-    SilenceRequested(WorldCountrySilenceRequestSync),
-    AbsolveRequested(WorldCountryAbsolveRequestSync),
-    MinisterDeposed(WorldCountryDeposeMinisterSync),
-    MinisterAppointed(WorldCountryAppointMinisterSync),
-    KingDemised(WorldCountryDemiseSync),
-    CountryAppointedDirectly(WorldCountryDirectAppointmentSync),
-    CountryInfoSent(WorldCountryInfoSync),
-    CountryPlayersListed(WorldCountryPlayersListSync),
-    CountryWarDeclared(WorldCountryWarDeclarationSync),
-    CountryWarVictory(WorldCountryWarVictorySync),
-    FourNationWarResult(WorldFourNationWarResultSync),
-    FourNationExploit(WorldFourNationExploitSync),
-    FourNationSignUp(WorldFourNationSignUpSync),
-    FourNationWarTime(WorldFourNationWarTimeSync),
-    FourNationCountryFail(WorldFourNationCountryFailSync),
-}
-
-pub(crate) enum WorldCountryMessageDispatch {
-    Handled(WorldCountryMessageOutcome),
-    Pending(CMessage),
-}
 
 /// Адаптер [`WorldCountryMutGate`] поверх живого `CCountryHandler`: ровно те
 /// же `get_country_mut`/`get_country` цепочки, что выполнял прежний
@@ -168,9 +112,9 @@ impl WorldCountryMutGate for CountryHandlerMutGate<'_> {
 
 /// Хвостовые ветви `OnCountryMessage` (`0x6030F`, `0x6031B`,
 /// `0x60314..0x60316`, relay `0x60310`/`0x60311`, no-op) перенесены в realm
-/// `nebokrai_realm::app::countrymessage::on_country_message`; здесь только
-/// отображение tail-исходов на общий `WorldCountryMessageOutcome`, который
-/// пока цитирует war-типы старого `countrywarsys.rs`.
+/// `nebokrai_realm::app::countrymessage::on_country_message`, который уже
+/// возвращает общий `WorldCountryMessageOutcome`; здесь только подача
+/// адаптера `CCountryHandler` в шов [`WorldCountryMutGate`].
 pub(crate) fn on_country_message(
     game: &CGame,
     country_handler: &mut CCountryHandler,
@@ -182,35 +126,13 @@ pub(crate) fn on_country_message(
         handler: country_handler,
     };
     WorldCountryMessageDispatch::Handled(
-        match nebokrai_realm::app::countrymessage::on_country_message(
+        nebokrai_realm::app::countrymessage::on_country_message(
             game,
             &mut gate,
             country_parameters,
             globe_setup,
             message,
-        ) {
-            WorldCountryMessageTailOutcome::NoOp { request_type } => {
-                WorldCountryMessageOutcome::NoOp { request_type }
-            }
-            WorldCountryMessageTailOutcome::IgnoredGovernanceRequest { request_type } => {
-                WorldCountryMessageOutcome::IgnoredGovernanceRequest { request_type }
-            }
-            WorldCountryMessageTailOutcome::Relay(outcome) => {
-                WorldCountryMessageOutcome::Relay(outcome)
-            }
-            WorldCountryMessageTailOutcome::ScalarSynchronized(sync) => {
-                WorldCountryMessageOutcome::ScalarSynchronized(sync)
-            }
-            WorldCountryMessageTailOutcome::QuestSwitchSynchronized(sync) => {
-                WorldCountryMessageOutcome::QuestSwitchSynchronized(sync)
-            }
-            WorldCountryMessageTailOutcome::ExileTimeSynchronized(sync) => {
-                WorldCountryMessageOutcome::ExileTimeSynchronized(sync)
-            }
-            WorldCountryMessageTailOutcome::FourNationSignUp(sync) => {
-                WorldCountryMessageOutcome::FourNationSignUp(sync)
-            }
-        },
+        ),
     )
 }
 
@@ -511,13 +433,6 @@ impl WorldCountryPlayerChangeView for CGame {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryWarVictorySync {
-    pub(crate) country: u8,
-    pub(crate) country_complete: bool,
-    pub(crate) report: CountryWarVictoryReport,
-}
-
 /// Ветвь `0x6030E` перенесена в realm; обёртка сохраняет прежнюю сигнатуру и
 /// отображение исхода один к одному.
 pub(crate) fn dispatch_country_exile_result_message(
@@ -733,67 +648,9 @@ pub(crate) fn dispatch_country_demise_message(
     )
 }
 
-pub(crate) fn dispatch_country_war_victory_message<Context: CountryWarVictoryContext + ?Sized>(
-    message: &mut CMessage,
-    country_war_sys: &mut CountryWarSys,
-    context: &mut Context,
-) -> Result<Option<WorldCountryWarVictorySync>, CountryWarVictoryDispatchError<Context::Block>> {
-    if message.message_type() != 0x60318 {
-        return Ok(None);
-    }
-
-    let decoded_country = message.base_mut().get_byte();
-    let country = decoded_country.unwrap_or(0);
-    let report = country_war_sys
-        .on_flag_destory(i32::from(country), context)
-        .map_err(|source| CountryWarVictoryDispatchError { source })?;
-    Ok(Some(WorldCountryWarVictorySync {
-        country,
-        country_complete: decoded_country.is_some(),
-        report,
-    }))
-}
-
-pub(crate) fn dispatch_country_war_declaration_message<
-    Context: CountryWarDeclarationContext + ?Sized,
->(
-    message: &mut CMessage,
-    country_war_sys: &mut CountryWarSys,
-    context: &mut Context,
-) -> Option<WorldCountryWarDeclarationSync> {
-    if message.message_type() != 0x60317 {
-        return None;
-    }
-
-    let source_map_id = message.map_id();
-    let decoded_player_id = message.base_mut().get_long();
-    let player_id = decoded_player_id.unwrap_or(0);
-    let decoded_target_country = message.base_mut().get_long();
-    let target_country = decoded_target_country.unwrap_or(0);
-    let declaration = country_war_sys.player_declare(player_id, target_country, context);
-
-    let mut response = CMessage::new(0x7ff16);
-    response
-        .base_mut()
-        .add_char(if declaration.accepted() { 1 } else { 0 });
-    response.base_mut().add_long(player_id);
-    response.base_mut().add_long(target_country);
-    let response_wire = response.as_wire_bytes().to_vec();
-    let response_delivery = context.send_to_map_id(&response, source_map_id);
-
-    Some(WorldCountryWarDeclarationSync {
-        player_id,
-        player_id_complete: decoded_player_id.is_some(),
-        target_country,
-        target_country_complete: decoded_target_country.is_some(),
-        source_map_id,
-        declaration,
-        response_wire,
-        response_delivery,
-    })
-}
-
 // Four-nation dispatch `0x60319`/`0x6031C`/`0x6031D`, decode `0x6031A`,
-// governance-ветви `0x60301`, `0x60304`, `0x60306..0x6030E`, `0x60313` и
-// хвостовой `on_country_message` перенесены в realm; имена доступны здесь
-// через glob re-export и делегирующие обёртки выше.
+// governance-ветви `0x60301`, `0x60304`, `0x60306..0x6030E`, `0x60313`,
+// war-ветви `0x60317`/`0x60318`, sync-типы, агрегаты
+// `WorldCountryMessageOutcome`/`WorldCountryMessageDispatch` и хвостовой
+// `on_country_message` перенесены в realm; имена доступны здесь через glob
+// re-export и делегирующие обёртки выше.
