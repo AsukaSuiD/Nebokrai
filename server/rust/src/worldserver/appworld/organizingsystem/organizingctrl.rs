@@ -3914,12 +3914,13 @@ impl COrganizingCtrl {
         let applicant_membership = self.is_free_faction(applicant_faction_id);
         self.detached_union_membership_lookup
             .set(Some((applicant_faction_id, applicant_membership)));
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
         let result = union.apply_for_join(
             game,
             applicant_faction_id,
             second_parameter,
             third_parameter,
-            self,
+            &mut bridge,
             effects,
         );
         self.detached_union_membership_lookup.set(None);
@@ -4433,12 +4434,13 @@ impl COrganizingCtrl {
             .expect("GetUnion вернул живой owner из того же controller map");
         self.detached_union_membership_lookup
             .set(Some((applicant_faction_id, applicant_membership)));
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
         let result = union.apply_for_join(
             game,
             applicant_faction_id,
             second_parameter,
             third_parameter,
-            self,
+            &mut bridge,
             effects,
         );
         self.detached_union_membership_lookup.set(None);
@@ -4479,11 +4481,12 @@ impl COrganizingCtrl {
         };
         self.detached_union_membership_lookup
             .set(Some((invited_faction_id, invited_membership)));
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
         let result = union.invite(
             game,
             inviter_faction_id,
             invited_faction_id,
-            self,
+            &mut bridge,
             effects,
         );
         self.detached_union_membership_lookup.set(None);
@@ -4524,12 +4527,13 @@ impl COrganizingCtrl {
             .get_mut(&union_id)
             .and_then(Option::take)
             .expect("GetUnion вернул живой owner из того же controller map");
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
         let result = union.fire_out(
             game,
             parameters,
             manager_id,
             target_faction_id,
-            self,
+            &mut bridge,
             effects,
             update_player,
         );
@@ -4592,11 +4596,12 @@ impl COrganizingCtrl {
             .get_mut(&union_id)
             .and_then(Option::take)
             .expect("GetConfederationOrganizing вернул живой owner из того же controller map");
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
         let result = union.exit(
             game,
             parameters,
             player_id,
-            self,
+            &mut bridge,
             effects,
             update_player,
         );
@@ -4691,11 +4696,12 @@ impl COrganizingCtrl {
             .get_mut(&union_id)
             .and_then(Option::take)
             .expect("GetUnion вернул живой owner из того же controller map");
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
         let result = union.demise(
             game,
             old_master_player_id,
             new_master_faction_id,
-            self,
+            &mut bridge,
             effects,
             get_tick,
             update_player,
@@ -4756,13 +4762,14 @@ impl COrganizingCtrl {
             return Ok(OrganizingConfederationDisbandOutcome::Rejected(rejection));
         }
 
-        let standard_enemy_clear = union.clear_enemy_factions(self);
-        let city_enemy_clear = union.clear_city_war_enemy_factions(self);
+        let mut bridge = UnionOrganizingBridge { organizing: self, game };
+        let standard_enemy_clear = union.clear_enemy_factions(&mut bridge);
+        let city_enemy_clear = union.clear_city_war_enemy_factions(&mut bridge);
         let union_outcome = match union.disband(
             game,
             parameters,
             manager_id,
-            self,
+            &mut bridge,
             effects,
         ) {
             Ok(outcome) => outcome,
@@ -4806,7 +4813,8 @@ impl COrganizingCtrl {
             }
         }
         self.confederations.remove(&union_id);
-        let player_refresh = union.update_player_faction_info(0, self, game, update_player);
+        let bridge = UnionOrganizingBridge { organizing: self, game };
+        let player_refresh = union.update_player_faction_info(0, &bridge, update_player);
         Ok(OrganizingConfederationDisbandOutcome::Applied(
             OrganizingConfederationDisbandReport {
                 union_id,
@@ -5406,10 +5414,11 @@ impl COrganizingCtrl {
                     .get_mut(&union_id)
                     .and_then(Option::take)
                     .expect("resolved city-war union slot не удаляется");
+                let mut bridge = UnionOrganizingBridge { organizing: self, game };
                 let outcome = if offence {
-                    union.add_offense_victor_counts(self, game)
+                    union.add_offense_victor_counts(&mut bridge)
                 } else {
-                    union.add_defence_victor_counts(self, game)
+                    union.add_defence_victor_counts(&mut bridge)
                 };
                 *self
                     .confederations
@@ -5445,7 +5454,8 @@ impl COrganizingCtrl {
                     .get_mut(&union_id)
                     .and_then(Option::take)
                     .expect("resolved city-war union slot не удаляется");
-                let outcome = union.delete_owned_city(self, game, region_id, update_player);
+                let mut bridge = UnionOrganizingBridge { organizing: self, game };
+                let outcome = union.delete_owned_city(&mut bridge, region_id, update_player);
                 *self
                     .confederations
                     .get_mut(&union_id)
@@ -5480,7 +5490,8 @@ impl COrganizingCtrl {
                     .get_mut(&union_id)
                     .and_then(Option::take)
                     .expect("resolved city-war union slot не удаляется");
-                let outcome = union.add_owned_city(self, game, region_id, update_player);
+                let mut bridge = UnionOrganizingBridge { organizing: self, game };
+                let outcome = union.add_owned_city(&mut bridge, region_id, update_player);
                 *self
                     .confederations
                     .get_mut(&union_id)
@@ -6185,16 +6196,18 @@ impl COrganizingCtrl {
 
         let union_id = self.generate_db_organizing_id();
         report.union_id = Some(union_id);
-        let (mut union, initial) = match CUnion::from_live_state(
-            union_id,
-            first_faction_id,
-            union_name.to_vec(),
-            None,
-            self,
-            parameters,
-            game,
-            update_player,
-        ) {
+        let (mut union, initial) = match {
+            let mut bridge = UnionOrganizingBridge { organizing: self, game };
+            CUnion::from_live_state(
+                union_id,
+                first_faction_id,
+                union_name.to_vec(),
+                None,
+                &mut bridge,
+                parameters,
+                update_player,
+            )
+        } {
             Ok(result) => result,
             Err((_union, source)) => {
                 self.finish_confederation_creation_reservations(
@@ -6219,14 +6232,10 @@ impl COrganizingCtrl {
             )
         });
 
-        report.second_faction_addition = match union.add_faction(
-            second_faction_id,
-            self,
-            effects,
-            parameters,
-            game,
-            update_player,
-        ) {
+        report.second_faction_addition = match {
+            let mut bridge = UnionOrganizingBridge { organizing: self, game };
+            union.add_faction(second_faction_id, &mut bridge, effects, parameters, update_player)
+        } {
             Ok(outcome) => Some(outcome),
             Err(source) => {
                 self.finish_confederation_creation_reservations(
@@ -6851,17 +6860,20 @@ impl COrganizingCtrl {
             };
             self.detached_union_membership_lookup
                 .set(detached_membership_lookup.map(|lookup| (applicant_faction_id, lookup)));
-            let join_result = union.do_join(
-                game,
-                parameters,
-                manager_id,
-                applicant_faction_id,
-                1,
-                UNUSED_UNION_APPLICATION_TIME,
-                self,
-                effects,
-                update_player,
-            );
+            let join_result = {
+                let mut bridge = UnionOrganizingBridge { organizing: self, game };
+                union.do_join(
+                    game,
+                    parameters,
+                    manager_id,
+                    applicant_faction_id,
+                    1,
+                    UNUSED_UNION_APPLICATION_TIME,
+                    &mut bridge,
+                    effects,
+                    update_player,
+                )
+            };
             self.detached_union_membership_lookup.set(None);
             match join_result {
                 Ok(outcome) => Some(outcome),
@@ -6992,17 +7004,20 @@ impl COrganizingCtrl {
             self.detached_union_membership_lookup.set(
                 detached_membership_lookup.map(|lookup| (invited_faction_id, lookup)),
             );
-            let join_result = union.do_join(
-                game,
-                parameters,
-                inviter_faction_id,
-                invited_faction_id,
-                1,
-                UNUSED_UNION_APPLICATION_TIME,
-                self,
-                effects,
-                update_player,
-            );
+            let join_result = {
+                let mut bridge = UnionOrganizingBridge { organizing: self, game };
+                union.do_join(
+                    game,
+                    parameters,
+                    inviter_faction_id,
+                    invited_faction_id,
+                    1,
+                    UNUSED_UNION_APPLICATION_TIME,
+                    &mut bridge,
+                    effects,
+                    update_player,
+                )
+            };
             self.detached_union_membership_lookup.set(None);
             match join_result {
                 Ok(outcome) => Some(outcome),
@@ -7444,35 +7459,51 @@ impl UnionOperatorValidationContext for COrganizingCtrl {
     }
 }
 
-impl UnionFireOutContext for COrganizingCtrl {
+/// Адаптер-мост union-контекстов Realm `CUnion` к единственному исходному
+/// владельцу: Realm контекст-трейты не принимают `&CGame` (прецедент
+/// `RegionOwnerOrganizingBridge`), поэтому game-доступ остаётся в телах
+/// bridge-реализаций. Call-sites с отсоединённым `CUnion` связывают
+/// `&mut COrganizingCtrl` и `&CGame` локальным bridge на месте вызова.
+pub(crate) struct UnionOrganizingBridge<'a> {
+    pub(crate) organizing: &'a mut COrganizingCtrl,
+    pub(crate) game: &'a CGame,
+}
+
+impl UnionOperatorValidationContext for UnionOrganizingBridge<'_> {
+    type Block = FactionMasterLookupBlock;
+
+    fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block> {
+        COrganizingCtrl::faction_id_by_master_player(self.organizing, player_id)
+    }
+}
+
+impl UnionFireOutContext for UnionOrganizingBridge<'_> {
     type DetachBlock = UnionMemberDetachBlock;
     type DetachOutcome = UnionMemberDetachOutcome;
 
     fn detach_union_member_for_fire_out(
         &mut self,
-        game: &CGame,
         parameters: &COrganizingParam,
         faction_id: i32,
     ) -> Result<Self::DetachOutcome, Self::DetachBlock> {
-        self.detach_union_member(game, parameters, faction_id)
+        self.organizing.detach_union_member(self.game, parameters, faction_id)
     }
 }
 
-impl UnionExitContext for COrganizingCtrl {
+impl UnionExitContext for UnionOrganizingBridge<'_> {
     type DetachBlock = UnionMemberDetachBlock;
     type DetachOutcome = UnionMemberDetachOutcome;
 
     fn detach_union_member_for_exit(
         &mut self,
-        game: &CGame,
         parameters: &COrganizingParam,
         faction_id: i32,
     ) -> Result<Self::DetachOutcome, Self::DetachBlock> {
-        self.detach_union_member(game, parameters, faction_id)
+        self.organizing.detach_union_member(self.game, parameters, faction_id)
     }
 }
 
-impl UnionDoJoinContext for COrganizingCtrl {
+impl UnionDoJoinContext for UnionOrganizingBridge<'_> {
     type FreeFactionBlock = FactionUnionMembershipLookupBlock;
     type InitialSnapshotBlock = AddUnionToFactionBlock;
 
@@ -7480,13 +7511,13 @@ impl UnionDoJoinContext for COrganizingCtrl {
         &self,
         faction_id: i32,
     ) -> Result<i32, Self::FreeFactionBlock> {
-        let cached = self.detached_union_membership_lookup.get();
+        let cached = self.organizing.detached_union_membership_lookup.get();
         let lookup = match cached {
             Some((cached_faction_id, lookup)) if cached_faction_id == faction_id => {
-                self.detached_union_membership_lookup.set(None);
+                self.organizing.detached_union_membership_lookup.set(None);
                 lookup
             }
-            _ => self.is_free_faction(faction_id),
+            _ => self.organizing.is_free_faction(faction_id),
         };
         match lookup {
             FreeFactionLookup::NoUnion => Ok(0),
@@ -7499,12 +7530,314 @@ impl UnionDoJoinContext for COrganizingCtrl {
 
     fn add_current_union_to_client_by_faction_id(
         &mut self,
-        game: &CGame,
         union: &mut CUnion,
         faction_id: i32,
     ) -> Result<bool, Self::InitialSnapshotBlock> {
-        send_union_snapshot_to_faction(game, &self.factions, union, faction_id)
+        send_union_snapshot_to_faction(self.game, &self.organizing.factions, union, faction_id)
             .map(|outcome| matches!(outcome, AddUnionToFactionOutcome::Sent { .. }))
+    }
+}
+
+impl UnionApplyForJoinContext for UnionOrganizingBridge<'_> {
+    fn union_application_is_reserved(&self, faction_id: i32) -> bool {
+        self.organizing.is_union_application_reserved(faction_id)
+    }
+
+    fn union_application_faction(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<UnionApplicationFactionSnapshot>, UnionApplicationFactionBlock> {
+        if faction_id < 1 {
+            return Ok(None);
+        }
+        let Some(faction) = self.organizing.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        let player_header = faction
+            .master_id()
+            .ok_or(UnionApplicationFactionBlock { faction_id })?;
+        Ok(Some(UnionApplicationFactionSnapshot {
+            faction_id,
+            name: faction.name().to_vec(),
+            player_header,
+        }))
+    }
+
+    fn reserve_union_application(&mut self, faction_id: i32) {
+        self.organizing.push_to_establishment_list(faction_id);
+    }
+}
+
+impl UnionMasterFactionQueryContext for UnionOrganizingBridge<'_> {
+    fn faction_is_owned_city(&self, faction_id: i32, region_id: i32) -> Option<i32> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.is_owned_city(region_id))
+    }
+
+    fn faction_is_enemy_faction(&self, faction_id: i32, enemy_id: i32) -> Option<i32> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.is_enemy_faction(enemy_id))
+    }
+
+    fn faction_owned_cities(&self, faction_id: i32) -> Option<VecDeque<i32>> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.owned_cities().clone())
+    }
+
+    fn faction_has_enemy(&self, faction_id: i32) -> Option<bool> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(CFaction::has_enemy_faction)
+    }
+
+    fn faction_has_city_war_enemy(&self, faction_id: i32) -> Option<bool> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(CFaction::has_city_war_enemy_faction)
+    }
+
+    fn faction_enemy_leader_organizing_id(&self, faction_id: i32) -> Option<i32> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(CFaction::enemy_leader_organizing_id)
+    }
+}
+
+impl UnionOwnedCityMutationContext for UnionOrganizingBridge<'_> {
+    fn faction_add_owned_city(
+        &mut self,
+        faction_id: i32,
+        region_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        self.organizing
+            .add_owned_city_to_faction(self.game, faction_id, region_id, update_player)
+            .map(|outcome| outcome.is_some())
+    }
+
+    fn faction_add_owned_cities(
+        &mut self,
+        faction_id: i32,
+        region_ids: &VecDeque<i32>,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction
+            .add_owned_city_list(self.game, region_ids, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
+            .map(|_| true)
+    }
+
+    fn faction_clear_owned_cities(
+        &mut self,
+        faction_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction
+            .clear_owned_cities(self.game, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
+            .map(|_| true)
+    }
+
+    fn faction_set_owned_cities(
+        &mut self,
+        faction_id: i32,
+        region_ids: &VecDeque<i32>,
+    ) -> Result<bool, OwnedCityMutationBuildError> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction.set_owned_cities(self.game, region_ids).map(|_| true)
+    }
+}
+
+impl UnionFactionStateMutationContext for UnionOrganizingBridge<'_> {
+    fn faction_clear_enemy_factions(&mut self, faction_id: i32) -> bool {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return false;
+        };
+        faction.clear_enemy_factions();
+        true
+    }
+
+    fn faction_clear_city_war_enemy_factions(&mut self, faction_id: i32) -> bool {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return false;
+        };
+        faction.clear_city_war_enemy_factions();
+        true
+    }
+
+    fn faction_add_defence_victor_count(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction.add_defence_victor_count(self.game).map(Some)
+    }
+
+    fn faction_add_offense_victor_count(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction.add_offense_victor_count(self.game).map(Some)
+    }
+
+    fn faction_add_village_war_victor_count(
+        &mut self,
+        faction_id: i32,
+    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(None);
+        };
+        faction.add_village_war_victor_count(self.game).map(Some)
+    }
+}
+
+impl UnionPlayerRefreshContext for UnionOrganizingBridge<'_> {
+    fn faction_update_player_info(
+        &self,
+        faction_id: i32,
+        update_player: &mut dyn FnMut(i32),
+    ) -> Option<Vec<i32>> {
+        self.organizing.faction_by_id(faction_id).map(|faction| {
+            faction.update_player_faction_info(self.game, 0, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
+        })
+    }
+}
+
+impl UnionMasterProjectionMutationContext for UnionOrganizingBridge<'_> {
+    fn set_union_master_projection(&mut self, faction_ids: &[i32], union_master_id: i32) {
+        for faction_id in faction_ids {
+            if let Some(faction) = self.organizing.faction_by_id_mut(*faction_id) {
+                faction.set_union_master_projection(union_master_id);
+            }
+        }
+    }
+}
+
+impl UnionInitialMutationContext for UnionOrganizingBridge<'_> {
+    fn faction_set_superior_organizing(
+        &mut self,
+        faction_id: i32,
+        union_id: i32,
+        union_master_id: i32,
+        parameters: &COrganizingParam,
+    ) -> Result<bool, FactionSuperiorOrganizingBlock> {
+        let Some(faction) = self.organizing.faction_by_id_mut(faction_id) else {
+            return Ok(false);
+        };
+        faction.set_superior_organizing(union_id, union_master_id, parameters)?;
+        Ok(true)
+    }
+}
+
+impl UnionFactionJoinContext for UnionOrganizingBridge<'_> {
+    fn faction_refresh_owned_city_info(
+        &self,
+        faction_id: i32,
+        refresh_owned_city: &mut dyn FnMut(i32, i32, i32, Option<u8>),
+    ) -> Result<Option<FactionOwnedCityRefreshReport>, FactionOwnedCityRefreshBlock> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.refresh_owned_city_info(refresh_owned_city))
+            .transpose()
+    }
+}
+
+impl UnionClientSnapshotContext for UnionOrganizingBridge<'_> {
+    fn faction_update_enemy_snapshot(
+        &self,
+        faction_id: i32,
+    ) -> Option<Vec<FactionEnemyDelivery>> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.update_enemy_factions_to_client(self.game))
+    }
+
+    fn faction_update_city_war_enemy_snapshot(
+        &self,
+        faction_id: i32,
+    ) -> Option<Vec<FactionEnemyDelivery>> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.update_city_war_enemy_factions_to_client(self.game))
+    }
+
+    fn faction_update_owned_city_snapshot(
+        &self,
+        faction_id: i32,
+    ) -> Result<Option<Vec<FactionOwnedCityDelivery>>, FactionOwnedCityUpdateBuildError> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.update_owned_cities_to_client(self.game))
+            .transpose()
+    }
+}
+
+impl UnionSendInfoContext for UnionOrganizingBridge<'_> {
+    fn faction_send_info_to_members<'a>(
+        &self,
+        faction_id: i32,
+        first_text: &'a [u8],
+        second_text: &'a [u8],
+        information_type: i32,
+        color: u32,
+        send_organizing_info: &mut dyn FnMut(FactionMemberInfoRequest<'a>),
+    ) -> Option<FactionMemberInfoReport> {
+        self.organizing.faction_by_id(faction_id).map(|faction| {
+            faction.send_info_to_all_members_with_color(
+                first_text,
+                second_text,
+                information_type,
+                color,
+                send_organizing_info,
+            )
+        })
+    }
+}
+
+impl UnionFactionMemberContext for UnionOrganizingBridge<'_> {
+    fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.get_members().keys().copied().collect())
+    }
+
+    fn faction_name(&self, faction_id: i32) -> Option<Vec<u8>> {
+        self.organizing
+            .faction_by_id(faction_id)
+            .map(|faction| faction.name().to_vec())
+    }
+
+    fn faction_level(&self, faction_id: i32) -> Result<Option<i32>, UnionFactionLevelBlock> {
+        let Some(faction) = self.organizing.faction_by_id(faction_id) else {
+            return Ok(None);
+        };
+        faction
+            .level()
+            .map(Some)
+            .ok_or(UnionFactionLevelBlock { faction_id })
     }
 }
 
@@ -7570,133 +7903,6 @@ impl UnionMasterFactionQueryContext for COrganizingCtrl {
     }
 }
 
-impl UnionOwnedCityMutationContext for COrganizingCtrl {
-    fn faction_add_owned_city(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-        region_id: i32,
-        update_player: &mut dyn FnMut(i32),
-    ) -> Result<bool, OwnedCityMutationBuildError> {
-        self.add_owned_city_to_faction(game, faction_id, region_id, update_player)
-            .map(|outcome| outcome.is_some())
-    }
-
-    fn faction_add_owned_cities(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-        region_ids: &VecDeque<i32>,
-        update_player: &mut dyn FnMut(i32),
-    ) -> Result<bool, OwnedCityMutationBuildError> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(false);
-        };
-        faction
-            .add_owned_city_list(game, region_ids, |game, faction, player_id| {
-                let _ = game.update_player_faction_info_from_faction(faction, player_id);
-                update_player(player_id);
-            })
-            .map(|_| true)
-    }
-
-    fn faction_clear_owned_cities(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-        update_player: &mut dyn FnMut(i32),
-    ) -> Result<bool, OwnedCityMutationBuildError> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(false);
-        };
-        faction
-            .clear_owned_cities(game, |game, faction, player_id| {
-                let _ = game.update_player_faction_info_from_faction(faction, player_id);
-                update_player(player_id);
-            })
-            .map(|_| true)
-    }
-
-    fn faction_set_owned_cities(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-        region_ids: &VecDeque<i32>,
-    ) -> Result<bool, OwnedCityMutationBuildError> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(false);
-        };
-        faction.set_owned_cities(game, region_ids).map(|_| true)
-    }
-}
-
-impl UnionFactionStateMutationContext for COrganizingCtrl {
-    fn faction_clear_enemy_factions(&mut self, faction_id: i32) -> bool {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return false;
-        };
-        faction.clear_enemy_factions();
-        true
-    }
-
-    fn faction_clear_city_war_enemy_factions(&mut self, faction_id: i32) -> bool {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return false;
-        };
-        faction.clear_city_war_enemy_factions();
-        true
-    }
-
-    fn faction_add_defence_victor_count(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(None);
-        };
-        faction.add_defence_victor_count(game).map(Some)
-    }
-
-    fn faction_add_offense_victor_count(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(None);
-        };
-        faction.add_offense_victor_count(game).map(Some)
-    }
-
-    fn faction_add_village_war_victor_count(
-        &mut self,
-        faction_id: i32,
-        game: &CGame,
-    ) -> Result<Option<Vec<FactionPropertyDelivery>>, FactionInitialPropertyBlock> {
-        let Some(faction) = self.faction_by_id_mut(faction_id) else {
-            return Ok(None);
-        };
-        faction.add_village_war_victor_count(game).map(Some)
-    }
-}
-
-impl UnionPlayerRefreshContext for COrganizingCtrl {
-    fn faction_update_player_info(
-        &self,
-        faction_id: i32,
-        game: &CGame,
-        update_player: &mut dyn FnMut(i32),
-    ) -> Option<Vec<i32>> {
-        self.faction_by_id(faction_id).map(|faction| {
-            faction.update_player_faction_info(game, 0, |game, faction, player_id| {
-                let _ = game.update_player_faction_info_from_faction(faction, player_id);
-                update_player(player_id);
-            })
-        })
-    }
-}
-
 impl UnionMasterProjectionMutationContext for COrganizingCtrl {
     fn set_union_master_projection(
         &mut self,
@@ -7724,48 +7930,6 @@ impl UnionInitialMutationContext for COrganizingCtrl {
         };
         faction.set_superior_organizing(union_id, union_master_id, parameters)?;
         Ok(true)
-    }
-}
-
-impl UnionFactionJoinContext for COrganizingCtrl {
-    fn faction_refresh_owned_city_info(
-        &self,
-        faction_id: i32,
-        refresh_owned_city: &mut dyn FnMut(i32, i32, i32, Option<u8>),
-    ) -> Result<Option<FactionOwnedCityRefreshReport>, FactionOwnedCityRefreshBlock> {
-        self.faction_by_id(faction_id)
-            .map(|faction| faction.refresh_owned_city_info(refresh_owned_city))
-            .transpose()
-    }
-}
-
-impl UnionClientSnapshotContext for COrganizingCtrl {
-    fn faction_update_enemy_snapshot(
-        &self,
-        faction_id: i32,
-        game: &CGame,
-    ) -> Option<Vec<FactionEnemyDelivery>> {
-        self.faction_by_id(faction_id)
-            .map(|faction| faction.update_enemy_factions_to_client(game))
-    }
-
-    fn faction_update_city_war_enemy_snapshot(
-        &self,
-        faction_id: i32,
-        game: &CGame,
-    ) -> Option<Vec<FactionEnemyDelivery>> {
-        self.faction_by_id(faction_id)
-            .map(|faction| faction.update_city_war_enemy_factions_to_client(game))
-    }
-
-    fn faction_update_owned_city_snapshot(
-        &self,
-        faction_id: i32,
-        game: &CGame,
-    ) -> Result<Option<Vec<FactionOwnedCityDelivery>>, FactionOwnedCityUpdateBuildError> {
-        self.faction_by_id(faction_id)
-            .map(|faction| faction.update_owned_cities_to_client(game))
-            .transpose()
     }
 }
 

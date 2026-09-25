@@ -1,5 +1,6 @@
-//! Блоки свойств, owned-city и билборда фракций, вынесенные сюда заранее:
-//! сами `CFactionCtrl`/`COrganizingCtrl` остаются в старом пакете до шага
+//! Блоки свойств, owned-city, билборда, member-info и enemy-проекций
+//! фракций плюс общий time-помощник, вынесенные сюда заранее: сами
+//! `CFactionCtrl`/`COrganizingCtrl` остаются в старом пакете до шага
 //! переноса organizing-области.
 //!
 //! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
@@ -7,7 +8,10 @@
 use std::error::Error;
 use std::fmt;
 
+use chrono::{Datelike, Local, Timelike};
+
 use crate::app::world_message::SendMessageError;
+use crate::content::organizing::TagTimeValue;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FactionInitialPropertyBlock;
@@ -121,4 +125,58 @@ pub struct FactionReinitializationBlock {
     pub map_key: i32,
     pub source: FactionInitialPropertyBlock,
     pub completed: Vec<FactionReinitializationEntry>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FactionSuperiorOrganizingBlock {
+    MissingBaseProperty,
+    DeleteRemainTimeAbsent,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct FactionEnemyDelivery {
+    pub recipient_player_id: i32,
+    pub game_server_id: i32,
+    pub result: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FactionMemberInfoRequest<'a> {
+    pub recipient_player_id: i32,
+    pub first_text: &'a [u8],
+    pub second_text: &'a [u8],
+    pub information_type: i32,
+    pub color: u32,
+    pub trailing_value: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct FactionMemberInfoReport {
+    pub recipient_player_ids: Vec<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FactionOwnedCityRefreshBlock {
+    MissingBaseProperty,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct FactionOwnedCityRefreshReport {
+    pub refreshed_region_ids: Vec<i32>,
+}
+
+/// Текущее локальное время в полях члена фракции. Одинаковая формула для
+/// faction/union проекций живёт здесь с владельцем.
+pub fn current_local_member_time() -> TagTimeValue {
+    let now = Local::now();
+    TagTimeValue {
+        year: now.year() as u16,
+        month: now.month() as u16,
+        day_of_week: now.weekday().num_days_from_sunday() as u16,
+        day: now.day() as u16,
+        hour: now.hour() as u16,
+        minute: now.minute() as u16,
+        second: now.second() as u16,
+        milliseconds: now.timestamp_subsec_millis() as u16,
+    }
 }

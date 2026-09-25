@@ -106,7 +106,7 @@ use crate::worldserver::appworld::organizingsystem::organizingctrl::{
     OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
     FactionCreationBlock, FactionCreationEffects, FactionCreationOutcome,
     FactionCreationPreparation, FactionClientSnapshotBlock, AllFactionInfoClientBlock,
-    UnionClientSnapshotByPlayerBlock, UnionClientSnapshotByPlayerOutcome,
+    UnionClientSnapshotByPlayerBlock, UnionClientSnapshotByPlayerOutcome, UnionOrganizingBridge,
     PlayerInviteFactionBlock, PlayerInviteFactionEffects, PlayerInviteFactionOutcome,
     OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
     OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
@@ -5860,10 +5860,13 @@ impl AttackCityWarResultContext
     }
 
     fn add_owned_city(&mut self, faction_id: i32, region_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionOwnedCityMutationContext::faction_add_owned_city(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
             region_id,
             self.update_player,
         )
@@ -5884,10 +5887,13 @@ impl AttackCityWarResultContext
     }
 
     fn clear_owned_city(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionOwnedCityMutationContext::faction_clear_owned_cities(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
             self.update_player,
         )
         .map_err(|source| OrganizingCityWarResultContextBlock::OwnedCity {
@@ -5920,12 +5926,15 @@ impl AttackCityWarResultContext
     }
 
     fn add_defence_victor_count(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionFactionStateMutationContext::faction_add_defence_victor_count(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
         )
-            .map_err(|source| OrganizingCityWarResultContextBlock::VictorCount {
+        .map_err(|source| OrganizingCityWarResultContextBlock::VictorCount {
                 faction_id,
                 operation: "AddDefenceVictorCounts",
                 source,
@@ -5942,12 +5951,15 @@ impl AttackCityWarResultContext
     }
 
     fn add_offense_victor_count(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionFactionStateMutationContext::faction_add_offense_victor_count(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
         )
-            .map_err(|source| OrganizingCityWarResultContextBlock::VictorCount {
+        .map_err(|source| OrganizingCityWarResultContextBlock::VictorCount {
                 faction_id,
                 operation: "AddOffenseVictorCounts",
                 source,
@@ -6706,10 +6718,13 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
     }
 
     fn add_owned_city(&mut self, faction_id: i32, region_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionOwnedCityMutationContext::faction_add_owned_city(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
             region_id,
             self.update_player,
         )
@@ -6729,10 +6744,13 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
     }
 
     fn clear_owned_city(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionOwnedCityMutationContext::faction_clear_owned_cities(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
             self.update_player,
         )
         .map_err(|source| OrganizingVillageWarResultContextBlock::ClearOwnedCity {
@@ -6751,10 +6769,13 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
     }
 
     fn add_village_war_victor_count(&mut self, faction_id: i32) -> Result<(), Self::Block> {
+        let mut bridge = UnionOrganizingBridge {
+            organizing: self.organizing,
+            game: self.game,
+        };
         let found = UnionFactionStateMutationContext::faction_add_village_war_victor_count(
-            self.organizing,
+            &mut bridge,
             faction_id,
-            self.game,
         )
         .map_err(|source| OrganizingVillageWarResultContextBlock::AddVictorCount {
             faction_id,

@@ -198,10 +198,12 @@ pub(crate) enum FactionCloneSaveBlock {
 }
 
 pub(crate) use nebokrai_realm::organizations::faction::{
-    FactionInitialPropertyBlock, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
-    FactionPropertyDelivery, FactionPropertyReinitialization, FactionTalkDelivery,
+    FactionEnemyDelivery, FactionInitialPropertyBlock, FactionMemberInfoReport,
+    FactionMemberInfoRequest, FactionOwnedCityDelivery, FactionOwnedCityRefreshBlock,
+    FactionOwnedCityRefreshReport, FactionOwnedCityUpdateBuildError, FactionPropertyDelivery,
+    FactionPropertyReinitialization, FactionSuperiorOrganizingBlock, FactionTalkDelivery,
     OwnedCitiesWireBuildError, OwnedCityAddOutcome, OwnedCityMutationBuildError,
-    OwnedCityMutationReport,
+    OwnedCityMutationReport, current_local_member_time,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -219,12 +221,6 @@ pub(crate) struct FactionInitialBlock {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FactionSuperiorOrganizingBlock {
-    MissingBaseProperty,
-    DeleteRemainTimeAbsent,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionDelMemberBlock {
     MasterIdMissing,
     DeleteRemainTimeAbsent,
@@ -239,13 +235,6 @@ pub(crate) struct FactionDelMemberReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionOperatorValidationBlock;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionEnemyDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
-}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FactionEnemyRefreshReport {
@@ -1154,21 +1143,6 @@ impl FactionFeatureFunction {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FactionMemberInfoRequest<'a> {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) first_text: &'a [u8],
-    pub(crate) second_text: &'a [u8],
-    pub(crate) information_type: i32,
-    pub(crate) color: u32,
-    pub(crate) trailing_value: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionMemberInfoReport {
-    pub(crate) recipient_player_ids: Vec<i32>,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FactionFeatureFunctionUpdate {
     Unchanged,
@@ -1564,16 +1538,6 @@ pub(crate) use nebokrai_realm::organizations::factionenemyblock::FactionEnemyMut
 pub(crate) struct OwnedCityBooleanMutationReport {
     pub(crate) legacy_result: bool,
     pub(crate) mutation: OwnedCityMutationReport,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FactionOwnedCityRefreshBlock {
-    MissingBaseProperty,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionOwnedCityRefreshReport {
-    pub(crate) refreshed_region_ids: Vec<i32>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -6801,20 +6765,6 @@ where
         _ => false,
     };
     inside_time_window && is_in_faction_id_list(faction_id)
-}
-
-pub(crate) fn current_local_member_time() -> TagTimeValue {
-    let now = Local::now();
-    TagTimeValue {
-        year: now.year() as u16,
-        month: now.month() as u16,
-        day_of_week: now.weekday().num_days_from_sunday() as u16,
-        day: now.day() as u16,
-        hour: now.hour() as u16,
-        minute: now.minute() as u16,
-        second: now.second() as u16,
-        milliseconds: now.timestamp_subsec_millis() as u16,
-    }
 }
 
 fn append_member_update_fields(
