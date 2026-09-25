@@ -1,15 +1,19 @@
-//! Общая достигнутая часть идентичности и жизненного цикла `CSummonShape`.
+//! Связующий enum 24 призванных навыковых форм и владелец их счётчика ID.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/summonshape.cpp`. Все призванные формы получают общий для процесса
-//! знаковый ID с переполнением из прежнего `g_lID`, тип `1000`, начальные часы
-//! и срок жизни. Конкретная область, атака и игровые эффекты остаются у
-//! производного владельца. Счётчик принадлежит `CGame`, а не региону, поэтому смена региона
-//! не создаёт повторные устаревшие ID.
+//! `appserver/summonshape.cpp`. Общий тип `1000`, правило следующего ID и
+//! wire-конверт снимков семейства перенесены в
+//! `nebokrai_zone::skills::summonshape`; здесь временно остаются enum
+//! `SummonedSkillShape` с диспетчеризацией shape/master/снимка (уходит с
+//! per-phalanx порциями) и счётчик `NextSummonShapeId`. Счётчик принадлежит
+//! `CGame`, а не региону, поэтому смена региона не создаёт повторные
+//! устаревшие ID.
 //! Общие ForceMove и End подключены через game/summonshape: живой регион,
 //! порядок сообщений и базовый SetTileXY не дублируются в каждом снаряде.
 
-pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
+pub(crate) use nebokrai_zone::skills::{
+    SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix, encode_related_phalanx_snapshot,
+};
 
 use crate::gameserver::appserver::skills::basemagicphalanx::CBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
@@ -35,7 +39,6 @@ use crate::gameserver::appserver::skills::maskedelementphalanx::MaskedElementPha
 use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
-use nebokrai_shared::protocol::LegacyWriter;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
@@ -65,49 +68,6 @@ pub(crate) enum SummonedSkillShape {
     GodPunishment(CGodPunishmentPhalanx),
     GodThunder(CGodThunderPhalanx),
     HeartlessArrow(CHeartlessArrowPhalanx),
-}
-
-/// Общий точный wire-префикс снарядов, чьи `AddToByteArray` сведены линкером
-/// в одну машинную функцию: идентификатор и уровень навыка, два зависящих от
-/// владельца `long` и оставшееся время перед базовым `CShape`. Значение пары
-/// определяет конкретный владелец; незавершённая ветвь сохраняет два чтения
-/// часов.
-pub(crate) fn encode_related_phalanx_snapshot(
-    shape: &CShape,
-    skill_id: i32,
-    skill_level: i32,
-    related_type: i32,
-    related_id: i32,
-    started_at_ms: u32,
-    lifetime_ms: u32,
-    now_milliseconds: impl FnMut() -> u32,
-) -> Option<Vec<u8>> {
-    let mut payload = encode_related_phalanx_prefix(
-        skill_id, skill_level, related_type, related_id,
-        started_at_ms, lifetime_ms, now_milliseconds,
-    );
-    shape
-        .add_to_byte_array(&mut payload, true)
-        .then_some(payload)
-}
-
-pub(crate) fn encode_related_phalanx_prefix(
-    skill_id: i32, skill_level: i32, related_type: i32, related_id: i32,
-    started_at_ms: u32, lifetime_ms: u32, mut now_milliseconds: impl FnMut() -> u32,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    let mut writer = LegacyWriter::new(&mut payload);
-    writer.write_i32(skill_id);
-    writer.write_i32(skill_level);
-    writer.write_i32(related_type);
-    writer.write_i32(related_id);
-    let remained = if started_at_ms.wrapping_add(lifetime_ms) <= now_milliseconds() {
-        0
-    } else {
-        lifetime_ms.wrapping_sub(now_milliseconds()).wrapping_add(started_at_ms)
-    };
-    writer.write_u32(remained);
-    payload
 }
 
 impl SummonedSkillShape {
@@ -240,13 +200,15 @@ impl SummonedSkillShape {
     }
 }
 
+/// Живой счётчик прежнего `g_lID`; владелец — `CGame`. Правило приращения
+/// перенесено в `nebokrai_zone::skills::next_summon_shape_id`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NextSummonShapeId(i32);
 
 impl NextSummonShapeId {
     pub(crate) fn take(&mut self) -> i32 {
         let id = self.0;
-        self.0 = self.0.wrapping_add(1);
+        self.0 = nebokrai_zone::skills::next_summon_shape_id(self.0);
         id
     }
 }

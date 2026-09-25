@@ -22,6 +22,7 @@ mod snowstorm;
 mod soulmirror;
 mod spidermist;
 pub mod statefactory;
+mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
 mod visualeffect;
 mod wangsheng;
 mod weak;
@@ -68,3 +69,5 @@ pub use godbless::GodBlessGains;
 pub use hearten::hearten_state;
 pub use wangsheng::{WANGSHENG_SKILL_ID, wangsheng_restored_health};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
+pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,
+    encode_related_phalanx_snapshot, next_summon_shape_id};
