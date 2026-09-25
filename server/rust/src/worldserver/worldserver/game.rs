@@ -90,9 +90,7 @@ use crate::nets::clients::{ClientConnectError, ClientSendQueue};
 use crate::nets::mysocket::{DEFAULT_SOCKET_TYPE, legacy_ipv4_word};
 use crate::nets::networld::message::{CMessage, SendMessageError, WorldMessageHandlers};
 use crate::nets::networld::mynetclient::CMyNetClient;
-use crate::nets::networld::mynetserver::{
-    CMyNetServer, WorldServerEvent, WorldServerEventSender,
-};
+use crate::nets::networld::mynetserver::{CMyNetServer, WorldServerEvent};
 use crate::nets::servers::{ServerCommandHandle, ServerHostError};
 use crate::public::auctionlog::{
     AuctionBangUpdateOutcome, AuctionLogLoadOutcome, CAuctionLog,
@@ -1322,45 +1320,14 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
     fn request_window_close(&mut self);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldLoginReconnect {
-    pub(crate) endpoint: SocketAddrV4,
-}
-
-/// Итог awaitable-замены `ConnectLoginServerFunc`.
-///
-/// Причина неуспешных попыток исходной функцией не публиковалась: она знала
-/// только `ReConnectLoginServer == 1`, поэтому report сохраняет лишь число
-/// попыток и terminal state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldLoginReconnectWorkerOutcome {
-    StoppedBeforeRetry,
-    StoppedAfterFailedRetry { attempts: u32 },
-    Reconnected {
-        attempts: u32,
-        reconnect: WorldLoginReconnect,
-    },
-}
-
-/// Snapshot, достаточный для одной попытки reconnect вне mutable `CGame`.
-///
-/// Optional-поля намеренно переносятся без ранней валидации: исходный worker
-/// создавался всегда, а ошибка setup/server-owner обнаруживалась уже после
-/// bind/connect в каждой конкретной попытке.
-#[derive(Clone)]
-pub(crate) struct WorldLoginReconnectSpec {
-    login_ip: Vec<u8>,
-    login_port: Option<u32>,
-    event_sender: Option<WorldServerEventSender>,
-}
-
-impl WorldLoginReconnectSpec {
-    pub(crate) async fn reconnect_once(
-        &self,
-    ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
-        CGame::reconnect_login_server_from_spec(self).await
-    }
-}
+// Контракты reconnect-семейства LoginServer (итог попытки, snapshot endpoint
+// и итог worker-а) вместе с ошибкой попытки перенесены в Realm app к своему
+// worker-у. Здесь реэкспорт для остающихся process-owner связей: setup
+// snapshot, lifecycle thread-owner-а и отчёт диспетчера server-сообщений.
+pub(crate) use nebokrai_realm::app::loginreconnectworker::{
+    WorldLoginReconnect, WorldLoginReconnectError, WorldLoginReconnectSpec,
+    WorldLoginReconnectWorkerOutcome,
+};
 
 #[derive(Debug)]
 pub(crate) enum WorldLoginReconnectThreadStart {
@@ -4488,54 +4455,6 @@ fn current_country_save_limits(
                 "_max_king_war_point",
             ))?,
     })
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldLoginReconnectError {
-    MissingSetupField(&'static str),
-    LoginAddressEncodingUnsupported,
-    LoginAddressResolution,
-    Bind(io::Error),
-    Connect(ClientConnectError),
-    MissingNetworkServerOwner,
-}
-
-impl fmt::Display for WorldLoginReconnectError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingSetupField(field) => {
-                write!(formatter, "World setup не назначил поле {field}")
-            }
-            Self::LoginAddressEncodingUnsupported => formatter.write_str(
-                "кодировка LoginServer-адреса не поддерживается безопасным Linux resolver",
-            ),
-            Self::LoginAddressResolution => {
-                formatter.write_str("LoginServer-адрес не разрешён в IPv4")
-            }
-            Self::Bind(error) => write!(formatter, "не создан reconnect socket: {error}"),
-            Self::Connect(error) => {
-                write!(
-                    formatter,
-                    "WorldServer повторно не подключён к LoginServer: {error}"
-                )
-            }
-            Self::MissingNetworkServerOwner => formatter.write_str(
-                "подключённый LoginServer client некуда передать: World server-owner отсутствует",
-            ),
-        }
-    }
-}
-
-impl Error for WorldLoginReconnectError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Bind(error) => Some(error),
-            Self::Connect(error) => Some(error),
-            Self::MissingSetupField(_) | Self::LoginAddressEncodingUnsupported
-            | Self::LoginAddressResolution
-            | Self::MissingNetworkServerOwner => None,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -11264,60 +11183,6 @@ impl CGame {
             .and_then(WorldLoginReconnectWorker::stop);
         self.connect_login_worker = None;
         completion
-    }
-
- /// Подключает один новый LoginServer client и передаёт его World FIFO.
- ///
- /// Здесь сохраняется публичный owner-метод для caller-ов `CGame`; его
- /// фактическая попытка живёт в cloneable spec и потому может выполняться
- /// без передачи mutable `CGame` системному worker-у.
-    async fn reconnect_login_server_from_spec(
-        spec: &WorldLoginReconnectSpec,
-    ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
- // держал новый CMyNetClient только в локальном pointer.
-        let mut client = CMyNetClient::new();
-        let socket = match bind_tcp_ipv4(None, 0) {
-            Ok(socket) => socket,
-            Err(error) => {
-                let _legacy_result = client.close();
-                return Err(WorldLoginReconnectError::Bind(error));
-            }
-        };
-        let login_port = match spec.login_port {
-            Some(port) => port,
-            None => {
- // Старый dwLoginPort здесь был
- // неинициализирован; неизвестное значение не выбираем.
-                let _legacy_result = client.close();
-                return Err(WorldLoginReconnectError::MissingSetupField("dwLoginPort"));
-            }
-        };
-        let endpoint = match resolve_login_endpoint(&spec.login_ip, login_port) {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                let _legacy_result = client.close();
-                return Err(WorldLoginReconnectError::from(error));
-            }
-        };
-
-        if let Err(error) = client.connect(socket, endpoint).await {
-            let _legacy_result = client.close();
-            return Err(WorldLoginReconnectError::Connect(error));
-        }
-
-        let event_sender = match spec.event_sender.as_ref() {
-            Some(server) => server,
-            None => {
- // Исходник после успешного connect
- // разыменовывал обязательный g_pGame->s_pNetServer. Safe Rust
- // закрывает ещё не опубликованный owner и не имитирует UB.
-                let _legacy_result = client.close();
-                return Err(WorldLoginReconnectError::MissingNetworkServerOwner);
-            }
-        };
-        event_sender.publish_reconnected_login_client(client);
-
-        Ok(WorldLoginReconnect { endpoint })
     }
 
  /// Выполняет точный retry-loop свободного `ConnectLoginServerFunc`.
@@ -21816,11 +21681,12 @@ pub(crate) fn legacy_tick_ms() -> u32 {
     seconds_ms.wrapping_add(nanoseconds_ms) as u32
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LoginEndpointError {
-    EncodingUnsupported,
-    Resolution,
-}
+// Resolution LoginServer endpoint-а общая: initial client-owner и reconnect
+// worker используют одну реализацию Realm loginreconnectworker; типовой итог
+// ошибки остаётся у process-owner-а.
+pub(crate) use nebokrai_realm::app::loginreconnectworker::{
+    LoginEndpointError, resolve_login_endpoint,
+};
 
 impl From<LoginEndpointError> for WorldClientInitializationError {
     fn from(error: LoginEndpointError) -> Self {
@@ -21829,30 +21695,6 @@ impl From<LoginEndpointError> for WorldClientInitializationError {
             LoginEndpointError::Resolution => Self::LoginAddressResolution,
         }
     }
-}
-
-impl From<LoginEndpointError> for WorldLoginReconnectError {
-    fn from(error: LoginEndpointError) -> Self {
-        match error {
-            LoginEndpointError::EncodingUnsupported => Self::LoginAddressEncodingUnsupported,
-            LoginEndpointError::Resolution => Self::LoginAddressResolution,
-        }
-    }
-}
-
-fn resolve_login_endpoint(raw_host: &[u8], port: u32) -> Result<SocketAddrV4, LoginEndpointError> {
-    let host = legacy_c_string_prefix(raw_host);
-    let host = std::str::from_utf8(host).map_err(|_| LoginEndpointError::EncodingUnsupported)?;
-    (host, port as u16)
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addresses| {
-            addresses.find_map(|address| match address {
-                SocketAddr::V4(address) => Some(address),
-                SocketAddr::V6(_) => None,
-            })
-        })
-        .ok_or(LoginEndpointError::Resolution)
 }
 
 fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {

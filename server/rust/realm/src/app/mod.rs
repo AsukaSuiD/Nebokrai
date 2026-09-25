@@ -18,6 +18,7 @@ pub mod login_server;
 pub mod login_server_client;
 pub mod login_world_server;
 pub mod login_world_server_client;
+pub mod loginreconnectworker; // reconnect worker World->Login: исходный 8-сек cadence, публикация replacement client в World FIFO
 pub mod misc_client;
 pub mod misc_game;
 pub mod misc_message;
