@@ -84,6 +84,11 @@
 //! смены пространственной принадлежности, двоичные форматы `0xBF603/604/605`,
 //! счётчики запрета движения и боя, а также подтверждённая странность
 //! `ForceMove`, где верхняя граница Y записывает `width - 1`.
+//! Общая основа wire-команд `0xBF603/604/605` (порция 2 волны moveshape)
+//! перенесена в Zone `regions/moveshape.rs`: методы ниже собирают её решение
+//! типизированным результатом, а around-доставку и запись членства
+//! (`set_move_shape_tile_position`) по-прежнему выполняет эта обвязка; span и
+//! запрет клетки читаются через `RegionSpanView` у владельца хранилищ.
 //! Его BF604 строится общим способом; CGame сохраняет виртуальный SetTileXY
 //! игрока с отменой захвата до свежего AI Stand. Монстр и постройка используют
 //! пространственную базу напрямую, не создавая второго способа переноса игрока.
@@ -266,13 +271,11 @@ use super::restorestate::{ConsumableRestoreIntervals, ConsumableRestoreState};
 use super::restorehpstate::RestoreHpState;
 use super::restorempstate::RestoreMpState;
 use super::scriptstate::ScriptMoveState;
-use super::serverregion::{CServerRegion, RegionMembershipBlock};
+use super::serverregion::CServerRegion;
 use super::skills::kernel::{BattleFairyExecution, PlayerSkillExecution, SkillLifecycle, SkillTermination};
 use super::states::visualeffect::SkillVisualEffect;
 use super::teamstate::CTeamState;
-use super::shape::{
-    CShape, ShapeAreaCoordinates, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
-};
+use super::shape::{CShape, ShapeAreaCoordinates, ShapeFigure, ShapeIdentity, ShapeResolver};
 use crate::gameserver::appserver::skills::agilitystate::PersistentAgilityFamilyState;
 use crate::gameserver::appserver::skills::immediatestate::is_immediate_state_skill;
 use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
@@ -350,16 +353,15 @@ use crate::gameserver::appserver::states::automaticrestore::{
 };
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::nets::netserver::message::GameMessageDomainOps;
-use crate::public::tools::get_line_direction;
-use nebokrai_zone::regions::moveshape::{clamp_force_x, clamp_force_y, set_pos_xy_core};
+use nebokrai_zone::regions::moveshape::{
+    MoveShapeSetPositionOutcome, RegionSpanView, force_move_wire, on_move_wire,
+    on_set_position_wire, set_pos_xy_core,
+};
 pub(crate) use nebokrai_zone::regions::moveshape::{
-    KillingAttackIdentity, MoveShapePet, MoveShapePositionBlock, MoveShapePositionDispatch,
-    MoveShapePositionFacts, MoveShapePropertyModifiers,
+    KillingAttackIdentity, MoveShapeCommandBlock, MoveShapePet, MoveShapePositionBlock,
+    MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapePropertyModifiers,
 };
 
-const SET_POSITION_MESSAGE: i32 = 0xBF603;
-const FORCE_MOVE_MESSAGE: i32 = 0xBF604;
-const MOVE_MESSAGE: i32 = 0xBF605;
 pub(crate) const SKILL_BASE_DEFENSE: u32 = 10;
 const SKILL_NOT_DISAPPEAR_AFTER_DEAD: u32 = 56;
 const SKILL_USAGE_CONST: u32 = 20_010;
@@ -877,12 +879,21 @@ impl MoveShapeSkill {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MoveShapeCommandBlock {
-    Coordinate(ShapeCoordinateBlock),
-    RegionCell(RegionCellAccessBlock),
-    Position(RegionMembershipBlock),
-    DetachedPosition(MoveShapePositionBlock),
+/// Шов Zone-основы wire-команд `0xBF603/604/605` к переходному владельцу
+/// хранилищ: основе достаточно span и запрета клетки, а вся запись позиции
+/// (`set_move_shape_tile_position`) и around-доставка остаются этой обвязке.
+impl RegionSpanView for CServerRegion {
+    fn width(&self) -> i32 {
+        self.region.width
+    }
+
+    fn height(&self) -> i32 {
+        self.region.height
+    }
+
+    fn get_block(&self, x: i32, y: i32) -> Result<u8, RegionCellAccessBlock> {
+        self.region.get_block(x, y)
+    }
 }
 
 pub(crate) trait MoveShapeResolver: ShapeResolver {
@@ -2655,8 +2666,9 @@ impl CMoveShape {
         Ok(true)
     }
 
-    /// Общий BF604 и clamp; виртуальный SetTileXY и последующий AI Stand
-    /// принадлежат конкретному владельцу движения.
+    /// Общий BF604 и clamp принадлежат Zone-основе `regions/moveshape`;
+    /// виртуальный SetTileXY и последующий AI Stand принадлежат конкретному
+    /// владельцу движения.
     pub(crate) fn force_move_message(
         &self,
         server_region: &CServerRegion,
@@ -2664,30 +2676,15 @@ impl CMoveShape {
         destination_y: i32,
         duration_ms: u32,
     ) -> Result<(ShapeAreaCoordinates, CMessage), MoveShapeCommandBlock> {
-        let width = server_region.region.width;
-        let height = server_region.region.height;
-        let clamped_x = clamp_force_x(destination_x, width);
-        let clamped_y = clamp_force_y(destination_y, width, height);
-        let old_x = self
-            .shape
-            .get_tile_x()
-            .map_err(MoveShapeCommandBlock::Coordinate)?;
-        let old_y = self
-            .shape
-            .get_tile_y()
-            .map_err(MoveShapeCommandBlock::Coordinate)?;
-        let identity = self.shape.identity();
-
-        let mut message = CMessage::new(FORCE_MOVE_MESSAGE);
-        message.add_long(identity.id);
-        message.add_long(identity.object_type);
-        message.add_long(old_x);
-        message.add_long(old_y);
-        message.add_long(clamped_x);
-        message.add_long(clamped_y);
-        message.add_ulong(duration_ms);
-        message.add_long(0);
-        Ok((ShapeAreaCoordinates { x: clamped_x, y: clamped_y }, message))
+        let outcome = force_move_wire(
+            &self.shape,
+            server_region,
+            destination_x,
+            destination_y,
+            duration_ms,
+        )
+        .map_err(MoveShapeCommandBlock::Coordinate)?;
+        Ok((outcome.destination, outcome.message))
     }
 
     pub(crate) fn on_move(
@@ -2699,33 +2696,8 @@ impl CMoveShape {
         facts: MoveShapePositionFacts,
         around: &GameServerAroundRuntime<'_>,
     ) -> Result<(), MoveShapeCommandBlock> {
-        let old_x = self
-            .shape
-            .get_tile_x()
+        let message = on_move_wire(&mut self.shape, destination_x, destination_y, run)
             .map_err(MoveShapeCommandBlock::Coordinate)?;
-        let old_y = self
-            .shape
-            .get_tile_y()
-            .map_err(MoveShapeCommandBlock::Coordinate)?;
-        self.shape.set_direction(get_line_direction(
-            old_x,
-            old_y,
-            destination_x,
-            destination_y,
-        ));
-        let identity = self.shape.identity();
-
-        let mut message = CMessage::new(MOVE_MESSAGE);
-        message.add_long(identity.id);
-        message.add_long(identity.object_type);
-        message.add_long(old_x);
-        message.add_long(old_y);
-        message.add_byte(1);
-        message.add_byte(2 + u8::from(run != 0));
-        message.add_long(destination_x);
-        message.add_long(destination_y);
-        message.add_long(destination_x);
-        message.add_long(destination_y);
         let _ = message
             .send_to_around(server_region.as_deref(), &self.shape, None, around)
             .map_err(MoveShapeCommandBlock::Coordinate)?;
@@ -2757,29 +2729,12 @@ impl CMoveShape {
         let Some(server_region) = server_region else {
             return Ok(false);
         };
-        let region = &server_region.region;
-        if destination_x < 0
-            || destination_x >= region.width
-            || destination_y < 0
-            || destination_y >= region.height
-        {
+        let MoveShapeSetPositionOutcome::Accepted(message) =
+            on_set_position_wire(&self.shape, server_region, destination_x, destination_y)
+                .map_err(MoveShapeCommandBlock::RegionCell)?
+        else {
             return Ok(false);
-        }
-        if region
-            .get_block(destination_x, destination_y)
-            .map_err(MoveShapeCommandBlock::RegionCell)?
-            != 0
-        {
-            return Ok(false);
-        }
-
-        let identity = self.shape.identity();
-        let mut message = CMessage::new(SET_POSITION_MESSAGE);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(destination_x);
-        message.add_long(destination_y);
-        message.add_long(0);
+        };
         let _ = message
             .send_to_around(Some(&*server_region), &self.shape, None, around)
             .map_err(MoveShapeCommandBlock::Coordinate)?;

@@ -1,9 +1,15 @@
-//! Пространственное ядро и поведение скалярных колонок `CMoveShape`
-//! исторического GameServer, перенесённые в Zone `regions/` первой порцией
-//! волны moveshape. Исходный владелец — `appserver/moveshape.h/.cpp`.
-//! Переходный агрегат `CMoveShape` остаётся в старом пакете, хранит те же
-//! колонки и делегирует сюда их поведение без изменения сигнатур; нематериальные
-//! accessor-ы чтения/записи полей остаются у этого переходного владельца.
+//! Пространственное ядро, поведение скалярных колонок и общая основа
+//! wire-команд движения `CMoveShape` исторического GameServer, перенесённые
+//! в Zone `regions/` волной moveshape. Исходный владелец —
+//! `appserver/moveshape.h/.cpp`. Переходный агрегат `CMoveShape` остаётся в
+//! старом пакете, хранит те же колонки и делегирует сюда их поведение без
+//! изменения сигнатур; нематериальные accessor-ы чтения/записи полей остаются
+//! у этого переходного владельца. Основа wire-команд `0xBF603/604/605`
+//! (порция 2) возвращает решение и готовый пакет типизированным результатом;
+//! around-доставку и запись пространственного членства по-прежнему выполняет
+//! dispatcher-обвязка старого пакета, а чтение span и запрета клетки региона
+//! основа получает узким швом `RegionSpanView`, реализованным переходным
+//! владельцем хранилищ у себя.
 //!
 //! Точная пара: `GameServer/gameserver.exe` (SHA-256
 //! `4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E`) +
@@ -12,25 +18,34 @@
 //! `SetMoveable` (`0x000CCEE0`), `SetFightable` (`0x000CCE10`),
 //! `God` (`0x0002ACB0`), `SetKilledMeAttackInfo` (`0x000CCE50`),
 //! `IsDied` (`0x000CCF20`), `GetDestDir` (`0x000CCF60`),
-//! `ForceMove` (`0x000CD1A0`), `OnEnterRegion` (`0x000CEF40`), а также
-//! overrides `GetBeAttackedPoint` (`CBuild` `0x001DD350`,
+//! `ForceMove` (`0x000CD1A0`), `OnMove` (`0x000CD490`), `OnSetPosition`
+//! (`0x000CD5C0`), `OnEnterRegion` (`0x000CEF40`), а также overrides
+//! `GetBeAttackedPoint` (`CBuild` `0x001DD350`,
 //! `CMonster` `0x000E6AA0`). Сохраняются точный порядок смены пространственной
 //! принадлежности, счётчики запрета движения и боя, подтверждённая странность
-//! `ForceMove`, где верхняя граница Y записывает `width - 1`, и единственная
-//! запись убийцы после пакета смерти `0xBF60B`.
+//! `ForceMove`, где верхняя граница Y записывает `width - 1`, единственная
+//! запись убийцы после пакета смерти `0xBF60B` и исходный порядок полей
+//! wire `0xBF603/604/605`, сверенный по машинному коду перечисленных RVA.
 //! PDB `tagProperties` (type `0x6D94`, fieldlist `0x6D93`) задаёт 25 signed
 //! LONG размером `0x64` по полю `CMoveShape +0x84`; имена и порядок полей
 //! сохранены типизированной структурой — это не wire-layout и не копия
 //! свойств монстра.
 
-use super::region::CRegion;
+use nebokrai_shared::runtime::get_line_direction;
+
+use super::region::{CRegion, RegionCellAccessBlock};
+use super::serverregion::membership::RegionMembershipBlock;
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapePositionDispatch,
 };
+use crate::app::game_message::CMessage;
 use crate::combat::AttackInformation;
 
 const NPC_TYPE: i32 = 500;
+const SET_POSITION_MESSAGE: i32 = 0xBF603;
+const FORCE_MOVE_MESSAGE: i32 = 0xBF604;
+const MOVE_MESSAGE: i32 = 0xBF605;
 
 /// Отказ пространственной регистрации `CMoveShape::SetPosXY`: coordinate
 /// conversion, запись клетки footprint либо несогласованный area-span.
@@ -360,4 +375,146 @@ pub const fn reset_region_entry_control(
     *can_fight = true;
     *moveable_count = 0;
     *can_fight_count = 0;
+}
+
+/// Typed-отказ wire-команд движения `CMoveShape` (`0xBF603/604/605`):
+/// чтение координат фигуры, доступ запрета клетки региона, запись
+/// пространственного членства либо отсоединённая позиция без региона.
+/// Общая основа методов живёт здесь, а отказ от её шагов собирает
+/// dispatcher-обвязка переходного `CMoveShape` старого пакета.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MoveShapeCommandBlock {
+    Coordinate(ShapeCoordinateBlock),
+    RegionCell(RegionCellAccessBlock),
+    Position(RegionMembershipBlock),
+    DetachedPosition(MoveShapePositionBlock),
+}
+
+/// Узкий шов чтения пространственного региона для основы wire-команд
+/// движения (порция 2): `ForceMove` клампит цель к span, а `OnSetPosition`
+/// сверяет цель с границами и запретом клетки. Вид реализует переходный
+/// владелец хранилищ (`CServerRegion` старого пакета) у себя; запись позиции
+/// и around-доставка этой границей не покрываются.
+pub trait RegionSpanView {
+    fn width(&self) -> i32;
+    fn height(&self) -> i32;
+    fn get_block(&self, x: i32, y: i32) -> Result<u8, RegionCellAccessBlock>;
+}
+
+/// Typed-решение основы `CMoveShape::ForceMove`: зажатая к span точка цели и
+/// готовый пакет `0xBF604`; публикация и spatial-запись остаются dispatcher-у.
+pub struct MoveShapeForceMoveOutcome {
+    pub destination: ShapeAreaCoordinates,
+    pub message: CMessage,
+}
+
+/// Общая основа exact `CMoveShape::ForceMove` (RVA `0x000CD1A0`): clamp цели
+/// к span региона и построение `0xBF604` в исходном порядке полей — ID,
+/// object type, старые tile X/Y, цель X/Y, duration и нулевой хвост.
+/// Around-доставка, virtual SetTileXY и последующий AI Stand принадлежат
+/// dispatcher-владельцу старого пакета.
+pub fn force_move_wire(
+    shape: &CShape,
+    span: &impl RegionSpanView,
+    destination_x: i32,
+    destination_y: i32,
+    duration_ms: u32,
+) -> Result<MoveShapeForceMoveOutcome, ShapeCoordinateBlock> {
+    let width = span.width();
+    let height = span.height();
+    let clamped_x = clamp_force_x(destination_x, width);
+    let clamped_y = clamp_force_y(destination_y, width, height);
+    let old_x = shape.get_tile_x()?;
+    let old_y = shape.get_tile_y()?;
+    let identity = shape.identity();
+
+    let mut message = CMessage::new(FORCE_MOVE_MESSAGE);
+    message.add_long(identity.id);
+    message.add_long(identity.object_type);
+    message.add_long(old_x);
+    message.add_long(old_y);
+    message.add_long(clamped_x);
+    message.add_long(clamped_y);
+    message.add_ulong(duration_ms);
+    message.add_long(0);
+    Ok(MoveShapeForceMoveOutcome {
+        destination: ShapeAreaCoordinates {
+            x: clamped_x,
+            y: clamped_y,
+        },
+        message,
+    })
+}
+
+/// Общая основа exact virtual `CMoveShape::OnMove` (RVA `0x000CD490`):
+/// направление считается от текущей клетки к цели исходной line-direction
+/// сеткой и записывается в фигуру, затем строится `0xBF605` — ID,
+/// object type, старые tile X/Y, байты `1` и режима `2 + (run != 0)` и две
+/// пары координат цели. Отправка и spatial-запись — у dispatcher-а.
+pub fn on_move_wire(
+    shape: &mut CShape,
+    destination_x: i32,
+    destination_y: i32,
+    run: i32,
+) -> Result<CMessage, ShapeCoordinateBlock> {
+    let old_x = shape.get_tile_x()?;
+    let old_y = shape.get_tile_y()?;
+    shape.set_direction(get_line_direction(
+        old_x,
+        old_y,
+        destination_x,
+        destination_y,
+    ));
+    let identity = shape.identity();
+
+    let mut message = CMessage::new(MOVE_MESSAGE);
+    message.add_long(identity.id);
+    message.add_long(identity.object_type);
+    message.add_long(old_x);
+    message.add_long(old_y);
+    message.add_byte(1);
+    message.add_byte(2 + u8::from(run != 0));
+    message.add_long(destination_x);
+    message.add_long(destination_y);
+    message.add_long(destination_x);
+    message.add_long(destination_y);
+    Ok(message)
+}
+
+/// Typed-решение основы `CMoveShape::OnSetPosition`: отказ без публикации
+/// (цель вне span либо на занятой клетке) либо готовый пакет `0xBF603`.
+pub enum MoveShapeSetPositionOutcome {
+    Declined,
+    Accepted(CMessage),
+}
+
+/// Общая основа exact virtual `CMoveShape::OnSetPosition` (RVA `0x000CD5C0`):
+/// цель вне span региона или по ненулевому запрету клетки отклоняется без
+/// публикации, иначе строится `0xBF603` — object type, ID, цель X/Y и
+/// нулевой хвост. Отправка и запись членства — у dispatcher-а.
+pub fn on_set_position_wire(
+    shape: &CShape,
+    span: &impl RegionSpanView,
+    destination_x: i32,
+    destination_y: i32,
+) -> Result<MoveShapeSetPositionOutcome, RegionCellAccessBlock> {
+    if destination_x < 0
+        || destination_x >= span.width()
+        || destination_y < 0
+        || destination_y >= span.height()
+    {
+        return Ok(MoveShapeSetPositionOutcome::Declined);
+    }
+    if span.get_block(destination_x, destination_y)? != 0 {
+        return Ok(MoveShapeSetPositionOutcome::Declined);
+    }
+
+    let identity = shape.identity();
+    let mut message = CMessage::new(SET_POSITION_MESSAGE);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(destination_x);
+    message.add_long(destination_y);
+    message.add_long(0);
+    Ok(MoveShapeSetPositionOutcome::Accepted(message))
 }
