@@ -3498,6 +3498,32 @@ impl nebokrai_realm::activities::rsjjcsys::RsJjcSysPlayerTarget for CPlayer {
     }
 }
 
+impl nebokrai_realm::characters::honorranks::HonorRankPlayerView for CPlayer {
+    fn get_id(&self) -> i32 {
+        self.get_id()
+    }
+
+    fn get_level(&self) -> u8 {
+        self.get_level()
+    }
+
+    fn get_occupation(&self) -> u8 {
+        self.get_occupation()
+    }
+
+    fn get_appellation_id(&self) -> u32 {
+        self.get_appellation_id()
+    }
+
+    fn get_name(&self) -> &[u8] {
+        self.get_name()
+    }
+
+    fn country(&self) -> Option<u8> {
+        self.country()
+    }
+}
+
 fn append_player_count(
     destination: &mut Vec<u8>,
     field: &'static str,

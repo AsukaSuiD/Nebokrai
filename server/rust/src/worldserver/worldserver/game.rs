@@ -864,7 +864,7 @@ pub(crate) type WorldGameInitResult<ContextBlock> =
 
 pub(crate) trait WorldGameInitContext {
     type Block;
-    type PlayerDatabase: RsPlayerOwner;
+    type PlayerDatabase: RsPlayerOwner + nebokrai_realm::characters::honorranks::HonorRanksDbOwner;
     type EnemyFactionsDatabase: RsEnemyFactionsOwner;
     type GeneralVariableDatabase: RsGenVarOwner;
     type UnionDatabase: RsUnionOwner;
@@ -17227,6 +17227,23 @@ impl CGame {
 impl nebokrai_realm::activities::factionwarsys::EnemyFactionSink for CGame {
     fn set_enemy_factions(&self, enemy_factions: VecDeque<Option<EnemyFactionSaveSnapshot>>) {
         CGame::set_enemy_factions(self, enemy_factions);
+    }
+}
+
+impl nebokrai_realm::characters::honorranks::HonorRanksGameView for CGame {
+    fn queue_honor_ranks_world_message(
+        &self,
+        message: CMessage,
+    ) -> Result<(), nebokrai_realm::characters::honorranks::HonorRanksLocalQueueBlock> {
+        self.queue_local_world_message(message).map_err(|block| {
+            nebokrai_realm::characters::honorranks::HonorRanksLocalQueueBlock {
+                message_type: block.message_type,
+            }
+        })
+    }
+
+    fn honor_ranks_game_server_sender(&self) -> Option<ServerCommandHandle> {
+        self.current_game_server_sender()
     }
 }
 
