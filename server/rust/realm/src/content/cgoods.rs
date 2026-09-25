@@ -13,8 +13,12 @@
 //! signed wrapping; max-stack и weight зависят от base-properties, weight
 //! умножается с 32-битным wrapping.
 //!
-//! `CanUpgraded` в поставленном EXE всегда возвращает false. Rust-владение и
-//! `Vec` заменяют ручной cleanup, не меняя wire или этот запрет.
+//! `CanUpgraded` (RVA `0x4528e0`, точная пара `Nworldserver.exe` SHA
+//! `f3ac454d…` + `WorldServer.pdb` RSDS match) возвращает true только когда
+//! base-properties по индексу найдены, goods type == `GOODS_TYPE_EQUIPMENT`
+//! и addon values `GAP_WEAPON_LEVEL` (0x30) непусты; иначе false.
+//! Rust-владение и `Vec` заменяют ручной cleanup, не меняя wire или этот
+//! предикат.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -29,8 +33,8 @@ use crate::content::goodsdb::{
 use crate::regions::shape::CShape;
 use crate::regions::shapetypes::ShapeDecodeError;
 use crate::content::goods::{
-    GAP_GOODS_STACKING_LIMIT, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS,
-    GoodsBasePropertiesRegistry,
+    GAP_GOODS_STACKING_LIMIT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
+    GOODS_TYPE_USELESS, GoodsBasePropertiesRegistry,
 };
 use crate::content::cgoodsfactory::query_goods_base_properties;
 
@@ -378,8 +382,50 @@ impl CGoods {
         )
     }
 
-    pub const fn can_upgraded(&self) -> bool {
-        false
+    /// `CGoods::CanUpgraded` (RVA `0x4528e0`, точная пара `Nworldserver.exe`
+    /// `f3ac454d…` + `WorldServer.pdb` RSDS match).
+    ///
+    /// Машинные шаги: индекс `+0x6c` передаётся в map-lookup global-реестра
+    /// (`0x4528fc-0x45290a` → `0x455db0`); промах (NULL) → ret 0
+    /// (`0x45290c`); `props->GetGoodsType() != 2` (`0x4dea40`, compare
+    /// `0x452919: cmp eax, 2; jne`) → ret 0; `GetAddonValues(0x30, out)`
+    /// (`0x45293b` → `0x452760`) при пустом result-векторе → ret 0
+    /// (`0x452944`/`0x452966`); иначе ret 1 (`0x45297f-0x45298d`).
+    /// Ctor-неназначенный индекс (`None`) соответствует промаху lookup по
+    /// неинициализированному `+0x6c` → false.
+    pub fn can_upgraded(&self, registry: &GoodsBasePropertiesRegistry) -> bool {
+        let Some(index) = self.base_properties_index else {
+            return false;
+        };
+        let Some(properties) = query_goods_base_properties(registry, index) else {
+            return false;
+        };
+        if properties.get_goods_type() != GOODS_TYPE_EQUIPMENT {
+            return false;
+        }
+        !self.get_addon_property_values(GAP_WEAPON_LEVEL).is_empty()
+    }
+
+ /// DIRECT-case `0x45648c` машинной jump-table `UpgradeEquipment`
+ /// (`Nworldserver.exe` `f3ac454d…` + `WorldServer.pdb`): у property по
+ /// индексу итерируемого addon-вектора ищется первое value с id == 1
+ /// (`0x456492-0x4564c6`, compare `0x4564b9: cmp dword ptr [eax], 1; je`)
+ /// и его modifier меняется на ±1 обычным x86 wrapping без всякого clamp
+ /// (`0x4564d7: add …,+1` / `0x4564f7: add …,-1`). changed-флаг цикла
+ /// взводится только при найденном value (`0x4564e4`/`0x4564ff`).
+    pub fn adjust_indexed_id_one_modifier(&mut self, property_index: usize, increase: bool) -> bool {
+        let Some(property) = self.addon_properties.get_mut(property_index) else {
+            return false;
+        };
+        let Some(value) = property.values.iter_mut().find(|value| value.id == 1) else {
+            return false;
+        };
+        if increase {
+            value.modifier = value.modifier.wrapping_add(1);
+        } else {
+            value.modifier = value.modifier.wrapping_sub(1);
+        }
+        true
     }
 
     pub const fn set_price(&mut self, price: u32) {
@@ -557,6 +603,10 @@ impl CGoods {
 }
 
 impl GoodsAddonProperty {
+    pub const fn property_type(&self) -> i32 {
+        self.property_type
+    }
+
     const fn with_constructor_defaults() -> Self {
         Self {
             property_type: 0,

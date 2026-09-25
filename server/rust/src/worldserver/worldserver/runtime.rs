@@ -3,6 +3,7 @@
 //! StringTable и встроенные setup-владельцы остаются у единственного `CGame`;
 //! здесь собраны исторические process-global owners, передаваемые ему ссылками.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::future::Future;
@@ -1014,24 +1015,37 @@ impl WorldProcessPlayerLoadDatabase {
     }
 }
 
+fn world_lcg_random(random_state: &Cell<u32>, upper_bound: i32) -> i32 {
+    let state = random_state
+        .get()
+        .wrapping_mul(214013)
+        .wrapping_add(2531011);
+    random_state.set(state);
+    let value = ((state >> 16) & 0x7fff) as i32;
+    if upper_bound > 0 {
+        value % upper_bound
+    } else {
+        0
+    }
+}
+
 pub(crate) fn world_player_load_largess(
     largess: Arc<TiberiusLargess>,
     snapshot: Arc<RwLock<WorldPlayerLoadSnapshot>>,
 ) -> Box<dyn FnMut(&mut CPlayer) + Send> {
-    let mut random_state = 1u32;
+ // Machine random (`0x453560`) — process-global CRT rand; create/upgrade
+ // пути делят одну последовательность, поэтому состояние общее через Cell.
+    let random_state = Cell::new(1u32);
     Box::new(move |player| {
         let snapshot = snapshot.read().clone();
         let mut random = |upper_bound: i32| {
-            random_state = random_state.wrapping_mul(214013).wrapping_add(2531011);
-            let value = ((random_state >> 16) & 0x7fff) as i32;
-            if upper_bound > 0 {
-                value % upper_bound
-            } else {
-                0
-            }
+            world_lcg_random(&random_state, upper_bound)
         };
         let mut upgrade = |goods: &mut _, target_level| {
-            let _ = upgrade_equipment(Some(goods), target_level);
+            let mut random = |upper_bound: i32| {
+                world_lcg_random(&random_state, upper_bound)
+            };
+            let _ = upgrade_equipment(Some(goods), &snapshot.goods, target_level, &mut random);
         };
         match largess.load_largess(
             player,

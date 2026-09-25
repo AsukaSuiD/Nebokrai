@@ -12,17 +12,23 @@
 //! всех вызовов legacy `random(bound)`; сам генератор передаётся callback-ом.
 //!
 //! Gold/YuanBao/JiFen indices разрешаются через исходные StringTable имена.
-//! Public equipment upgrade этой версии всегда запрещён `CanUpgraded == 0`;
-//! недостижимое mutation-тело не включается в поведение фабрики.
+//! `UpgradeEquipment` (RVA `0x4561c0`, точная пара `Nworldserver.exe` SHA
+//! `f3ac454d…` + `WorldServer.pdb` RSDS match) воспроизводит машинный цикл
+//! апгрейда экипировки: gate `CanUpgraded` (eax==0 → ret 0), per-property
+//! jump-table `0x45655c` на gapType `0x30..0x49` с 18 звеньями к private
+//! `Upgrade` (`0x455f20`) и DIRECT-case уровня ±1, завершение по сравнению
+//! текущего уровня с целевым. Подробные шаги — у `upgrade_equipment`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::CStr;
 use std::fmt;
-use crate::content::cgoods::{CGoods, GoodsCodecError};
+use crate::content::cgoods::{
+    CGoods, FirstAddonModifierAdjustment, GoodsCodecError,
+};
 use crate::content::goods::{
-    CGoodsBaseProperties, GoodsBasePropertiesCodecError, GoodsBasePropertiesRegistry,
-    ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED, ICON_TYPE_GROUND,
+    CGoodsBaseProperties, GAP_WEAPON_LEVEL, GoodsBasePropertiesCodecError,
+    GoodsBasePropertiesRegistry, ICON_TYPE_CONTAINER, ICON_TYPE_EQUIPPED, ICON_TYPE_GROUND,
 };
 
 pub type GoodsOriginalNameIndex = BTreeMap<Vec<u8>, u32>;
@@ -332,15 +338,137 @@ pub fn garbage_collect(goods: Option<&mut Option<Box<CGoods>>>) -> bool {
     true
 }
 
-pub fn upgrade_equipment(goods: Option<&mut CGoods>, target_level: i32) -> bool {
+/// Пары (source gapType → destination gapType) 18 case-звеньев jump-table
+/// `0x45655c` из machine-байт; immediates взяты из push-последовательностей
+/// case-тел (`0x456285`-`0x45647a`). Слоты `0x31..0x34` и `0x46..0x48`
+/// указывают на default `0x456507` (пропуск), как и всё вне `0x30..0x49`.
+const fn upgrade_destination_gap_type(gap_type: i32) -> Option<i32> {
+    match gap_type {
+        0x35 => Some(0x0e),
+        0x36 => Some(0x0f),
+        0x37 => Some(0x10),
+        0x38 => Some(0x11),
+        0x39 => Some(0x12),
+        0x3a => Some(0x13),
+        0x3b => Some(0x14),
+        0x3c => Some(0x15),
+        0x3d => Some(0x06),
+        0x3e => Some(0x07),
+        0x3f => Some(0x08),
+        0x40 => Some(0x09),
+        0x41 => Some(0x0a),
+        0x42 => Some(0x25),
+        0x43 => Some(0x1f),
+        0x44 => Some(0x20),
+        0x45 => Some(0x16),
+        0x49 => Some(0x17),
+        _ => None,
+    }
+}
+
+/// Private `CGoodsFactory::Upgrade` (RVA `0x455f20`, точная пара
+/// `Nworldserver.exe` `f3ac454d…` + `WorldServer.pdb` RSDS match).
+///
+/// delta-контракт: `v1 = GetAddonPropertyValue(src, 1)`, `v2 = (src, 2)`;
+/// `v1 <= 0` → ret 0 (`0x455f4c: jle`); `v2 > 0` →
+/// `delta = random(v2 − v1) + v1` (`0x455f54-0x455f65`), иначе `delta = v1`
+/// (`0x455f6b`). Signed sub/add — обычный x86 wrapping. Мутация destination
+/// вынесена в `adjust_first_addon_modifier` (first-match скан с головы
+/// вектора, `_Myfirst` без проверки, clamp-формы — MATCH). Машина вызывает
+/// `0x453560` с сырым signed bound, включая ноль и отрицательный; bound
+/// поступает в callback без коррекции. Результат потребляется только
+/// вызывающим `UpgradeEquipment` — и он его игнорирует.
+fn upgrade<Random>(
+    goods: &mut CGoods,
+    source_gap_type: i32,
+    destination_gap_type: i32,
+    increase: bool,
+    random: &mut Random,
+) -> bool
+where
+    Random: FnMut(i32) -> i32 + ?Sized,
+{
+    let first = goods.get_addon_property_value(source_gap_type, 1);
+    let second = goods.get_addon_property_value(source_gap_type, 2);
+    if first <= 0 {
+        return false;
+    }
+    let mut delta = first;
+    if second > 0 {
+        delta = random(second.wrapping_sub(first)).wrapping_add(first);
+    }
+    matches!(
+        goods.adjust_first_addon_modifier(destination_gap_type, delta, increase),
+        FirstAddonModifierAdjustment::Adjusted
+    )
+}
+
+/// `CGoodsFactory::UpgradeEquipment` (RVA `0x4561c0`, точная пара
+/// `Nworldserver.exe` `f3ac454d…` + `WorldServer.pdb` RSDS match).
+///
+/// Шаги машинного тела:
+/// - NULL goods → 0 (`0x4561cb-0x4561cd` → `0x456553`);
+/// - gate `CanUpgraded`, eax==0 → 0 (`0x4561d3-0x4561dc`);
+/// - current = `GetAddonPropertyValue(GAP 0x30, 1)`; current < 0 → 0
+///   (signed `jl`, `0x4561e8-0x4561ef`);
+/// - direction `increase = target >= current` (signed `jge`,
+///   `0x4561fa-0x456204`);
+/// - свежее current == target → ret 1 до любой мутации
+///   (`0x456206-0x456217`);
+/// - проходы по addon-вектору в index-порядке с шагом `0x1c` (`0x456230`);
+///   jump-table — только диспетчеризация по gapType, порядок обхода задаёт
+///   сам вектор (факт по телу `0x45621d-0x45627e`);
+/// - case 0x30 — DIRECT (`0x45648c`): у итерируемой property ищется первое
+///   value с id == 1 и его modifier меняется на ±1 без clamp; только этот
+///   case взводит changed-флаг (`0x4564e4`/`0x4564ff`);
+/// - 18 case зовут private `upgrade`; результат игнорируется
+///   (`0x456285`-`0x45629d` и далее по телам);
+/// - конец прохода: changed == 0 → ret 0 (`0x456516-0x45653f`), иначе
+///   свежее current == target → ret 1 (`0x45651d-0x45653a`), иначе новый
+///   проход (`0x45652c` → `0x456220`).
+pub fn upgrade_equipment<Random>(
+    goods: Option<&mut CGoods>,
+    registry: &GoodsBasePropertiesRegistry,
+    target_level: i32,
+    random: &mut Random,
+) -> bool
+where
+    Random: FnMut(i32) -> i32 + ?Sized,
+{
     let Some(goods) = goods else {
         return false;
     };
-    let _ = target_level;
-    if !goods.can_upgraded() {
+    if !goods.can_upgraded(registry) {
         return false;
     }
-    false
+    if goods.get_addon_property_value(GAP_WEAPON_LEVEL, 1) < 0 {
+        return false;
+    }
+    let increase = target_level >= goods.get_addon_property_value(GAP_WEAPON_LEVEL, 1);
+    if goods.get_addon_property_value(GAP_WEAPON_LEVEL, 1) == target_level {
+        return true;
+    }
+    loop {
+        let mut changed = false;
+        let mut index = 0;
+        while index < goods.get_all_addon_properties().len() {
+            let gap_type = goods.get_all_addon_properties()[index].property_type();
+            if gap_type == GAP_WEAPON_LEVEL {
+                if goods.adjust_indexed_id_one_modifier(index, increase) {
+                    changed = true;
+                }
+            } else if let Some(destination_gap_type) = upgrade_destination_gap_type(gap_type) {
+                let _ = upgrade(goods, gap_type, destination_gap_type, increase, random);
+            }
+            index += 1;
+        }
+        if !changed {
+            return false;
+        }
+        if goods.get_addon_property_value(GAP_WEAPON_LEVEL, 1) == target_level {
+            return true;
+        }
+    }
 }
 
 pub fn get_gold_coin_index<ResolveString>(
