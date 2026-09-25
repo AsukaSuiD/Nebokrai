@@ -29,64 +29,10 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerLoadedGoodsInsertBlock};
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GoodsAddonPropertyValue {
-    pub(crate) id: u32,
-    pub(crate) base_value: i32,
-    pub(crate) modifier: i32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GoodsAddonValueCountBlock {
-    pub(crate) value_count: usize,
-}
-
-pub(crate) struct GoodsAddonPropertySnapshot {
-    property_type: u32,
-    occur_probability: u32,
-    values: Vec<GoodsAddonPropertyValue>,
-}
-
-impl GoodsAddonPropertySnapshot {
- /// Создаёт только диапазон, в котором исходный `unsigned char` loop
- /// действительно достигал конца vector.
-    pub(crate) fn from_legacy_parts(
-        property_type: u32,
-        occur_probability: u32,
-        values: Vec<GoodsAddonPropertyValue>,
-    ) -> Result<Self, GoodsAddonValueCountBlock> {
-        if values.len() > u8::MAX as usize {
-            return Err(GoodsAddonValueCountBlock {
-                value_count: values.len(),
-            });
-        }
-        Ok(Self {
-            property_type,
-            occur_probability,
-            values,
-        })
-    }
-
- /// Возвращает исходные части property для другого DB-owner-а. Порядок
- /// values и все три 32-битных поля остаются исходным `tagAddonProperty`.
-    pub(crate) fn legacy_parts(&self) -> (u32, u32, &[GoodsAddonPropertyValue]) {
-        (self.property_type, self.occur_probability, &self.values)
-    }
-}
-
-pub(crate) enum GoodsPropertiesSnapshot {
-    Available(Vec<GoodsAddonPropertySnapshot>),
-    MissingBaseProperties,
-}
-
-pub(crate) struct GoodsObjectSnapshot {
-    pub(crate) goods_id: CGuid,
-    pub(crate) base_properties_index: u32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) price: u32,
-    pub(crate) amount: u32,
-    pub(crate) properties: GoodsPropertiesSnapshot,
-}
+pub(crate) use nebokrai_realm::content::goodsdb::{
+    GoodsAddonPropertySnapshot, GoodsAddonPropertyValue, GoodsAddonValueCountBlock,
+    GoodsObjectSnapshot, GoodsPropertiesSnapshot,
+};
 
 pub(crate) struct GoodsSaveSnapshot<'goods> {
     pub(crate) player_id: i32,

@@ -4,6 +4,7 @@ pub mod battlefairyproperty;
 mod clientresource;
 pub mod countryparam;
 pub mod goods;
+pub mod goodsdb;
 pub mod organizing;
 mod quests;
 mod scriptfiles;
