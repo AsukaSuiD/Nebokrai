@@ -1058,11 +1058,7 @@ use crate::gameserver::appserver::shape::{
     ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
-    cancel_player_base_attack,
-    BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
-    SKILL_USAGE_DELAY_TIME,
-    SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
-    real_distance,
+    cancel_player_base_attack, real_distance, BASE_ATTACK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::agility::{
     AGILITY_2_SKILL_ID, AGILITY_SKILL_ID,
@@ -1328,9 +1324,7 @@ use crate::gameserver::appserver::skills::lingzhishu::{
 };
 use crate::gameserver::appserver::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::states::attackpower::{
-    AttackInformation, AttackPower, AttackPowerType,
-};
+use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::appserver::summonshape::{
     NextSummonShapeId, SUMMON_SHAPE_TYPE, SummonedSkillShape,
 };

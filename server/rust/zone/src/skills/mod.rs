@@ -1,5 +1,6 @@
 //! Данные живых навыков Zone, которыми временно управляет прежний Game.
 
+mod baseattackruntime; // исполнение CBaseAttack игроком и монстром: стадии, формула, visual, terminal; фасадные швы прежнего CGame.
 mod battlefairy; // правила навыков боевого духа (сброс, стоимость, запись).
 mod chaossphere; // движущаяся область CChaosSpherePhalanx и её живая форма.
 mod cure; // числовое правило и выбор снимаемых состояний CCure.
@@ -37,6 +38,12 @@ mod yinyang; // параметры и маски областей CYinYang и CY
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};
 pub use lifecycle::skill_is_restored;
+pub use baseattackruntime::{BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
+    BaseAttackExecutionOutcome, BaseAttackContact, BaseAttackGame, BaseAttackMoveShape,
+    BaseAttackPkPermissions, BaseAttackPlayer, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
+    abort_player_base_attack_on_region_change, cancel_player_base_attack,
+    execute_owned_monster_base_attack, execute_player_base_attack, publish_base_attack_visual};
 pub use battlefairy::{BattleFairyResetItemChange, BattleFairyResetItemLookup,
     BattleFairyResetPreflight, BattleFairyResetSlot,
     BattleFairySkillProperty, battle_fairy_mana_text_cost,
