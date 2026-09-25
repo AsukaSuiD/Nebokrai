@@ -9,7 +9,7 @@ use crate::gameserver::appserver::states::state::{
     resolve_state_move_shape, update_applied_state_end_visual, update_property_state_visual,
 };
 use crate::gameserver::gameserver::game::CGame;
-pub(crate) use nebokrai_zone::effects::{WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID, WangshengState};
+pub(crate) use nebokrai_zone::effects::{WANGSHENG_STATE_BYTES, WangshengState};
 pub(crate) fn update_wangsheng_state_properties(
     game: &mut CGame,
     region_id: i32,

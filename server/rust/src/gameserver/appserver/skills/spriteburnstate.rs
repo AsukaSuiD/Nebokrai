@@ -7,8 +7,6 @@
 //! Ниже сохранены две пока недостигнутые перегрузки Begin.
 
 use super::spriteburn::SPRITE_BURN_SKILL_ID;
-pub(crate) use crate::gameserver::appserver::states::poison::POISON_STATE_BYTES
-    as SPRITE_BURN_STATE_BYTES;
 pub(crate) type SpriteBurnState =
     crate::gameserver::appserver::states::poison::PoisonState<SPRITE_BURN_SKILL_ID>;
 

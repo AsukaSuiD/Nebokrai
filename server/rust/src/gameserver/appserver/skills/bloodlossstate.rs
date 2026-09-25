@@ -22,7 +22,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) use crate::gameserver::appserver::states::periodicattack::begin_primary_periodic_attack_state as begin_primary_blood_loss_state;
 pub(crate) use nebokrai_zone::effects::{
-    BLOOD_LOSS_STATE_BYTES, BloodLossAttackSeed, BloodLossState,
+    BloodLossAttackSeed, BloodLossState,
 };
 
 impl PeriodicAttackState for BloodLossState {

@@ -12,8 +12,6 @@
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::swordshipstate::SwordshipState;
 pub(crate) use nebokrai_zone::effects::{
-    SWORDSHIP_2_STATE_ID as SWORDSHIP_2_SKILL_ID, SWORDSHIP_3_STATE_ID as SWORDSHIP_3_SKILL_ID,
-    SWORDSHIP_4_STATE_ID as SWORDSHIP_4_SKILL_ID, SWORDSHIP_STATE_ID as SWORDSHIP_SKILL_ID,
     is_swordship_state_id as is_swordship_skill,
 };
 

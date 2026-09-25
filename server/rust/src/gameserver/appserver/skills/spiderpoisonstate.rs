@@ -10,7 +10,6 @@
 
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 pub(crate) use crate::gameserver::appserver::states::poison::{
-    POISON_STATE_BYTES as SPIDER_POISON_STATE_BYTES,
     begin_primary_poison_state as begin_primary_spider_poison_state,
 };
 pub(crate) type SpiderPoisonState =

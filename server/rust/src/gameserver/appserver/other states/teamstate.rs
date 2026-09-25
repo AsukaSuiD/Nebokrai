@@ -34,7 +34,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) use nebokrai_zone::effects::{CTeamState, TEAM_STATE_ID};
+pub(crate) use nebokrai_zone::effects::{CTeamState};
 
 const TEAM_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const TEAM_STATE_UPDATE_MESSAGE: i32 = 0x000b_fe05;

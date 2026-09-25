@@ -30,7 +30,7 @@ use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
 pub(crate) use nebokrai_zone::effects::{
-    DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState,
+    DAUB_POISON_STATE_BYTES, DaubPoisonState,
 };
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;

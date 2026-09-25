@@ -38,7 +38,7 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) use nebokrai_zone::effects::{
-    BOSS_BLUE_FURY_STATE_BYTES, BOSS_BLUE_FURY_STATE_ID, BossBlueFuryState,
+    BOSS_BLUE_FURY_STATE_BYTES, BossBlueFuryState,
 };
 
 pub(crate) fn update_boss_blue_fury_state_properties(

@@ -10,7 +10,6 @@
 
 use super::poisonarrow::POISON_ARROW_SKILL_ID;
 pub(crate) use crate::gameserver::appserver::states::poison::{
-    POISON_STATE_BYTES as POISON_ARROW_STATE_BYTES,
     begin_primary_poison_state as begin_primary_poison_arrow_state,
 };
 pub(crate) type PoisonArrowState =

@@ -21,6 +21,7 @@ pub mod skillfactory;
 mod snowstorm;
 mod soulmirror;
 mod spidermist;
+pub mod statefactory;
 mod visualeffect;
 mod wangsheng;
 mod weak;

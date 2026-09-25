@@ -9,7 +9,6 @@
 
 pub(crate) const KEROSENE_STATE_ID: u32 = 0xf1;
 pub(crate) use crate::gameserver::appserver::states::poison::{
-    POISON_STATE_BYTES as KEROSENE_STATE_BYTES,
     begin_primary_poison_state as begin_primary_kerosene_state,
 };
 pub(crate) type KeroseneState =

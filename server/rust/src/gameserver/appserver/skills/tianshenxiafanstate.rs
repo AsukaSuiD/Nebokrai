@@ -41,7 +41,7 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) use nebokrai_zone::effects::{
-    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanPlayerView,
+    TIAN_SHEN_XIA_FAN_STATE_BYTES, TianShenXiaFanPlayerView,
     TianShenXiaFanState,
 };
 

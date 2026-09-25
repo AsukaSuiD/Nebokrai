@@ -32,7 +32,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) use nebokrai_zone::effects::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
+pub(crate) use nebokrai_zone::effects::{PARTICULAR_STATE_BYTES, ParticularState};
 
 pub(crate) fn begin_primary_particular_state(
     player: &mut CPlayer,

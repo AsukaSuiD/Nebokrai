@@ -21,7 +21,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) use crate::gameserver::appserver::states::periodicattack::begin_primary_periodic_attack_state as begin_primary_leaf_cut_state;
 pub(crate) use nebokrai_zone::effects::{
-    LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID, LeafCutAttackSeed, LeafCutState,
+    LEAF_CUT_STATE_ID, LeafCutAttackSeed, LeafCutState,
 };
 
 impl<const ID: u32> PeriodicAttackState for LeafCutState<ID>

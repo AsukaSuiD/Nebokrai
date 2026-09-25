@@ -23,7 +23,7 @@ use super::sealstate::SEAL_STATE_ID;
 use super::blindstate::BLIND_STATE_ID;
 use super::knightcutstate::KNIGHT_CUT_STATE_ID;
 
-pub(crate) use nebokrai_zone::effects::{KNOCK_OUT_STATE_BYTES, KNOCK_OUT_STATE_ID, KnockOutState};
+pub(crate) use nebokrai_zone::effects::{KNOCK_OUT_STATE_ID, KnockOutState};
 
 pub(crate) fn replace_knock_out_state(
     game: &mut CGame,

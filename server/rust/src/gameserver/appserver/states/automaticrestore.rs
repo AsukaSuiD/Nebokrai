@@ -10,7 +10,6 @@ use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) use nebokrai_zone::effects::{
     AUTOMATIC_RESTORE_STATE_BYTES, AutomaticRestoreMutation, AutomaticRestoreState,
-    is_automatic_restore_state_id,
 };
 
 impl From<PlayerCombatProperties> for nebokrai_zone::effects::AutomaticRestoreProperties {

@@ -26,7 +26,7 @@
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 
 pub(crate) use nebokrai_zone::effects::{
-    EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind,
+    ExtendedState, ExtendedStateKind,
 };
 
 /// Тонкая оболочка переходного Game: фабрика навыков остаётся у старого

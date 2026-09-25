@@ -26,7 +26,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{end_and_destroy_state_at, resolve_state_move_shape};
 use crate::gameserver::gameserver::game::CGame;
 
-pub(crate) use nebokrai_zone::effects::{BOA_LOCK_STATE_BYTES, BOA_LOCK_STATE_ID, BoaLockState};
+pub(crate) use nebokrai_zone::effects::{BOA_LOCK_STATE_ID, BoaLockState};
 
 pub(super) fn replace_boa_lock_state(
     game: &mut CGame, source: (i32, ShapeIdentity), target: (i32, ShapeIdentity),

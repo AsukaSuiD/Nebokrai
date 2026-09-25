@@ -11,5 +11,5 @@
 //! Вход в регион восстанавливает visual и запреты без нового отсчёта.
 
 pub(crate) use nebokrai_zone::effects::{
-    KNIGHT_CUT_STATE_BYTES, KNIGHT_CUT_STATE_ID, KnightCutState,
+    KNIGHT_CUT_STATE_ID, KnightCutState,
 };
