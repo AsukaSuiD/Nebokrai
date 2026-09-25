@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm regions: country-war надстройка мирового региона 25 сентября 2026
+
+`WorldCountryWarRegion` перенесён в [`realm/regions/worldcountrywarregion.rs`](../../server/rust/realm/src/regions/worldcountrywarregion.rs): после base Load owner читает `regions/{id}.country`, missing resource сохраняет прежние списки; парсер defend/attack секций gates/flags/areas с `<end>`-терминатором и wire — base, шесть signed counts и ordered records (gate 0x2C с двумя C-строками, flag 0x28, area 0x14), имена/scripts byte-exact без StringTable. Зависимости уже имели realm-владельцев (CWorldRegion и resource-контекст прошлыми волнами); старый файл стал glob-шимом, потребитель world game dispatch работает без правок. City-надстройка остаётся последним файлом семьи за своим шагом.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): публичные символы сборки содержат семейство country-war региона. Секционный порядок, форматы записей и little-endian scalars сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений после отклика на те же две утерянные строки импорта блоков, что и в war-волне (закономерность перезаписи файла — обе проверены чтением до гейта). Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm regions: war- и village-надстройки мирового региона 25 сентября 2026
 
 `CWorldWarRegion` и `CWorldVillageRegion` перенесены в [`realm/regions/worldwarregion.rs`](../../server/rust/realm/src/regions/worldwarregion.rs) и [`realm/regions/worldvillageregion.rs`](../../server/rust/realm/src/regions/worldvillageregion.rs): war-конструктор с тремя `Option<i32>` DWORD после base-снимка, `Load` всегда сначала полный base Load и возвращает именно base-result, чтение первого `#` из optional `.war`, serializer-дописи; Village создаёт ровно один war с `1/1/1`, намеренно идёт прямым base Load, игнорирует его legacy result и потому serializer наследует допись `1/1/1`. Зависимости уже имели realm-владельцев (CWorldRegion прошлой волной, resource-контекст у reload-владельца); старые файлы стали glob-шимами, потребители (world game dispatch и city/country-war композиции) работают без правок.
