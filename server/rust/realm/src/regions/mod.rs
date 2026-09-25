@@ -9,4 +9,5 @@ pub mod shapetypes;
 pub mod worldcityregion;
 pub mod worldcountrywarregion;
 pub mod worldregion;
+pub mod worldvillageregion;
 pub mod worldwarregion;
