@@ -1,7 +1,6 @@
 //! Владельцы исторического WorldServer.
 
 pub(crate) mod appworld {
-    pub(crate) mod baseobject;
     pub(crate) mod country {
         #[allow(
             clippy::module_inception,
@@ -162,15 +161,11 @@ pub(crate) mod appworld {
         pub(crate) mod variablelist;
     }
     pub(crate) mod session {
-        pub(crate) mod cplug;
-        pub(crate) mod csession;
         #[allow(
             dead_code,
             reason = "factory сохраняет весь восстановленный virtual API, включая пока недостигнутые ветви"
         )]
         pub(crate) mod csessionfactory;
-        pub(crate) mod cteam;
-        pub(crate) mod cteamate;
     }
     pub(crate) mod skills {
         #[allow(

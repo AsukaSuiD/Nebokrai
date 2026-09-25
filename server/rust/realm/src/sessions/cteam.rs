@@ -1,5 +1,5 @@
 //! Командная session `CTeam`, подтверждённая `worldserver.exe` и
-//! `worldserver.pdb`.
+//! `worldserver.pdb`, перенесённая в Realm `sessions/`.
 //!
 //! Owner сохраняет delay `125`, минутный leader-check, allocation `0`, team
 //! wire, порядок Start-before-plug-count при unserialize и opcodes
@@ -11,18 +11,15 @@
 //! Owner identity кэшируется рядом с ordered plug ID, а обращения к
 //! factory/game выполняются немедленными typed effects.
 
-use crate::worldserver::appworld::session::csession::{
-    CSession, WorldSessionEffect, WorldSessionPlug,
-};
-use crate::worldserver::appworld::session::csessionfactory::{
-    WorldSessionOwner, WorldTeamSessionOwner,
-};
-use crate::worldserver::worldserver::game::legacy_tick_ms;
+use rustix::time::{ClockId, clock_gettime};
+
+use crate::sessions::csession::{CSession, WorldSessionEffect, WorldSessionPlug};
+use crate::sessions::csessionfactory::{WorldSessionOwner, WorldTeamSessionOwner};
 
 const PLAYER_OWNER_TYPE: i32 = 400;
 const TEAM_CHECK_INTERVAL_MS: u32 = 60_000;
 
-pub(crate) struct CTeam {
+pub struct CTeam {
     session: CSession,
     team_id: u32,
     password: Vec<u8>,
@@ -30,6 +27,10 @@ pub(crate) struct CTeam {
     team_leader_id: i32,
     last_checked_timestamp_ms: u32,
     allocation_scheme: i32,
+    #[allow(
+        dead_code,
+        reason = "список пополняется запросами team и читается позднее CPlayer container sequence, как и в оригинале; mod-allow старого пакета глушил то же предупреждение"
+    )]
     queried_plugs: Vec<(i32, i32)>,
     delay: i32,
     effects: Vec<WorldSessionEffect>,
@@ -37,7 +38,7 @@ pub(crate) struct CTeam {
 }
 
 impl CTeam {
-    pub(crate) const fn new(
+    pub const fn new(
         minimum_plugs: u32,
         maximum_plugs: u32,
         lifetime_ms: u32,
@@ -59,27 +60,27 @@ impl CTeam {
         }
     }
 
-    pub(crate) fn session(&self) -> &CSession {
+    pub fn session(&self) -> &CSession {
         &self.session
     }
 
-    pub(crate) fn session_mut(&mut self) -> &mut CSession {
+    pub fn session_mut(&mut self) -> &mut CSession {
         &mut self.session
     }
 
-    pub(crate) fn insert_plug_identity(&mut self, plug: WorldSessionPlug) {
+    pub fn insert_plug_identity(&mut self, plug: WorldSessionPlug) {
         self.session.insert_plug_identity(plug);
     }
 
-    pub(crate) fn take_effects(&mut self) -> Vec<WorldSessionEffect> {
+    pub fn take_effects(&mut self) -> Vec<WorldSessionEffect> {
         std::mem::take(&mut self.effects)
     }
 
-    pub(crate) fn take_pending_unserialize_plugs(&mut self) -> u32 {
+    pub fn take_pending_unserialize_plugs(&mut self) -> u32 {
         std::mem::take(&mut self.pending_unserialize_plugs)
     }
 
-    pub(crate) fn serialize_header(&self, output: &mut Vec<u8>) -> i32 {
+    pub fn serialize_header(&self, output: &mut Vec<u8>) -> i32 {
         self.session.serialize(output);
         output.extend_from_slice(&self.team_id.to_le_bytes());
         output.extend_from_slice(&self.team_name);
@@ -358,4 +359,11 @@ fn read_legacy_string(stream: &[u8], offset: &mut i32) -> Option<Vec<u8>> {
     let end = start + relative_nul;
     *offset = i32::try_from(end.checked_add(1)?).ok()?;
     Some(stream[start..end].to_vec())
+}
+
+fn legacy_tick_ms() -> u32 {
+    let now = clock_gettime(ClockId::Boottime);
+    let seconds_ms = (now.tv_sec as u64).wrapping_mul(1_000);
+    let nanoseconds_ms = (now.tv_nsec as u64) / 1_000_000;
+    seconds_ms.wrapping_add(nanoseconds_ms) as u32
 }

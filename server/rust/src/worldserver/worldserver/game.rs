@@ -17004,6 +17004,42 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
     fn current_game_server_sender(&self) -> Option<ServerCommandHandle> {
         CGame::current_game_server_sender(self)
     }
+
+    fn send_msg_to_game_server(
+        &self,
+        map_id: i32,
+        message: &CMessage,
+    ) -> Result<i32, SendMessageError> {
+        CGame::send_msg_to_game_server(self, map_id, message)
+    }
+
+    fn publish_team_session(&mut self, team_id: u32, session_id: i32) {
+        CGame::publish_team_session(self, team_id, session_id);
+    }
+
+    fn remove_team_session(&mut self, team_id: u32) {
+        CGame::remove_team_session(self, team_id);
+    }
+
+    fn get_team_session_id(&self, team_id: u32) -> i32 {
+        CGame::get_team_session_id(self, team_id)
+    }
+
+    fn player_game_server(
+        &self,
+        player_id: i32,
+    ) -> Option<nebokrai_realm::app::world_game_view::WorldGameServerSnapshot> {
+        CGame::player_game_server(self, player_id).map(|entry| {
+            nebokrai_realm::app::world_game_view::WorldGameServerSnapshot {
+                connected: entry.connected,
+                index: entry.index,
+            }
+        })
+    }
+
+    fn legacy_tick_ms(&self) -> u32 {
+        legacy_tick_ms()
+    }
 }
 
 impl nebokrai_realm::activities::leiting::LeiTingGameView for CGame {

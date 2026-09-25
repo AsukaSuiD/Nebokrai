@@ -1,4 +1,4 @@
-//! Участник команды `CTeamate` из WorldServer, подтверждённый
+//! Участник команды `CTeamate` из WorldServer, перенесённый в Realm `sessions/`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Constructor задаёт plug type 5, region/timestamp 0, existence 1 и пустое
@@ -8,17 +8,17 @@
 //! Wire suffix — signed region и NUL-имя после base plug. Decoder требует NUL
 //! в пределах прежнего `char[256]`; поздняя ошибка сохраняет поля и cursor.
 
-use crate::nets::networld::message::CMessage;
-use crate::worldserver::appworld::session::cplug::{CPlug, read_i32};
-use crate::worldserver::appworld::session::csessionfactory::{
+use crate::app::world_game_view::WorldGameView;
+use crate::app::world_message::CMessage;
+use crate::sessions::cplug::{CPlug, read_i32};
+use crate::sessions::csessionfactory::{
     WorldPlugOwner, WorldPlugSessionEffect, WorldTeamateOwner,
 };
-use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 
 const TEAMATE_PLUG_TYPE: u32 = 5;
 const EXISTENCE_QUERY_INTERVAL_MS: u32 = 60_000;
 
-pub(crate) struct CTeamate {
+pub struct CTeamate {
     plug: CPlug,
     owner_region_id: i32,
     owner_name: Vec<u8>,
@@ -27,7 +27,7 @@ pub(crate) struct CTeamate {
 }
 
 impl CTeamate {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         let mut plug = CPlug::new();
         plug.set_plug_type(TEAMATE_PLUG_TYPE);
         Self {
@@ -39,36 +39,36 @@ impl CTeamate {
         }
     }
 
-    pub(crate) const fn owner_region_id(&self) -> i32 {
+    pub const fn owner_region_id(&self) -> i32 {
         self.owner_region_id
     }
 
-    pub(crate) const fn object_id(&self) -> i32 {
+    pub const fn object_id(&self) -> i32 {
         self.plug.object_id()
     }
 
-    pub(crate) const fn owner_type(&self) -> i32 {
+    pub const fn owner_type(&self) -> i32 {
         self.plug.owner_type()
     }
 
-    pub(crate) const fn owner_id(&self) -> i32 {
+    pub const fn owner_id(&self) -> i32 {
         self.plug.owner_id()
     }
 
-    pub(crate) const fn set_session(&mut self, session_id: i32) {
+    pub const fn set_session(&mut self, session_id: i32) {
         self.plug.set_session(session_id);
     }
 
-    pub(crate) const fn is_plug_ended(&self) -> i32 {
+    pub const fn is_plug_ended(&self) -> i32 {
         self.plug.is_plug_ended()
     }
 
-    pub(crate) fn owner_name(&self) -> &[u8] {
+    pub fn owner_name(&self) -> &[u8] {
         &self.owner_name
     }
 
-    pub(crate) fn is_plug_available(&mut self, game: &CGame) -> i32 {
-        let now = legacy_tick_ms();
+    pub fn is_plug_available(&mut self, game: &dyn WorldGameView) -> i32 {
+        let now = game.legacy_tick_ms();
         if self.last_queried_timestamp_ms == 0 {
             self.player_still_existed = 1;
             self.last_queried_timestamp_ms = now;
@@ -95,17 +95,17 @@ impl CTeamate {
             }
             1
         };
-        self.last_queried_timestamp_ms = legacy_tick_ms();
+        self.last_queried_timestamp_ms = game.legacy_tick_ms();
         result
     }
 
  /// Исходный callback только пытается найти plug в той же session и
  /// независимо от результата возвращает `1`.
-    pub(crate) const fn on_change_state(&self, _plug_id: i32) -> i32 {
+    pub const fn on_change_state(&self, _plug_id: i32) -> i32 {
         1
     }
 
-    pub(crate) fn serialize(&self, output: &mut Vec<u8>) -> i32 {
+    pub fn serialize(&self, output: &mut Vec<u8>) -> i32 {
         if self.plug.serialize(output) == 0 {
             return 0;
         }
@@ -175,7 +175,7 @@ impl WorldPlugOwner for CTeamate {
         self.set_session(session_id);
     }
 
-    fn is_plug_available(&mut self, game: &CGame) -> i32 {
+    fn is_plug_available(&mut self, game: &dyn WorldGameView) -> i32 {
         self.is_plug_available(game)
     }
 

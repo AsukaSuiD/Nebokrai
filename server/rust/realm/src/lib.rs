@@ -12,3 +12,4 @@ pub mod items;
 pub mod organizations;
 pub mod persistence;
 pub mod regions;
+pub mod sessions;

@@ -1,4 +1,4 @@
-//! Базовый `CPlug` из WorldServer, подтверждённый
+//! Базовый `CPlug` из WorldServer, перенесённый в Realm `sessions/`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Wire содержит plug type, owner type/ID и signed ended flag. Factory уже
@@ -9,10 +9,10 @@
 //! результата handler-а. Короткий input сохраняет wrapping сдвиг cursor и
 //! возвращает ноль.
 
-use crate::worldserver::appworld::baseobject::CBaseObject;
-use crate::worldserver::appworld::session::csessionfactory::WorldPlugSessionEffect;
+use crate::regions::baseobject::CBaseObject;
+use crate::sessions::csessionfactory::WorldPlugSessionEffect;
 
-pub(crate) struct CPlug {
+pub struct CPlug {
     object: CBaseObject,
     session_id: i32,
     owner_type: i32,
@@ -23,7 +23,7 @@ pub(crate) struct CPlug {
 }
 
 impl CPlug {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             object: CBaseObject::with_reached_constructor_defaults(),
             session_id: 0,
@@ -35,45 +35,45 @@ impl CPlug {
         }
     }
 
-    pub(crate) fn assign_factory_identity(&mut self, object_type: i32, object_id: i32) {
+    pub fn assign_factory_identity(&mut self, object_type: i32, object_id: i32) {
         self.object.set_type(object_type);
         self.object.set_id(object_id);
     }
 
-    pub(crate) const fn object_id(&self) -> i32 {
+    pub const fn object_id(&self) -> i32 {
         self.object.get_id()
     }
 
-    pub(crate) const fn set_plug_type(&mut self, plug_type: u32) {
+    pub const fn set_plug_type(&mut self, plug_type: u32) {
         self.plug_type = plug_type;
     }
 
-    pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+    pub const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
         self.owner_type = owner_type;
         self.owner_id = owner_id;
     }
 
-    pub(crate) const fn owner_type(&self) -> i32 {
+    pub const fn owner_type(&self) -> i32 {
         self.owner_type
     }
 
-    pub(crate) const fn owner_id(&self) -> i32 {
+    pub const fn owner_id(&self) -> i32 {
         self.owner_id
     }
 
-    pub(crate) const fn set_session(&mut self, session_id: i32) {
+    pub const fn set_session(&mut self, session_id: i32) {
         self.session_id = session_id;
     }
 
-    pub(crate) const fn session_id(&self) -> i32 {
+    pub const fn session_id(&self) -> i32 {
         self.session_id
     }
 
-    pub(crate) const fn is_plug_ended(&self) -> i32 {
+    pub const fn is_plug_ended(&self) -> i32 {
         self.ended
     }
 
-    pub(crate) fn serialize(&self, output: &mut Vec<u8>) -> i32 {
+    pub fn serialize(&self, output: &mut Vec<u8>) -> i32 {
         output.extend_from_slice(&self.plug_type.to_le_bytes());
         output.extend_from_slice(&self.owner_type.to_le_bytes());
         output.extend_from_slice(&self.owner_id.to_le_bytes());
@@ -81,7 +81,7 @@ impl CPlug {
         1
     }
 
-    pub(crate) fn change_state(&mut self, state: i32, value: &[u8]) {
+    pub fn change_state(&mut self, state: i32, value: &[u8]) {
         self.session_effects.push(WorldPlugSessionEffect {
             session_id: self.session_id,
             plug_id: self.object.get_id(),
@@ -91,7 +91,7 @@ impl CPlug {
         });
     }
 
-    pub(crate) fn exit(&mut self) {
+    pub fn exit(&mut self) {
         self.session_effects.push(WorldPlugSessionEffect {
             session_id: self.session_id,
             plug_id: self.object.get_id(),
@@ -101,15 +101,15 @@ impl CPlug {
         });
     }
 
-    pub(crate) fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {
+    pub fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {
         std::mem::take(&mut self.session_effects)
     }
 
-    pub(crate) const fn confirm_exit(&mut self) {
+    pub const fn confirm_exit(&mut self) {
         self.ended = 1;
     }
 
-    pub(crate) fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32 {
+    pub fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32 {
         let Some(ended) = read_i32(stream, offset) else {
             return 0;
         };
@@ -118,7 +118,7 @@ impl CPlug {
     }
 }
 
-pub(super) fn read_i32(stream: &[u8], offset: &mut i32) -> Option<i32> {
+pub fn read_i32(stream: &[u8], offset: &mut i32) -> Option<i32> {
     let attempted_offset = *offset;
     *offset = offset.wrapping_add(4);
     let start = usize::try_from(attempted_offset).ok()?;

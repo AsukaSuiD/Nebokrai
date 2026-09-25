@@ -25,6 +25,7 @@ pub mod onbillserver;
 pub mod othermessage;
 pub mod setup;
 pub mod playermessage;
+pub mod teammessage;
 pub mod world_client;
 pub mod world_game_view;
 pub mod world_message;
