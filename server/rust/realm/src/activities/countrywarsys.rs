@@ -1,5 +1,6 @@
 //! Войны государств `CountryWarSys` из `countrywarsys.cpp/.h`, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`, перенесённые в Realm `activities/`.
+//! точной парой `Nworldserver.exe` и `WorldServer.pdb`, перенесённые в Realm
+//! `activities/`.
 //!
 //! Setup хранит расписание по war ID. `initialize` регистрирует девять one-shot
 //! timer callbacks в исходном порядке; `reload` сначала снимает прежние timers,
