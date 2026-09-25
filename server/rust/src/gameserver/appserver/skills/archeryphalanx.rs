@@ -1,22 +1,26 @@
 //! Прицельный региональный снаряд базовой стрельбы Archery.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/archeryphalanx.cpp.
-//! Два независимых чтения часов сравнивают unsigned start+life и start+delay.
-//! После задержки цель заново ищется в фактическом регионе формы по type/id
-//! с GUID_INVALID. Attack проверяет смерть, фиксирует PK и доставляет сырой
-//! OnBeenAttacked без допуска, DaubPoison и RP. End только отмечает удаление,
-//! после контакта, без немедленного сообщения выхода.
-//! Calculate ищет игрока по attacker ID независимо от сохранённого типа.
-//! Отсутствие игрока или таблицы оставляет исходную пустую атаку. Живые
-//! weapon modifier, hit, MIN/MAX, ELEMENT/SOUL и CCH читаются в исходном
-//! порядке; физический RNG получает max(MAX-MIN,0), без +1.
-//! Неиспользуемые MIN/MAX/ELEMENT конструктора и выделение CScope не
-//! дублируются: область не участвует ни в выборе цели, ни в расчёте.
-//! Клиентский снимок содержит skill/level, master type/id и остаток времени.
-//! Серверный decoder ниже не имеет достигнутого caller-а.
+//! Снимок конструктора, физический roll и общий серверный decoder перенесены
+//! в `nebokrai_zone::skills::projectile` (основание и статусы см. там);
+//! обёртка сохраняет прежние имена и интерфейс для владельцев game/. Здесь
+//! остаются CGame-разрешение живых полей: поиск игрока по attacker ID
+//! независимо от сохранённого типа, живая таблица навыка, уровень цели,
+//! живой weapon modifier, source_property и порог смерти, затем доставка
+//! сырым OnBeenAttacked без допуска, DaubPoison и RP. Отсутствие игрока или
+//! таблицы оставляет исходную пустую атаку, не отменяя контакт. После
+//! задержки цель заново ищется в фактическом регионе формы по type/id с
+//! GUID_INVALID; End только отмечает удаление, после контакта, без
+//! немедленного сообщения выхода. Выделение CScope конструктора и
+//! неиспользуемые MIN/MAX/ELEMENT не дублируются: они не участвуют ни в
+//! выборе цели, ни в расчёте.
 
 use super::archery::ARCHERY_SKILL_ID;
 use super::baseprojectilephalanx::BaseProjectileFlight;
-use super::weaponattack::{PlayerWeaponRoll, fill_ordinary_weapon_damage};
+use super::weaponattack::{SourceProperty, source_property};
+use nebokrai_zone::skills::{
+    ARCHERY_HIT_MODIFIER_PROPERTY, ArcheryProjectileAttack as ArcheryProjectileRule,
+    ArcheryProjectileLiveField,
+};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
@@ -24,8 +28,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArcheryAttack {
-    master: MasterInfo,
-    skill_level: i32,
+    rule: ArcheryProjectileRule,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,13 +44,17 @@ impl CArcheryPhalanx {
     ) -> Self {
         Self {
             flight: BaseProjectileFlight::new(id, started_at_ms, lifetime_ms, attack_delay_ms, target),
-            attack: ArcheryAttack { master, skill_level },
+            attack: ArcheryAttack {
+                rule: ArcheryProjectileRule {
+                    master, skill_id: ARCHERY_SKILL_ID, skill_level,
+                },
+            },
         }
     }
 
     pub(crate) const fn shape(&self) -> &CShape { self.flight.shape() }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { self.flight.shape_mut() }
-    pub(crate) const fn master(&self) -> MasterInfo { self.attack.master }
+    pub(crate) const fn master(&self) -> MasterInfo { self.attack.rule.master }
     pub(crate) const fn flight(&self) -> &BaseProjectileFlight { &self.flight }
     pub(crate) const fn flight_mut(&mut self) -> &mut BaseProjectileFlight { &mut self.flight }
     pub(crate) const fn attack_snapshot(&self) -> ArcheryAttack { self.attack }
@@ -56,19 +63,14 @@ impl CArcheryPhalanx {
         &self, now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         self.flight.encode_client_snapshot(
-            ARCHERY_SKILL_ID, self.attack.skill_level, self.attack.master, now_milliseconds,
+            ARCHERY_SKILL_ID, self.attack.rule.skill_level, self.attack.rule.master,
+            now_milliseconds,
         )
     }
 }
 
 impl ArcheryAttack {
-    fn attack_master(self) -> MasterInfo {
-        if self.master.master_type == 400 { return self.master; }
-        MasterInfo {
-            master_type: self.master.master_type, master_id: self.master.master_id,
-            ..MasterInfo::default()
-        }
-    }
+    fn attack_master(self) -> MasterInfo { self.rule.attack_master() }
 }
 
 fn calculate_archery_attack(
@@ -76,19 +78,41 @@ fn calculate_archery_attack(
     attack: &mut AttackInformation,
 ) {
     let Some(player) = game.find_player(attack.attacker_id) else { return; };
-    let Some(properties) = game.skill_base_properties(ARCHERY_SKILL_ID, snapshot.skill_level)
+    let Some(properties) = game.skill_base_properties(ARCHERY_SKILL_ID, snapshot.rule.skill_level)
     else { return; };
     let source = (player.shape().get_region_id(), player.shape().identity());
-    attack.skill_id = ARCHERY_SKILL_ID;
-    attack.skill_level = snapshot.skill_level as u8;
-    attack.damage_modifier = 0;
+    snapshot.rule.begin_calculation(attack);
     let Some(target_level) = game.move_shape_level(target.0, target.1) else { return; };
     let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
-    attack.damage_factor = player.weapon_modifier(
+    let weapon_modifier = player.weapon_modifier(
         game.goods_factory(), i32::from(target_level), divisor, minimum_factor,
     );
-    attack.hit_modifier = properties.query_property(20_001) as i32;
-    fill_ordinary_weapon_damage(game, source, PlayerWeaponRoll::Archery, attack);
+    let hit_modifier = properties.query_property(ARCHERY_HIT_MODIFIER_PROPERTY);
+    let critical_rate = game.globe_setup().critical_rate();
+    snapshot.rule.roll_damage(
+        attack, weapon_modifier, critical_rate,
+        move |_property| hit_modifier,
+        |field| match field {
+            ArcheryProjectileLiveField::RandomBelow(bound) => Some(game.skill_random_below(bound)),
+            ArcheryProjectileLiveField::MinimumAttack => {
+                source_property(game, source, SourceProperty::Minimum).map(|value| value as i32)
+            }
+            ArcheryProjectileLiveField::MaximumAttack => {
+                source_property(game, source, SourceProperty::Maximum).map(|value| value as i32)
+            }
+            ArcheryProjectileLiveField::AddElementAttack => {
+                source_property(game, source, SourceProperty::Element).map(|value| value as i32)
+            }
+            ArcheryProjectileLiveField::AddSoulAttack => {
+                source_property(game, source, SourceProperty::Soul)
+                    .map(|value| i32::from(value as u16))
+            }
+            ArcheryProjectileLiveField::CriticalChance => {
+                source_property(game, source, SourceProperty::CriticalChance)
+                    .map(|value| i32::from(value as u16))
+            }
+        },
+    );
 }
 
 pub(crate) fn apply_archery_attack<Runtime: GameMainLoopRuntime>(
@@ -102,11 +126,7 @@ pub(crate) fn apply_archery_attack<Runtime: GameMainLoopRuntime>(
     game.apply_owned_skill_contact(master, target.1, target.0, attack, runtime);
 }
 
-// Неподключённый серверный декодер снимка. Клиентский encoder не заменяет
-// его runtime: после чтения префикса native начинает отсчёт заново.
-// FUNCTION: CArcheryPhalanx::DecordFromByteArray
-// SOURCE: appserver/skills/archeryphalanx.cpp:281
-// RVA: 0x001EB070
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar *source, long *offset, bool include_ex_data)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Неподключённый общий серверный decoder (pub `1:001ea070`, RVA `0x1EB070`;
+// линкером слит с CBaseMagicPhalanx и CBFBaseAttackPhalanx) перенесён в
+// `nebokrai_zone::skills::BaseProjectileFlight::decode_server_snapshot`;
+// основание и статусы см. там.
