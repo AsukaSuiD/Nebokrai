@@ -25,15 +25,15 @@ use crate::dbaccess::worlddb::dbcountry::DbCountryOwner;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::CMessage;
 use crate::worldserver::appworld::country::country::{
-    CCountry, CountryAiBlock, CountryAiReport, CountryExileResultContext,
-    CountryKingSaveLimits, CountrySerializeError, CountrySetNewDayContext,
-    CountrySetNewDayReport,
+    CCountry, CountryExileResultContext, CountryKingSaveLimits, CountrySerializeError,
+    CountrySetNewDayContext,
 };
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::worldserver::game::CGame;
 
 pub(crate) use nebokrai_realm::organizations::countryhandler::{
-    CountryHandlerReleaseReport, CountryInfoDeliveryContext,
+    CountryHandlerInitializeReport, CountryHandlerNewDayEntry, CountryHandlerNewDayReport,
+    CountryHandlerReleaseReport, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
 };
 
 static NEXT_COUNTRY_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
@@ -44,16 +44,6 @@ struct CountryTopInfo {
     param: i32,
     started_at_ms: u32,
     info: Vec<u8>,
-}
-
-/// Наблюдаемые блоки `CCountryHandler::Run` после устранения внутреннего
-/// null-slot lifecycle-дефекта.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryRunBlock {
-    Ai {
-        map_key: u8,
-        source: CountryAiBlock,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,34 +80,6 @@ impl Error for CountryHandlerSerializeError {
             _ => None,
         }
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryRunReport {
-    pub(crate) expired_top_info_ids: Vec<i32>,
-    pub(crate) ai_country_ids: Vec<u8>,
-    pub(crate) ai_reports: Vec<(u8, CountryAiReport)>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryHandlerNewDayEntry {
-    pub(crate) map_key: u8,
-    pub(crate) report: CountrySetNewDayReport,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryHandlerNewDayReport {
-    pub(crate) requested_day: i32,
-    pub(crate) countries: Vec<CountryHandlerNewDayEntry>,
-    pub(crate) skipped_null_country_keys: Vec<u8>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryHandlerInitializeReport {
-    pub(crate) local_day: i32,
-    pub(crate) database_loaded: bool,
-    pub(crate) new_day: Option<CountryHandlerNewDayReport>,
-    pub(crate) legacy_result: bool,
 }
 
 #[derive(Debug)]

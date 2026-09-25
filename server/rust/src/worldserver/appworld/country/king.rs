@@ -17,6 +17,9 @@
 //! остаётся неинициализированным, а подтверждённых project-caller-ов у него
 //! нет. Это внутренний UB-дефект, не контракт: safe Rust назначает ему `false`,
 //! как согласованный C++ reference, и не переносит случайное значение allocator-а.
+//!
+//! Data-типы point-отчётов (`KingPointKind`, `KingPointUpdate`) живут в Realm
+//! `organizations/country` и доступны здесь через re-export.
 
 use crate::dbaccess::worlddb::dbcountry::CountryKingSaveSnapshot;
 use crate::worldserver::appworld::country::countryparam::{
@@ -24,6 +27,8 @@ use crate::worldserver::appworld::country::countryparam::{
 };
 
 use super::officer::COfficer;
+
+pub(crate) use nebokrai_realm::organizations::country::{KingPointKind, KingPointUpdate};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CKing {
@@ -140,21 +145,6 @@ impl CKing {
     ) -> Result<KingPointUpdate, CountryParameterUnavailable> {
         self.set_control_point(self.control_point.wrapping_add(delta), parameters)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum KingPointKind {
-    Control,
-    Material,
-    War,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct KingPointUpdate {
-    pub(crate) kind: KingPointKind,
-    pub(crate) requested: i32,
-    pub(crate) previous: i32,
-    pub(crate) applied: i32,
 }
 
 pub(crate) fn set_control_point(

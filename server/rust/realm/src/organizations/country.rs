@@ -2,11 +2,12 @@
 //! точной парой `worldserver.exe` и `worldserver.pdb`. Data-уровень
 //! перенесён в Realm `organizations/`.
 //!
-//! Сама `CCountry`, её методы и контекстные трейты остаются в старом
-//! `appworld/country/country.rs` до волны владельца. Отчёты, ссылающиеся на
-//! ещё не перенесённый `KingPointUpdate` из `appworld/country/king.rs`
-//! (AI-, exile-, silence-, absolve-, appoint-, demise-семьи и new-day), а
-//! также типы, ссылающиеся на саму `CCountry`, переносятся вместе с ней в следующих волнах.
+//! Data king points (`KingPointKind`, `KingPointUpdate`) перенесены из
+//! `appworld/country/king.rs`; сам `CKing`, его методы и free-функции
+//! остаются в старом файле и держат re-export. Сама `CCountry`, её методы и
+//! контекстные трейты остаются в старом `appworld/country/country.rs` до
+//! волны владельца; типы, ссылающиеся на саму `CCountry`, переносятся
+//! вместе с ней.
 
 use std::error::Error;
 use std::fmt;
@@ -22,6 +23,21 @@ pub enum CountryGovernanceContextBlock {
     UnionLookup,
     OwnedCityMutation,
     FactionDemise,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KingPointKind {
+    Control,
+    Material,
+    War,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KingPointUpdate {
+    pub kind: KingPointKind,
+    pub requested: i32,
+    pub previous: i32,
+    pub applied: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +139,53 @@ pub enum CountryVillageTaxBlock {
     Context(CountryVillageTaxContextBlock),
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountrySetNewDayDisposition {
+    FirstDay,
+    TaxBlocked(CountryVillageTaxBlock),
+    Rolled {
+        tax: Option<CountryVillageTaxReport>,
+        term: CountryNewTermReport,
+        minister_slot_inserted: bool,
+        minister_deposed: Option<CountryAppointMinisterReport>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountrySetNewDayReport {
+    pub requested_day: i32,
+    pub previous_day: i32,
+    pub applied_day: i32,
+    pub previous_silence_count: i32,
+    pub previous_pk_count: i32,
+    pub disposition: CountrySetNewDayDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CountryScalarUpdate {
+    Treasury {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    Power {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    TechnologyExperience {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    TechnologyLevel {
+        requested: i32,
+        previous: i32,
+        applied: i32,
+    },
+    KingPoint(KingPointUpdate),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CountryExileTextArgument<'a> {
     Text(&'a [u8]),
@@ -191,6 +254,32 @@ pub enum CountryInitialKingRejection {
     TargetFromAnotherCountry,
     FactionMissing,
     KingMismatch,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountryInitialKingDisposition {
+    Rejected {
+        reason: CountryInitialKingRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    Applied {
+        faction_id: i32,
+        control_point_update: KingPointUpdate,
+        appointment_wire: Vec<u8>,
+        appointment_delivery: Result<i32, SendMessageError>,
+        world_wire: Option<Vec<u8>>,
+        world_delivery: Option<Result<i32, SendMessageError>>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountryInitialKingReport {
+    pub player_id: i32,
+    pub text: Vec<u8>,
+    pub legacy_result: i32,
+    pub disposition: CountryInitialKingDisposition,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -271,6 +360,105 @@ pub struct CountryDeposeKingReport {
     pub world_delivery: Option<Result<i32, SendMessageError>>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountryAiReport {
+    pub current_tick_ms: u32,
+    pub previous_timestamp_ms: u32,
+    pub interval_ms: Option<i32>,
+    pub deadline_ms: Option<u32>,
+    pub due: bool,
+    pub timestamp_updated: bool,
+    pub control_point_update: Option<KingPointUpdate>,
+    pub depose: Option<CountryDeposeKingReport>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountryAiBlock {
+    Parameter {
+        report: CountryAiReport,
+        source: CountryParameterUnavailable,
+    },
+    Depose {
+        report: CountryAiReport,
+        source: CountryGovernanceContextBlock,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountryRegisterKingDisposition {
+    Rejected(CountryDemiseRejection),
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    Applied {
+        city_transfer: Option<CountryCityTransferReport>,
+        faction_transferred: bool,
+        depose: CountryDeposeKingReport,
+        control_point_update: KingPointUpdate,
+        appointment_wire: Vec<u8>,
+        appointment_delivery: Result<i32, SendMessageError>,
+        world_wire: Option<Vec<u8>>,
+        world_delivery: Option<Result<i32, SendMessageError>>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountryRegisterKingReport {
+    pub player_id: i32,
+    pub text: Vec<u8>,
+    pub disposition: CountryRegisterKingDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountryDemiseDisposition {
+    Rejected(CountryDemiseRejection),
+    ParameterUnavailable(CountryParameterUnavailable),
+    ContextBlocked(CountryGovernanceContextBlock),
+    Applied {
+        old_king_id: i32,
+        register: CountryRegisterKingReport,
+        control_point_delivery: CountryExileMessageDelivery,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountryDemiseReport {
+    pub target_player_id: i32,
+    pub legacy_result: i32,
+    pub text: Vec<u8>,
+    pub disposition: CountryDemiseDisposition,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountrySuccessExiledDisposition {
+    PlayerMissing {
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        king_map_id: i32,
+        control_point_update: Option<KingPointUpdate>,
+        control_point_delivery: Option<CountryExileMessageDelivery>,
+    },
+    Successful {
+        control_point_update: KingPointUpdate,
+        control_point_delivery: CountryExileMessageDelivery,
+        previous_exile_count: i32,
+        applied_exile_count: i32,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+    },
+    Failed {
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountrySuccessExiledReport {
+    pub player_id: i32,
+    pub success: bool,
+    pub text: Vec<u8>,
+    pub disposition: CountrySuccessExiledDisposition,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CountryExileRejection {
     CountryAtWar,
@@ -334,6 +522,37 @@ pub enum CountryCanSilenceDisposition {
     },
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountrySilenceDisposition {
+    Rejected {
+        reason: CountrySilenceRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        previous_silence_count: i32,
+        applied_silence_count: i32,
+        control_point_update: Option<KingPointUpdate>,
+    },
+    Applied {
+        previous_silence_count: i32,
+        applied_silence_count: i32,
+        control_point_update: KingPointUpdate,
+        control_point_delivery: CountryExileMessageDelivery,
+        target_delivery: CountryExileMessageDelivery,
+        target_wire: Vec<u8>,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountrySilenceReport {
+    pub player_id: i32,
+    pub legacy_result: i32,
+    pub text: Vec<u8>,
+    pub disposition: CountrySilenceDisposition,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CountryAbsolveRejection {
     CountryAtWar,
@@ -354,6 +573,37 @@ pub enum CountryCanAbsolveDisposition {
         text: Vec<u8>,
         private_delivery: Option<CountryExileMessageDelivery>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountryAbsolveDisposition {
+    Rejected {
+        reason: CountryAbsolveRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        counter_reset: CountryAbsolveCounterReset,
+        control_point_update: Option<KingPointUpdate>,
+    },
+    Applied {
+        counter_reset: CountryAbsolveCounterReset,
+        control_point_update: KingPointUpdate,
+        control_point_delivery: CountryExileMessageDelivery,
+        previous_absolve_count: i32,
+        applied_absolve_count: i32,
+        broadcast_wire: Vec<u8>,
+        broadcast_delivery: Result<i32, SendMessageError>,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountryAbsolveReport {
+    pub player_id: i32,
+    pub legacy_result: i32,
+    pub text: Vec<u8>,
+    pub disposition: CountryAbsolveDisposition,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -425,6 +675,37 @@ pub enum CountryCanAppointMinisterDisposition {
         text: Vec<u8>,
         private_delivery: Option<CountryExileMessageDelivery>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum CountryAppointMinisterDisposition {
+    Rejected {
+        reason: CountryAppointMinisterRejection,
+        private_delivery: Option<CountryExileMessageDelivery>,
+    },
+    ParameterUnavailable {
+        block: CountryParameterUnavailable,
+        appointment_flag_set: bool,
+        control_point_update: Option<KingPointUpdate>,
+    },
+    Applied {
+        control_point_update: KingPointUpdate,
+        country_deliveries: Vec<CountryExileMessageDelivery>,
+        appointment_wire: Vec<u8>,
+        appointment_delivery: Result<i32, SendMessageError>,
+        control_point_delivery: CountryExileMessageDelivery,
+        base_info: CountryBaseInfoDisposition,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct CountryAppointMinisterReport {
+    pub player_id: i32,
+    pub job: u8,
+    pub mode: u8,
+    pub legacy_result: i32,
+    pub text: Vec<u8>,
+    pub disposition: CountryAppointMinisterDisposition,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
