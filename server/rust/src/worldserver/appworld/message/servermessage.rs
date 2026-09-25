@@ -25,15 +25,13 @@
 //! меняет только тип на `0x7F80A` и передаёт неизменный payload целевому
 //! GameServer; там существующий concrete handler создаёт NPC/monster owner-а.
 //!
-//! Наблюдаемые outcome/report-типы ветвей вынесены в
+//! Наблюдаемые outcome/report-типы ветвей вместе с диспетчерной связкой
+//! outcome/dispatch и парой `WorldCountryHandlerConfiguration*` вынесены в
 //! `nebokrai_realm::app::servermessage`, включая типы, чьи поля цитируют
 //! data-контракты бывшего game hub из `nebokrai_realm::app::worldserver`;
-//! ниже их реэкспорт для переходных потребителей старого пакета.
-//! У старого владельца временно остаются `WorldLoginServerClosed`,
-//! `WorldServerMessageOutcome` и `WorldServerMessageDispatch`: их
-//! transitive-контракты живут у reconnect worker-а (`loginreconnectworker.rs`)
-//! и у network `CMessage`. Пара `WorldCountryHandlerConfiguration*` ждёт
-//! переноса `CountrySerializeError` вместе с country.rs.
+//! ниже их реэкспорт для переходных потребителей старого пакета. Здесь
+//! остаются только fn-уровень: сам диспетчер `OnServerMessage`, decode-helpers
+//! и initial-configuration/reconnect обработчики.
 
 use std::net::Ipv4Addr;
 
@@ -67,9 +65,7 @@ use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
-use crate::worldserver::appworld::country::countryhandler::{
-    CCountryHandler, CountryHandlerSerializeError,
-};
+use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
 use crate::worldserver::appworld::goods::cbattlefairyproperty::CBattleFairyProperty;
@@ -87,9 +83,8 @@ use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::appworld::skills::skillfactory::CSkillFactory;
 use crate::worldserver::worldserver::game::{
     CGame, WorldGameServerLookupError, WorldGenerateDbDataBlock, WorldInitialRegionSnapshot,
-    WorldInitialRegionSnapshotKind, WorldLoginReconnectThreadRestart, WorldPingGameServerInfo,
-    WorldSaveRuntimeContext, WorldSaveThreadHandleState, WorldServerSnapshotPlayerOwner,
-    prepare_save_thread_launch,
+    WorldInitialRegionSnapshotKind, WorldPingGameServerInfo, WorldSaveRuntimeContext,
+    WorldSaveThreadHandleState, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::CHonorRanks;
 use crate::worldserver::worldserver::playerranks::CPlayerRanks;
@@ -97,30 +92,6 @@ use crate::worldserver::worldserver::savedb::SaveDataLifecycleState;
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 pub use nebokrai_realm::app::servermessage::*;
-
-#[derive(Debug)]
-pub(crate) enum WorldServerMessageOutcome {
-    NoOp { request_type: i32 },
-    GameServerConnection(WorldGameServerConnectionReport),
-    GameServerBroadcast(WorldGameServerBroadcast),
-    GameServerPingResponseRecorded(WorldGameServerPingResponse),
-    GameServerPingStarted(WorldGameServerPingStart),
-    GodsBattle(WorldGodsBattleMessage),
-    GodsBattleTopTen(WorldGodsBattleTopTenMessage),
-    GeneralVariableUpdated(WorldGeneralVariableUpdate),
-    LoginServerClosed(WorldLoginServerClosed),
-    LoginServerTupleRelay(WorldLoginServerTupleRelay),
-    LoginServerIdentityAssigned(WorldLoginServerIdentity),
-    MurderReported(WorldMurderReport),
-    OpaqueFieldsRead(WorldOpaqueServerFields),
-    PlayerDataSynchronized(WorldPlayerDataSync),
-    PlayerNameMessageRelayed(WorldPlayerNameMessageRelay),
-    PlayerSaveBatch(WorldPlayerSaveBatchMessage),
-    RegionParametersUpdated(WorldRegionParameterUpdate),
-    RegionChanged(WorldRegionChangeMessage),
-    RegionMessageRelayed(WorldRegionMessageRelay),
-    SpawnRouted(WorldSpawnRoutingOutcome),
-}
 
 fn decode_spawn_routing_i32(payload: &[u8], cursor: &mut usize) -> Option<i32> {
     let bytes: [u8; 4] = payload
@@ -189,31 +160,6 @@ fn decode_world_spawn_routing(payload: &[u8]) -> Option<WorldSpawnRoutingCommand
         let _lifetime = decode_spawn_routing_i32(payload, &mut cursor)?;
     }
     (cursor == payload.len()).then_some(WorldSpawnRoutingCommand { kind, region_id })
-}
-
-/// Наблюдаемые эффекты внутреннего `0x3FC01`, опубликованного
-/// `CMyNetClient::OnClose`.
-#[derive(Debug)]
-pub(crate) struct WorldLoginServerClosed {
-    pub(crate) log: AddLogTextDisposition,
-    pub(crate) reconnect: WorldLoginReconnectThreadRestart,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldCountryHandlerConfigurationCompletion {
-    CountryHandler(CountryHandlerSerializeError),
-    GodsBattleConfigurationPending { socket_id: i32 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldCountryHandlerConfigurationReport {
-    pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
-    pub(crate) completion: WorldCountryHandlerConfigurationCompletion,
-}
-
-pub(crate) enum WorldServerMessageDispatch {
-    Handled(WorldServerMessageOutcome),
-    Pending(CMessage),
 }
 
 pub(crate) fn game_server_connected_log(

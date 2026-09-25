@@ -1320,26 +1320,15 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
     fn request_window_close(&mut self);
 }
 
-// Контракты reconnect-семейства LoginServer (итог попытки, snapshot endpoint
-// и итог worker-а) вместе с ошибкой попытки перенесены в Realm app к своему
-// worker-у. Здесь реэкспорт для остающихся process-owner связей: setup
-// snapshot, lifecycle thread-owner-а и отчёт диспетчера server-сообщений.
+// Контракты reconnect-семейства LoginServer (итог попытки, snapshot endpoint,
+// итог worker-а и restart-итоги) вместе с ошибкой попытки перенесены в Realm
+// app к своему worker-у. Здесь реэкспорт для остающихся process-owner связей:
+// setup snapshot, lifecycle thread-owner-а и отчёт диспетчера server-сообщений.
 pub(crate) use nebokrai_realm::app::loginreconnectworker::{
     WorldLoginReconnect, WorldLoginReconnectError, WorldLoginReconnectSpec,
+    WorldLoginReconnectThreadRestart, WorldLoginReconnectThreadStart,
     WorldLoginReconnectWorkerOutcome,
 };
-
-#[derive(Debug)]
-pub(crate) enum WorldLoginReconnectThreadStart {
-    Started,
-    SpawnFailed(io::Error),
-}
-
-#[derive(Debug)]
-pub(crate) struct WorldLoginReconnectThreadRestart {
-    pub(crate) previous_completion: Option<WorldLoginReconnectWorkerCompletion>,
-    pub(crate) started: WorldLoginReconnectThreadStart,
-}
 
 pub(crate) use nebokrai_realm::app::worldserver::{
     WorldCdkeySnapshot, WorldOnlinePlayerAppendOutcome, WorldReconnectedPlayerDecode,

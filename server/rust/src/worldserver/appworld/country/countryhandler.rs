@@ -16,24 +16,22 @@
 //! отдельного key; пустой slot блокирует сериализацию вместо null-dereference.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::error::Error;
 use std::ffi::{CStr, CString};
-use std::fmt;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::dbaccess::worlddb::dbcountry::DbCountryOwner;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::CMessage;
 use crate::worldserver::appworld::country::country::{
-    CCountry, CountryExileResultContext, CountryKingSaveLimits, CountrySerializeError,
-    CountrySetNewDayContext,
+    CCountry, CountryExileResultContext, CountryKingSaveLimits, CountrySetNewDayContext,
 };
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::worldserver::game::CGame;
 
 pub(crate) use nebokrai_realm::organizations::countryhandler::{
     CountryHandlerInitializeReport, CountryHandlerNewDayEntry, CountryHandlerNewDayReport,
-    CountryHandlerReleaseReport, CountryInfoDeliveryContext, CountryRunBlock, CountryRunReport,
+    CountryHandlerReleaseReport, CountryHandlerSerializeError, CountryInfoDeliveryContext,
+    CountryRunBlock, CountryRunReport,
 };
 
 static NEXT_COUNTRY_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
@@ -44,42 +42,6 @@ struct CountryTopInfo {
     param: i32,
     started_at_ms: u32,
     info: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryHandlerSerializeError {
-    CountryCountOutOfRange { country_count: usize },
-    NullCountry { map_key: u8 },
-    Country {
-        map_key: u8,
-        source: CountrySerializeError,
-    },
-}
-
-impl fmt::Display for CountryHandlerSerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CountryCountOutOfRange { country_count } => write!(
-                formatter,
-                "CCountryHandler содержит {country_count} стран вне signed 32-битного диапазона"
-            ),
-            Self::NullCountry { map_key } => {
-                write!(formatter, "CCountryHandler содержит null country по ключу {map_key}")
-            }
-            Self::Country { map_key, source } => {
-                write!(formatter, "страна по ключу {map_key} не сериализована: {source}")
-            }
-        }
-    }
-}
-
-impl Error for CountryHandlerSerializeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Country { source, .. } => Some(source),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug)]

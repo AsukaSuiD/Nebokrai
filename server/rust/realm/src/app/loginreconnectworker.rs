@@ -27,9 +27,11 @@
 //! [`WorldLoginReconnectSpec::reconnect_once`] без mutable игры; разрешение
 //! endpoint-а (`resolve_login_endpoint`) разделяет и initial client-owner.
 //! Tokio runtime/blocking заменяет Win32 thread message и handle; stop всегда
-//! дожидается завершения задачи. Setup thread-сборка и lifecycle
-//! thread-owner-а (`connect_login_worker`, restart report диспетчера)
-//! остаются у `CGame`.
+//! дожидается завершения задачи. Data-итоги restart финальной
+//! servermessage-волны (`WorldLoginReconnectThreadStart`,
+//! `WorldLoginReconnectThreadRestart`) живут здесь рядом с outcome/spec; setup
+//! thread-сборка и lifecycle thread-owner-а (`connect_login_worker`) остаются
+//! у `CGame`.
 
 use std::error::Error;
 use std::fmt;
@@ -233,6 +235,18 @@ struct WorldLoginReconnectWorkerSignal {
 pub enum WorldLoginReconnectWorkerCompletion {
     Returned(WorldLoginReconnectWorkerOutcome),
     Panicked,
+}
+
+#[derive(Debug)]
+pub enum WorldLoginReconnectThreadStart {
+    Started,
+    SpawnFailed(io::Error),
+}
+
+#[derive(Debug)]
+pub struct WorldLoginReconnectThreadRestart {
+    pub previous_completion: Option<WorldLoginReconnectWorkerCompletion>,
+    pub started: WorldLoginReconnectThreadStart,
 }
 
 pub struct WorldLoginReconnectWorker {

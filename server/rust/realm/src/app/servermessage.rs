@@ -8,18 +8,22 @@
 //! Вторая волна добавила типы, чьи поля цитируют data-контракты бывшего
 //! `worldserver/worldserver/game.rs`: сами контракты (CD-key snapshot, reconnect
 //! records, region transition/snapshot, save-пайплайн, ping/region decode)
-//! теперь в `crate::app::worldserver`. У старого владельца остаются связка
+//! теперь в `crate::app::worldserver`. Финальная типовая волна добавила
+//! диспетчерную связку
 //! `WorldLoginServerClosed`/`WorldServerMessageOutcome`/`WorldServerMessageDispatch`
-//! (ждёт reconnect-worker из `loginreconnectworker.rs` и network `CMessage`) и
-//! пара `WorldCountryHandlerConfiguration*` (ждёт `CountrySerializeError` из
-//! country.rs). Формы wire-полей и смысл disposition-вариантов не меняются.
+//! (reconnect restart-итоги живут в `crate::app::loginreconnectworker`, network
+//! `CMessage` — в `crate::app::world_message`) и пару
+//! `WorldCountryHandlerConfiguration*` (`CountryHandlerSerializeError` переехал
+//! к `CountrySerializeError` в `crate::organizations`). Формы wire-полей и
+//! смысл disposition-вариантов не меняются.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::activities::fournationwarsys::FourNationWarSerializationBlock;
 use crate::activities::rsgodsbattle::RsGodsBattleNotice;
-use crate::app::world_message::SendMessageError;
+use crate::app::loginreconnectworker::WorldLoginReconnectThreadRestart;
+use crate::app::world_message::{CMessage, SendMessageError};
 use crate::app::worldserver::{
     AddLogTextDisposition, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGenerateDbDataBlock,
     WorldGenerateDbDataReport, WorldGlobeVariablesDelivery, WorldInitialRegionSnapshotBlock,
@@ -39,6 +43,7 @@ use crate::content::countryparam::CountryParamSerializationBlock;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::skillfactory::SkillFactorySerializeError;
 use crate::content::variablelist::{VariableListSerializationBlock, VariableSetOutcome};
+use crate::organizations::countryhandler::CountryHandlerSerializeError;
 use nebokrai_shared::resources::{
     BattleFairyExpSerializeError, CiQingSerializationBlock, ContributeSetupSerializeError,
     DupliRegionSerializeError, EmotionSerializeError, EquipmentComposeSerializeError,
@@ -1184,4 +1189,58 @@ impl Error for WorldServerMessageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
     }
+}
+
+// Финальная типовая волна: диспетчерная связка outcome/dispatch и пара
+// CountryHandler configuration. Их transitive-контракты (reconnect
+// restart-итоги, network `CMessage`, `CountryHandlerSerializeError`) уже
+// размещены в realm.
+
+/// Наблюдаемые эффекты внутреннего `0x3FC01`, опубликованного
+/// `CMyNetClient::OnClose`.
+#[derive(Debug)]
+pub struct WorldLoginServerClosed {
+    pub log: AddLogTextDisposition,
+    pub reconnect: WorldLoginReconnectThreadRestart,
+}
+
+#[derive(Debug)]
+pub enum WorldServerMessageOutcome {
+    NoOp { request_type: i32 },
+    GameServerConnection(WorldGameServerConnectionReport),
+    GameServerBroadcast(WorldGameServerBroadcast),
+    GameServerPingResponseRecorded(WorldGameServerPingResponse),
+    GameServerPingStarted(WorldGameServerPingStart),
+    GodsBattle(WorldGodsBattleMessage),
+    GodsBattleTopTen(WorldGodsBattleTopTenMessage),
+    GeneralVariableUpdated(WorldGeneralVariableUpdate),
+    LoginServerClosed(WorldLoginServerClosed),
+    LoginServerTupleRelay(WorldLoginServerTupleRelay),
+    LoginServerIdentityAssigned(WorldLoginServerIdentity),
+    MurderReported(WorldMurderReport),
+    OpaqueFieldsRead(WorldOpaqueServerFields),
+    PlayerDataSynchronized(WorldPlayerDataSync),
+    PlayerNameMessageRelayed(WorldPlayerNameMessageRelay),
+    PlayerSaveBatch(WorldPlayerSaveBatchMessage),
+    RegionParametersUpdated(WorldRegionParameterUpdate),
+    RegionChanged(WorldRegionChangeMessage),
+    RegionMessageRelayed(WorldRegionMessageRelay),
+    SpawnRouted(WorldSpawnRoutingOutcome),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum WorldCountryHandlerConfigurationCompletion {
+    CountryHandler(CountryHandlerSerializeError),
+    GodsBattleConfigurationPending { socket_id: i32 },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct WorldCountryHandlerConfigurationReport {
+    pub delivery: Option<WorldInitialConfigurationDelivery>,
+    pub completion: WorldCountryHandlerConfigurationCompletion,
+}
+
+pub enum WorldServerMessageDispatch {
+    Handled(WorldServerMessageOutcome),
+    Pending(CMessage),
 }

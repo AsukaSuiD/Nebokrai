@@ -2,13 +2,18 @@
 //! `countryhandler.cpp/.h`, подтверждённые точной парой `worldserver.exe` и
 //! `worldserver.pdb`. Data-уровень перенесён в Realm `organizations/`.
 //!
-//! Run-, new-day- и initialize-отчёты перенесены вместе с data-семьями стран.
-//! `CountryAppendDisposition` ссылается на саму `CCountry` и переносится
-//! вместе с ней в волне владельца; `CountryHandlerSerializeError` остаётся
-//! волне servermessage-типов.
+//! Run-, new-day- и initialize-отчёты перенесены вместе с data-семьями стран;
+//! servermessage-волна добавила `CountryHandlerSerializeError` к уже
+//! перенесённому `CountrySerializeError`. `CountryAppendDisposition` ссылается
+//! на саму `CCountry` и переносится вместе с ней в волне владельца.
+
+use std::error::Error;
+use std::fmt;
 
 use crate::app::world_message::CMessage;
-use crate::organizations::country::{CountryAiBlock, CountryAiReport, CountrySetNewDayReport};
+use crate::organizations::country::{
+    CountryAiBlock, CountryAiReport, CountrySerializeError, CountrySetNewDayReport,
+};
 
 /// Наблюдаемые блоки `CCountryHandler::Run` после устранения внутреннего
 /// null-slot lifecycle-дефекта.
@@ -56,4 +61,40 @@ pub struct CountryHandlerReleaseReport {
 
 pub trait CountryInfoDeliveryContext {
     fn send_all(&mut self, message: &CMessage) -> i32;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CountryHandlerSerializeError {
+    CountryCountOutOfRange { country_count: usize },
+    NullCountry { map_key: u8 },
+    Country {
+        map_key: u8,
+        source: CountrySerializeError,
+    },
+}
+
+impl fmt::Display for CountryHandlerSerializeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CountryCountOutOfRange { country_count } => write!(
+                formatter,
+                "CCountryHandler содержит {country_count} стран вне signed 32-битного диапазона"
+            ),
+            Self::NullCountry { map_key } => {
+                write!(formatter, "CCountryHandler содержит null country по ключу {map_key}")
+            }
+            Self::Country { map_key, source } => {
+                write!(formatter, "страна по ключу {map_key} не сериализована: {source}")
+            }
+        }
+    }
+}
+
+impl Error for CountryHandlerSerializeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Country { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
