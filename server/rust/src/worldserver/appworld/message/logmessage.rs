@@ -1,5 +1,5 @@
-//! Login/player lifecycle `OnLogMessage` из `logmessage.cpp`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Login/player lifecycle `OnLogMessage` из `logmessage.cpp`, сопоставленный
+//! с парой `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Ветки `0x4FB01..0x4FB07` и `0x5FB01..0x5FB02` сохраняют переходы
 //! login/offline/online, create/delete/restore/select и account cleanup.
@@ -22,9 +22,6 @@ use crate::dbaccess::worlddb::rsplayer::{
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use nebokrai_realm::app::player_base::{
-    PLAYER_BASE_RESPONSE, PlayerBaseWireRow, remaining_deletion_days,
-};
 use crate::public::date::TagTime;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use nebokrai_shared::resources::CPlayerList;
@@ -333,19 +330,21 @@ pub(crate) async fn on_log_message(
     message: CMessage,
 ) -> WorldLogMessageDispatch {
     match message.message_type() {
-        PLAYER_BASE_REQUEST => {
-            player_base(
-                game,
-                organizing,
-                registry,
-                coefficients,
-                globe_setup,
-                rs_player,
-                player_database,
-                message,
-            )
-            .await
-        }
+        PLAYER_BASE_REQUEST => WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::PlayerBase(
+                nebokrai_realm::app::player_base::on_player_base(
+                    game,
+                    organizing,
+                    registry,
+                    coefficients,
+                    globe_setup,
+                    rs_player,
+                    player_database,
+                    message,
+                )
+                .await,
+            ),
+        ),
         DELETE_ROLE_REQUEST => {
             let mut country_gate = DeleteRoleCountryGateBridge {
                 country_handler,
@@ -1042,190 +1041,6 @@ impl nebokrai_realm::app::world_game_view::WorldDeleteRoleCountryGate
     }
 }
 
-
-fn send_player_base(
-    game: &CGame,
-    account: Vec<u8>,
-    succeeded: bool,
-    declared_count: Option<u8>,
-    emitted_rows: i32,
-    response: CMessage,
-) -> WorldLogMessageDispatch {
-    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerBase(
-        nebokrai_realm::app::player_base::send_player_base(
-            game, account, succeeded, declared_count, emitted_rows, response,
-        ),
-    ))
-}
-
-fn send_player_base_failure(
-    game: &CGame,
-    account: Vec<u8>,
-    declared_count: Option<u8>,
-) -> WorldLogMessageDispatch {
-    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerBase(
-        nebokrai_realm::app::player_base::send_player_base_failure(game, account, declared_count),
-    ))
-}
-
-async fn player_base(
-    game: &mut CGame,
-    organizing: &COrganizingCtrl,
-    registry: &GoodsBasePropertiesRegistry,
-    coefficients: &PlayerPropertyCoefficients,
-    globe_setup: &GlobeSetupSnapshot,
-    rs_player: &mut TiberiusRsPlayer,
-    mut player_database: Option<&mut WorldTdsClient>,
-    mut request: CMessage,
-) -> WorldLogMessageDispatch {
-    let account = request
-        .base_mut()
-        .get_str_bytes(0x14)
-        .unwrap_or_default();
-    let Some(database_count) = rs_player
-        .get_player_count_in_db_by_cdkey(&account, player_database.as_deref_mut())
-        .await
-    else {
-        while let Some(notice) = rs_player.pop_notice() {
-            eprintln!(
-                "WorldServer: получение количества персонажей завершилось ошибкой: {:?}: {}",
-                notice.operation, notice.error
-            );
-        }
-        return send_player_base_failure(game, account, None);
-    };
-
-    let creation_count = game.creation_player_count_in_cdkey(&account);
-    let declared_count = database_count.wrapping_add(creation_count);
-    let mut response = CMessage::new(PLAYER_BASE_RESPONSE);
-    response.base_mut().add_char(1);
-    response.base_mut().add(&account);
-    response.base_mut().add_char(0);
-    response.base_mut().add_word(u16::from(declared_count));
-    if declared_count == 0 {
-        response.base_mut().add_char(1);
-        response.base_mut().add(&account);
-        response.base_mut().add_char(0);
-        // CRsPlayer::OpenPlayerBase, VA 0x0050F816: Add(short), два байта.
-        response.base_mut().add_word(0);
-        return send_player_base(game, account, true, Some(0), 0, response);
-    }
-
-    let database_rows = match rs_player
-        .open_player_base_in_db(&account, player_database.as_deref_mut())
-        .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            eprintln!("WorldServer: базовые данные персонажей не прочитаны: {error:?}");
-            while let Some(notice) = rs_player.pop_notice() {
-                eprintln!(
-                    "WorldServer: ошибка чтения базовых данных персонажей: {:?}: {}",
-                    notice.operation, notice.error
-                );
-            }
-            return send_player_base_failure(game, account, Some(declared_count));
-        }
-    };
-
-    let mut row_index = 0_i32;
-    for database_row in database_rows {
-        let player_id = database_row.id;
-        let deletion_status = if game.is_restore_player_exist(player_id) {
-            -1
-        } else {
-            let mut deletion_time = game.deletion_player_time(player_id);
-            if deletion_time == 0 {
-                deletion_time = rs_player
-                    .get_player_deletion_date(player_id, player_database.as_deref_mut())
-                    .await;
-            }
-            if deletion_time == 0 {
-                -1
-            } else {
-                remaining_deletion_days(globe_setup.deletion_days(), deletion_time)
-            }
-        };
-
-        let runtime = match game.clone_map_player(
-            player_id,
-            registry,
-            organizing,
-            coefficients,
-        ) {
-            Ok(Some(player)) => match player.player_base_wire_snapshot() {
-                Ok(snapshot) => Some(snapshot),
-                Err(_) => {
-                    return send_player_base_failure(game, account, Some(declared_count));
-                }
-            },
-            Ok(None) => match game.clone_saving_player(
-                player_id,
-                registry,
-                organizing,
-                coefficients,
-            ) {
-                Ok(Some(player)) => match player.player_base_wire_snapshot() {
-                    Ok(snapshot) => Some(snapshot),
-                    Err(_) => {
-                        return send_player_base_failure(game, account, Some(declared_count));
-                    }
-                },
-                Ok(None) => None,
-                Err(_) => {
-                    return send_player_base_failure(game, account, Some(declared_count));
-                }
-            },
-            Err(_) => return send_player_base_failure(game, account, Some(declared_count)),
-        };
-        let row = runtime.map_or_else(
-            || PlayerBaseWireRow::from_database(database_row, deletion_status),
-            |snapshot| {
-                PlayerBaseWireRow::from_snapshot(player_id, snapshot, deletion_status)
-            },
-        );
-        row.append_to(row_index, &mut response);
-        row_index = row_index.wrapping_add(1);
-    }
-
-    let creation_player_ids = game.creation_player_ids_by_cdkey(&account);
-    for player_id in creation_player_ids {
-        let snapshot = match game.clone_map_player(
-            player_id,
-            registry,
-            organizing,
-            coefficients,
-        ) {
-            Ok(Some(player)) => match player.player_base_wire_snapshot() {
-                Ok(snapshot) if snapshot.id != 0 => snapshot,
-                Ok(_) => continue,
-                Err(_) => {
-                    return send_player_base_failure(game, account, Some(declared_count));
-                }
-            },
-            Ok(None) => continue,
-            Err(_) => return send_player_base_failure(game, account, Some(declared_count)),
-        };
-        let deletion_time = game.deletion_player_time(player_id);
-        let deletion_status = if deletion_time == 0 {
-            -1
-        } else {
-            remaining_deletion_days(globe_setup.deletion_days(), deletion_time)
-        };
-        PlayerBaseWireRow::from_snapshot(player_id, snapshot, deletion_status)
-            .append_to(row_index, &mut response);
-        row_index = row_index.wrapping_add(1);
-    }
-
-    send_player_base(
-        game,
-        account,
-        true,
-        Some(declared_count),
-        row_index,
-        response,
-    )
-}
 
 fn player_return(
     game: &mut CGame,

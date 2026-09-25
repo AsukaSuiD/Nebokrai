@@ -17039,6 +17039,38 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
     }
 }
 
+impl nebokrai_realm::app::player_base::WorldPlayerBaseGameView for CGame {
+    type OrganizingContext = COrganizingCtrl;
+
+    fn creation_player_count_in_cdkey(&self, account: &[u8]) -> u8 {
+        CGame::creation_player_count_in_cdkey(self, account)
+    }
+
+    fn creation_player_ids_by_cdkey(&self, account: &[u8]) -> Vec<u32> {
+        CGame::creation_player_ids_by_cdkey(self, account)
+    }
+
+    fn clone_map_player_for_base(
+        &mut self,
+        player_id: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing: &COrganizingCtrl,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
+        CGame::clone_map_player(self, player_id, registry, organizing, coefficients)
+    }
+
+    fn clone_saving_player_for_base(
+        &self,
+        player_id: u32,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing: &COrganizingCtrl,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<Box<CPlayer>>, PlayerCodecError> {
+        CGame::clone_saving_player(self, player_id, registry, organizing, coefficients)
+    }
+}
+
 impl nebokrai_realm::activities::leiting::LeiTingGameView for CGame {
     type Player = CPlayer;
 
