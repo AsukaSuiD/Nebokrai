@@ -16,4 +16,4 @@ pub mod shape; // CShape: spatial/membership-часть и геометрия ф
 pub mod skillregistry; // CMoveShape: реестр навыков (категории, current/item, скалярная identity записи).
 pub mod summonedcreature; // CSummonedCreature: жизненный цикл призванного монстра.
 
-pub use identity::ShapeIdentity;
+pub use identity::ShapeIdentity; // локальная игровая ссылка на фигуру (type/ID/GUID).
