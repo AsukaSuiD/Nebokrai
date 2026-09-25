@@ -26,6 +26,7 @@ use crate::characters::player::{
 use crate::organizations::faction::CFaction;
 use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::content::skillfactory::CSkillFactory;
+use crate::sessions::csessionfactory::CSessionFactory;
 
 /// Трёхсторонний поиск имени региона: отсутствующий ключ карты, null-ячейка
 /// owner-а и найденное имя. Свёртка в `Option` потеряла бы отличие
@@ -37,11 +38,39 @@ pub enum WorldRegionNameLookup<'a> {
     Name(&'a [u8]),
 }
 
+/// Snapshot полей login-строки игрока: `_strcmpi` совпадение долгожителям ещё до
+/// поставки `worldserver.exe` строки, legacy-порядок map-итерации сохранён.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldLoginAccountPlayer {
+    pub team_id: i32,
+    pub owner_type: i32,
+    pub owner_id: i32,
+}
+
+/// Онлайн account маршрут с optional team-form fields; map-owner исходящие
+/// states добавляются записями той же backend формы.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldOnlineAccountPlayerRoute {
+    pub team_id: i32,
+    pub owner_type: i32,
+    pub owner_id: i32,
+    pub game_server_index: u32,
+}
+
 /// Снимок состояния game server-а: наличие коннекта и числовой индекс маршрута.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorldGameServerSnapshot {
     pub connected: bool,
     pub index: u32,
+}
+
+/// Результат `CGame::exit_team_player`: три исхода проверки внешней
+/// session/team-реквизитация plug identifiers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldLoginTimeoutTeamExit {
+    SessionMissingOrNotTeam,
+    PlugMissing,
+    Exited,
 }
 
 /// Точки обратного вызова handler-ветвей мира в владельца игры. Реализация
@@ -169,6 +198,32 @@ pub trait WorldGameView {
     fn append_restore_player(&mut self, player_id: u32);
 
     fn append_deletion_player(&mut self, player_id: u32, deletion_time: i32);
+
+    /// Списки login/online/offline при cleanup/disconnect: login-строка
+    /// маршрута сохранён как legacy-lookup фиксну БД адресной очередью;
+    /// список login и player_load-очередь у старого владельца, взамен login
+    /// или SB account offline записей;
+    /// team session exit — те же session-factory что и owner world queue.
+    fn login_player_by_account(&self, account: &[u8]) -> Option<WorldLoginAccountPlayer>;
+
+    fn remove_login_player(&mut self, player_id: u32) -> bool;
+
+    fn remove_player_load_data(&self, player_id: i32) -> bool;
+
+    fn append_offline_player_id(&mut self, player_id: u32) -> bool;
+
+    fn online_player_route_by_account(&self, account: &[u8]) -> Option<WorldOnlineAccountPlayerRoute>;
+
+    /// Исполнение session-id variant для команды нетронутой формы owner.
+    /// Оборачивает соединение world entry-points и широкий коннектор
+    /// contants SCSessionFactory-type-order списков host.
+    fn exit_team_player(
+        &mut self,
+        factory: &mut CSessionFactory,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+    ) -> WorldLoginTimeoutTeamExit;
 
     fn replace_online_player_silience_time(&mut self, player_id: u32, silience_time: i32) -> Option<i32>;
 

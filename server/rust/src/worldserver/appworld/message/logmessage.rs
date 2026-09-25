@@ -274,49 +274,9 @@ pub(crate) enum WorldDeleteRoleOutcome {
     },
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldAccountLoginCleanupOutcome {
-    NotFound {
-        account: Vec<u8>,
-    },
-    Cleaned {
-        account: Vec<u8>,
-        player_id: u32,
-        team_id: i32,
-        team_session_id: i32,
-        team_exit: WorldLoginTimeoutTeamExit,
-        player_load_removed: bool,
-        login_removed: bool,
-        offline_inserted: bool,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum WorldAccountDisconnectOutcome {
-    OnlineRouted {
-        account: Vec<u8>,
-        player_id: u32,
-        game_server_index: u32,
-        response_type: i32,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-        team_id: i32,
-        team_session_id: i32,
-        team_exit: WorldLoginTimeoutTeamExit,
-    },
-    LoginAcknowledged {
-        account: Vec<u8>,
-        released_player_id: Option<u32>,
-        team_id: Option<i32>,
-        team_session_id: Option<i32>,
-        team_exit: Option<WorldLoginTimeoutTeamExit>,
-        login_removed: bool,
-        offline_inserted: bool,
-        response_type: i32,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
+pub(crate) use nebokrai_realm::app::logmessage::{
+    WorldAccountDisconnectOutcome, WorldAccountLoginCleanupOutcome,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerDetailOutcome {
@@ -515,10 +475,20 @@ pub(crate) async fn on_log_message(
             )
             .await
         }
-        ACCOUNT_LOGIN_CLEANUP_REQUEST => {
-            account_login_cleanup(game, session_factory, message)
-        }
-        ACCOUNT_DISCONNECT_REQUEST => account_disconnect(game, session_factory, message),
+        ACCOUNT_LOGIN_CLEANUP_REQUEST => WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::AccountLoginCleanup(
+                nebokrai_realm::app::logmessage::on_account_login_cleanup(
+                    game, session_factory, message,
+                ),
+            ),
+        ),
+        ACCOUNT_DISCONNECT_REQUEST => WorldLogMessageDispatch::Handled(
+            WorldLogMessageOutcome::AccountDisconnect(
+                nebokrai_realm::app::logmessage::on_account_disconnect(
+                    game, session_factory, message,
+                ),
+            ),
+        ),
         request_type => WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::NoOp {
             request_type,
         }),

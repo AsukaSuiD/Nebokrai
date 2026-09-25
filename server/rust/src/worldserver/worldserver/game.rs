@@ -3374,12 +3374,7 @@ pub(crate) struct WorldMainLoopBaiTanJjcStageReport {
     pub(crate) jjc: JjcRunReport,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldLoginTimeoutTeamExit {
-    SessionMissingOrNotTeam,
-    PlugMissing,
-    Exited,
-}
+pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginTimeoutTeamExit;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionChangeTeamUpdate {
@@ -5629,12 +5624,7 @@ struct WorldLoginPlayerEntry {
     login_time_ms: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldLoginAccountPlayer {
-    pub(crate) team_id: i32,
-    pub(crate) owner_type: i32,
-    pub(crate) owner_id: i32,
-}
+pub(crate) use nebokrai_realm::app::world_game_view::WorldLoginAccountPlayer;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLoginPlayerRouteSnapshot {
@@ -5643,13 +5633,7 @@ pub(crate) struct WorldLoginPlayerRouteSnapshot {
     pub(crate) region_id: i32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldOnlineAccountPlayerRoute {
-    pub(crate) team_id: i32,
-    pub(crate) owner_type: i32,
-    pub(crate) owner_id: i32,
-    pub(crate) game_server_index: u32,
-}
+pub(crate) use nebokrai_realm::app::world_game_view::WorldOnlineAccountPlayerRoute;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DeletionPlayerSnapshot {
@@ -16900,6 +16884,36 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
 
     fn append_deletion_player(&mut self, player_id: u32, deletion_time: i32) {
         CGame::append_deletion_player(self, player_id, deletion_time)
+    }
+
+    fn login_player_by_account(&self, account: &[u8]) -> Option<WorldLoginAccountPlayer> {
+        CGame::login_player_by_account(self, account)
+    }
+
+    fn remove_login_player(&mut self, player_id: u32) -> bool {
+        CGame::remove_login_player(self, player_id)
+    }
+
+    fn remove_player_load_data(&self, player_id: i32) -> bool {
+        CGame::remove_player_load_data(self, player_id)
+    }
+
+    fn append_offline_player_id(&mut self, player_id: u32) -> bool {
+        CGame::append_offline_player_id(self, player_id)
+    }
+
+    fn online_player_route_by_account(&self, account: &[u8]) -> Option<WorldOnlineAccountPlayerRoute> {
+        CGame::online_player_route_by_account(self, account)
+    }
+
+    fn exit_team_player(
+        &mut self,
+        factory: &mut CSessionFactory,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+    ) -> WorldLoginTimeoutTeamExit {
+        CGame::exit_team_player(self, factory, session_id, owner_type, owner_id)
     }
 
     fn replace_online_player_silience_time(
