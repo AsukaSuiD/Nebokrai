@@ -265,6 +265,11 @@
 //! Property-формулы боевых свойств и property-пакеты перенесены в Zone
 //! `combat/monsterformula.rs`; методы ниже делегируют туда без изменения
 //! сигнатур, включая квоту/поправку опыта и pet attack/speed/timing.
+//! Скалярная база монстра — tame/master предикаты, счётчик попыток
+//! приручения, pet-progress колонки, бит-хранилище factors, записи
+//! script/refresh, защита первого нападающего и Nation-допуск — перенесена
+//! второй порцией в Zone `regions/monster.rs`; методы ниже делегируют туда
+//! без изменения сигнатур, нематериальные accessor-ы полей остаются здесь.
 //! Pet-факторы применяются только при валидной player-owner связи;
 //! целочисленные результаты сохраняют x87 truncation. Некоммутативные
 //! attack/element property-state обходятся в общем byte-exact порядке
@@ -315,6 +320,7 @@ use super::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::CMessage;
 use crate::setup::monsterlist::MonsterProperties;
 use nebokrai_zone::combat::monsterformula;
+use nebokrai_zone::regions::monster;
 pub(crate) use nebokrai_zone::combat::monsterformula::{
     MonsterCombatProperties, MonsterExperienceFormula, PetAttackProperties, PetExperienceUpdate,
 };
@@ -644,7 +650,7 @@ impl CMonster {
     }
 
     pub(crate) const fn set_tamed(&mut self, tamed: bool) {
-        self.tamed = tamed;
+        monster::set_tamed(&mut self.tamed, tamed);
     }
 
     /// Точный `CMonster::DoesCreatureBeenTamed` (RVA `0x000E6460`): одного
@@ -654,12 +660,11 @@ impl CMonster {
     }
 
     pub(crate) const fn is_tamable(&self, property: &MonsterProperties) -> bool {
-        property.tamable == 1
-            && self.tame_attempt_count < property.maximum_tame_attempt_count
+        monster::is_tamable(self.tame_attempt_count, property)
     }
 
     pub(crate) const fn increase_tame_attempt_count(&mut self) {
-        self.tame_attempt_count = self.tame_attempt_count.wrapping_add(1);
+        monster::increase_tame_attempt_count(&mut self.tame_attempt_count);
     }
 
     pub(crate) fn try_become_tamed(
@@ -847,16 +852,15 @@ impl CMonster {
     }
 
     pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {
-        self.master_info.master_type == 400 && self.master_info.master_id == player_id
+        monster::is_owned_pet(self.master_info, player_id)
     }
 
     pub(crate) const fn set_pet_progress(&mut self, level: u32, experience: u32) {
-        self.pet_level = level;
-        self.pet_experience = experience;
+        monster::set_pet_progress(&mut self.pet_level, &mut self.pet_experience, level, experience);
     }
 
     pub(crate) const fn pet_progress(&self) -> (u32, u32) {
-        (self.pet_level, self.pet_experience)
+        monster::pet_progress(self.pet_level, self.pet_experience)
     }
 
     pub(crate) fn increase_pet_experience(
@@ -894,7 +898,7 @@ impl CMonster {
     }
 
     pub(crate) fn adjust_pet_factors(&mut self, factors: [f32; 10]) {
-        self.factors = factors.map(f32::to_bits);
+        monster::adjust_pet_factors(&mut self.factors, factors);
     }
 
     pub(crate) fn maximum_hp(&self, property: &MonsterProperties) -> u32 {
@@ -1028,12 +1032,7 @@ impl CMonster {
     }
 
     pub(crate) fn display_name(&self) -> &[u8] {
-        let name = self.move_shape.shape().base_object().get_name();
-        if name.is_empty() {
-            &self.original_name
-        } else {
-            name
-        }
+        monster::display_name(self.move_shape.shape().base_object().get_name(), &self.original_name)
     }
 
     /// Формирует точный кадр `CMonster::Talk`; завершающие нули строк остаются
@@ -1281,7 +1280,7 @@ impl CMonster {
     }
 
     const fn has_player_pet_master(&self) -> bool {
-        self.tamed && self.master_info.master_type == 400 && self.master_info.master_id != 0
+        monster::has_player_pet_master(self.tamed, self.master_info)
     }
 
     pub(crate) fn attack_interval(&self, property: &MonsterProperties) -> u32 {
@@ -1342,20 +1341,15 @@ impl CMonster {
         &mut self,
         attacker_player_id: i32,
         protection_ms: u32,
-        mut clock: impl FnMut() -> u32,
+        clock: impl FnMut() -> u32,
     ) -> bool {
-        if self.first_attack_player_id != 0
-            && clock().wrapping_sub(self.last_attack_timer_ms) <= protection_ms
-        {
-            if self.first_attack_player_id != attacker_player_id {
-                return false;
-            }
-            self.last_attack_timer_ms = clock();
-            return true;
-        }
-        self.first_attack_player_id = attacker_player_id;
-        self.last_attack_timer_ms = clock();
-        true
+        monster::register_attacking_player(
+            &mut self.first_attack_player_id,
+            &mut self.last_attack_timer_ms,
+            attacker_player_id,
+            protection_ms,
+            clock,
+        )
     }
 
     pub(crate) const fn first_attack_player_id(&self) -> i32 {
@@ -2018,7 +2012,7 @@ impl CMonster {
     /// Guards reached from `CMonster::OnBeenHurted` before Nation first-hit
     /// dispatch: action `ACT_DIED` and health-based death are independent.
     pub(crate) fn can_trigger_nation_damage(&self) -> bool {
-        self.move_shape.shape().get_action() != 6 && !CMoveShape::is_died(self.hit_points)
+        monster::can_trigger_nation_damage(self.move_shape.shape().get_action(), self.hit_points)
     }
 
     /// Exact `OnClearWar` predicate использует ту же пару virtual action/HP,
@@ -2038,13 +2032,7 @@ impl CMonster {
     }
 
     pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {
-        let prefix_len = script_file
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(script_file.len());
-        self.script_file.clear();
-        self.script_file
-            .extend_from_slice(&script_file[..prefix_len]);
+        monster::set_script_file(&mut self.script_file, script_file);
     }
 
     pub(crate) const fn set_refresh_data(
@@ -2054,10 +2042,18 @@ impl CMonster {
         leader_distance: u16,
         refresh_index: i32,
     ) {
-        self.sign = sign;
-        self.leader_sign = leader_sign;
-        self.leader_distance = leader_distance;
-        self.refresh_index = refresh_index;
+        monster::set_refresh_data(
+            &mut self.sign,
+            &mut self.leader_sign,
+            &mut self.leader_distance,
+            &mut self.refresh_index,
+            monster::MonsterRefreshData {
+                sign,
+                leader_sign,
+                leader_distance,
+                refresh_index,
+            },
+        );
     }
 
     pub(crate) fn figure(property: &MonsterProperties) -> ShapeFigure {

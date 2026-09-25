@@ -174,8 +174,8 @@ use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
 use super::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapePositionBlock,
-    MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
+    CMoveShape, MoveShapeCommandBlock, MoveShapePositionDispatch, MoveShapePositionFacts,
+    MoveShapeResolver,
 };
 use super::npc::CNpc;
 use super::player::CPlayer;
@@ -184,9 +184,8 @@ use super::region::{
     RegionReturnPoint, RegionStorageBlock,
 };
 use super::shape::{
-    BaseShapePositionDispatch, CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
-    ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
-    ShapeRuntimeFacts, ShapeView,
+    BaseShapePositionDispatch, CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeFigure,
+    ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use super::summonshape::{SUMMON_SHAPE_TYPE, SummonedSkillShape};
 use crate::nets::netserver::message::GameServerAroundRuntime;
@@ -199,102 +198,11 @@ use crate::setup::monsterlist::{
     MonsterProperties, MonsterRegistry, get_monster_property_by_origin_name,
 };
 
-const PLAYER_TYPE: i32 = 400;
-const NPC_TYPE: i32 = 500;
-const MONSTER_TYPE: i32 = 600;
-const GOODS_TYPE: i32 = 700;
-const WAR_SOUL_AREA_SPAN: i32 = 15;
-
-const DROP_GOODS_OFFSETS: [(i32, i32); 49] = [
-    (0, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (-1, 0),
-    (1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
-    (-2, -2),
-    (-1, -2),
-    (0, -2),
-    (1, -2),
-    (2, -2),
-    (-2, -1),
-    (2, -1),
-    (-2, 0),
-    (2, 0),
-    (-2, 1),
-    (2, 1),
-    (-2, 2),
-    (-1, 2),
-    (0, 2),
-    (1, 2),
-    (2, 2),
-    (-3, -3),
-    (-2, -3),
-    (-1, -3),
-    (0, -3),
-    (1, -3),
-    (2, -3),
-    (3, -3),
-    (-3, -2),
-    (3, -2),
-    (-3, -1),
-    (3, -1),
-    (-3, 0),
-    (3, 0),
-    (-3, 1),
-    (3, 1),
-    (-3, 2),
-    (3, 2),
-    (-3, 3),
-    (-2, 3),
-    (-1, 3),
-    (0, 3),
-    (1, 3),
-    (2, 3),
-    (3, 3),
-];
-
-const NEIGHBOR_AREAS: [(i32, i32); 9] = [
-    (0, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (-1, 0),
-    (1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
-];
-
-const CITY_STATE_NONE: i32 = 0;
-const CITY_STATE_DECLARE: i32 = 1;
-const CITY_STATE_MASS: i32 = 2;
-const CITY_STATE_FIGHT: i32 = 3;
-
 pub(crate) use nebokrai_zone::regions::regionparam::RegionParamState;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RegionTaxAddition {
-    pub(crate) region_id: i32,
-    pub(crate) retained: u32,
-    pub(crate) superior_region_id: Option<i32>,
-    pub(crate) superior_share: u32,
-    pub(crate) today_total_tax: u32,
-    pub(crate) total_tax: u32,
-    pub(crate) current_tax_rate: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RegionTaxCollection {
-    pub(crate) region_id: i32,
-    pub(crate) collected: u32,
-    pub(crate) today_total_tax: u32,
-    pub(crate) total_tax: u32,
-    pub(crate) current_tax_rate: i32,
-}
+pub(crate) use nebokrai_zone::regions::serverregion::{
+    areagrid::*, geometry::*, membership::*, queries::*, registry::*, tax::*, transitions::*,
+    weather::*,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RegionTaxSessionKind {
@@ -430,19 +338,6 @@ pub(crate) enum ServerRegionSetupDecodeError {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AreaGridBlock {
-    InvalidAreaSpan { width: i32, height: i32 },
-    InvalidRegionDimensions { width: i32, height: i32 },
-    GridSizeOverflow { area_x: i32, area_y: i32 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AreaIndexBlock {
-    pub(crate) index: i32,
-    pub(crate) available: usize,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ServerRegionLoadError {
     Region(RegionDecodeError),
@@ -508,39 +403,6 @@ pub(crate) struct ServerRegionMonsterSetup {
     pub(crate) variants: Vec<ServerRegionMonsterVariant>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionWeather {
-    pub(crate) weather_index: i32,
-    pub(crate) fog_color: u32,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionWeatherOption {
-    pub(crate) cumulative_odds: i32,
-    pub(crate) weather: Vec<ServerRegionWeather>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionWeatherTime {
-    pub(crate) time: i32,
-    pub(crate) options: Vec<ServerRegionWeatherOption>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ServerRegionWeatherTick {
-    Waiting {
-        segment: usize,
-        count: i32,
-    },
-    AdvancedWithoutSelection {
-        segment: usize,
-    },
-    Changed {
-        segment: usize,
-        weather: Vec<ServerRegionWeather>,
-    },
-}
-
 pub(crate) trait ServerRegionDecodeEffectsContext:
     ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterEffectsContext
 {
@@ -555,39 +417,6 @@ pub(crate) trait ServerRegionDecodeContext:
 impl<Context> ServerRegionDecodeContext for Context where
     Context: ServerRegionDecodeEffectsContext + ServerRegionMonsterContext + ?Sized
 {
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RegionMembershipBlock {
-    InvalidAreaSpan { width: i32, height: i32 },
-    StaleAreaIndex { index: usize, available: usize },
-    ShapeCoordinate(ShapeCoordinateBlock),
-    ShapeBlock(ShapeBlockError),
-    RegionCell(RegionCellAccessBlock),
-    MoveShape(MoveShapePositionBlock),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AreaTransitionBlock {
-    StaleAreaIndex { index: usize, available: usize },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AreaTransitionAudience {
-    pub(crate) area_x: i32,
-    pub(crate) area_y: i32,
-    pub(crate) shapes_for_moving_player: Vec<ShapeView>,
-}
-
-/// Immutable effect-plan исходного `OnShapeChangeArea`. Регион вычисляет
-/// exclusive areas и их ordered shape snapshots до membership mutation;
-/// `CGame` исполняет клиентский wire, затем регион применяет target index.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AreaTransitionPlan {
-    pub(crate) moving: ShapeIdentity,
-    pub(crate) current_index: usize,
-    pub(crate) target_index: Option<usize>,
-    pub(crate) audience: Vec<AreaTransitionAudience>,
 }
 
 pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {}
@@ -672,137 +501,6 @@ pub(crate) struct ServerRegionNpcNameBlock {
     pub(crate) matches: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct NextNpcId(i32);
-
-impl NextNpcId {
-    fn take(&mut self) -> i32 {
-        let id = self.0;
-        self.0 = self.0.wrapping_add(1);
-        id
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct NextMonsterId(i32);
-
-impl NextMonsterId {
-    fn take(&mut self) -> i32 {
-        let id = self.0;
-        self.0 = self.0.wrapping_add(1);
-        id
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct NextChildId(i32);
-
-impl NextChildId {
-    fn take(&mut self) -> i32 {
-        let id = self.0;
-        self.0 = self.0.wrapping_add(1);
-        id
-    }
-}
-
-impl Default for NextMonsterId {
-    fn default() -> Self {
-        Self(1)
-    }
-}
-
-impl Default for NextNpcId {
-    fn default() -> Self {
-        Self(1)
-    }
-}
-
-impl Default for NextChildId {
-    fn default() -> Self {
-        Self(1)
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ServerRegionRegistry {
-    monsters: BTreeSet<i32>,
-    players: Vec<i32>,
-    npcs: BTreeSet<i32>,
-    goods: BTreeSet<CGuid>,
-    other_shapes: BTreeSet<i64>,
-}
-
-impl ServerRegionRegistry {
-    fn add(&mut self, identity: ShapeIdentity, facts: ShapeRuntimeFacts) {
-        match identity.object_type {
-            MONSTER_TYPE if facts.monster.is_some() => {
-                self.monsters.insert(identity.id);
-            }
-            PLAYER_TYPE if facts.is_player => self.players.push(identity.id),
-            NPC_TYPE if facts.is_npc => {
-                self.npcs.insert(identity.id);
-            }
-            GOODS_TYPE if facts.goods.is_some() => {
-                self.goods.insert(identity.ex_id);
-            }
-            PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE | GOODS_TYPE => {}
-            _ => {
-                self.other_shapes
-                    .insert(super::baseobject::CBaseObject::get_hash_value(
-                        identity.object_type,
-                        identity.id,
-                    ));
-            }
-        }
-    }
-
-    fn remove(&mut self, identity: ShapeIdentity) {
-        match identity.object_type {
-            MONSTER_TYPE => {
-                self.monsters.remove(&identity.id);
-            }
-            PLAYER_TYPE => {
-                if let Some(index) = self.players.iter().position(|id| *id == identity.id) {
-                    self.players.remove(index);
-                }
-            }
-            NPC_TYPE => {
-                self.npcs.remove(&identity.id);
-            }
-            GOODS_TYPE => {
-                self.goods.remove(&identity.ex_id);
-            }
-            _ => {
-                self.other_shapes
-                    .remove(&super::baseobject::CBaseObject::get_hash_value(
-                        identity.object_type,
-                        identity.id,
-                    ));
-            }
-        }
-    }
-
-    fn contains(&self, identity: ShapeIdentity) -> bool {
-        match identity.object_type {
-            MONSTER_TYPE => self.monsters.contains(&identity.id),
-            PLAYER_TYPE => self.players.contains(&identity.id),
-            NPC_TYPE => self.npcs.contains(&identity.id),
-            GOODS_TYPE => self.goods.contains(&identity.ex_id),
-            _ => self
-                .other_shapes
-                .contains(&super::baseobject::CBaseObject::get_hash_value(
-                    identity.object_type,
-                    identity.id,
-                )),
-        }
-    }
-}
-
-struct RegisteredShapeResolver<'a, Resolver> {
-    registry: &'a ServerRegionRegistry,
-    resolver: &'a Resolver,
-}
-
 // Для замены покрытия нужны только призванные формы. Заимствованный resolver
 // сохраняет обычный area-порядок GetShapes и работает у снятого с CGame региона.
 struct RegionSummonShapeResolver<'a>(&'a BTreeMap<i32, SummonedSkillShape>);
@@ -819,15 +517,6 @@ impl ShapeResolver for RegionSummonShapeResolver<'_> {
             pos_y_bits: shape.get_pos_y().to_bits(),
             figure: ShapeFigure::default(),
         })
-    }
-}
-
-impl<Resolver: ShapeResolver> ShapeResolver for RegisteredShapeResolver<'_, Resolver> {
-    fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
-        if !self.registry.contains(identity) {
-            return None;
-        }
-        self.resolver.resolve_shape(identity)
     }
 }
 
@@ -3289,90 +2978,38 @@ impl CServerRegion {
     }
 
     /// Пересоздаёт весь area-grid и назначает каждой клетке region parent/X/Y.
+    /// Ядро точного `CreateAreaArray` принадлежит Zone
+    /// `regions/serverregion/areagrid`.
     pub(crate) fn create_area_array(
         &mut self,
         area_width: i32,
         area_height: i32,
     ) -> Result<(), AreaGridBlock> {
-        if area_width <= 0 || area_height <= 0 {
-            // BLOCKED_MISSING_FACT: x86 `idiv` trap для нуля и последующая
-            // signed allocation для отрицательного span не задают safe contract.
-            return Err(AreaGridBlock::InvalidAreaSpan {
-                width: area_width,
-                height: area_height,
-            });
-        }
-        if self.region.width < 0 || self.region.height < 0 {
-            return Err(AreaGridBlock::InvalidRegionDimensions {
-                width: self.region.width,
-                height: self.region.height,
-            });
-        }
-
-        self.area_x = ceil_positive_division(self.region.width, area_width);
-        self.area_y = ceil_positive_division(self.region.height, area_height);
-        self.areas.clear();
-
-        let Some(area_count_i32) = self.area_x.checked_mul(self.area_y) else {
-            return Err(AreaGridBlock::GridSizeOverflow {
-                area_x: self.area_x,
-                area_y: self.area_y,
-            });
-        };
-        let Ok(area_count) = usize::try_from(area_count_i32) else {
-            return Err(AreaGridBlock::GridSizeOverflow {
-                area_x: self.area_x,
-                area_y: self.area_y,
-            });
-        };
-        if area_count > (u32::MAX as usize - 4) / 0x118 {
-            return Err(AreaGridBlock::GridSizeOverflow {
-                area_x: self.area_x,
-                area_y: self.area_y,
-            });
-        }
-
-        self.areas
-            .resize_with(area_count, CArea::with_storage_defaults);
-        let mut x = 0;
-        while x < self.area_x {
-            let mut y = 0;
-            while y < self.area_y {
-                let index =
-                    usize::try_from(self.area_x * y + x).expect("положительные grid dimensions");
-                self.areas[index].assign_to_server_region(x, y);
-                y += 1;
-            }
-            x += 1;
-        }
-        Ok(())
+        create_area_array(
+            &mut self.areas,
+            &mut self.area_x,
+            &mut self.area_y,
+            self.region.width,
+            self.region.height,
+            area_width,
+            area_height,
+        )
     }
 
-    /// Safe-граница исходного unbounded `GetArea(long)`.
+    /// Safe-граница исходного unbounded `GetArea(long)`; ядро принадлежит
+    /// Zone `regions/serverregion/areagrid`.
     pub(crate) fn get_area_by_index(&self, index: i32) -> Result<&CArea, AreaIndexBlock> {
-        let Ok(index_usize) = usize::try_from(index) else {
-            return Err(AreaIndexBlock {
-                index,
-                available: self.areas.len(),
-            });
-        };
-        self.areas.get(index_usize).ok_or(AreaIndexBlock {
-            index,
-            available: self.areas.len(),
-        })
+        get_area_by_index(&self.areas, index)
     }
 
-    /// Сохраняет bounds-check и `nullptr` coordinate-overload-а.
+    /// Сохраняет bounds-check и `nullptr` coordinate-overload-а; ядро
+    /// принадлежит Zone `regions/serverregion/areagrid`.
     pub(crate) fn get_area(&self, x: i32, y: i32) -> Option<&CArea> {
-        if x < 0 || x >= self.area_x || y < 0 || y >= self.area_y {
-            return None;
-        }
-        let index = usize::try_from(self.area_x * y + x).expect("положительный grid index");
-        self.areas.get(index)
+        get_area(&self.areas, self.area_x, self.area_y, x, y)
     }
 
     pub(crate) fn block_at(&self, x: i32, y: i32) -> Option<u8> {
-        self.region.get_block(x, y).ok()
+        block_at(&self.region, x, y)
     }
 
     /// Применяет достигнутый virtual `SetBlock(tile_x, tile_y, block)` к
@@ -3387,67 +3024,43 @@ impl CServerRegion {
 
     /// Mutable counterpart точного coordinate-overload `GetArea`; нужен
     /// только owner-у war-soul map, который уже владеет всем area-grid.
+    /// Ядро принадлежит Zone `regions/serverregion/areagrid`.
     fn get_area_mut(&mut self, x: i32, y: i32) -> Option<&mut CArea> {
-        if x < 0 || x >= self.area_x || y < 0 || y >= self.area_y {
-            return None;
-        }
-        let index = usize::try_from(self.area_x * y + x).expect("положительный grid index");
-        self.areas.get_mut(index)
+        get_area_mut(&mut self.areas, self.area_x, self.area_y, x, y)
     }
 
     pub(crate) fn has_war_soul_area(&self, point: WarSoulPoint) -> bool {
-        self.get_area(point.x / WAR_SOUL_AREA_SPAN, point.y / WAR_SOUL_AREA_SPAN)
-            .is_some()
+        has_war_soul_area(&self.areas, self.area_x, self.area_y, point)
     }
 
     /// Материализует spatial tail `CPlayer::SetWarSoulXY`: target area должна
-    /// существовать; old entry очищается лишь если её area присутствует, после
-    /// чего точка добавляется в target map. Деление на `15` — literal `idiv
-    /// 0xF` из owner-а. Возвращается наличие target area, не результат AddWarSoul.
+    /// существовать. Ядро принадлежит Zone `regions/serverregion/areagrid`.
     pub(crate) fn set_war_soul_position(
         &mut self,
         player_id: u32,
         previous: WarSoulPoint,
         target: WarSoulPoint,
     ) -> bool {
-        let target_x = target.x / WAR_SOUL_AREA_SPAN;
-        let target_y = target.y / WAR_SOUL_AREA_SPAN;
-        if !self.has_war_soul_area(target) {
-            return false;
-        }
-
-        let previous_x = previous.x / WAR_SOUL_AREA_SPAN;
-        let previous_y = previous.y / WAR_SOUL_AREA_SPAN;
-        if let Some(area) = self.get_area_mut(previous_x, previous_y) {
-            let _legacy_result = area.del_war_soul(player_id, previous);
-        }
-        let _legacy_result = self.get_area_mut(target_x, target_y)
-            .expect("проверенная target area остаётся в том же grid")
-            .add_war_soul(player_id, target);
-        true
+        set_war_soul_position(
+            &mut self.areas,
+            self.area_x,
+            self.area_y,
+            player_id,
+            previous,
+            target,
+        )
     }
 
-    /// `CPlayer::DelWarSoul` сбрасывает player point только при найденной area,
-    /// независимо от результата удаления прежней записи из её карты.
+    /// `CPlayer::DelWarSoul` сбрасывает player point только при найденной
+    /// area. Ядро принадлежит Zone `regions/serverregion/areagrid`.
     pub(crate) fn delete_war_soul(&mut self, player_id: u32, point: WarSoulPoint) -> bool {
-        let area_x = point.x / WAR_SOUL_AREA_SPAN;
-        let area_y = point.y / WAR_SOUL_AREA_SPAN;
-        let Some(area) = self.get_area_mut(area_x, area_y) else {
-            return false;
-        };
-        let _legacy_result = area.del_war_soul(player_id, point);
-        true
+        delete_war_soul(&mut self.areas, self.area_x, self.area_y, player_id, point)
     }
 
-    /// Точный `GetWarSoulXY`: упорядоченная карта одной области боевого духа
-    /// фильтруется по координатам и сохраняет возрастание идентификаторов игроков.
+    /// Точный `GetWarSoulXY` одной области боевого духа; ядро принадлежит
+    /// Zone `regions/serverregion/areagrid`.
     pub(crate) fn war_souls_at(&self, x: i32, y: i32) -> BTreeMap<u32, WarSoulPoint> {
-        let mut found = BTreeMap::new();
-        if let Some(area) = self.get_area(x / WAR_SOUL_AREA_SPAN, y / WAR_SOUL_AREA_SPAN) {
-            area.find_war_souls(&mut found);
-        }
-        found.retain(|_, point| point.x == x && point.y == y);
-        found
+        war_souls_at(&self.areas, self.area_x, self.area_y, x, y)
     }
 
     /// Собирает player IDs одной area без чтения их координат: исходный
@@ -4264,29 +3877,14 @@ impl CServerRegion {
         Ok(())
     }
 
+    /// Порядок девяти-area окружения принадлежит Zone
+    /// `regions/serverregion/areagrid`.
     fn neighbor_area_indices(&self, center: ShapeAreaCoordinates) -> Vec<usize> {
-        let mut indices = Vec::new();
-        for (offset_x, offset_y) in NEIGHBOR_AREAS {
-            let coordinates = ShapeAreaCoordinates {
-                x: center.x.wrapping_add(offset_x),
-                y: center.y.wrapping_add(offset_y),
-            };
-            if let Some(index) = self.area_index_by_coordinates(coordinates) {
-                indices.push(index);
-            }
-        }
-        indices
+        neighbor_area_indices(self.area_x, self.area_y, center)
     }
 
     fn area_index_by_coordinates(&self, coordinates: ShapeAreaCoordinates) -> Option<usize> {
-        if coordinates.x < 0
-            || coordinates.x >= self.area_x
-            || coordinates.y < 0
-            || coordinates.y >= self.area_y
-        {
-            return None;
-        }
-        usize::try_from(self.area_x * coordinates.y + coordinates.x).ok()
+        area_index_by_coordinates(self.area_x, self.area_y, coordinates)
     }
 
     fn area_index_for_tile(
@@ -4296,12 +3894,14 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
     ) -> Option<usize> {
-        let area_x = tile_x / area_width;
-        let area_y = tile_y / area_height;
-        if area_x < 0 || area_x >= self.area_x || area_y < 0 || area_y >= self.area_y {
-            return None;
-        }
-        usize::try_from(self.area_x * area_y + area_x).ok()
+        area_index_for_tile(
+            self.area_x,
+            self.area_y,
+            tile_x,
+            tile_y,
+            area_width,
+            area_height,
+        )
     }
 
     pub(crate) fn decode_return_setup_prefix(
@@ -4578,40 +4178,6 @@ fn read_server_region_u8(
     Ok(value)
 }
 
-/// Воспроизводит только observable traversal `m_mNpcs` из decoder RVA
-/// `0x000858F0`. MSVC `_Hash::insert` RVA `0x00081A60` начинает с mask/bucket
-/// `1/1`, растит один bucket на каждые четыре элемента, группирует linked
-/// list по bucket и держит signed `long` keys по возрастанию внутри группы.
-fn legacy_msvc_npc_hash_traversal(ids: impl IntoIterator<Item = i32>) -> Vec<i32> {
-    let mut ids: Vec<_> = ids.into_iter().collect();
-    let mut mask = 1_u32;
-    let mut bucket_count = 1_u32;
-    let mut bucket_vector_len = 9_u32;
-
-    for inserted in 0..ids.len() as u32 {
-        if bucket_count <= inserted >> 2 {
-            if bucket_count < bucket_vector_len - 1 {
-                if mask < bucket_count {
-                    mask = mask.wrapping_mul(2).wrapping_add(1);
-                }
-            } else {
-                mask = bucket_vector_len.wrapping_mul(2).wrapping_sub(3);
-                bucket_vector_len = bucket_vector_len.wrapping_mul(2).wrapping_sub(1);
-            }
-            bucket_count = bucket_count.wrapping_add(1);
-        }
-    }
-
-    ids.sort_by_key(|id| {
-        let mut bucket = (*id as u32 ^ 0xdead_beef) & mask;
-        if bucket_count <= bucket {
-            bucket = bucket.wrapping_sub(1 + (mask >> 1));
-        }
-        (bucket, *id)
-    });
-    ids
-}
-
 fn read_server_region_i32(
     source: &[u8],
     cursor: &mut usize,
@@ -4718,31 +4284,6 @@ fn server_region_error(
         needed: block.needed,
         available: block.available,
     }
-}
-
-fn ceil_positive_division(value: i32, divisor: i32) -> i32 {
-    let quotient = value / divisor;
-    quotient + i32::from(value % divisor != 0)
-}
-
-fn validate_area_span(width: i32, height: i32) -> Result<(), RegionMembershipBlock> {
-    if width <= 0 || height <= 0 {
-        // BLOCKED_MISSING_FACT: zero вызывает x86 `idiv` trap, negative
-        // GlobeSetup span не имеет доказанного переносимого runtime contract.
-        return Err(RegionMembershipBlock::InvalidAreaSpan { width, height });
-    }
-    Ok(())
-}
-
-fn wrapping_abs_difference(left: i32, right: i32) -> i32 {
-    let difference = left.wrapping_sub(right);
-    let sign = difference >> 31;
-    (difference ^ sign).wrapping_sub(sign)
-}
-
-fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
-    wrapping_abs_difference(shape.tile_x, tile_x) <= i32::from(shape.figure.get(2))
-        && wrapping_abs_difference(shape.tile_y, tile_y) <= i32::from(shape.figure.get(0))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
