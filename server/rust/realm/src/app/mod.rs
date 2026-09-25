@@ -39,6 +39,7 @@ pub mod teammessage;
 pub mod world_client;
 pub mod world_game_view;
 pub mod world_message;
+pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view;
 pub mod worldothermessage;
 pub mod world_server;

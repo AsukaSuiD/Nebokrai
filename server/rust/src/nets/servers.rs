@@ -3,5 +3,5 @@
 
 pub(crate) use nebokrai_shared::network::{
     AcceptStart, AdmissionOutcome, ServerCommandHandle, ServerHostError, ServerIoAction,
-    ServerIoCompletion, ServerSnapshotError,
+    ServerIoCompletion,
 };

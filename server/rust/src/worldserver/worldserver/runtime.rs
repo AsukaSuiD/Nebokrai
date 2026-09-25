@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::future::Future;
-use std::future::poll_fn;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
@@ -16,13 +15,11 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::Poll;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use parking_lot::{Mutex, RwLock};
 use chrono::{Datelike, Timelike};
-use tokio::task::{JoinHandle as TokioJoinHandle, JoinSet};
 
 use crate::dbaccess::worlddb::dbgoods::TiberiusDbGoods;
 use crate::dbaccess::worlddb::dbcountry::TiberiusDbCountry;
@@ -41,6 +38,10 @@ use crate::dbaccess::worlddb::rsplayer::{
     TiberiusPlayerLoadData, TiberiusRsPlayer,
 };
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
+pub(crate) use nebokrai_realm::app::world_network::{
+    WorldProcessNetworkError, WorldProcessNetworkTurn, report_world_network_turn,
+};
+use nebokrai_realm::app::world_network::WorldProcessNetworkRuntime as RealmProcessNetworkRuntime;
 use crate::dbaccess::worlddb::rsregion::{
     RegionParametersLoadOutcome, RsRegionOwner, TiberiusRsRegion,
 };
@@ -58,13 +59,9 @@ use crate::public::auctionlog::CAuctionLog;
 use crate::public::date::TagTime;
 use crate::public::timer::CTimer;
 use crate::nets::networld::message::CMessage;
-use crate::nets::networld::mynetclient::{CMyNetClient, WorldClientIoError, WorldClientIoStep};
+use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::networld::mynetserver::CMyNetServer;
-use crate::nets::networld::myserverclient::GameServerReceiveError;
-use crate::nets::servers::{
-    AcceptStart, AdmissionOutcome, ServerCommandHandle, ServerIoAction,
-    ServerIoCompletion, ServerSnapshotError,
-};
+use crate::nets::servers::ServerCommandHandle;
 use crate::setup::timetoreturn::TimeToReturnCallbacks;
 use crate::setup::timetoreturn::TimeToReturn;
 use crate::setup::godsbattleconf::CGodsBattleConf;
@@ -486,84 +483,37 @@ impl WorldProcessMainLoopState {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct WorldProcessNetworkTurn {
-    pub(crate) admissions: Vec<AdmissionOutcome>,
-    pub(crate) accept_errors: Vec<io::Error>,
-    pub(crate) io_completions: Vec<ServerIoCompletion>,
-    pub(crate) server_errors: Vec<ServerSnapshotError<GameServerReceiveError>>,
-    pub(crate) login: Option<Result<WorldClientIoStep, WorldClientIoError>>,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldProcessNetworkError {
-    Task(tokio::task::JoinError),
-}
-
-impl fmt::Display for WorldProcessNetworkError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Task(error) => write!(formatter, "World network-задача завершилась: {error}"),
-        }
-    }
-}
-
-impl Error for WorldProcessNetworkError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Task(error) => Some(error),
-        }
-    }
-}
-
+/// Process-runtime обвязка Realm `app::world_network`: два mut-accessor-а
+/// `CGame` не вызываются одновременно, поэтому владельцы направлений
+/// подаются стадиями, а ход собирается в исходном порядке — сначала
+/// worker принятых GameServer, затем неблокирующий опрос Login.
 pub(crate) struct WorldProcessNetworkRuntime {
-    worker: Option<WorldServerNetworkWorker>,
-}
-
-struct WorldServerNetworkWorker {
-    stop: tokio::sync::oneshot::Sender<()>,
-    task: TokioJoinHandle<Result<(), WorldProcessNetworkError>>,
+    inner: RealmProcessNetworkRuntime,
 }
 
 impl WorldProcessNetworkRuntime {
     pub(crate) fn new() -> Self {
-        Self { worker: None }
+        Self {
+            inner: RealmProcessNetworkRuntime::new(),
+        }
     }
 
     pub(crate) async fn run_turn(
         &mut self,
         game: &mut CGame,
     ) -> Result<WorldProcessNetworkTurn, WorldProcessNetworkError> {
-        if self.worker.as_ref().is_some_and(|worker| worker.task.is_finished()) {
-            let worker = self.worker.take().expect("завершившийся World network-worker проверен");
-            worker.task.await.map_err(WorldProcessNetworkError::Task)??;
-        }
-        if self.worker.is_none() {
-            if let Some(server) = game.process_game_server_mut() {
-                let mut server = server.clone();
-                let (stop, mut stopped) = tokio::sync::oneshot::channel();
-                let task = tokio::spawn(async move {
-                    let mut network = WorldServerNetworkRuntime::new();
-                    let result = loop {
-                        match network.run_turn(&mut server).await {
-                            Ok(turn) => report_world_network_turn(&turn),
-                            Err(error) => break Err(error),
-                        }
-                        tokio::select! {
-                            _ = &mut stopped => break Ok(()),
-                            _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-                        }
-                    };
-                    let released = network.release_server(&mut server).await;
-                    result.and(released)
-                });
-                self.worker = Some(WorldServerNetworkWorker { stop, task });
-            }
-        }
+        self.inner
+            .run_game_server_worker(
+                game.process_game_server_mut(),
+                super::game::legacy_tick_ms,
+            )
+            .await?;
         let mut turn = WorldProcessNetworkTurn::default();
-        if let Some(client) = game.process_login_client_mut() {
-            turn.login = poll_once(client.run_io_once(super::game::legacy_tick_ms)).await;
-        }
+        turn.login = RealmProcessNetworkRuntime::poll_login_client(
+            game.process_login_client_mut(),
+            super::game::legacy_tick_ms,
+        )
+        .await;
         Ok(turn)
     }
 
@@ -571,147 +521,14 @@ impl WorldProcessNetworkRuntime {
         &mut self,
         server: &mut CMyNetServer,
     ) -> Result<(), WorldProcessNetworkError> {
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.stop.send(());
-            worker.task.await.map_err(WorldProcessNetworkError::Task)?
-        } else {
-            WorldServerNetworkRuntime::new().release_server(server).await
-        }
+        self.inner
+            .release_server(server, super::game::legacy_tick_ms)
+            .await
     }
 
     pub(crate) fn release_client(&mut self, client: &mut CMyNetClient) {
-        let _ = client.close();
+        self.inner.release_client(client);
     }
-}
-
-struct WorldServerNetworkRuntime {
-    accept_task: Option<TokioJoinHandle<io::Result<(tokio::net::TcpStream, std::net::SocketAddrV4)>>>,
-    io_tasks: JoinSet<ServerIoCompletion>,
-}
-
-impl WorldServerNetworkRuntime {
-    pub(crate) fn new() -> Self {
-        Self {
-            accept_task: None,
-            io_tasks: JoinSet::new(),
-        }
-    }
-
-    pub(crate) async fn run_turn(
-        &mut self,
-        server: &mut CMyNetServer,
-    ) -> Result<WorldProcessNetworkTurn, WorldProcessNetworkError> {
-        let mut turn = WorldProcessNetworkTurn::default();
-        self.drain_completed(server, &mut turn).await?;
-        self.start_accept(server);
-
-        {
-            let snapshot = server.process_network_snapshot(super::game::legacy_tick_ms());
-            let commands = server.command_handle();
-            let (actions, errors) = snapshot.into_parts();
-            turn.server_errors = errors;
-            self.spawn_io_actions(actions, commands);
-        }
-
-        Ok(turn)
-    }
-
-    pub(crate) async fn release_server(
-        &mut self,
-        server: &mut CMyNetServer,
-    ) -> Result<(), WorldProcessNetworkError> {
-        if let Some(task) = self.accept_task.take() {
-            task.abort();
-            match task.await {
-                Ok(result) => drop(result),
-                Err(error) if error.is_cancelled() => {}
-                Err(error) => return Err(WorldProcessNetworkError::Task(error)),
-            }
-        }
-
-        let _ = server.command_handle().quit_all();
-        while server.has_clients() {
-            let snapshot = server.process_network_snapshot(super::game::legacy_tick_ms());
-            let commands = server.command_handle();
-            let (actions, _errors) = snapshot.into_parts();
-            self.spawn_io_actions(actions, commands);
-            self.drain_io_completions(None)?;
-            tokio::task::yield_now().await;
-        }
-        self.io_tasks.shutdown().await;
-        Ok(())
-    }
-
-    async fn drain_completed(
-        &mut self,
-        server: &mut CMyNetServer,
-        turn: &mut WorldProcessNetworkTurn,
-    ) -> Result<(), WorldProcessNetworkError> {
-        if self
-            .accept_task
-            .as_ref()
-            .is_some_and(TokioJoinHandle::is_finished)
-        {
-            let result = self
-                .accept_task
-                .take()
-                .expect("завершившаяся World accept-задача проверена")
-                .await
-                .map_err(WorldProcessNetworkError::Task)?;
-            match result {
-                Ok((stream, peer)) => {
-                    turn.admissions.push(server.queue_accepted(
-                        stream,
-                        peer,
-                        super::game::legacy_tick_ms(),
-                    ));
-                }
-                Err(error) => turn.accept_errors.push(error),
-            }
-        }
-        self.drain_io_completions(Some(&mut turn.io_completions))
-    }
-
-    fn start_accept(&mut self, server: &mut CMyNetServer) {
-        if self.accept_task.is_some() {
-            return;
-        }
-        if let AcceptStart::Pending(accept) = server.begin_accept() {
-            self.accept_task = Some(tokio::spawn(async move { accept.accept().await }));
-        }
-    }
-
-    fn spawn_io_actions(&mut self, actions: Vec<ServerIoAction>, commands: ServerCommandHandle) {
-        for action in actions {
-            let commands = commands.clone();
-            self.io_tasks
-                .spawn(async move { action.run(commands).await });
-        }
-    }
-
-    fn drain_io_completions(
-        &mut self,
-        mut output: Option<&mut Vec<ServerIoCompletion>>,
-    ) -> Result<(), WorldProcessNetworkError> {
-        while let Some(completion) = self.io_tasks.try_join_next() {
-            let completion = completion.map_err(WorldProcessNetworkError::Task)?;
-            if let Some(output) = &mut output {
-                output.push(completion);
-            }
-        }
-        Ok(())
-    }
-}
-
-async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Output> {
-    let mut future = Box::pin(future);
-    poll_fn(move |context| {
-        Poll::Ready(match future.as_mut().poll(context) {
-            Poll::Ready(output) => Some(output),
-            Poll::Pending => None,
-        })
-    })
-    .await
 }
 
 pub(crate) struct WorldProcessReleaseContext<'a> {
@@ -2878,23 +2695,6 @@ impl WorldProcessRuntime {
             );
         }
         result
-    }
-}
-
-fn report_world_network_turn(turn: &WorldProcessNetworkTurn) {
-    for admission in &turn.admissions {
-        if !matches!(admission, AdmissionOutcome::Queued { .. }) {
-            eprintln!("WorldServer: GameServer admission: {admission:?}");
-        }
-    }
-    for error in &turn.accept_errors {
-        eprintln!("WorldServer: ошибка GameServer accept: {error}");
-    }
-    for error in &turn.server_errors {
-        eprintln!("WorldServer: ошибка GameServer transport: {error:?}");
-    }
-    if let Some(Err(error)) = &turn.login {
-        eprintln!("WorldServer: ошибка Login transport: {error}");
     }
 }
 
