@@ -7,8 +7,6 @@
 //! и нормализация provider-order поверх исходного контракта не добавляются.
 
 use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
 use tiberius::{Query, Row};
@@ -22,80 +20,14 @@ use crate::worldserver::appworld::country::countryhandler::{
 };
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 
+pub(crate) use nebokrai_realm::organizations::dbcountry::{
+    CountryKingSaveSnapshot, CountryMinisterSaveSnapshot, CountrySaveSnapshot, DbCountryLoadFailure,
+    DbCountryNotice,
+};
+
 const COUNTRY_SELECT_SQL: &str = "SELECT TOP 1 id FROM CSL_Countrys WHERE id = @P1";
 const COUNTRY_LOAD_SQL: &str = "SELECT * FROM CSL_Countrys";
 const COUNTRY_UPDATE_SQL: &str = "UPDATE TOP (1) CSL_Countrys SET treasury = @P1, power = @P2, tech_exp = @P3, tech_lel = @P4, king_id = @P5, king_name = @P6, king_appoint = @P7, king_salary = @P8, control_point = @P9, material_point = @P10, war_point = @P11, war_res = @P12, minister_2_id = @P13, minister_2_name = @P14, minister_2_appoint = @P15, minister_2_salary = @P16, minister_3_id = @P17, minister_3_name = @P18, minister_3_appoint = @P19, minister_3_salary = @P20, minister_4_id = @P21, minister_4_name = @P22, minister_4_appoint = @P23, minister_4_salary = @P24, minister_5_id = @P25, minister_5_name = @P26, minister_5_appoint = @P27, minister_5_salary = @P28, minister_6_id = @P29, minister_6_name = @P30, minister_6_appoint = @P31, minister_6_salary = @P32, minister_7_id = @P33, minister_7_name = @P34, minister_7_appoint = @P35, minister_7_salary = @P36 WHERE id = @P37";
-
-#[derive(Clone, Debug)]
-pub(crate) struct CountryKingSaveSnapshot {
-    pub(crate) id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) appointed: bool,
-    pub(crate) salary_received: bool,
-    pub(crate) control_point: i32,
-    pub(crate) material_point: i32,
-    pub(crate) war_point: i32,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CountryMinisterSaveSnapshot {
-    pub(crate) id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) appointed: bool,
-    pub(crate) salary_received: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CountrySaveSnapshot {
-    pub(crate) country_id: u8,
-    pub(crate) treasury: i32,
-    pub(crate) power: i32,
-    pub(crate) tech_current_exp: i32,
-    pub(crate) tech_level: i32,
-    pub(crate) king: CountryKingSaveSnapshot,
-    pub(crate) country_war_result: i32,
-    pub(crate) ministers: [Option<CountryMinisterSaveSnapshot>; 6],
-}
-
-#[derive(Debug)]
-pub(crate) enum DbCountryNotice {
-    MissingConnection,
-    LoadFailed {
-        row_index: Option<usize>,
-        failure: DbCountryLoadFailure,
-    },
-    SaveFailed(DbCountryDatabaseError),
-}
-
-#[derive(Debug)]
-pub(crate) enum DbCountryLoadFailure {
-    MissingConnection,
-    Database(DbCountryDatabaseError),
-    MissingRequiredValue { column: String },
-    NumericOutsideRange { column: String, value: i64 },
-    ParameterUnavailable { field: &'static str },
-}
-
-#[derive(Debug)]
-pub(crate) struct DbCountryDatabaseError(tiberius::error::Error);
-
-impl fmt::Display for DbCountryDatabaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "ошибка TDS World country DB: {}", self.0)
-    }
-}
-
-impl Error for DbCountryDatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl From<tiberius::error::Error> for DbCountryDatabaseError {
-    fn from(error: tiberius::error::Error) -> Self {
-        Self(error)
-    }
-}
 
 pub(crate) trait DbCountryOwner {
     async fn load(

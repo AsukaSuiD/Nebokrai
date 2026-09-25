@@ -32,6 +32,10 @@ use crate::worldserver::appworld::country::country::{
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::worldserver::game::CGame;
 
+pub(crate) use nebokrai_realm::organizations::countryhandler::{
+    CountryHandlerReleaseReport, CountryInfoDeliveryContext,
+};
+
 static NEXT_COUNTRY_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
 
 struct CountryTopInfo {
@@ -125,20 +129,10 @@ pub(crate) enum CountryAppendDisposition {
     },
 }
 
-pub(crate) trait CountryInfoDeliveryContext {
-    fn send_all(&mut self, message: &CMessage) -> i32;
-}
-
 pub(crate) struct CCountryHandler {
     countries: BTreeMap<u8, Option<Box<CCountry>>>,
     top_infos: VecDeque<CountryTopInfo>,
     day: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryHandlerReleaseReport {
-    pub(crate) released_countries: usize,
-    pub(crate) released_top_infos: usize,
 }
 
 impl Default for CCountryHandler {

@@ -23,46 +23,17 @@
 //! переполнение внутренних буферов, не меняя wire и БД.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
 use std::ffi::CString;
-use std::fmt;
 
-use crate::dbaccess::worlddb::dbcountry::{
-    CountryKingSaveSnapshot, CountryMinisterSaveSnapshot, CountrySaveSnapshot,
-};
+use crate::dbaccess::worlddb::dbcountry::{CountryKingSaveSnapshot, CountrySaveSnapshot};
 use crate::nets::networld::message::{CMessage, SendMessageError};
 
-use super::countryparam::{
-    CCountryParam, CountryParameterUnavailable, CountryTechLevelLookup,
-};
+use super::countryparam::{CCountryParam, CountryParameterUnavailable};
 use super::king::{
     KingPointUpdate, change_control_point, set_control_point, set_material_point, set_war_point,
 };
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct CountryKingSaveLimits {
-    pub(crate) control_point: i32,
-    pub(crate) material_point: i32,
-    pub(crate) war_point: i32,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CountryMinisterState {
-    pub(crate) id_type: u8,
-    pub(crate) quest_switch: bool,
-    pub(crate) snapshot: CountryMinisterSaveSnapshot,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryConstructorReport {
-    pub(crate) next_technology: CountryTechLevelLookup,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum CountryMinisterFromDbUpdate {
-    Inserted,
-    Replaced { previous: Option<CountryMinisterState> },
-}
+pub(crate) use nebokrai_realm::organizations::country::*;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CCountry {
@@ -89,61 +60,8 @@ pub(crate) struct CCountry {
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryExileTimeLookup {
-    pub(crate) started_at_ms: Option<i32>,
-    pub(crate) sampled_at_ms: u32,
-    pub(crate) remaining_ms: i32,
-    pub(crate) remaining_seconds: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryQuestSwitchTarget {
-    King,
-    Minister { job: u8 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryQuestSwitchUpdate {
-    pub(crate) target: CountryQuestSwitchTarget,
-    pub(crate) previous: bool,
-    pub(crate) applied: bool,
-}
-
 pub(crate) trait CountryNewTermContext {
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryMinisterTermReset {
-    pub(crate) job: u8,
-    pub(crate) previous_appointed: bool,
-    pub(crate) previous_salary_received: bool,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryNewTermReport {
-    pub(crate) previous_king_appointed: bool,
-    pub(crate) previous_king_salary_received: bool,
-    pub(crate) minister_resets: Vec<CountryMinisterTermReset>,
-    pub(crate) previous_silence_count: i32,
-    pub(crate) previous_pk_count: i32,
-    pub(crate) previous_exile_count: i32,
-    pub(crate) previous_absolve_count: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryVillageTaxRegion {
-    pub(crate) map_key: i32,
-    pub(crate) name: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryVillageTaxContextBlock {
-    UninitializedRegionType { map_key: i32 },
-    UninitializedRegionCountry { map_key: i32 },
 }
 
 pub(crate) trait CountryVillageTaxContext {
@@ -158,27 +76,6 @@ pub(crate) trait CountryVillageTaxContext {
         arguments: &[CountryExileTextArgument<'_>],
     ) -> Vec<u8>;
     fn put_king_log(&mut self, text: &[u8]);
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryVillageTaxUpdate {
-    pub(crate) map_key: i32,
-    pub(crate) region_name: Vec<u8>,
-    pub(crate) previous_treasury: i32,
-    pub(crate) daily_treasury: i32,
-    pub(crate) applied_treasury: i32,
-    pub(crate) log: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryVillageTaxReport {
-    pub(crate) updates: Vec<CountryVillageTaxUpdate>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryVillageTaxBlock {
-    Parameter(CountryParameterUnavailable),
-    Context(CountryVillageTaxContextBlock),
 }
 
 pub(crate) trait CountrySetNewDayContext:
@@ -238,76 +135,6 @@ pub(crate) enum CountryScalarUpdate {
     KingPoint(KingPointUpdate),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryExileTextArgument<'a> {
-    Text(&'a [u8]),
-    Signed(i32),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryExileMessageDelivery {
-    pub(crate) map_id: i32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryExileTarget {
-    pub(crate) name: Vec<u8>,
-    pub(crate) country: Option<u8>,
-    pub(crate) level: u8,
-    pub(crate) credit: u32,
-    pub(crate) pk_count: u16,
-    pub(crate) is_god: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryOnlinePlayer {
-    pub(crate) id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) country: Option<u8>,
-    pub(crate) occupation: u8,
-    pub(crate) level: u8,
-    pub(crate) is_god: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryPlayerInfo {
-    pub(crate) id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) occupation: u8,
-    pub(crate) level: u8,
-    pub(crate) faction_name: Vec<u8>,
-    pub(crate) is_faction_master: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryPlayersListContextBlock {
-    PlayerFactionLookup,
-    FactionMasterLookup,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryPlayersListReport {
-    pub(crate) page: i32,
-    pub(crate) start_index: u32,
-    pub(crate) total: u32,
-    pub(crate) entries: Vec<CountryPlayerInfo>,
-    pub(crate) map_id: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-    pub(crate) logs: Vec<Vec<u8>>,
-    pub(crate) legacy_result: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryInitialKingRejection {
-    PlayerMissing,
-    TargetCountryUnavailable,
-    TargetFromAnotherCountry,
-    FactionMissing,
-    KingMismatch,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryInitialKingDisposition {
     Rejected {
@@ -332,30 +159,6 @@ pub(crate) struct CountryInitialKingReport {
     pub(crate) text: Vec<u8>,
     pub(crate) legacy_result: i32,
     pub(crate) disposition: CountryInitialKingDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountrySetKingReport {
-    pub(crate) player_id: i32,
-    pub(crate) depose: CountryDeposeKingReport,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-    pub(crate) legacy_result: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryFactionSnapshot {
-    pub(crate) faction_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) owned_cities: Vec<i32>,
-}
-
-pub(crate) use nebokrai_realm::organizations::country::CountryGovernanceContextBlock;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryAbsolveCounterReset {
-    pub(crate) previous_kill_count: u32,
-    pub(crate) previous_pk_count: u16,
 }
 
 pub(crate) trait CountryExileResultContext {
@@ -494,62 +297,6 @@ pub(crate) trait CountryPlayersListContext {
     fn put_king_log(&mut self, text: &[u8]);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryDemiseRejection {
-    CountryAtWar,
-    InsufficientControlPoint,
-    AppointmentPending,
-    SamePlayer,
-    PlayerMissing,
-    KingMissing,
-    InsufficientCredit,
-    InsufficientLevel,
-    FactionMissing,
-    OwnedCityConflict,
-    TargetCountryUnavailable,
-    TargetFromAnotherCountry,
-    OldKingNameMissing,
-    OldKingNotFactionMaster,
-    OldFactionMissing,
-    OldFactionCityMissing,
-    FactionTransferRejected,
-    OldKingDeposeFailed,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryCanDemiseDisposition {
-    Allowed,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        reason: CountryDemiseRejection,
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryCityTransferReport {
-    pub(crate) city_id: i32,
-    pub(crate) old_faction_id: i32,
-    pub(crate) cleared_old_cities: Vec<i32>,
-    pub(crate) new_faction_id: i32,
-    pub(crate) new_union_id: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryDeposeKingReport {
-    pub(crate) old_king_id: i32,
-    pub(crate) legacy_result: i32,
-    pub(crate) mode: u8,
-    pub(crate) minister_reports: Vec<CountryDeposeMinisterReport>,
-    pub(crate) appointment_wire: Option<Vec<u8>>,
-    pub(crate) appointment_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) world_wire: Option<Vec<u8>>,
-    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CountryAiReport {
     pub(crate) current_tick_ms: u32,
@@ -655,69 +402,6 @@ pub(crate) struct CountrySuccessExiledReport {
     pub(crate) disposition: CountrySuccessExiledDisposition,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryExileRejection {
-    CountryAtWar,
-    InsufficientControlPoint,
-    DailyLimitReached,
-    TargetIsKing,
-    TargetMissing,
-    TargetCountryUnavailable,
-    TargetFromAnotherCountry,
-    ExileRectMissing,
-    TargetPkTooHigh,
-    TargetRouteMissing,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryCanExileDisposition {
-    Allowed,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        reason: CountryExileRejection,
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryExileRequestDisposition {
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        reason: CountryExileRejection,
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
-    Sent {
-        map_id: i32,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountrySilenceRejection {
-    CountryAtWar,
-    InsufficientControlPoint,
-    DailyLimitReached,
-    TargetIsKing,
-    TargetMissing,
-    TargetCountryUnavailable,
-    TargetFromAnotherCountry,
-    TargetIsGod,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryCanSilenceDisposition {
-    Allowed,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        reason: CountrySilenceRejection,
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountrySilenceDisposition {
     Rejected {
@@ -749,28 +433,6 @@ pub(crate) struct CountrySilenceReport {
     pub(crate) disposition: CountrySilenceDisposition,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryAbsolveRejection {
-    CountryAtWar,
-    InsufficientControlPoint,
-    DailyLimitReached,
-    TargetMissing,
-    TargetCountryUnavailable,
-    TargetFromAnotherCountry,
-    TargetMutationUnavailable,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryCanAbsolveDisposition {
-    Allowed,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        reason: CountryAbsolveRejection,
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CountryAbsolveDisposition {
     Rejected {
@@ -800,77 +462,6 @@ pub(crate) struct CountryAbsolveReport {
     pub(crate) legacy_result: i32,
     pub(crate) text: Vec<u8>,
     pub(crate) disposition: CountryAbsolveDisposition,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryCanDeposeMinisterDisposition {
-    Allowed,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryBaseInfoDisposition {
-    KingMissing,
-    ParameterUnavailable(CountryParameterUnavailable),
-    MinisterCountOutOfRange { minister_count: usize },
-    Sent {
-        map_id: i32,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-        log: Vec<u8>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryDeposeMinisterDisposition {
-    SlotMissing { inserted_null_slot: bool },
-    Applied {
-        previous_player_id: i32,
-        previous_name: Vec<u8>,
-        country_deliveries: Vec<CountryExileMessageDelivery>,
-        appointment_wire: Vec<u8>,
-        appointment_delivery: Result<i32, SendMessageError>,
-        control_point_delivery: CountryExileMessageDelivery,
-        base_info: CountryBaseInfoDisposition,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CountryDeposeMinisterReport {
-    pub(crate) job: u8,
-    pub(crate) mode: u8,
-    pub(crate) legacy_result: i32,
-    pub(crate) text: Vec<u8>,
-    pub(crate) disposition: CountryDeposeMinisterDisposition,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryAppointMinisterRejection {
-    CountryAtWar,
-    InsufficientControlPoint,
-    TargetIsKing,
-    JobUnavailable,
-    JobOccupied,
-    AppointmentPending,
-    TargetMissing,
-    TargetCountryUnavailable,
-    TargetFromAnotherCountry,
-    TargetAlreadyHasJob { job: u8 },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum CountryCanAppointMinisterDisposition {
-    Allowed,
-    ParameterUnavailable(CountryParameterUnavailable),
-    Rejected {
-        reason: CountryAppointMinisterRejection,
-        text: Vec<u8>,
-        private_delivery: Option<CountryExileMessageDelivery>,
-    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -3741,24 +3332,6 @@ impl CCountry {
         }
     }
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountrySerializeError {
-    MinisterCountOutOfRange { minister_count: usize },
-}
-
-impl fmt::Display for CountrySerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MinisterCountOutOfRange { minister_count } => write!(
-                formatter,
-                "CCountry содержит {minister_count} министров вне byte-диапазона"
-            ),
-        }
-    }
-}
-
-impl Error for CountrySerializeError {}
 
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     value
