@@ -10,7 +10,16 @@
 //! `CCountryParam::main_return_point`. `DoesRecallWhenLost` (`0x0007BAC0`)
 //! читает `+0x184`. Constructor не записывает `m_stSetup`: до доказанного
 //! decoder/writer-а setup остаётся отдельной typed-границей
-//! `ServerReturnSetupBlock`.
+//! `ServerReturnSetupBlock`. Машинная досверка 2026-09-26 подтвердила:
+//! null-ветвь — инлайн-порт базового `CRegion::GetReturnPoint` (RVA
+//! `0x000F0280`, тот же zero-write шести выходов); use_return ветвь пишет
+//! direction константой `-1`; fallback — три mutating карты
+//! (`operator[]` семантика `main_return_point`); `does_recall` `+0x184` и
+//! `use_return` `+0x18C` machine-verified. Поле `+0x188`
+//! (`move_monster_when_refeash`) — INFERRED (ни одна из функций его не
+//! читает); остальные 7 из 8 полей machine-verified. Ctor-claim
+//! «не записывает setup» подтверждён телами `??0CServerRegion`/`??0CRegion`
+//! (косвенный вызов — `timeGetTime()`, не setup).
 
 use crate::content::countryparam::CCountryParam;
 use crate::regions::region::RegionReturnPoint;
