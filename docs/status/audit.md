@@ -1,5 +1,12 @@
 # Аудит готовности серверной реконструкции
 
+## Realm activities: CountryWarSys — владелец в realm (volна war совпадений): `get_country_war_sys` свободный синглтон (`0xEBE60`→`add_top_info`/`send_top_info`, timer-фаза 2) остаются без перетасовки — `COrganizingCtrl` не тронут.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): **9 статических timer-callbacks из pubs 1:1 на 9 variant `CountryWarCallbacks`** (`on_war_clear 0x8F490`, `on_declare_end 0x8FA00`, `on_prepare_begin 0x8FB40`, `on_prepare_end 0x8FC80`, `on_war_start 0x90EC0`, `on_war_end 0x91100`, `on_declare_begin 0x91530`, `on_war_start_info 0x916C0`, `on_war_end_info 0x918E0`); члены `initialize`/`reload`/`player_declare`/`on_flag_destory`(sic)/`end_war`/`is_already_declare`/`get_war_region`/`AddToByteArray`/`get_instance` + `_instance` static и STL `_Tmap_traits<J,CountryWar*>` обе карты подтверждены; правило seg:offset+0x1000 проверено численно (`LoadIni@CFactionWarSys 0x63BB0` → VA `0x464BB0`, точно совпадает с адресом прежнего коммита). Изменённого поведения нет — типовой владелец со STATIC-полем singleton (не game-полем); закрыто по конвенции wave-формы. Каскад: оставшийся в `public/date.rs` переходный re-export
+`TagTimeArithmeticBlock` потерял последнего потребителя — зачищен этим же коммитом. Гейт `deploy/check-rust.ps1` — exit 0, ноль ошибок и предупреждений по всему workspace. Серверы и клиент не запускались, тесты не создавались.
+
+Открыто: war-финал countrymessage (`0x60317/0x60318` sync-структуры + dispatch-функции) остаётся следующей отдельной волной с правом править старый countrymessage — его полевые типы теперь уже realm. Также оценено: имён `CCountryWar`/`Declarat*` pubs в бинарнике нет (отчёты/контексты declaration — evidence-конструкты по `player_declare`/`is_already_declare`); «change_war_point» в Rust и pubs не существует (имени нет); `can_absolve` — принадлежит country-компоненту (вне линии).
+
 ## Рефакторинг: первая порция архитектурного прохода по аудиту transitional-слоёв, 26 сентября 2026
 
 По готовому архитектурному аудиту (недавний инвентарь transitional-слоёв, приложение разделов 1/4/5) исполнена первая безопасная порция — только compile-safe точечные изменения:
