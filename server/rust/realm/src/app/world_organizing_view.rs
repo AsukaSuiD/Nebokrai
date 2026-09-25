@@ -43,9 +43,10 @@ use crate::organizations::union::{
 };
 
 /// Точки обратного вызова handler-ветвей мира в organizing-владельца.
-/// Реализация живёт у старого `COrganizingCtrl` и делегирует его inherent-
-/// методам и `CFaction::talk`; отдельный трейт, а не `WorldGameView`,
-/// потому что organizing передаётся диспетчерам отдельным owner-параметром.
+/// Реализация живёт на realm `COrganizingCtrl` (`organizations/organizingctrl`)
+/// и делегирует его inherent-методам и `CFaction::talk`; отдельный трейт,
+/// а не `WorldGameView`, потому что organizing передаётся диспетчерам
+/// отдельным owner-параметром.
 pub trait WorldOrganizingView {
     fn is_free_player(&self, player_id: i32) -> FreePlayerLookup;
 

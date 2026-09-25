@@ -747,8 +747,8 @@ pub enum WorldCreateRoleOrganizingLookupBlock {
 }
 
 /// Узкий dyn-view живой таблицы организационных имён (фракции/союзы стран).
-/// Реализация делегирует `COrganizingCtrl::organizing_by_name(...).map(|m| m.is_some())`
-/// адаптером у dispatcher-а старого пакета; сам контроллер не переносится.
+/// Реализация на realm `COrganizingCtrl` (`organizations/organizingctrl`)
+/// делегирует `organizing_by_name(...).map(|m| m.is_some())`.
 pub trait WorldCreateRoleOrganizingView {
     fn name_exists(&self, name: &[u8]) -> Result<bool, WorldCreateRoleOrganizingLookupBlock>;
 }
@@ -778,8 +778,8 @@ pub trait WorldCreateRoleLaunchGate {
     ) -> Result<WorldCreateRoleLaunchSuccess, WorldCreateRoleLaunchFailure>;
 
     /// Занятость имени организацией: живой список фракций (`COrganizingCtrl`)
-    /// пока остаётся в старом пакете, dyn-заменитель `is_name_exit_in_faction`
-    /// сохраняет ту же линейку вызова без переноса самой таблицы.
+    /// в realm `organizations/organizingctrl`; dyn-заменитель
+    /// `is_name_exit_in_faction` сохраняет ту же линейку вызова.
     fn is_name_exit_in_faction(
         &mut self,
         organizing: &dyn WorldCreateRoleOrganizingView,

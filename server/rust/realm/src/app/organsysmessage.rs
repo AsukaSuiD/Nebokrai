@@ -4114,10 +4114,10 @@ where
 
 /// Причина остановки ветви `0x60103`: decode игрока из wire-хвоста, отказ
 /// середины создания фракции либо отказ/пропажа owner-а при refresh проекции
-/// faction-информации. Тип generic по `CreationBlock`, потому что конкретный
-/// block-перечислитель `finish_faction_creation` остаётся у старого
-/// `COrganizingCtrl`; старый пакет связывает параметр type-алиасом прежнего
-/// имени, форма вариантов не меняется.
+/// faction-информации. Конкретный block-перечислитель `FactionCreationBlock`
+/// живёт в realm `organizations/organizingctrl` вместе с
+/// `finish_faction_creation`; старый пакет связывает generic-параметр этим
+/// типом, форма вариантов не меняется.
 #[derive(Debug)]
 pub enum OrganizingCreateFactionDispatchBlock<CreationBlock> {
     PlayerDecode(PlayerCodecError),

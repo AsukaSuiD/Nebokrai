@@ -33,7 +33,7 @@ pub enum PlayerRankFactionLookup {
 }
 
 /// Узкая точка чтения фракции, нужная `CPlayerRanks::add_rank`.
-/// Реализация живёт у владельца организаций (старый `COrganizingCtrl`)
+/// Реализация живёт на realm `COrganizingCtrl` (`organizations/organizingctrl`)
 /// и делегирует его inherent-методам.
 pub trait PlayerRankOrganizingLookup {
     fn faction_lookup_of_player(&self, player_id: i32) -> PlayerRankFactionLookup;
