@@ -12,6 +12,11 @@
 //! Unserialize сначала wrapping увеличивает offset, читает ID, создаёт owner
 //! и делегирует virtual body; false удаляет созданный объект. Null stream даёт
 //! ноль без изменения offset, короткий input сохраняет уже выполненный сдвиг.
+//! В командном plug-цикле отказ любого plug-а валит unserialize всей сессии:
+//! созданная сессия уничтожается GC, а запись `team_id → session_id` в карте
+//! CGame не откатывается (зомби-запись оригинала, см. `unserialize_session`).
+//! Машинное основание таких особенностей — точная пара `Nworldserver.exe`
+//! (`F3AC454D…`) + `WorldServer.pdb` (RSDS match).
 
 use std::error::Error;
 use std::fmt;
@@ -346,6 +351,12 @@ impl CSessionFactory {
             .is_some()
     }
 
+    // Документированная граница (достижимость UNKNOWN, намеренно не чинить):
+    // в машине arm `0x60008` диспетчера игнорирует результат virtual Serialize
+    // (`0x4AB25A`, eax не тестируется) и отправляет `0x7FD08` даже с частично
+    // заполненным буфером; Rust при plug-miss / serialize == 0 не шлёт вовсе.
+    // Отказ здесь недостижим в перенесённых потоках — GC всегда идёт с unlink,
+    // поэтому plug-список сессии не содержит висячих ID; расхождение оставлено.
     pub fn serialize_team(&mut self, session_id: i32) -> Option<Vec<u8>> {
         let (mut output, plug_ids) = {
             let session = self.sessions.get_mut(session_id)?;
@@ -498,7 +509,18 @@ impl CSessionFactory {
                     .collect()
             })
             .unwrap_or_default();
-        if !plug_ids.contains(&plug_id) {
+        // Членство source в списке сессии моделирует сеансовый `QueryPlugByID`
+        // (`0x4DD910`) + RTTI-guard, которые `CTeam::OnPlugChangeState`
+        // (`0x4DE3C0`) применяет в ветвях state 0/1/2/6/8/9. State 5
+        // (`0x7FD0A`, SetAllocationScheme) — исключение: ветвь `0x4DE417`
+        // довольствуется base-guard `0x4DE3F2` → `CSession::OnPlugChangeState`
+        // (`0x4DD810`: только глобальный QueryPlug + IsPlugAvailable) и
+        // членства не требует, поэтому при числовом совпадении quirk-ового
+        // player leader ID с чужим plug ID машина доставляет; ниже guard
+        // global-exists + available сохраняется, exclusion по source map тоже.
+        // Машинное основание: точная пара `Nworldserver.exe` (`F3AC454D…`) +
+        // `WorldServer.pdb` (RSDS match).
+        if state != 5 && !plug_ids.contains(&plug_id) {
             return;
         }
         let Some(source) = self.plugs.get_mut(plug_id) else {
@@ -1000,9 +1022,33 @@ impl CSessionFactory {
         if unserialized != 0 {
             self.drain_session_effects(game, session_id);
             for _ in 0..plug_count {
-                let plug_id = self.unserialize_plug(Some(stream), offset)?;
+                let plug_id = match self.unserialize_plug(Some(stream), offset) {
+                    Ok(plug_id) => plug_id,
+                    Err(block) => {
+                        // Спутник отказа plug-а в bounded-окне короткого input
+                        // (машина читала бы unchecked): созданная сессия
+                        // разрушается тем же GC, что и при чистом отказе ниже;
+                        // частичная сессия в registry не остаётся.
+                        let _ = self.garbage_collect(TYPE_SESSION, session_id);
+                        return Err(block);
+                    }
+                };
                 if plug_id == 0 {
-                    break;
+                    // Машинный контракт (точная пара `Nworldserver.exe`
+                    // `F3AC454D…` + `WorldServer.pdb`): plug-цикл тела
+                    // `CTeam::Unserialize` (`0x4DE103-0x4DE12B`) при отказе
+                    // UnserializePlug — например чужой plug_type ≠ 5 — валит
+                    // весь unserialize: `test eax, eax; je` (`0x4DE10D-0x4DE10F`)
+                    // = return 0 из virtual body. UnserializeSession тогда
+                    // разрушает созданную сессию deleting dtor + hash erase
+                    // (`0x47C610-0x47C62F`) и возвращает 0; plug-и, вставленные
+                    // до отказа, погибают вместе с сессией. Запись
+                    // `team_id → session_id` в карте CGame НЕ откатывается:
+                    // Start/OnSessionStarted выполнен до plug-цикла (здесь —
+                    // дренирован выше), запись остаётся зомби навсегда.
+                    // Особенность оригинала, исправлять нельзя.
+                    let _ = self.garbage_collect(TYPE_SESSION, session_id);
+                    return Ok(0);
                 }
                 let _ = self.insert_plug(game, session_id, plug_id);
             }
