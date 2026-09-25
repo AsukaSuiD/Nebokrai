@@ -1,6 +1,10 @@
 //! Постройка CBuild (0x44C), её свойства, footprint и сериализация.
 //! Источник: gameserver.exe + GameServer.pdb, appserver/build.h/.cpp.
 //!
+//! Определения данных и скалярные правила перенесены в Zone
+//! `regions/build`; здесь переходный агрегат `CBuild` с прежними
+//! сигнатурами, реэкспорт семейства для старого пакета и evidence-блок.
+//!
 //! Единственный CMoveShape участвует в общем registry, поиске боевых целей
 //! и клиентском wire. Vec<u8>/Drop заменяют строку и служебное владение C++.
 //! BuildBlockUpdate применяет регион: постройка освобождает footprint при
@@ -14,62 +18,11 @@
 //! CBuild с одним аргументом: смерть проходит общий End/очистку состояний,
 //! а отсутствие CBaseAI не подменяется синхронным запуском OnDied/script.
 
-use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use super::moveshape::CMoveShape;
-use super::shape::{ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView};
+pub(crate) use nebokrai_zone::regions::build::*;
+
+use super::moveshape::{CMoveShape, SKILL_BASE_DEFENSE};
+use super::shape::{ShapeIdentity, ShapeView};
 use nebokrai_shared::values::CGuid;
-
-pub(crate) const BUILD_OBJECT_TYPE: u32 = 0x44C;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BuildInit {
-    pub(crate) id: i32,
-    pub(crate) graphics_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) direction: i32,
-    pub(crate) max_hp: i32,
-    pub(crate) defence: i32,
-    pub(crate) width_increment: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) height_increment: i32,
-    pub(crate) element_resistance: i32,
-    pub(crate) script: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BuildBlockUpdate {
-    pub(crate) region_id: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) width_increment: u8,
-    pub(crate) height_increment: u8,
-    pub(crate) block: u16,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BuildClientUpdate {
-    pub(crate) object_type: u32,
-    pub(crate) object_id: u32,
-    pub(crate) action: u16,
-    pub(crate) max_hp: u32,
-    pub(crate) hp: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BuildClientPublication {
-    pub(crate) region_id: i32,
-    pub(crate) build_id: i32,
-    pub(crate) update: BuildClientUpdate,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BuildDecodeError {
-    Shape(ShapeDecodeError),
-    Property(LegacyReadBlock),
-    Coordinate(ShapeCoordinateBlock),
-}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CBuild {
@@ -84,18 +37,16 @@ pub(crate) struct CBuild {
 }
 
 impl CBuild {
-    /// Создаёт локальное состояние уже успешно созданного factory type `0x44C`.
+    /// Создаёт локальное состояние уже успешно созданного factory type `0x44C`;
+    /// скалярный пайплайн init принадлежит общей операции Zone build.
     pub(crate) fn from_created(init: BuildInit) -> Self {
-        let direction = if (0..8).contains(&init.direction) {
-            init.direction
-        } else {
-            0
-        };
-        let tile_x = legacy_build_title_tile(init.tile_x);
-        let tile_y = legacy_build_title_tile(init.tile_y);
+        let direction = nebokrai_zone::regions::build::init_direction(init.direction);
+        let pos_x = nebokrai_zone::regions::build::init_center_coordinate(init.tile_x);
+        let pos_y = nebokrai_zone::regions::build::init_center_coordinate(init.tile_y);
         let mut move_shape = CMoveShape::default();
-        move_shape.insert_new_skill(1, 1);
-        move_shape.insert_new_skill(super::moveshape::SKILL_BASE_DEFENSE, 1);
+        nebokrai_zone::regions::build::register_base_skills(SKILL_BASE_DEFENSE, |skill_id, level| {
+            move_shape.insert_new_skill(skill_id, level);
+        });
         move_shape.shape_mut().set_identity(ShapeIdentity {
             object_type: BUILD_OBJECT_TYPE as i32,
             id: init.id,
@@ -110,9 +61,7 @@ impl CBuild {
             .base_object_mut()
             .set_name(&init.name);
         move_shape.shape_mut().set_region_id(init.region_id);
-        move_shape
-            .shape_mut()
-            .set_pos_xy_base(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        move_shape.shape_mut().set_pos_xy_base(pos_x, pos_y);
         move_shape.shape_mut().set_direction(direction);
         let mut build = Self {
             move_shape,
@@ -124,7 +73,7 @@ impl CBuild {
             element_resistance: init.element_resistance as u32,
             script: Vec::new(),
         };
-        if !init.script.is_empty() && init.script != b"0" {
+        if nebokrai_zone::regions::build::init_script_uses_file(&init.script) {
             build.set_script_file(init.script);
         }
         build
@@ -134,21 +83,21 @@ impl CBuild {
         self.script = script;
     }
 
-    /// При неизменившемся action оригинал не менял change-state и карту.
+    /// При неизменившемся action оригинал не менял change-state и карту;
+    /// решение и block-эффект принадлежат общей операции Zone build.
     pub(crate) fn set_action(&mut self, action: u16) -> Option<BuildBlockUpdate> {
-        if self.action() == action {
-            return None;
-        }
+        let update = nebokrai_zone::regions::build::decide_set_action_update(
+            self.action(),
+            action,
+            self.region_id(),
+            self.tile_x(),
+            self.tile_y(),
+            self.width_increment,
+            self.height_increment,
+        )?;
         self.move_shape.shape_mut().set_change_state(0);
         self.move_shape.shape_mut().set_action(action);
-        Some(BuildBlockUpdate {
-            region_id: self.region_id(),
-            tile_x: self.tile_x(),
-            tile_y: self.tile_y(),
-            width_increment: self.width_increment as u8,
-            height_increment: self.height_increment as u8,
-            block: if action == 6 { 0 } else { 3 },
-        })
+        Some(update)
     }
 
     pub(crate) fn set_hp(&mut self, hp: u32) {
@@ -163,17 +112,17 @@ impl CBuild {
         &self,
         region_allows: impl FnOnce() -> bool,
     ) -> bool {
-        self.action() != 6 && self.hp != 0 && region_allows()
+        nebokrai_zone::regions::build::is_attackable_in_region(self.action(), self.hp, region_allows)
     }
 
     /// Стадия `ApplyFinalDamage` меняет только HP. Смертельные callbacks и
     /// packet выполняются раньше отдельного virtual `SetAction(6)`.
     pub(crate) fn apply_combat_damage(&mut self, damage: u32) {
-        self.hp = self.hp.saturating_sub(damage);
+        nebokrai_zone::regions::build::apply_combat_damage(&mut self.hp, damage);
     }
 
     pub(crate) fn refresh_hp(&mut self) {
-        self.set_hp(self.max_hp);
+        nebokrai_zone::regions::build::refresh_hp(&mut self.hp, self.max_hp);
     }
 
     pub(crate) const fn hp(&self) -> u32 {
@@ -238,12 +187,10 @@ impl CBuild {
             tile_y: self.tile_y(),
             pos_x_bits: shape.get_pos_x().to_bits(),
             pos_y_bits: shape.get_pos_y().to_bits(),
-            figure: ShapeFigure::from_directions([
-                self.height_increment as u8,
-                self.height_increment as u8,
-                self.width_increment as u8,
-                self.width_increment as u8,
-            ]),
+            figure: nebokrai_zone::regions::build::figure_from_increments(
+                self.width_increment,
+                self.height_increment,
+            ),
         }
     }
 
@@ -261,18 +208,18 @@ impl CBuild {
     }
 
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
-        BuildBlockUpdate {
-            region_id: self.region_id(),
-            tile_x: self.tile_x(),
-            tile_y: self.tile_y(),
-            width_increment: self.width_increment as u8,
-            height_increment: self.height_increment as u8,
-            block: if self.action() == 6 { 0 } else { 3 },
-        }
+        nebokrai_zone::regions::build::block_snapshot(
+            self.action(),
+            self.region_id(),
+            self.tile_x(),
+            self.tile_y(),
+            self.width_increment,
+            self.height_increment,
+        )
     }
 
     /// Exact `CBuild::AddToByteArray`: общий current-state serializer
-    /// `CMoveShape`, затем непрерывный 0x18-byte `m_Property` и WORD action.
+    /// `CMoveShape`, затем общий 0x18-byte + WORD property-хвост Zone build.
     pub(crate) fn encode_client_snapshot(
         &self,
         include_child: bool,
@@ -283,20 +230,24 @@ impl CBuild {
             self.hp == 0,
             timed_state_now_milliseconds,
         )?;
-        let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u32(self.hp);
-        writer.write_u32(self.max_hp);
-        writer.write_u32(self.defence);
-        writer.write_i32(self.width_increment);
-        writer.write_i32(self.height_increment);
-        writer.write_u32(self.element_resistance);
-        writer.write_u16(self.action());
+        nebokrai_zone::regions::build::encode_client_property(
+            &mut payload,
+            BuildProperties {
+                hp: self.hp,
+                max_hp: self.max_hp,
+                defence: self.defence,
+                width_increment: self.width_increment,
+                height_increment: self.height_increment,
+                element_resistance: self.element_resistance,
+            },
+            self.action(),
+        );
         Some(payload)
     }
 
     /// Exact `CBuild::DecordFromByteArray`: base owner вызывает `CShape`, а
-    /// не `CMoveShape` decoder, затем копирует шесть little-endian DWORD из
-    /// непрерывного 0x18-byte `m_Property`.
+    /// не `CMoveShape` decoder, затем общий 0x18-byte property-хвост Zone
+    /// build; запись колонок и commit cursor идут после coordinate validation.
     pub(crate) fn decode_from_byte_array(
         &mut self,
         source: &[u8],
@@ -307,13 +258,9 @@ impl CBuild {
             .shape_mut()
             .decode_from_byte_array(source, cursor, include_child)
             .map_err(BuildDecodeError::Shape)?;
-        let mut reader = LegacyReader::at(source, *cursor).map_err(BuildDecodeError::Property)?;
-        let hp = reader.read_u32().map_err(BuildDecodeError::Property)?;
-        let max_hp = reader.read_u32().map_err(BuildDecodeError::Property)?;
-        let defence = reader.read_u32().map_err(BuildDecodeError::Property)?;
-        let width_increment = reader.read_i32().map_err(BuildDecodeError::Property)?;
-        let height_increment = reader.read_i32().map_err(BuildDecodeError::Property)?;
-        let element_resistance = reader.read_u32().map_err(BuildDecodeError::Property)?;
+        let (properties, position) =
+            nebokrai_zone::regions::build::decode_client_property(source, *cursor)
+                .map_err(BuildDecodeError::Property)?;
         self
             .move_shape
             .shape()
@@ -325,26 +272,14 @@ impl CBuild {
             .get_tile_y()
             .map_err(BuildDecodeError::Coordinate)?;
 
-        *cursor = reader.position();
-        self.hp = hp;
-        self.max_hp = max_hp;
-        self.defence = defence;
-        self.width_increment = width_increment;
-        self.height_increment = height_increment;
-        self.element_resistance = element_resistance;
+        *cursor = position;
+        self.hp = properties.hp;
+        self.max_hp = properties.max_hp;
+        self.defence = properties.defence;
+        self.width_increment = properties.width_increment;
+        self.height_increment = properties.height_increment;
+        self.element_resistance = properties.element_resistance;
         Ok(())
-    }
-}
-
-pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
-    // VERIFIED_DISASSEMBLY RVA 0x001DD2B0: `fild i32 -> fstp f32 ->
-    // fld f32 -> fistp i32` под truncation control word. Округлённое вверх
-    // `i32::MAX` становится x87 integer-indefinite `0x80000000`.
-    let stored_float = value as f32;
-    if stored_float >= 2_147_483_648.0_f32 {
-        i32::MIN
-    } else {
-        stored_float as i32
     }
 }
 

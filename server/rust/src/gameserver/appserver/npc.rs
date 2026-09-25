@@ -1,4 +1,5 @@
-//! Concrete `CNpc` исторического GameServer.
+//! Concrete `CNpc` исторического GameServer — переходный агрегат с полем
+//! `CMoveShape`.
 //!
 //! Источник: `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходный
 //! owner `server/gameserver/appserver/npc.h/.cpp`. Constructor создаёт
@@ -8,6 +9,12 @@
 //! `LossHP` всегда возвращает ноль; decoder ничего не читает и возвращает true.
 //! `Vec`/`Drop` заменяют SSO/destructor без дополнительного поведения.
 //!
+//! Data-профиль конструктора и scalar-правила (script-колонка, lifetime
+//! predicate, `LossHP`, decoder, shape-проекция и movement-факты) перенесены
+//! в Zone `regions/npc.rs`; машинное основание и статусы подтверждения
+//! зафиксированы в его верхнем комментарии. Методы ниже делегируют туда без
+//! изменения сигнатур; нематериальные accessor-ы полей остаются здесь.
+//!
 //! `Talk` формирует `0xBF801` и выбирает игроков из девяти соседних area, после
 //! чего применяет строгий coordinate-filter `abs(dx) < AREA_WIDTH` и
 //! `abs(dy) < AREA_HEIGHT`; storage traversal и доставка остаются у `CGame`.
@@ -16,10 +23,9 @@
 //! префиксом и не добавляет NPC-specific полей.
 
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
-use super::shape::{ShapeFigure, ShapeView};
+use super::shape::ShapeView;
 use crate::nets::netserver::message::CMessage;
-
-const NPC_TYPE: i32 = 500;
+use nebokrai_zone::regions::npc;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CNpc {
@@ -33,13 +39,16 @@ pub(crate) struct CNpc {
 impl CNpc {
     pub(crate) fn with_constructor_defaults() -> Self {
         let mut move_shape = CMoveShape::default();
-        move_shape.shape_mut().base_object_mut().set_type(NPC_TYPE);
+        move_shape
+            .shape_mut()
+            .base_object_mut()
+            .set_type(npc::NPC_CONSTRUCTOR_PROFILE.object_type);
         Self {
             move_shape,
             script_file: Vec::new(),
-            show_list: true,
-            live_time_ms: None,
-            born_time_ms: None,
+            show_list: npc::NPC_CONSTRUCTOR_PROFILE.show_list,
+            live_time_ms: npc::NPC_CONSTRUCTOR_PROFILE.live_time_ms,
+            born_time_ms: npc::NPC_CONSTRUCTOR_PROFILE.born_time_ms,
         }
     }
 
@@ -60,13 +69,7 @@ impl CNpc {
     }
 
     pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {
-        let prefix_len = script_file
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(script_file.len());
-        self.script_file.clear();
-        self.script_file
-            .extend_from_slice(&script_file[..prefix_len]);
+        npc::set_script_file(&mut self.script_file, script_file);
     }
 
     pub(crate) fn script_file(&self) -> &[u8] {
@@ -74,15 +77,7 @@ impl CNpc {
     }
 
     pub(crate) fn shape_view(&self) -> Option<ShapeView> {
-        let shape = self.move_shape.shape();
-        Some(ShapeView {
-            identity: shape.identity(),
-            tile_x: shape.get_tile_x().ok()?,
-            tile_y: shape.get_tile_y().ok()?,
-            pos_x_bits: shape.get_pos_x().to_bits(),
-            pos_y_bits: shape.get_pos_y().to_bits(),
-            figure: ShapeFigure::default(),
-        })
+        npc::shape_view(self.move_shape.shape())
     }
 
     /// Формирует точный `CNpc::Talk`/script `3301` кадр. Переданное сценарием
@@ -113,13 +108,7 @@ impl CNpc {
         area_width: i32,
         area_height: i32,
     ) -> MoveShapePositionFacts {
-        MoveShapePositionFacts {
-            current_hit_points: 0,
-            figure: ShapeFigure::default(),
-            current_area: None,
-            area_width,
-            area_height,
-        }
+        npc::movement_position_facts(area_width, area_height)
     }
 
     pub(crate) const fn set_show_list(&mut self, show_list: bool) {
@@ -147,17 +136,12 @@ impl CNpc {
     }
 
     pub(crate) const fn lifetime_expired(&self, now_ms: u32) -> bool {
-        match (self.live_time_ms, self.born_time_ms) {
-            (Some(live_time), Some(born_time)) if live_time != 0 => {
-                live_time < now_ms.wrapping_sub(born_time)
-            }
-            _ => false,
-        }
+        npc::lifetime_expired(self.live_time_ms, self.born_time_ms, now_ms)
     }
 
     /// Exact virtual `LossHP`: NPC не получает урон через combat-chain.
     pub(crate) const fn loss_hp(&mut self, _amount: i32, _source: Option<&CMoveShape>) -> u16 {
-        0
+        npc::loss_hp(_amount)
     }
 
     pub(crate) const fn decord_from_byte_array(
@@ -166,6 +150,6 @@ impl CNpc {
         _cursor: &mut usize,
         _include_child: bool,
     ) -> bool {
-        true
+        npc::decord_from_byte_array()
     }
 }

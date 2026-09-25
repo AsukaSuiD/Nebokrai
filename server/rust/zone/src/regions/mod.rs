@@ -1,15 +1,17 @@
 //! Идентичность фигур, используемая живыми компонентами Zone.
 
-pub mod area;
-pub mod baseobject;
-mod identity;
-pub mod monster;
-pub mod moveshape;
-pub mod proxyserverregion;
-pub mod region;
-pub mod regionparam;
-pub mod serverregion;
-pub mod shape;
-pub mod summonedcreature;
+pub mod area; // CArea: storage-часть ячеек области.
+pub mod baseobject; // CBaseObject: базовая идентичность type/ID/GUID и имя объекта.
+pub mod build; // CBuild: data-семья и скалярные правила постройки.
+mod identity; // ShapeIdentity: локальная игровая ссылка type/ID/GUID.
+pub mod monster; // CMonster: скалярная база и правила монстра (script/tame/pet, защита первого удара).
+pub mod moveshape; // CMoveShape: пространственное ядро и скалярные колонки (запреты, направления, питомцы).
+pub mod npc; // CNpc: data-профиль и скалярные правила NPC.
+pub mod proxyserverregion; // CProxyServerRegion: proxy-регион GameServer.
+pub mod region; // CRegion: spatial/persistence поверхность региона.
+pub mod regionparam; // tagRegionParam: wire-проекция налогов и владения городом.
+pub mod serverregion; // CServerRegion: data-типы и позиционное ядро региона.
+pub mod shape; // CShape: spatial/membership-часть и геометрия фигуры.
+pub mod summonedcreature; // CSummonedCreature: жизненный цикл призванного монстра.
 
 pub use identity::ShapeIdentity;
