@@ -16916,6 +16916,36 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::exit_team_player(self, factory, session_id, owner_type, owner_id)
     }
 
+    fn is_name_exist_in_map_player(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError> {
+        CGame::is_name_exist_in_map_player(self, name)
+    }
+
+    fn is_name_exist_in_db_creation(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError> {
+        CGame::is_name_exist_in_db_creation(self, name)
+    }
+
+    fn is_name_exist_in_db_data(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError> {
+        CGame::is_name_exist_in_db_data(self, name)
+    }
+
+    fn check_create_role_name(
+        &self,
+        name: &mut Vec<u8>,
+        allow_short: bool,
+        apply_filter: bool,
+    ) -> bool {
+        CGame::check_create_role_name(self, name, allow_short, apply_filter)
+    }
+
+    fn allocate_player_id(&mut self) -> i32 {
+        CGame::allocate_player_id(self)
+    }
+
+    fn creation_player_by_name(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError> {
+        CGame::creation_player_by_name(self, name).map(|found| found.is_some())
+    }
+
+
     fn replace_online_player_silience_time(
         &mut self,
         player_id: u32,

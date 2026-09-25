@@ -214,9 +214,31 @@ pub trait WorldGameView {
 
     fn online_player_route_by_account(&self, account: &[u8]) -> Option<WorldOnlineAccountPlayerRoute>;
 
-    /// Исполнение session-id variant для команды нетронутой формы owner.
-    /// Оборачивает соединение world entry-points и широкий коннектор
-    /// contants SCSessionFactory-type-order списков host.
+    /// Проверки обработчика `create_role`: занятость имени в live-карте и в
+    /// двух слоях загруженных DB-данных. Реализации делегируют одноимённым
+    /// inherent-методам владельца игры; порядок вызовов остаётся у обработчика.
+    fn is_name_exist_in_map_player(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError>;
+
+    fn is_name_exist_in_db_creation(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError>;
+
+    fn is_name_exist_in_db_data(&self, name: &[u8]) -> Result<bool, WorldPlayerNameLookupError>;
+
+    fn check_create_role_name(
+        &self,
+        name: &mut Vec<u8>,
+        allow_short: bool,
+        apply_filter: bool,
+    ) -> bool;
+
+    fn allocate_player_id(&mut self) -> i32;
+
+    /// Занятость имени игроком в стадии создания: свёртка `Option<&CPlayer>`
+    /// inherent-результата в предикат, как делает сам обработчик.
+    fn creation_player_by_name(
+        &self,
+        name: &[u8],
+    ) -> Result<bool, WorldPlayerNameLookupError>;
+
     fn exit_team_player(
         &mut self,
         factory: &mut CSessionFactory,
