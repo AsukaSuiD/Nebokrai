@@ -1,13 +1,23 @@
-//! Окна целей и клиентские поля областей CGodThunderPhalanx/CGodThunderPhalanx2.
+//! Окна целей, клиентские поля и живая форма областей
+//! CGodThunderPhalanx/CGodThunderPhalanx2.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
 //! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
 //! Конструкторы VA 0x005F5B50/0x005EF190, Initialize 0x005F59C0/0x005EEF30,
 //! общий AddToByteArray 0x005EF0C0, AI 0x005F6150/0x005EF6B0,
 //! Summon 0x00573840/0x00553A80 (appserver/skills/godthunder{,2}.cpp).
+//! Композит `CGodThunderPhalanx` (CShape + область) перенесён из старого
+//! адаптера буквально порцией замыкания; новых машинных оснований он не
+//! добавляет. Для server decode VA 0x005F5D90 подтверждённого вызывающего
+//! пути оригинала нет (UNKNOWN), decoder не переносится.
 
 use nebokrai_shared::protocol::LegacyWriter;
+use nebokrai_shared::values::CGuid;
+use crate::combat::MasterInfo;
 use crate::effects::timed_client_state_time;
+use crate::regions::ShapeIdentity;
+use crate::regions::shape::CShape;
+use super::summonshape::SUMMON_SHAPE_TYPE;
 use super::{ElementPhalanxAttack, ElementSummonLiveField};
 
 pub const GOD_THUNDER_SKILL_ID: u32 = 0x140;
@@ -174,5 +184,63 @@ impl GodThunderPhalanx {
             writer.write_i32(x);
             writer.write_i32(y);
         }
+    }
+}
+
+/// Живая форма областей GodThunder/GodThunder2: связка CShape и области
+/// окон. Состав и порядок соответствуют адаптеру старого пакета.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CGodThunderPhalanx {
+    shape: CShape,
+    area: GodThunderPhalanx,
+}
+
+impl CGodThunderPhalanx {
+    pub fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32,
+        parameters: GodThunderSummonParameters,
+    ) -> Result<Self, GodThunderParametersError> {
+        let area = GodThunderPhalanx::new(
+            ElementPhalanxAttack {
+                master, skill_id: parameters.skill_id, skill_level: parameters.skill_level,
+                minimum: parameters.minimum_attack, maximum: parameters.maximum_attack,
+                element: parameters.element_attack, critical_chance: parameters.critical_chance,
+            },
+            started_at_ms, parameters.lifetime_ms, parameters.frequency_ms,
+            parameters.target_count,
+        )?;
+        let mut shape = CShape::with_constructor_defaults();
+        shape.set_identity(ShapeIdentity {
+            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
+        });
+        Ok(Self { shape, area })
+    }
+
+    pub const fn shape(&self) -> &CShape { &self.shape }
+    pub const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub const fn master(&self) -> MasterInfo { self.area.attack_snapshot().master }
+    pub const fn attack_snapshot(&self) -> ElementPhalanxAttack {
+        self.area.attack_snapshot()
+    }
+    pub const fn has_war_soul_pass(&self) -> bool { self.area.has_war_soul_pass() }
+    pub const fn scope_area(&self) -> u32 { self.area.scope_area() }
+
+    pub fn initialize(&mut self, random: &mut dyn FnMut(i32) -> i32) {
+        let center = (self.shape.get_tile_x().unwrap_or(i32::MIN),
+            self.shape.get_tile_y().unwrap_or(i32::MIN));
+        self.area.initialize(center, random);
+    }
+    pub const fn expired_at(&self, now: u32) -> bool { self.area.expired_at(now) }
+    pub const fn attack_due_at(&self, now: u32) -> bool { self.area.attack_due_at(now) }
+    pub fn mark_attack_at(&mut self, now: u32) { self.area.mark_attack_at(now); }
+    pub fn advance_attack_window(&mut self) { self.area.advance_attack_window(); }
+    pub fn current_cell(&self, index: u32) -> Option<(i32, i32)> {
+        self.area.current_cell(index)
+    }
+
+    pub fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        let mut payload = Vec::new();
+        self.area.write_client_snapshot_fields(&mut payload, now);
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }

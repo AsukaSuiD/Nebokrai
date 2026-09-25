@@ -5,7 +5,9 @@
 //! wire-конверт снимков семейства перенесены в
 //! `nebokrai_zone::skills::summonshape`; здесь временно остаются enum
 //! `SummonedSkillShape` с диспетчеризацией shape/master/снимка (уходит с
-//! per-phalanx порциями) и счётчик `NextSummonShapeId`. Счётчик принадлежит
+//! per-phalanx порциями; ветви ChaosSphere, GodThunder, MaskedElement,
+//! GodPunishment и FireBall уже оканчиваются в zone-владельцах) и счётчик
+//! `NextSummonShapeId`. Счётчик принадлежит
 //! `CGame`, а не региону, поэтому смена региона не создаёт повторные
 //! устаревшие ID.
 //! Общие ForceMove и End подключены через game/summonshape: живой регион,

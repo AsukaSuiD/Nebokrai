@@ -1,13 +1,20 @@
-//! Движущаяся область CChaosSpherePhalanx.
+//! Движущаяся область CChaosSpherePhalanx и её живая форма.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! EXE SHA-256 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E,
 //! PDB SHA-256 B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016.
 //! Summon VA 0x005A8290, ctor VA 0x005FEE80, AddToByteArray VA 0x005FECB0,
 //! AI VA 0x005FF270 (appserver/skills/chaossphere.cpp и chaosspherephalanx.cpp/.h).
+//! Композит `CChaosSpherePhalanx` (CShape + область) перенесён из старого
+//! адаптера буквально порцией замыкания; новых машинных оснований он не
+//! добавляет.
 
 use nebokrai_shared::protocol::LegacyWriter;
+use nebokrai_shared::values::CGuid;
+use crate::combat::{MasterInfo, truncate_original};
 use crate::effects::timed_client_state_time;
-use crate::combat::truncate_original;
+use crate::regions::ShapeIdentity;
+use crate::regions::shape::CShape;
+use super::summonshape::SUMMON_SHAPE_TYPE;
 use super::{ElementPhalanxAttack, ElementSummonLiveField};
 
 pub const CHAOS_SPHERE_SKILL_ID: u32 = 0x137;
@@ -128,5 +135,58 @@ impl ChaosSpherePhalanx {
         writer.write_i32(self.attack.master.master_type);
         writer.write_i32(self.attack.master.master_id);
         writer.write_u32(timed_client_state_time(self.started_at_ms, self.lifetime_ms, now));
+    }
+}
+
+/// Живая форма сферы хаоса: связка CShape и движущейся области; скорость
+/// кладётся в форму, остальное читают область и клиентский конверт.
+/// Состав и порядок соответствуют адаптеру старого пакета.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CChaosSpherePhalanx {
+    shape: CShape,
+    area: ChaosSpherePhalanx,
+}
+
+impl CChaosSpherePhalanx {
+    pub fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32,
+        parameters: ChaosSphereSummonParameters, path: Vec<(i32, i32)>,
+    ) -> Self {
+        let mut shape = CShape::with_constructor_defaults();
+        shape.set_identity(ShapeIdentity {
+            object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID,
+        });
+        shape.set_speed((parameters.speed_ms as i32) as f32);
+        let attack = ElementPhalanxAttack {
+            master, skill_id: CHAOS_SPHERE_SKILL_ID, skill_level: parameters.skill_level,
+            minimum: parameters.minimum_attack, maximum: parameters.maximum_attack,
+            element: parameters.element_attack, critical_chance: parameters.critical_chance,
+        };
+        let area = ChaosSpherePhalanx::new(
+            attack, started_at_ms, parameters.lifetime_ms,
+            parameters.frequency_ms, path, parameters.speed_ms,
+        );
+        Self { shape, area }
+    }
+
+    pub const fn shape(&self) -> &CShape { &self.shape }
+    pub const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub const fn master(&self) -> MasterInfo { self.area.master() }
+    pub const fn attack_snapshot(&self) -> ElementPhalanxAttack { self.area.attack_snapshot() }
+    pub const fn expired_at(&self, now: u32) -> bool { self.area.expired_at(now) }
+    pub fn has_path(&self) -> bool { self.area.has_path() }
+    pub fn initial_force_move(&self) -> Option<(i32, i32, u32)> {
+        self.area.initial_force_move()
+    }
+    pub fn mark_force_moved_at(&mut self, now: u32) { self.area.mark_force_moved_at(now); }
+    pub const fn movement_due_at(&self, now: u32) -> bool { self.area.movement_due_at(now) }
+    pub fn advance_at(&mut self, now: u32) { self.area.advance_at(now); }
+    pub const fn attack_due_at(&self, now: u32) -> bool { self.area.attack_due_at(now) }
+    pub fn mark_attack_at(&mut self, now: u32) { self.area.mark_attack_at(now); }
+    pub fn attack_origin(&self) -> Option<(i32, i32)> { self.area.attack_origin() }
+    pub fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        let mut payload = Vec::new();
+        self.area.write_client_snapshot_fields(&mut payload, now);
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }

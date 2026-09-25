@@ -1,9 +1,19 @@
-//! Маска неподвижных областей FireWall и YinYang.
+//! Маска и живая форма неподвижных областей FireWall и YinYang.
 //! Источник: GameServer/gameserver.exe + GameServer/GameServer.pdb,
 //! appserver/skills/firewallphalanx.cpp и yinyangphalanx{,2}.cpp.
 //! ReplaceAffectRegion VA 0x005FFCD0, 0x005FE270, 0x005F2190;
 //! CScope::SetInScope VA 0x005E9990. AI FireWall VA 0x006003E0,
 //! YinYang VA 0x005FE9A0 и YinYang2 VA 0x005F28C0.
+//! Композит `MaskedElementPhalanx` (CShape + снимок атаки + маска) перенесён
+//! из старого адаптера буквально порцией замыкания; новых машинных оснований
+//! он не добавляет.
+
+use nebokrai_shared::values::CGuid;
+use crate::combat::MasterInfo;
+use crate::regions::ShapeIdentity;
+use crate::regions::shape::CShape;
+use super::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
+use super::ElementPhalanxAttack;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MaskedAreaPulse {
@@ -81,5 +91,73 @@ impl MaskedArea {
     pub fn cell_active(&self, x: i32, y: i32) -> bool {
         self.cells.get(y.wrapping_mul(self.length).wrapping_add(x) as usize)
             .copied().unwrap_or(false)
+    }
+}
+
+/// Живая форма неподвижных масочных областей огненной стены и инь-ян:
+/// связка CShape, снимка атаки и маски. Стена повторяет окно по трём чтениям
+/// часов, инь-ян поражает при истечении срока и завершается после обхода.
+/// Replace транспонирует координаты записи, AI читает обычный X/Y.
+/// Состав и порядок соответствуют адаптеру старого пакета.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaskedElementPhalanx {
+    shape: CShape,
+    attack: ElementPhalanxAttack,
+    scope: MaskedArea,
+}
+
+impl MaskedElementPhalanx {
+    pub fn new(
+        id: i32, attack: ElementPhalanxAttack, started_at_ms: u32, lifetime_ms: u32,
+        pulse: MaskedAreaPulse, mask: (i32, i32, &[bool]),
+    ) -> Self {
+        let mut shape = CShape::with_constructor_defaults();
+        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
+        Self { shape, attack,
+            scope: MaskedArea::new(started_at_ms, lifetime_ms, pulse, mask) }
+    }
+
+    pub const fn shape(&self) -> &CShape { &self.shape }
+    pub const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub const fn master(&self) -> MasterInfo { self.attack.master }
+    pub const fn skill_id(&self) -> u32 { self.attack.skill_id }
+    pub const fn attack_snapshot(&self) -> ElementPhalanxAttack { self.attack }
+    pub const fn dimensions(&self) -> (i32, i32) { self.scope.dimensions() }
+    pub const fn is_periodic(&self) -> bool { self.scope.is_periodic() }
+    pub const fn expired_at(&self, now: u32) -> bool {
+        self.scope.expired_at(now)
+    }
+    pub const fn attack_due_at(&self, now: u32) -> bool {
+        self.scope.attack_due_at(now)
+    }
+    pub fn mark_attack_at(&mut self, now: u32) {
+        self.scope.mark_attack_at(now);
+    }
+
+    pub fn origin(&self) -> (i32, i32) {
+        let x = self.shape.get_tile_x().unwrap_or(i32::MIN);
+        let y = self.shape.get_tile_y().unwrap_or(i32::MIN);
+        self.scope.origin((x, y))
+    }
+
+    pub fn replace_affect_region(&mut self, level: i32, tile_x: i32, tile_y: i32) {
+        let incoming = if self.is_periodic() {
+            super::firewall::fire_wall_scope(level)
+        } else { super::yinyang::yin_yang_scope(self.skill_id()) };
+        let center = (self.shape.get_tile_x().unwrap_or(i32::MIN),
+            self.shape.get_tile_y().unwrap_or(i32::MIN));
+        self.scope.replace_affect_region(center, (tile_x, tile_y), incoming);
+    }
+
+    pub fn cell_active(&self, x: i32, y: i32) -> bool {
+        self.scope.cell_active(x, y)
+    }
+
+    pub fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        encode_related_phalanx_snapshot(
+            &self.shape, self.skill_id() as i32, self.attack.skill_level,
+            self.master().master_type, self.master().master_id,
+            self.scope.started_at_ms(), self.scope.lifetime_ms(), now,
+        )
     }
 }

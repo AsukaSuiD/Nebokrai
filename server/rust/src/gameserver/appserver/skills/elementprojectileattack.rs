@@ -36,6 +36,12 @@ impl ElementProjectileAttack {
         }
     }
 
+    /// Снимок живой формы приходит из zone-композита; live-разрешение полей
+    /// источника и доставка контакта остаются здесь.
+    pub(super) const fn from_rule(rule: ElementProjectileAttackRule) -> Self {
+        Self { rule }
+    }
+
     pub(crate) const fn master(self) -> MasterInfo { self.rule.master }
     pub(super) const fn skill_level(self) -> i32 { self.rule.skill_level }
 

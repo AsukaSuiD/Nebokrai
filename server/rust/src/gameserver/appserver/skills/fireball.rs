@@ -10,7 +10,7 @@
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, ServerRegionOwner};
 
-pub(crate) const FIRE_BALL_SKILL_ID: u32 = 0x13d;
+pub(crate) use nebokrai_zone::skills::FIRE_BALL_SKILL_ID;
 
 pub(crate) fn execute_owned_monster_fire_ball<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, owner: &mut Option<ServerRegionOwner>, monster_id: i32,

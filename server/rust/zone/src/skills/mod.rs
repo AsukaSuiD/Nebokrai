@@ -1,7 +1,7 @@
 //! Данные живых навыков Zone, которыми временно управляет прежний Game.
 
 mod battlefairy; // правила навыков боевого духа (сброс, стоимость, запись).
-mod chaossphere; // движущаяся область CChaosSpherePhalanx.
+mod chaossphere; // движущаяся область CChaosSpherePhalanx и её живая форма.
 mod cure; // числовое правило и выбор снимаемых состояний CCure.
 mod daubpoison; // числовое правило смазки оружия ядом CDaubPoison.
 mod directelement; // числовой расчёт прямых элементальных ударов.
@@ -14,13 +14,13 @@ pub mod execution;
 mod firewall; // правила призыва и маска области CFireWall.
 mod fury; // ID состояний, которые Fury снимает перед созданием.
 mod godbless; // параметры CGodBless/CGodBless2 при создании состояния.
-mod godthunder; // окна целей и клиентские поля областей CGodThunderPhalanx/CGodThunderPhalanx2.
+mod godthunder; // окна целей, клиентские поля областей GodThunder/GodThunder2 и живая форма CGodThunderPhalanx.
 mod hearten; // параметры нового состояния CHearten.
 mod lifecycle; // база и стадии живого навыка.
-mod masked_area; // маска неподвижных областей FireWall и YinYang.
+mod masked_area; // маска неподвижных областей FireWall и YinYang и живая форма MaskedElementPhalanx.
 mod pillar; // параметры создаваемой стойки CPillar.
 mod poisonfog; // данные живой области CPoisonFogPhalanx.
-mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall и общий серверный decoder.
+mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall, общий серверный decoder и живые композиты FireBall и GodPunishment.
 mod roar; // границы обхода клеток CRoar.
 pub mod skillfactory; // фабричные владельцы и реестр runtime-свойств навыков.
 mod snowstorm; // данные области CSnowStormPhalanx и окна выбранных клеток.
@@ -55,14 +55,14 @@ pub use spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistPhalanx, SpiderMistPhalanxT
 pub use snowstorm::{SNOW_STORM_SKILL_ID, SNOW_STORM_SCOPE_AREA, SnowStormAttack,
     SnowStormParametersError, SnowStormPhalanx, SnowStormSummonParameters};
 pub use firewall::{FIRE_WALL_SKILL_ID, FireWallSummonParameters, fire_wall_scope};
-pub use masked_area::{MaskedArea, MaskedAreaPulse};
+pub use masked_area::{MaskedArea, MaskedAreaPulse, MaskedElementPhalanx};
 pub use yinyang::{YIN_YANG_SKILL_ID, YIN_YANG_2_SKILL_ID,
     YinYangSummonParameters, yin_yang_scope};
 pub use elementphalanx::{ElementPhalanxAttack, ElementSummonLiveField};
-pub use godthunder::{GOD_THUNDER_SKILL_ID, GOD_THUNDER_2_SKILL_ID,
+pub use godthunder::{CGodThunderPhalanx, GOD_THUNDER_SKILL_ID, GOD_THUNDER_2_SKILL_ID,
     ROUNDED_THUNDER_SCOPE, ROUNDED_THUNDER_SCOPE_SIDE,
     GodThunderParametersError, GodThunderPhalanx, GodThunderSummonParameters};
-pub use chaossphere::{CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
+pub use chaossphere::{CChaosSpherePhalanx, CHAOS_SPHERE_SKILL_ID, ChaosSpherePhalanx,
     ChaosSphereSummonParameters, chaos_sphere_path_length};
 pub use soulmirror::{SOUL_MIRROR_SKILL_ID, SoulMirrorArea, SoulMirrorSummonParameters,
     soul_mirror_scope_size, soul_mirror_scope_cell};
@@ -78,6 +78,8 @@ pub use directelement::{DirectElementProfile, DirectElementLiveField};
 pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,
     encode_related_phalanx_snapshot, next_summon_shape_id};
 pub use projectile::{ARCHERY_HIT_MODIFIER_PROPERTY, ArcheryProjectileAttack,
-    ArcheryProjectileLiveField, BaseProjectileFlight, ElementProjectileAttack,
-    ElementProjectileLiveField, FireBallPath,
+    ArcheryProjectileLiveField, BaseProjectileFlight, CFireBallPhalanx,
+    CGodPunishmentPhalanx, ElementProjectileAttack,
+    ElementProjectileLiveField, FIRE_BALL_SKILL_ID, FireBallPath,
+    GOD_PUNISHMENT_SKILL_ID,
     ProjectileServerSnapshotPrefix, SoulProjectileAmplification};

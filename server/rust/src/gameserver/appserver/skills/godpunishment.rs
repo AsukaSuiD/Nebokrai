@@ -45,7 +45,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::public::tools::get_line_direction;
 
-pub(crate) const GOD_PUNISHMENT_SKILL_ID: u32 = 0x13a;
+pub(crate) use nebokrai_zone::skills::GOD_PUNISHMENT_SKILL_ID;
 
 fn summon<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, instance: RegisteredSkill, source: (i32, ShapeIdentity),

@@ -1,6 +1,8 @@
-//! Общая база прицельных снарядов Archery, BaseMagic и FireBolt:
+//! Общая база прицельных снарядов Archery, BaseMagic и FireBolt и
+//! площадных областей FireBall и GodPunishment:
 //! снимок полёта, физический контакт Archery, элементный контакт,
-//! усилитель душами и общий серверный decoder снимка.
+//! усилитель душами, общий серверный decoder снимка и живые композиты
+//! FireBall и GodPunishment.
 //!
 //! Размещение в `skills/`: полёт строится на конверте `summonshape`, а
 //! боевые формулы принадлежат навыковым владельцам, как у соседних
@@ -11,7 +13,8 @@
 //! + `GameServer/GameServer.pdb` (RSDS `5BEE6DD1-BF90-49B8-8BE9-EB25C4038D53`
 //! age 2, совпадение подтверждено `.local/evidence/symbols.py identity`).
 //! Исходные владельцы PDB: `appserver/skills/archeryphalanx.cpp/.h`,
-//! `basemagicphalanx.cpp/.h` и `fireboltphalanx.cpp/.h`; базовый класс —
+//! `basemagicphalanx.cpp/.h`, `fireboltphalanx.cpp/.h`,
+//! `fireballphalanx.cpp/.h` и `godpunishmentphalanx.cpp/.h`; базовый класс —
 //! `appserver/summonshape.cpp/.h` (кто хранит слоты полёта, master и skill id,
 //! см. `skills/summonshape`).
 //!
@@ -178,6 +181,15 @@
 //! признак после callback. Независимый `Vec` заменяет исходный STL-вектор;
 //! endpoint клиентскому encoder-у не нужен.
 //! Точные имена полей PDB не фиксировались.
+//!
+//! Живые композиты `CFireBallPhalanx` и `CGodPunishmentPhalanx` перенесены
+//! сюда из старого адаптера буквально порцией замыкания: flight
+//! `BaseProjectileFlight` + элементный снимок `ElementProjectileAttack`
+//! (у FireBall — с движением `FireBallPath` и усилителем душами из cast-а,
+//! у GodPunishment — без CScope и без усилителя). Состав полей и порядок
+//! записей новыми машинными основаниями не дополнялись, статусы — выше по
+//! шапке. Live-разрешение полей источника и доставка контакта остаются у
+//! владельца `CGame` (обёртка `elementprojectileattack` старого пакета).
 
 use super::summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot};
 use crate::combat::{AttackInformation, AttackPower, AttackPowerType, MasterInfo, truncate_original};
@@ -428,6 +440,131 @@ impl ElementProjectileAttack {
         let Some(chance) = read_live(ElementProjectileLiveField::CriticalChance) else { return; };
         let Some(roll) = read_live(ElementProjectileLiveField::RandomBelow(100)) else { return; };
         apply_projectile_critical(attack, chance, roll, critical_rate);
+    }
+}
+
+/// Литерал навыка огненного шара для слота `+0xB8` (ctor pub `1:001f6cc0`,
+/// статус в шапке модуля).
+pub const FIRE_BALL_SKILL_ID: u32 = 0x13d;
+
+/// Литерал навыка божественной кары для слота `+0xB8` (ctor pub `1:001fcd80`,
+/// статус в шапке модуля).
+pub const GOD_PUNISHMENT_SKILL_ID: u32 = 0x13a;
+
+/// Живая форма движущейся площадной области огненного шара: общий полёт,
+/// элементный контакт с усилителем душами и движение пути. Души приходят
+/// снимком из cast-а, как у FireBolt. Срок жизни и дедлайн очередной клетки
+/// читают разные часы.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CFireBallPhalanx {
+    flight: BaseProjectileFlight,
+    attack: ElementProjectileAttack,
+    movement: FireBallPath,
+}
+
+impl CFireBallPhalanx {
+    #[allow(clippy::too_many_arguments, reason = "снимок конструктора FireBallPhalanx")]
+    pub fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
+        skill_level: i32, minimum_attack: i32, maximum_attack: i32,
+        element_modifier: i32, path: Vec<(i32, i32)>, speed_ms: u32,
+        soul_count: i32, soul_variable: u32,
+    ) -> Self {
+        Self {
+            flight: BaseProjectileFlight::new_untargeted(id, started_at_ms, lifetime_ms),
+            attack: ElementProjectileAttack {
+                master,
+                skill_id: FIRE_BALL_SKILL_ID,
+                skill_level,
+                minimum_attack,
+                maximum_attack,
+                element_modifier,
+                souls: Some(SoulProjectileAmplification::new(soul_count, soul_variable as i32)),
+            },
+            movement: FireBallPath::new(path, speed_ms),
+        }
+    }
+
+    pub const fn shape(&self) -> &CShape { self.flight.shape() }
+    pub const fn shape_mut(&mut self) -> &mut CShape { self.flight.shape_mut() }
+    pub const fn master(&self) -> MasterInfo { self.attack.master }
+    pub const fn attack_snapshot(&self) -> ElementProjectileAttack { self.attack }
+    pub fn path_is_empty(&self) -> bool { self.movement.is_empty() }
+
+    pub fn expired_at(&self, now_ms: u32) -> bool { self.flight.expired_at(now_ms) }
+
+    pub fn cell_due_at(&self, now_ms: u32) -> bool {
+        self.movement.cell_due_at(self.flight.started_at_ms(), now_ms)
+    }
+
+    pub fn current_cell(&self) -> Option<(i32, i32)> { self.movement.current_cell() }
+    pub fn set_cell_destination(&mut self, cell: (i32, i32)) {
+        self.movement.set_destination(cell);
+    }
+    pub fn advance(&mut self) { self.movement.advance(); }
+    pub fn pending_force_move(&self) -> Option<(i32, i32, u32)> {
+        self.movement.pending_force_move()
+    }
+    pub fn mark_force_moved(&mut self) { self.movement.mark_force_moved(); }
+
+    pub fn scope_cells(center_x: i32, center_y: i32) -> impl Iterator<Item = (i32, i32)> {
+        FireBallPath::scope_cells(center_x, center_y)
+    }
+
+    pub fn encode_client_snapshot(
+        &self, now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        self.flight.encode_client_snapshot(
+            FIRE_BALL_SKILL_ID, self.attack.skill_level, self.attack.master,
+            now_milliseconds,
+        )
+    }
+}
+
+/// Живая форма одноклеточной области божественной кары: тот же общий полёт
+/// и элементный контакт без усиления душами и без CScope конструктора.
+/// Замена игнорирует уровень и завершает форму при совпадении живой клетки.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CGodPunishmentPhalanx {
+    flight: BaseProjectileFlight,
+    attack: ElementProjectileAttack,
+}
+
+impl CGodPunishmentPhalanx {
+    pub fn new(
+        id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
+        skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32,
+    ) -> Self {
+        Self {
+            flight: BaseProjectileFlight::new_untargeted(id, started_at_ms, lifetime_ms),
+            attack: ElementProjectileAttack {
+                master,
+                skill_id: GOD_PUNISHMENT_SKILL_ID,
+                skill_level,
+                minimum_attack,
+                maximum_attack,
+                element_modifier,
+                souls: None,
+            },
+        }
+    }
+
+    pub const fn shape(&self) -> &CShape { self.flight.shape() }
+    pub const fn shape_mut(&mut self) -> &mut CShape { self.flight.shape_mut() }
+    pub const fn master(&self) -> MasterInfo { self.attack.master }
+    pub const fn attack_snapshot(&self) -> ElementProjectileAttack { self.attack }
+
+    pub fn expired_at(&self, now: u32) -> bool { self.flight.expired_at(now) }
+
+    pub fn replacement_matches(&self, _level: i32, x: i32, y: i32) -> bool {
+        self.flight.shape().get_tile_x().unwrap_or(i32::MIN) == x
+            && self.flight.shape().get_tile_y().unwrap_or(i32::MIN) == y
+    }
+
+    pub fn encode_client_snapshot(&self, now: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        self.flight.encode_client_snapshot(
+            GOD_PUNISHMENT_SKILL_ID, self.attack.skill_level, self.attack.master, now,
+        )
     }
 }
 
