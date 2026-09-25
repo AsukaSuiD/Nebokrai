@@ -2,6 +2,11 @@
 //! Источник: gameserver.exe + GameServer.pdb, appserver/skills/lifeshieldstate.cpp/.h;
 //! Serialize 0x005E2C60, Unserialize 0x005E2E30, AI 0x005E2D90,
 //! CFightDefense::PreDefense 0x005B0E64–0x005B1030.
+//! Произведение MP-фактора — MATCH по якорю 0x5B0F55–0x5B0F83 (ветвь ID 0x220):
+//! умножение идёт неокруглённым x87-продуктом `mp*0.01`; f32-копия
+//! (`fst [esp+0x1C]`) создаётся только для деления mana-ветви. Прежняя
+//! реконструкция округляла фактор до f32 до умножения — ошибка реконструкции,
+//! исправлена.
 
 use super::time::timed_client_state_time;
 use crate::combat::{AttackPower, truncate_original};
@@ -147,9 +152,12 @@ impl LifeShieldState {
         };
         if self.life > 0 && war_soul_mana > 0 && power.hp_damage > 0 {
             let hp_factor = f64::from(self.hp_factor) * f64::from(0.01_f32);
-            let mp_factor = self.mp_factor as f32 * 0.01_f32;
+            // Оригинал умножает неокруглённый x87-продукт `mp*0.01`; f32-копия
+            // фактора (`fst [esp+0x1C]`) служит только делителем mana-ветви.
+            let mp_factor = f64::from(self.mp_factor) * f64::from(0.01_f32);
+            let mp_factor_f32 = mp_factor as f32;
             let hp_shield = truncate_original(hp_factor * f64::from(power.hp_damage));
-            let mp_damage = truncate_original(f64::from(mp_factor) * f64::from(power.hp_damage));
+            let mp_damage = truncate_original(mp_factor * f64::from(power.hp_damage));
             if self.life < hp_shield {
                 let old_life = self.life;
                 self.life = 0;
@@ -161,7 +169,7 @@ impl LifeShieldState {
                 self.life = 0;
                 power.mp_damage = mp_damage;
                 power.hp_damage = truncate_original(
-                    f64::from(mp_damage.wrapping_sub(available_mana)) / f64::from(mp_factor),
+                    f64::from(mp_damage.wrapping_sub(available_mana)) / f64::from(mp_factor_f32),
                 );
             } else {
                 self.life = self.life.wrapping_sub(hp_shield);
