@@ -10,13 +10,23 @@
 //! BuildBlockUpdate применяет регион: постройка освобождает footprint при
 //! action 6, ворота также при 7. Координаты сохраняют преобразование
 //! i32 → f32 → trunc i32; GetTargetPath выбирает ближайшую точку footprint.
-//! Action-callbacks AI пусты. OnDied обычной постройки может запустить script,
-//! но не завершает country-war: победу обрабатывает CountryWarSys отдельно.
-//! У ворот OnDied пустой.
+//! Action-callbacks AI пусты. OnDied обычной постройки (`0x001DD9D0`, slot
+//! `+0x178`) сохраняет script-запуск через `stRunScript`/`RunScript` при
+//! убийце-игроке (тип `0x190`) и пустой в этой сборке virtual
+//! `CServerRegion::OnSymbolDestroy`; вызова CountryWarSys в его теле нет —
+//! победу обрабатывает CountryWarSys отдельно (`on_flag_destroy` `0x000EBE60`
+//! вызывается из `OnCountryMessage`). У ворот OnDied пустой: slot `+0x178`
+//! vtable CCityGate указывает общий пустой thunk (VA `0x00485540`).
 //! Конструктор регистрирует базовую атаку и CFightDefense в общей арене.
-//! Попадание через CMoveShape::OnBeenAttacked не вызывает отдельный обработчик
-//! CBuild с одним аргументом: смерть проходит общий End/очистку состояний,
-//! а отсутствие CBaseAI не подменяется синхронным запуском OnDied/script.
+//! Отдельный одноаргументный обработчик CBuild::OnBeenAttacked (`0x001DD6B0`,
+//! slot `+0x1B0`) не имеет вызывателей в этой сборке: ни одного
+//! `call [reg+0x1B0]`, ни одного прямого вызова `0x001DD6B0`, ссылки только из
+//! vtable CBuild/CCityGate; попадание через двухаргументный
+//! CMoveShape::OnBeenAttacked (slot `+0x15C`) его не вызывает. Смерть проходит
+//! общий End/очистку состояний, а OnDied вызывает только
+//! `CBaseAI::OnBeenKilled`; у постройки CBaseAI нет (конструктор CMoveShape
+//! обнуляет `+0xE8`, AI создают CPlayer-ctor и CMonster::InitAI), поэтому
+//! отсутствие AI не подменяется синхронным запуском OnDied/script.
 
 pub(crate) use nebokrai_zone::regions::build::*;
 
@@ -383,7 +393,7 @@ impl CBuild {
 
 // ============================================================================
 // FUNCTION: CBuild::GetAttackerDir
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY (тело); живые вызыватели — PARTIAL
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:297
@@ -391,7 +401,27 @@ impl CBuild {
 // ADDRESS: 005dd300
 // PROTOTYPE: long __thiscall GetAttackerDir(long param_1, long param_2, long param_3, long param_4)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Vtable `0x0065E704` slot `+0x0B0`; то же значение в slot `+0x0B0` vtable
+// CCityGate (`0x0065E8C4`). Тело `0x50` байт до следующего pub
+// `GetBeAttackedPoint` (`0x001DD350`), завершение `ret 0x10`.
+// Машинный стержень (`0x005DD300`..`0x005DD34D`): `x = CShape::GetTileX(this)`
+// (`0x0005B110`), `y = CShape::GetTileY(this)` (`0x0005B140`); virtual
+// `GetBeAttackedPoint` (slot `+0xAC`) вызывается как
+// `(param_2, param_2, &x, &y)` — второй stack-аргумент передан в обе
+// координаты точки атаки, `param_1`/`param_3`/`param_4` телом не читаются;
+// результат — `CMoveShape::GetDestDir(this, param_2, param_2, x, y)`
+// (`0x000CCF60`). `GetDestDir` — не atan2: 8-way таблица знаков по
+// `dx = a0 - a2`, `dy = a1 - a3`: dx>0 → dy>0:7, dy==0:6, dy<0:5;
+// dx<0 → dy>0:1, dy==0:2, dy<0:3; dx==0 → dy>0:0, иначе 4 (совпавшая точка
+// даёт direction 4). Базовая `CMoveShape::GetAttackerDir` (`0x0004A270`) —
+// голый `jmp GetDestDir` со всеми четырьмя аргументами; переопределение
+// CBuild сначала пересчитывает точку footprint своим `GetBeAttackedPoint`.
+// Вызыватели: прямых `E8` на `0x001DD300` в `.text` нет; все разобранные
+// сайты `call [reg+0xB0]` принадлежат другим иерархиям с тем же смещением
+// (CServerRegion `+0xB0` = `GetOwnedCityFaction` `0x000485F0`, `+0xB4` =
+// `GetOwnedCityUnion` `0x00048600`; скриптовые и менеджер-объекты);
+// подтверждённого живого сайта с receiver CMoveShape не установлено —
+// использование доказано только для двух vtable-слотов.
 //
 //
 
@@ -503,7 +533,8 @@ impl CBuild {
 
 // ============================================================================
 // FUNCTION: CBuild::OnBeenAttacked
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY (тело и контракт пакетов); мёртвый virtual —
+// ноль вызывателей в этой сборке
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:104
@@ -511,13 +542,63 @@ impl CBuild {
 // ADDRESS: 005dd6b0
 // PROTOTYPE: void __thiscall OnBeenAttacked(tagAttackInformation * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Vtable CBuild slot `+0x1B0` — новый virtual CBuild (vtable CMoveShape
+// заканчивается раньше и такого slot не имеет); CCityGate slot `+0x1B0`
+// содержит то же тело `0x001DD6B0` (no-op у ворот стоит только в OnDied slot
+// `+0x178`; `+0x180` ворот — реальный `CCityGate::OnBeenHurted` `0x001DDD80`,
+// сохраняющий атакующего в region `+0x2B8/+0x2BC`).
+// Машинный стержень (`0x005DD6B0`..`0x005DD9CD`):
+// 1. Guard `this->+0x40 (m_pRegion) != 0`, иначе мгновенный `ret 4`.
+// 2. `m_pRegion->FindChildObject(att+8, att+0xC, CGUID::GUID_INVALID)` через
+//    region slot `+0x1C` (`0xEF3D9C` = статический `CGUID::GUID_INVALID`,
+//    pub `?GUID_INVALID@CGUID@@2V1@A`); результат приводится
+//    `__RTDynamicCast` `CBaseObject*`→`CMoveShape*` (type_info `.?AVCBaseObject@@`
+//    @`0x69E6B0` → `.?AVCMoveShape@@` @`0x69E64C`); далее обязателен
+//    `this->IsAttackAble(attacker)` (slot `+0x134`).
+// 3. `std::vector<tagDamage*> v; this->ApplyFinalDamage(att, &v)` (slot
+//    `+0x160` = `CBuild::ApplyFinalDamage` `0x001DD270`).
+// 4. Ветвление по `CMoveShape::IsDied()` (`0x000CCF20`, читает virtual GetHP
+//    slot `+0xD0` и возвращает 1 при HP==0):
+//    - жив и вектор не пуст: `CMessage(0xBF60A)` — Add(M)(att+8),
+//      Add(M)(att+0xC), Add(M)(type `this+4`), Add(M)(id `this+8`),
+//      Add(D)((char)count), на каждую запись вектора Add(D)((char)dmg+0) и
+//      Add(M)(dmg+4), затем Add(M)(GetHP()), Add(D)(att+0x10),
+//      Add(D)(att+0x11), Add(M)(att+0), Add(E)(att+4);
+//      `SendToAround(this, 0)` (`0x00014970`); затем virtual
+//      `OnBeenHurted(att+8, att+0xC)` (slot `+0x180`; у CBuild общий пустой
+//      `ret 8` `0x000A8750`). Пустой вектор — без пакета и без OnBeenHurted.
+//    - мёртв: сначала virtual `OnBeenMurdered(att+8, att+0xC)` (slot `+0x17C`,
+//      тот же пустой thunk), затем `CMessage(0xBF60B)` — те же 4 dword,
+//      условно один Add(M)(dmg+4) первой записи вектора с `dmg+0 == 0` (ни
+//      одной подходящей → поле пропускается), Add(D)(1), Add(D)(att+0x10),
+//      Add(D)(att+0x11), Add(M)(att+0), Add(E)(att+4);
+//      `SendToAround(this, 0)`; `CMoveShape::SetKilledMeAttackInfo(att)`
+//      (`0x000CCE50`: копии att+8→`+0x180`, att+0xC→`+0x184`, att+0x30→`+0x1A8`,
+//      att+0x34→`+0x1AC`, att+0x38→`+0x1B0`, att+0x14/+0x18/+0x1C/+0x20 →
+//      `+0x18C/+0x190/+0x194/+0x198`, байты att+0x10→`+0x188`,
+//      att+0x28..+0x2B→`+0x1A0..+0x1A3`); virtual `SetAction(6)` (slot `+0x80`).
+//      Записи tagDamage и буфер вектора освобождаются `operator delete`
+//      (`0x0021770D`).
+//    `Add(M)` = `CBaseMessage::Add(float)` (`0x00013240`) дописывает 4 сырых
+//    little-endian байта аргумента; `Add(D)` (`0x00013110`) и `Add(E)`
+//    (`0x00013170`) по 1 байту (quirk: при исчерпании буфера байт молча не
+//    пишется, счётчик растёт); `CMessage(long)` (`0x000136D0`) кладёт ID в
+//    header+4. Семантика полей `tagAttackInformation` по именам не
+//    установлена (только смещения). OnDied отсюда не вызывается.
+// Вызыватели: ни одного `call [reg+0x1B0]` в `.text` (для смещения `0x1B0`
+// кодировка всегда disp32, скан исчерпывающий), ни одного прямого `E8` на
+// `0x001DD6B0`; ссылки на тело — только два vtable slot (CBuild `+0x1B0`,
+// CCityGate `+0x1B0`). Тело недостижимо в этой сборке; реальный урон
+// постройкам идёт двухаргументным слотом `+0x15C`
+// `CMoveShape::OnBeenAttacked` (`0x004D2890`).
 //
 //
 
 // ============================================================================
 // FUNCTION: CBuild::OnDied
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: VERIFIED_DISASSEMBLY (тело и цепочка вызовов); достижимость у
+// постройки в этой сборке не подтверждается: единственный вызыватель требует
+// CBaseAI, которого у CBuild нет
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:214
@@ -525,7 +606,39 @@ impl CBuild {
 // ADDRESS: 005dd9d0
 // PROTOTYPE: void __thiscall OnDied(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Vtable CBuild slot `+0x178`; CCityGate в том же slot держит общий пустой
+// thunk (VA `0x00485540`) — см. `??_7CCityGate@@6B@` (`0x0065E8C4`).
+// Машинный стержень (`0x005DD9D0`..`0x005DDAF9`):
+// 1. Guards: `m_pRegion (this+0x40) != 0` и `this->+0x180 == 0x190` — тип
+//    убийцы из kill-инфо (записывает `SetKilledMeAttackInfo`, см. блок
+//    OnBeenAttacked); `0x190` = тип объекта CPlayer (ctor CPlayer пишет
+//    `[this+4] = 0x190`, RVA `0x58F1F`).
+// 2. `killer = m_pRegion->FindChildObject(0x190, this->+0x184,
+//    CGUID::GUID_INVALID)` (region slot `+0x1C`).
+// 3. `m_pRegion->OnSymbolDestroy(this->id (+8), this->+0x184, this->+0x1AC,
+//    this->+0x1B0)` (slot `+0x68`) — в этой сборке тело пустое
+//    (`ret 0x10`, `0x001CED50`) у всех проверенных region-классов
+//    (CServerRegion, GodsBattle, Nation, Country, City, Village, War — по их
+//    vtable); вызывается в любом случае до проверок script-запуска.
+// 4. `if (!killer) return; if (m_ScriptFile пуст) return;` — MSVC-строка
+//    постройки: buffer `+0x1F0`, size `+0x200`, capacity `+0x204`; тело
+//    различает SSO/heap-вариант буфера по capacity ≥ `0x10`.
+// 5. `stRunScript rs` (ctor `0x00024AB0`): rs+0 = region, rs+4 = killer,
+//    rs+8 = 0, rs+0xC = CGUID, rs+0x20 = `m_ScriptFile`;
+//    `data = CGame::GetScriptFileData(m_ScriptFile)` (`0x00028C00`);
+//    `RunScript(&rs, data, 0)` (`0x00028840`; сторожа rs/[rs+4]/data и
+//    ScriptIfExit). SetAction, HP и CountryWarSys тело не вызывает.
+// Вызыватели: единственный сайт slot `+0x178` в `.text` —
+// `CBaseAI::OnBeenKilled` (`0x000C9220`, сайт `0x000C9303`): тот вызывает
+// OnDied owner-shape (поле `+0x68` AI) только при опустевшей AI-очереди
+// событий; прямых `E8` на `0x001DD9D0` нет; для смещения `0x178` кодировка
+// всегда disp32, скан исчерпывающий. Конструктор CMoveShape обнуляет
+// `+0xE8 (m_pAI)`, AI создают CPlayer-ctor и `CMonster::InitAI`; CBuild AI не
+// создаёт, поэтому script-ветка постройки в этой сборке недостижима.
+// Country-war: `CountryWarSys::on_flag_destroy(long)` (`0x000EBE60`)
+// вызывается только из `OnCountryMessage` (сайт `0x0009A2A8`) — отдельный
+// message-driven вход; из тела OnDied путь в CountryWarSys не выходит, что
+// машинно подтверждает «победу обрабатывает CountryWarSys отдельно».
 //
 //
 

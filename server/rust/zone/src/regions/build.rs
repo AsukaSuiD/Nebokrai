@@ -18,14 +18,27 @@
 //! `ApplyFinalDamage` `0x001DD270`, property-accessor-ы `GetHP`/`SetHP`/
 //! `GetMaxHP`/`GetDef`/`GetElementResistant` `0x001DD5F0`..`0x001DD630`,
 //! `SetScriptFile` `0x001DBAC0`, общие empty-thunk `OnBeenHurted`/
-//! `OnBeenMurdered` `0x000B8750` и `EnterCombatState`/`EnterPeaceState`/
-//! `UpdateCurrentState` `0x00085540`, vtable `0x0065E704` с RTTI-записями,
-//! внешний `CServerCountryRegion::UpdateBuildToClient` `0x001DAC80` и
-//! instantiation-ы `std::_Tree` карты `long → CBuild*` country-региона.
-//! Три member-функции остаются UNKNOWN и этой порцией не достигнуты:
-//! `GetAttackerDir` (`0x001DD300`), `OnBeenAttacked` (`0x001DD6B0`) и `OnDied`
-//! (`0x001DD9D0`); их статус и следующий ход — в evidence-блоке старого
-//! владельца.
+//! `OnBeenMurdered` `0x000A8750` (`ret 8`) и `EnterCombatState`/
+//! `EnterPeaceState`/`UpdateCurrentState` `0x00085540`, vtable `0x0065E704` с
+//! RTTI-записями, внешний `CServerCountryRegion::UpdateBuildToClient`
+//! `0x001DAC80` и instantiation-ы `std::_Tree` карты `long → CBuild*`
+//! country-региона.
+//! Три прежних UNKNOWN разобраны следующей порцией по машинному коду
+//! (подробный evidence и вызыватели — в блоках старого владельца):
+//! `GetAttackerDir` (`0x001DD300`, slot `+0x0B0`) — тело VERIFIED_DISASSEMBLY
+//! (8-way таблица знаков `GetDestDir`, quirk: `param_2` дважды в точку
+//! footprint), живые вызыватели с receiver CMoveShape не доказаны;
+//! одноаргументный `OnBeenAttacked` (`0x001DD6B0`, slot `+0x1B0`) — тело
+//! VERIFIED_DISASSEMBLY (пакеты `0xBF60A`/`0xBF60B`, death-ветвь с
+//! `SetKilledMeAttackInfo` и `SetAction(6)`), но virtual без единого
+//! call-сайта в `.text` — в этой сборке недостижим; `OnDied` (`0x001DD9D0`,
+//! slot `+0x178`) — тело VERIFIED_DISASSEMBLY (guard убийцы-игрока `0x190`,
+//! пустой у всех region-классов `OnSymbolDestroy`, script через
+//! `stRunScript`/`RunScript`), единственный вызыватель —
+//! `CBaseAI::OnBeenKilled`, а у постройки `CBaseAI` нет. Победу country-war
+//! обрабатывает `CountryWarSys` отдельно (`on_flag_destroy` `0x000EBE60` из
+//! `OnCountryMessage`), не тело `OnDied`. Переносить ли эти три тела в Zone,
+//! следующая порция решает с учётом их недостижимости.
 
 use super::shape::{ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure};
 use nebokrai_shared::protocol::{LegacyReadBlock, LegacyReader, LegacyWriter};
