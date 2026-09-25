@@ -11,7 +11,7 @@
 //! apartment был заменяемым техническим механизмом, а не наблюдаемым серверным
 //! контрактом. Единственный внешний hook — `SendErrLog` в Login — остаётся у
 //! прежнего owner-а в game.rs и приходит closure-параметром, потому что его
-//! `CMessage`-edge принадлежит будущей monitoring-message волне.
+//! `CMessage`-edge принадлежит Realm `app/worldserver` (волна monitoring-message завершена).
 //!
 //! Guards фиксируют точки исходных unlock: `release` замещает unlock успешного
 //! пути, `stop_outer_owner` — blocked-ветку, которая исходно не достигала
