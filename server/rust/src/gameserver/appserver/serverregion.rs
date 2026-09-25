@@ -3341,7 +3341,10 @@ impl CServerRegion {
         now_ms: u32,
         plan: &AreaTransitionPlan,
     ) -> bool {
-        commit_area_transition(&mut self.areas, shape, facts, now_ms, plan)
+        matches!(
+            commit_area_transition(&mut self.areas, shape, facts, now_ms, plan),
+            AreaTransitionOutcome::Committed
+        )
     }
 
     pub(crate) fn plan_owned_monster_area_transition<Resolver: ShapeResolver>(

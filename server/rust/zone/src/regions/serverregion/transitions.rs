@@ -10,7 +10,7 @@
 //! | функция | RVA | статус |
 //! |---|---|---|
 //! | `plan_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
-//! | `commit_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` с зафиксированным расхождением на пути ненайденной цели |
+//! | `commit_area_transition` | `0x000802A0` | `VERIFIED_DISASSEMBLY` |
 //! | staging-очереди (`stage_*`, `staged_area_transitions`, `take_staged_region_transitions`) | — | `PARTIAL`: staging-сайт исходного region AI отдельным телом этой волной не дизассемблировался |
 //!
 //! `OnShapeChangeArea` сверен по всему телу (`0x004802A0-0x004808A2`): gate
@@ -28,14 +28,17 @@
 //! (`0x0048076E/0x00480771-0x004807B5/0x004807BC/0x004807C6`) и player-only
 //! `PlayerEnter` `0x00075580` (`0x004807D1`).
 //!
-//! Машинно зафиксированное расхождение частичного эффекта: при ненайденной
-//! целевой области оригинал уже выполнил `RemoveObject` текущей области
-//! (`0x0048076E` до bounds-check цели) и завершается без `AddObject` и без
-//! сброса `m_pArea` (`0x004807C6` только на найденном пути; owner-link
-//! остаётся указывать на область, из которой фигура удалена). Ядро
-//! `commit_area_transition` при `target_index == None` возвращает `false`
-//! без мутации membership. Правка этого расхождения — решение отдельной
-//! волны, здесь только фиксация.
+//! Частичный эффект пути ненайденной цели, сверенный по телу и закрытый
+//! этой волной: оригинал выполняет `RemoveObject` прежней области
+//! (`0x0048076E`) до bounds-check цели (`GetArea(next)`
+//! `0x00480771-0x004807B5`) и завершается без `AddObject`
+//! (`0x004807BC`) и без сброса `m_pArea` (запись `0x004807C6` только на
+//! найденном пути; owner-link остаётся указывать на область, из которой
+//! фигура удалена). Ядро `commit_area_transition` исполняет этот порядок
+//! и докладывает частичный эффект вариантом
+//! `AreaTransitionOutcome::RemovedWithoutTargetArea`; обвязка старого
+//! пакета отображает его в прежнее булево «отказ», хуков и логирования на
+//! этой ветке машинное тело не содержит.
 //!
 //! Staging сохраняет pointer-unique append исходного region AI: marker
 //! сбрасывается caller-ом только после добавления, ordered snapshot берётся
@@ -174,21 +177,43 @@ pub fn plan_area_transition<Resolver: ShapeResolver>(
     }))
 }
 
-/// Committing-часть `OnShapeChangeArea`: `false` без target area, иначе
-/// исходный порядок `RemoveObject -> AddObject -> m_pArea` над текущей и
-/// целевой областью plan-а. Очистка staged-очередей остаётся caller-у.
+/// Outcome committing-части `OnShapeChangeArea`. Машинный порядок
+/// эффектов: `RemoveObject` прежней области (`0x0048076E`) стоит до
+/// `GetArea(next)`/bounds-check цели (`0x00480771-0x004807B5`), а
+/// `AddObject` (`0x004807BC`) и запись owner-link `m_pArea`
+/// (`0x004807C6`) выполняются только на найденном пути. Хуков и
+/// логирования на ветке ненайденной цели машинное тело не содержит.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AreaTransitionOutcome {
+    /// Целевая область найдена: исходный порядок `RemoveObject ->
+    /// AddObject -> m_pArea` выполнен целиком.
+    Committed,
+    /// Целевая область не найдена: прежняя область уже выполнила
+    /// `RemoveObject` (`0x0048076E`), без `AddObject` и без сброса
+    /// `m_pArea` (`0x004807C6` только на найденном пути) — owner-link
+    /// остаётся указывать на область, из которой фигура удалена, как в
+    /// оригинале.
+    RemovedWithoutTargetArea,
+}
+
+/// Committing-часть `OnShapeChangeArea`: `RemoveObject` прежней области
+/// до проверки target area в исходном порядке (`0x0048076E` до
+/// `0x00480771-0x004807B5`); при ненайденной цели фигура остаётся снятой
+/// с висячим owner-link (`RemovedWithoutTargetArea`), иначе `AddObject ->
+/// m_pArea` (`0x004807BC/0x004807C6`). Очистка staged-очередей остаётся
+/// caller-у.
 pub fn commit_area_transition(
     areas: &mut [CArea],
     shape: &mut CShape,
     facts: ShapeRuntimeFacts,
     now_ms: u32,
     plan: &AreaTransitionPlan,
-) -> bool {
-    let Some(target_index) = plan.target_index else {
-        return false;
-    };
+) -> AreaTransitionOutcome {
     areas[plan.current_index].remove_object(plan.moving, facts);
+    let Some(target_index) = plan.target_index else {
+        return AreaTransitionOutcome::RemovedWithoutTargetArea;
+    };
     areas[target_index].add_object(plan.moving, facts, now_ms);
     shape.set_area_index(Some(target_index));
-    true
+    AreaTransitionOutcome::Committed
 }
