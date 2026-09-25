@@ -10,4 +10,6 @@ pub mod goodswarmember;
 pub mod organizingctrl;
 pub mod organizingparam;
 pub mod rsenemyfactions;
+pub mod rsfaction;
+pub mod rsunion;
 pub mod union;

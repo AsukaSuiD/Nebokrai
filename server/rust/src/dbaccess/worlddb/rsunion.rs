@@ -1,5 +1,7 @@
-//! DB-владелец союзов и конфедераций WorldServer из `rsunion.cpp`.
-//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
+//! DB-владелец союзов и конфедераций WorldServer из `rsunion.cpp`; трейт
+//! `RsUnionOwner` и его data-семья перенесены в Realm `organizations/rsunion`,
+//! здесь остаётся Tiberius-реализация и их реэкспорт для переходных потребителей.
+//! Источник контракта — точная пара `Nworldserver.exe` и `WorldServer.pdb`.
 //!
 //! Owner сохраняет отдельные delete/save/load операции, ordered membership,
 //! исходные signed IDs и false для missing connection/catch. Tiberius и owned
@@ -7,20 +9,17 @@
 //! partial effects или наблюдаемых результатов.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::error::Error;
-use std::fmt;
 
 use encoding_rs::WINDOWS_1251;
 use tiberius::{Query, Row};
 
-use crate::dbaccess::worlddb::rssetup::{
-    WorldDatabaseConnectionError, WorldDatabaseSettings, WorldTdsClient,
-};
+use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
+use crate::worldserver::appworld::organizingsystem::faction::current_local_member_time;
 use crate::worldserver::appworld::organizingsystem::organizing::{
     EPurviewOwnState, TagMemInfo, UnterminatedMemberField,
 };
-use crate::worldserver::appworld::organizingsystem::faction::current_local_member_time;
-use crate::worldserver::appworld::organizingsystem::union::CUnion;
+
+pub(crate) use nebokrai_realm::organizations::rsunion::*;
 
 const UNION_BASE_SELECT_SQL: &str = "SELECT TOP 1 ID FROM CSL_UNION_BaseProperty WHERE ID = @P1";
 const UNION_BASE_UPDATE_SQL: &str =
@@ -28,205 +27,6 @@ const UNION_BASE_UPDATE_SQL: &str =
 const UNION_MEMBER_INSERT_PREFIX: &[u8] = b"INSERT INTO CSL_UNION_Members (UnionID,FactionID,MemberLvl,Title,bControbute,\t\t\t\t\t\t PV_Disband,PV_Exit,PV_DubJobLvl,PV_ConMem,PV_FireOut,PV_Pronounce,PV_LeaveWord,\t\t\t\t\t\t PV_EditLeaveWord,PV_ObtainTax,PV_OperCityGate,PV_EndueROR)\t\t\t\t\t\t VALUES (";
 const UNION_MEMBER_INSERT_CAPACITY: usize = 500;
 const LOAD_ALL_CONFEDERATIONS_SQL: &str = "SELECT * FROM CSL_UNION_BaseProperty";
-
-/// Безопасный результат одного base-row `LoadAllConfederation` до публикации
-/// concrete `CUnion` у следующего owner-а.
-pub(crate) struct UnionDatabaseLoadRecord {
-    pub(crate) union_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) master_id: i32,
-    pub(crate) members: BTreeMap<i32, TagMemInfo>,
-}
-
-/// Результат `LoadAllConfederation`; `records` всегда содержит уже завершённый
-/// prefix, как исходные записи в controller-map до первого отказа.
-///
-/// Owner возвращает `int`, а не `bool`, и увеличивает local counter
-/// до чтения каждого base-row. Поэтому `reported_count` может на единицу
-/// опережать `records.len()` на отказавшем base/member-row — именно это число
-/// попадает в последующий `Initialize` log.
-pub(crate) enum UnionLoadOutcome {
-    ReturnedTrue {
-        records: Vec<UnionDatabaseLoadRecord>,
-        reported_count: i32,
-    },
-    ReturnedFalse {
-        records: Vec<UnionDatabaseLoadRecord>,
-        reported_count: i32,
-    },
-}
-
-pub(crate) struct UnionSaveSnapshot<'union> {
-    pub(crate) union_id: i32,
-    pub(crate) name: &'union [u8],
-    pub(crate) master_id: i32,
-    pub(crate) members: &'union BTreeMap<i32, TagMemInfo>,
-}
-
-impl<'union> UnionSaveSnapshot<'union> {
-    pub(crate) fn from_union(union: &'union CUnion) -> Self {
-        Self {
-            union_id: union.union_id(),
-            name: union.name(),
-            master_id: union.master_id(),
-            members: union.members(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum UnionSaveBlock {
-    NullUnionPointer,
-    MemberTitle(UnterminatedMemberField),
-}
-
-impl fmt::Display for UnionSaveBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NullUnionPointer => formatter
-                .write_str("SaveConfederation разыменовывал null CUnion при живом соединении"),
-            Self::MemberTitle(block) => block.fmt(formatter),
-        }
-    }
-}
-
-impl Error for UnionSaveBlock {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::NullUnionPointer => None,
-            Self::MemberTitle(block) => Some(block),
-        }
-    }
-}
-
-impl From<UnterminatedMemberField> for UnionSaveBlock {
-    fn from(block: UnterminatedMemberField) -> Self {
-        Self::MemberTitle(block)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum UnionMembersSaveOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(UnterminatedMemberField),
-}
-
-#[derive(Debug)]
-pub(crate) enum UnionSaveOutcome {
-    ReturnedTrue,
-    ReturnedFalse,
-    BlockedMissingFact(UnionSaveBlock),
-}
-
-#[derive(Debug)]
-pub(crate) struct RsUnionNotice {
-    pub(crate) operation: RsUnionOperation,
-    pub(crate) error: RsUnionSaveError,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum RsUnionOperation {
-    LoadAllConfederation,
-    LoadConfederationMembers,
-    LoadUnionMemberInfo,
-    SaveConfederation,
-    DeleteConfederation,
-    DeleteConfederationMembers,
-    SaveConfederationMember,
-}
-
-#[derive(Debug)]
-pub(crate) enum RsUnionSaveError {
-    Database(RsUnionDatabaseError),
-    MissingConnection,
-    MissingSettings,
-    Connection(WorldDatabaseConnectionError),
-    MissingRequiredValue(&'static str),
-    InvalidPurview { column: &'static str, value: i32 },
-    MissingFaction { faction_id: i32 },
-}
-
-impl fmt::Display for RsUnionSaveError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Database(error) => error.fmt(formatter),
-            Self::MissingConnection => write!(formatter, "не передано соединение World union DB"),
-            Self::MissingSettings => write!(formatter, "не заданы параметры World union DB"),
-            Self::Connection(error) => error.fmt(formatter),
-            Self::MissingRequiredValue(column) => {
-                write!(formatter, "в union DB отсутствует обязательное поле {column}")
-            }
-            Self::InvalidPurview { column, value } => {
-                write!(formatter, "недопустимое union-право {column}={value}")
-            }
-            Self::MissingFaction { faction_id } => {
-                write!(formatter, "не найдена faction {faction_id} для union member")
-            }
-        }
-    }
-}
-
-impl Error for RsUnionSaveError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Database(error) => Some(error),
-            Self::Connection(error) => Some(error),
-            Self::MissingConnection => None,
-            Self::MissingSettings
-            | Self::MissingRequiredValue(_)
-            | Self::InvalidPurview { .. }
-            | Self::MissingFaction { .. } => None,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct RsUnionDatabaseError(tiberius::error::Error);
-
-impl fmt::Display for RsUnionDatabaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "ошибка TDS World union DB: {}", self.0)
-    }
-}
-
-impl Error for RsUnionDatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl From<tiberius::error::Error> for RsUnionDatabaseError {
-    fn from(error: tiberius::error::Error) -> Self {
-        Self(error)
-    }
-}
-
-pub(crate) trait RsUnionOwner {
- /// Открывает самостоятельное World DB connection и возвращает готовый
- /// prefix base/member rows в точном исходном порядке.
-    async fn load_all_confederations(&mut self) -> UnionLoadOutcome;
-
-    async fn save_confederation(
-        &mut self,
-        snapshot: Option<&UnionSaveSnapshot<'_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> UnionSaveOutcome;
-
-    async fn save_confe_members(
-        &mut self,
-        snapshot: Option<&UnionSaveSnapshot<'_>>,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> UnionMembersSaveOutcome;
-
-    async fn del_confederation(
-        &mut self,
-        union_id: i32,
-        active_transaction: Option<&mut WorldTdsClient>,
-    ) -> bool;
-
-    fn pop_notice(&mut self) -> Option<RsUnionNotice>;
-}
 
 #[derive(Default)]
 pub(crate) struct TiberiusRsUnion {
