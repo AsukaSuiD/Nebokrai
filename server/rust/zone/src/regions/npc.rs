@@ -22,7 +22,12 @@
 //!   буфер `+0x1D8=0`, size `+0x1E8=0`, capacity `+0x1EC=0xF`) и
 //!   `m_bShowList = true` (байт `+0x1F0=1`). Колонки live `+0x1F4` и born
 //!   `+0x1F8` ctor не трогает — Rust хранит их как `Option<u32>`, а
-//!   назначает region spawn до публикации объекта.
+//!   назначает region spawn до публикации объекта. Повторная сверка той же
+//!   волной: вызов базы — `CALL 0x4D0C60` (ctor `CMoveShape` `1:000cfc60` =
+//!   RVA `0x000D0C60`); полей figure/HP в layout `CMoveShape` нет, их
+//!   значения виртуально-константные (слоты `+0x8C`/`+0xD0` ниже), и
+//!   ctor-цепочка их не хранит, а current area `[+0x60]` и change-state
+//!   `[+0x80]` зануляет ctor `CShape` (RVA `0x0005B9A0`).
 //! - script-колонка — VERIFIED: отдельного pub `CNpc::SetScriptFile` в
 //!   функциях пары нет (соседний `SetScriptFile` VA `0x005CBAC0`
 //!   принадлежит `CBuild` и основание не подтверждает); запись
@@ -38,7 +43,12 @@
 //!   `0xBF504(type, id, 0)` и удаляет объект виртуальным слотом `+0x24` —
 //!   это остаётся у регионального владельца.
 //! - `LossHP` `1:001d2ed0` (VA `0x005D3ED0`) — VERIFIED: `XOR AX,AX;
-//!   RET 8` — всегда ноль, оба аргумента не читаются.
+//!   RET 8` — всегда ноль, оба аргумента не читаются. Это новый виртуал
+//!   `CNpc`: витабла `CMoveShape` заканчивается на 105 слотах, расширение
+//!   `CNpc` — шесть слотов `+0x1A4..+0x1B8`, и `LossHP` — единственный из
+//!   них с собственным телом (слот `+0x1B4`); остальные пять, включая
+//!   объявленный у `CNpc` виртуальный `IsDied`, свёрнуты ICF в общий
+//!   funclet RVA `0x00201200` (`XOR EAX,EAX; RET`).
 //! - `DecordFromByteArray` `1:001e8840` (VA `0x005E9840`) — VERIFIED:
 //!   `MOV AL,1; RET 0xC` — ничего не читает и возвращает true.
 //! - `Talk` `1:001d2f50` (VA `0x005D3F50`) — VERIFIED: девять area по
@@ -50,11 +60,69 @@
 //! - `AddToByteArray` `1:001d2dc0` (VA `0x005D3DC0`) — VERIFIED:
 //!   `JMP 0x0045B250` — tail-jump в `CShape::AddToByteArray` без
 //!   NPC-specific полей; encode остаётся у переходного владельца.
-//! - Проекции `shape_view`/`movement_position_facts` — PARTIAL: это
-//!   локальные проекции zone `ShapeView`/RTTI-фактов. Прямое основание —
-//!   отсутствие у `CNpc` собственных HP/figure-колонок (ctor их не пишет,
-//!   `LossHP` нулевой); сравнение vtable-слотов figure с базовым
-//!   `CMoveShape` отдельно не проводилось.
+//! - Витаблы `CNpc` ↔ `CMoveShape` — VERIFIED_DISASSEMBLY волной
+//!   vtable-сверки (identity точной пары подтверждена заново; сырой дамп
+//!   — `.local/evidence/audit-npc-vtable.txt`, драйвер
+//!   `audit-npc-vtable.py`): `CNpc` — pub `2:00012a1c` = RVA `0x0025DA1C`
+//!   = VA `0x0065DA1C`, 111 слотов, единственная витабла класса; `CMoveShape`
+//!   — `2:00006e7c` = RVA `0x00251E7C` = VA `0x00651E7C`, 105 слотов. На
+//!   всех слотах figure/combat-гнезда таблицы совпадают; собственные
+//!   отличия `CNpc` — dtor, codec-пара, `AI`, `IsAttackAble` (слот `+0x134`,
+//!   у `CMoveShape` там `_purecall`) и шесть виртуалов расширения конца
+//!   таблицы. Проекции `shape_view`/`movement_position_facts` принимают
+//!   значения именно этих разрешённых слотов:
+//! - figure-факт (`ShapeFigure::default()`) — VERIFIED_DISASSEMBLY:
+//!   `GetFigure` — слот `+0x8C` (машинная привязка: `CShape::SetBlock` RVA
+//!   `0x0005BA60` вызывает `[this+0x8C]` с аргументами 2 и 0 как
+//!   горизонтальный и вертикальный half-extents; overrides семейства —
+//!   `CBuild` слот `+0x8C` → RVA `0x001DD280`, `CMonster` → `0x000E7D20`).
+//!   У `CNpc`, как и у `CMoveShape`/`CShape`, слот `+0x8C` указывает на
+//!   общий ICF-funclet RVA `0x000856A0` — `XOR AL,AL; RET 4` (ICF x7:
+//!   `GetFigure@CShape`, `IsAttackAble@CNpc`, `FindChildObject@CBaseObject`
+//!   и четыре region/goods-метода с телом «константный ноль»). figure по
+//!   всем четырём направлениям нулевая — виртуально-константная, а не
+//!   ctor-поле. Совпадение слота `+0x18` (`FindChildObject@CBaseObject`) с
+//!   тем же funclet — свёртка идентичных тел, другой слот, не `GetFigure`.
+//! - HP-факт (`current_hit_points: 0`) — VERIFIED_DISASSEMBLY: `GetHP` —
+//!   слот `+0xD0` (машинная привязка: невиртуальный `CMoveShape::IsDied`
+//!   RVA `0x000CCF20` вызывает `[vftable+0xD0]` и сравнивает с нулём;
+//!   overrides — `CBuild` слот `+0xD0` → RVA `0x001DD5F0`, `CMonster` →
+//!   `0x000E7D40`). У `CNpc`/`CMoveShape` слот `+0xD0` ведёт в общий
+//!   ICF-funclet RVA `0x00201200` — `XOR EAX,EAX; RET` (ICF x55, включая
+//!   `GetHP@CMoveShape` и `GetHP@CNpc`), то есть виртуальный `GetHP()` NPC
+//!   всегда 0. Условие записи блока в `SetPosXY` (RVA `0x000CD050`):
+//!   `CALL [+0xD0]; TEST EAX,EAX; JA`, иначе `CMP [ESI+4],0x1F4; JNE` —
+//!   в точности проецируемое `hp != 0 || type == 500`, причём type пишет
+//!   ctor (`+0x4` = 500).
+//! - `GetBeAttackedPoint` — VERIFIED_DISASSEMBLY: слот `+0xAC` → RVA
+//!   `0x0004A250` (pub `1:00049250`); `CNpc` override не объявляет и
+//!   наследует слот с тем же target — реальное тело base-impl, не thunk:
+//!   out-параметры заполняются собственными `GetTileX` RVA `0x0005B110` и
+//!   `GetTileY` RVA `0x0005B140`, figure там не читается. Собственные
+//!   overrides только у `CBuild` (слот `+0xAC` → RVA `0x001DD350`) и
+//!   `CMonster` (→ `0x000E6AA0`), поэтому `nearest_figure_attack_point`
+//!   остаётся их геометрией, а NPC отвечает своей клеткой.
+//! - `IsDied` — VERIFIED_DISASSEMBLY (ICF-layout): два раздельных паблика.
+//!   Невиртуальный `IsDied@CMoveShape` `1:000cbf20` (RVA `0x000CCF20`) —
+//!   `return virtual GetHP() == 0` (`CALL [vftable+0xD0]`, `SBB EAX,EAX`,
+//!   `ADD EAX,1`). Собственный виртуальный `IsDied@CNpc` (`1:00200200`) —
+//!   один из новых виртуалов расширения и свёрнут ICF в funclet RVA
+//!   `0x00201200` (`XOR EAX,EAX; RET` → константная false); точный слот
+//!   внутри пятёрки return-0 (`+0x1A4/+0x1A8/+0x1AC/+0x1B0/+0x1B8`) по
+//!   машинному коду неразличим — тела идентичны, значение слота одно и то
+//!   же, статус ординала не ставится. Zone `moveshape::is_died` моделирует
+//!   базовый предикат поверх facts `current_hit_points`, его статус и
+//!   владелец — у moveshape-порции и здесь не меняются.
+//! - `current_area: None` — VERIFIED_DISASSEMBLY как ctor-состояние плюс
+//!   NULL-branch регистрации: ctor `CShape` (RVA `0x0005B9A0`) пишет
+//!   `[+0x60] = 0` (current area-указатель) и `[+0x80] = 0` (change-state);
+//!   `SetPosXY` при `[+0x60] == 0` (`TEST ECX,ECX; JE` на запись нуля)
+//!   ставит change-state `SHAPE_CHANGE_NONE` и не пишет next-area
+//!   `+0x68/+0x6C`. Проекция фиксирует это состояние; назначение и смена
+//!   area после регистрации разрешаются dispatcher-ом region-слоя — это
+//!   граница порции, а не машинное утверждение о поздних состояниях.
+//!   Прежний PARTIAL снят: расхождений проекций с машинными значениями не
+//!   установлено.
 
 use super::moveshape::MoveShapePositionFacts;
 use super::shape::{CShape, ShapeFigure, ShapeView};
@@ -119,7 +187,9 @@ pub const fn decord_from_byte_array() -> bool {
 }
 
 /// Проекция NPC в zone `ShapeView`. Собственной figure-колонки у `CNpc`
-/// нет — используется figure базового `CMoveShape` по умолчанию.
+/// нет: vtable-слот `GetFigure` `+0x8C` наследует `CShape`-функцию, свёрнутую
+/// ICF в `XOR AL,AL; RET 4` (RVA `0x000856A0`), — нулевая figure по всем
+/// направлениям (базис и статусы — в шапке файла).
 pub fn shape_view(shape: &CShape) -> Option<ShapeView> {
     Some(ShapeView {
         identity: shape.identity(),
@@ -132,8 +202,10 @@ pub fn shape_view(shape: &CShape) -> Option<ShapeView> {
 }
 
 /// RTTI-факты NPC для пространственной регистрации `CMoveShape::SetPosXY`:
-/// здоровье всегда нулевое (`CNpc` не имеет HP-колонки), figure по
-/// умолчанию, текущую area разрешает dispatcher.
+/// здоровье всегда нулевое (vtable-слот `GetHP` `+0xD0` свёрнут ICF в
+/// `XOR EAX,EAX; RET` RVA `0x00201200`), figure нулевая по тому же слоту
+/// `+0x8C`, а `current_area` фиксирует ctor-состояние `[+0x60] = 0`;
+/// назначение и смену area после регистрации разрешает dispatcher.
 pub fn movement_position_facts(area_width: i32, area_height: i32) -> MoveShapePositionFacts {
     MoveShapePositionFacts {
         current_hit_points: 0,
