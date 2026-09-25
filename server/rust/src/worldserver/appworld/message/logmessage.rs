@@ -18,10 +18,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dbaccess::worlddb::rsplayer::{
-    PlayerBaseDatabaseRow, RsPlayerOwner, TiberiusRsPlayer,
+    RsPlayerOwner, TiberiusRsPlayer,
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use nebokrai_realm::app::player_base::{
+    PLAYER_BASE_RESPONSE, PlayerBaseWireRow, remaining_deletion_days,
+};
 use crate::public::date::TagTime;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use nebokrai_shared::resources::CPlayerList;
@@ -64,7 +67,6 @@ const CREATE_ROLE_REQUEST: i32 = 0x0004_FB04;
 const PLAYER_SELECT_REQUEST: i32 = 0x0004_FB05;
 const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
-const PLAYER_BASE_RESPONSE: i32 = 0x0001_FF02;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
 const CREATE_ROLE_RESPONSE: i32 = 0x0001_FF05;
@@ -211,18 +213,7 @@ pub(crate) enum WorldPlayerSelectOutcome {
     },
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerBaseOutcome {
-    pub(crate) account: Vec<u8>,
-    pub(crate) succeeded: bool,
-    pub(crate) declared_count: Option<u8>,
-    pub(crate) emitted_rows: i32,
-    pub(crate) response_type: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-
+pub(crate) use nebokrai_realm::app::player_base::WorldPlayerBaseOutcome;
 pub(crate) use nebokrai_realm::app::logmessage::{
     WorldAccountDisconnectOutcome, WorldAccountLoginCleanupOutcome, WorldDeleteRoleOutcome,
 };
@@ -990,94 +981,6 @@ fn legacy_time_seconds() -> u32 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PlayerBaseWireRow {
-    player_id: u32,
-    name: Vec<u8>,
-    level: u8,
-    occupation: u8,
-    sex: u8,
-    country: u8,
-    head: u8,
-    equipment_ids: [u32; 11],
-    equipment_levels: [u8; 11],
-    region_id: i32,
-    deletion_status: i8,
-}
-
-impl PlayerBaseWireRow {
-    fn from_database(row: PlayerBaseDatabaseRow, deletion_status: i8) -> Self {
-        Self {
-            player_id: row.id,
-            name: row.name,
-            level: row.level,
-            occupation: row.occupation,
-            sex: row.sex,
-            country: row.country,
-            head: row.head,
-            equipment_ids: row.equipment_ids,
-            equipment_levels: row.equipment_levels,
-            region_id: row.region_id,
-            deletion_status,
-        }
-    }
-
-    fn from_snapshot(
-        player_id: u32,
-        snapshot: PlayerBaseWireSnapshot,
-        deletion_status: i8,
-    ) -> Self {
-        Self {
-            player_id,
-            name: snapshot.name,
-            level: snapshot.level,
-            occupation: snapshot.occupation,
-            sex: snapshot.sex,
-            country: snapshot.country,
-            head: snapshot.head,
-            equipment_ids: snapshot.equipment_ids,
-            equipment_levels: snapshot.equipment_levels,
-            region_id: snapshot.region_id,
-            deletion_status,
-        }
-    }
-
-    fn append_to(self, row_index: i32, response: &mut CMessage) {
-        response.base_mut().add_short(row_index as i16);
-        response.base_mut().add_ulong(self.player_id);
-        response.base_mut().add(c_string_prefix(&self.name));
-        response.base_mut().add_char(0);
-        response.base_mut().add_byte(self.level);
-        response.base_mut().add_byte(self.occupation);
-        response.base_mut().add_byte(self.sex);
-        response.base_mut().add_byte(self.country);
-        response.base_mut().add_byte(self.head);
-        for equipment_id in self.equipment_ids {
-            response.base_mut().add_ulong(equipment_id);
-        }
-        for equipment_level in self.equipment_levels {
-            response.base_mut().add_byte(equipment_level);
-        }
-        response.base_mut().add_long(self.region_id);
-        response.base_mut().add_char(self.deletion_status);
-    }
-}
-
-fn c_string_prefix(bytes: &[u8]) -> &[u8] {
-    bytes
-        .iter()
-        .position(|byte| *byte == 0)
-        .map_or(bytes, |end| &bytes[..end])
-}
-
-fn remaining_deletion_days(deletion_days: u32, deletion_time: i32) -> i8 {
-    let now = chrono::Local::now().timestamp();
-    let elapsed_seconds = now - i64::from(deletion_time);
-    let elapsed_days = (elapsed_seconds as f64 / 86_400.0) as i32;
-    let remaining = (deletion_days as u8 as i8).wrapping_sub(elapsed_days as u8 as i8);
-    remaining.max(0)
-}
-
 struct DeleteRoleCountryEffects<'a> {
     game: &'a (dyn nebokrai_realm::app::world_game_view::WorldGameView + 'a),
     globe_setup: &'a GlobeSetupSnapshot,
@@ -1148,21 +1051,10 @@ fn send_player_base(
     emitted_rows: i32,
     response: CMessage,
 ) -> WorldLogMessageDispatch {
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send(
-        game.current_login_client().map(|client| client.send_queue()),
-        false,
-    );
     WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerBase(
-        WorldPlayerBaseOutcome {
-            account,
-            succeeded,
-            declared_count,
-            emitted_rows,
-            response_type: PLAYER_BASE_RESPONSE,
-            wire,
-            delivery,
-        },
+        nebokrai_realm::app::player_base::send_player_base(
+            game, account, succeeded, declared_count, emitted_rows, response,
+        ),
     ))
 }
 
@@ -1171,11 +1063,9 @@ fn send_player_base_failure(
     account: Vec<u8>,
     declared_count: Option<u8>,
 ) -> WorldLogMessageDispatch {
-    let mut response = CMessage::new(PLAYER_BASE_RESPONSE);
-    response.base_mut().add_char(0);
-    response.base_mut().add(&account);
-    response.base_mut().add_char(0);
-    send_player_base(game, account, false, declared_count, 0, response)
+    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::PlayerBase(
+        nebokrai_realm::app::player_base::send_player_base_failure(game, account, declared_count),
+    ))
 }
 
 async fn player_base(
@@ -1216,7 +1106,8 @@ async fn player_base(
         response.base_mut().add_char(1);
         response.base_mut().add(&account);
         response.base_mut().add_char(0);
-        response.base_mut().add_long(0);
+        // CRsPlayer::OpenPlayerBase, VA 0x0050F816: Add(short), два байта.
+        response.base_mut().add_word(0);
         return send_player_base(game, account, true, Some(0), 0, response);
     }
 
