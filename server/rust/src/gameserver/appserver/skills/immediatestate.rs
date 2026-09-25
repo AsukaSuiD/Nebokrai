@@ -1,6 +1,9 @@
 //! Зарегистрированный цикл TaiJi, Origin, трёх Enlarge, Swordship и WuXing.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/{taiji,origin,
 //! enlargefullmiss,enlargemaxhp,enlargemaxmp,swordship*,wuxing*}.cpp.
+//! ID-карта семьи, подстановка S, ветка установки, End-политика и табличная
+//! подготовка payload — zone rules `skills/immediate.rs` и `skills/wuxing.rs`;
+//! здесь живой обход Game по тем же контрактам.
 //!
 //! Begin записывает общую базу, проверяет только исходный U и свежие свойства,
 //! затем включает фазу. Здесь нет reuse-допуска, MP, visual или Move.
@@ -19,18 +22,12 @@
 //! не меняя движение и CAN. UpdateProperty не заменяется OnChangeStates.
 //! SlotMap сохраняет идентичность навыка через callbacks без копии исполнения.
 
-use super::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
-use super::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
-use super::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
 use super::immediatestateinstallation::apply_immediate_state;
 use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::origin::ORIGIN_SKILL_ID;
 use super::playercast::execute_registered_player_cast_without_visual;
 use super::rangedweaponcast::terminal;
 use super::stateskill::end_state_skill;
-use super::swordship::is_swordship_skill;
-use super::taiji::TAIJI_SKILL_ID;
-use super::wuxing::{apply_wuxing_state, is_wuxing_skill, prepare_wuxing_parameters};
+use super::wuxing::apply_wuxing_state;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::skill::RegisteredSkill;
@@ -38,16 +35,10 @@ use crate::gameserver::appserver::states::state::{resolve_skill_sufferer, resolv
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, ServerRegionOwner,
 };
-
-pub(crate) const fn is_immediate_state_skill(skill_id: u32) -> bool {
-    matches!(skill_id, TAIJI_SKILL_ID | ORIGIN_SKILL_ID | ENLARGE_FULL_MISS_SKILL_ID
-        | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID)
-        || is_swordship_skill(skill_id) || is_wuxing_skill(skill_id)
-}
-
-pub(crate) const fn immediate_completion_end_argument(skill_id: u32) -> i32 {
-    if is_swordship_skill(skill_id) { 0 } else { 1 }
-}
+pub(crate) use nebokrai_zone::skills::{
+    immediate_completion_end_argument, is_immediate_state_skill,
+};
+use nebokrai_zone::skills::{immediate_ai_sufferer_fallback, prepare_wuxing_parameters};
 
 pub(crate) fn check_immediate_state_cast(
     game: &CGame, instance: RegisteredSkill, original_user: Option<(i32, ShapeIdentity)>,
@@ -67,10 +58,10 @@ pub(crate) fn run_immediate_state_ai<Runtime: GameMainLoopRuntime>(
     let Some(properties) = game.skill_base_properties(skill_id, skill.level()).cloned() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let wuxing_parameters = prepare_wuxing_parameters(skill_id, &properties);
+    let wuxing_parameters = prepare_wuxing_parameters(skill_id, |usage| properties.query_property(usage));
     let (region, identity) = skill.lifecycle().user();
     let source = resolve_state_move_shape(game, region, identity).or_else(|| {
-        if is_swordship_skill(skill_id) { return None; }
+        if !immediate_ai_sufferer_fallback(skill_id) { return None; }
         let (region, identity) = resolve_skill_sufferer(game, skill.lifecycle())?;
         resolve_state_move_shape(game, region, identity)
     });

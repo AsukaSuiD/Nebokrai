@@ -1,10 +1,12 @@
-//! Тайцзи CTaiJi.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/taiji.cpp/.h.
-//! Общий зарегистрированный Begin/AI/End — в immediatestate; Check требует
-//! исходного U и свойств, без reuse, visual и изменения движения.
-//! AI выбирает GetU, при NULL — GetS; создаёт состояние до End первого
-//! прежнего ID и сохраняет его позицию.
-//! После установки — UpdateProperty и End1. Формула и DB8 остаются у состояния.
-
-pub(crate) use nebokrai_zone::effects::TAIJI_STATE_ID as TAIJI_SKILL_ID;
-pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
+//! Тайцзи CTaiJi (0x12D).
+//! Источник: gameserver.exe/GameServer.pdb (пара `4F5C98E0…`, RSDS match),
+//! appserver/skills/taiji.cpp/.h.
+//! Весь класс делегирован: общий зарегистрированный Begin/AI/End —
+//! `immediatestate.rs`, ветка установки и таблица прибавок — zone rules
+//! `skills/immediate.rs`, данные и формула состояния — zone `effects/element.rs`,
+//! живой property/Begin/End — `taijistate.rs`.
+//! MATCH по машинной разведке порции №4: `CTaiJi::AI` VA `0x005AF770` —
+//! создание и первичный Begin нового состояния до поиска первого старого
+//! ID 0x12D, затем End старого, destroy свежего остатка, установка в ту же
+//! позицию, UpdateProperty и End(1). Check общий: только исходный U и свойства,
+//! без reuse, visual и изменения движения.

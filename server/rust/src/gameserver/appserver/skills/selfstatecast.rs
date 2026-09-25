@@ -1,6 +1,8 @@
 //! Зарегистрированное применение Agility, Agility2, Natural, Rapture, DaubPoison
 //! и двух щитов ManaShield/MachineShield.
 //! Источник: gameserver.exe/GameServer.pdb, одноимённые appserver/skills owners.
+//! Выбор ветки состояния, карта щитов и текст MP-отказа — zone rules
+//! `skills/selfstate.rs`; здесь живой обход Game по прежнему контракту.
 //! Общий Begin сохраняет исходную команду и часы до loop1 visual; Check
 //! получает исходного U и при отказе вызывает End(0) без второго visual2.
 //! У пяти усилений после reuse источник не типа Player проходит без Move0,
@@ -26,9 +28,8 @@
 use super::agility::apply_agility_state;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::daubpoison::{DAUB_POISON_SKILL_ID, apply_daub_poison};
+use super::daubpoison::apply_daub_poison;
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
-use super::natural::NATURAL_SKILL_ID;
 use super::playercast::execute_registered_player_cast;
 use super::rangedweaponcast::terminal;
 use super::selfshield::{apply_self_shield_state, is_self_shield_skill};
@@ -41,6 +42,7 @@ use crate::gameserver::appserver::states::visualeffect::SkillVisualEffectKind;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
+use nebokrai_zone::skills::{SelfStateBranch, self_state_branch, self_state_mana_failure_text};
 
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
@@ -51,10 +53,7 @@ fn mana_failure(
 ) {
     game.update_registered_skill_visual(instance, 7);
     let amount = properties.query_property(USER_MP_LOSE);
-    let message = if matches!(skill_id, NATURAL_SKILL_ID | DAUB_POISON_SKILL_ID) || is_self_shield_skill(skill_id) {
-        b"GS0288"
-    } else { b"GS0279" };
-    game.send_skill_system_info_with_unsigned(player_id, message, amount);
+    game.send_skill_system_info_with_unsigned(player_id, self_state_mana_failure_text(skill_id), amount);
 }
 
 fn check_cast<Runtime: GameMainLoopRuntime>(
@@ -133,9 +132,12 @@ fn run_ai<Runtime: GameMainLoopRuntime>(
     };
     if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending); }
     game.update_registered_skill_visual(instance, 1);
-    if skill_id == DAUB_POISON_SKILL_ID { apply_daub_poison(game, source, &properties, runtime); }
-    else if is_self_shield_skill(skill_id) { apply_self_shield_state(game, source, skill_id, &properties, runtime); }
-    else { apply_agility_state(game, source, skill_id, &properties, runtime); }
+    match self_state_branch(skill_id) {
+        Some(SelfStateBranch::DaubPoison) => apply_daub_poison(game, source, &properties, runtime),
+        Some(SelfStateBranch::SelfShield) => apply_self_shield_state(game, source, skill_id, &properties, runtime),
+        Some(SelfStateBranch::AgilityFamily) => apply_agility_state(game, source, skill_id, &properties, runtime),
+        None => {}
+    }
     terminal(QueuedSkillExecutionState::Completed)
 }
 

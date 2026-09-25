@@ -1,6 +1,7 @@
 //! Наложение ManaShield и MachineShield на захваченного источника.
 //! Источник: gameserver.exe/GameServer.pdb, appserver/skills/{mana,machine}shield.cpp.
-//! Общие Begin, Check, AI, visual и End принадлежат selfstatecast.
+//! Общие Begin, Check, AI, visual и End принадлежат selfstatecast; ID-карта —
+//! zone rules `skills/selfstate.rs`, здесь живой обход Game.
 //!
 //! После visual1 удаляется первый непустой слот нужного ID без фильтра RTTI
 //! или ended: End, затем destructor свежего остатка той же позиции.
@@ -25,9 +26,7 @@ pub(crate) trait SelfShieldOwner {
     fn create_state(properties: &CSkillBaseProperties) -> DefenseShieldState;
 }
 
-pub(crate) const fn is_self_shield_skill(skill_id: u32) -> bool {
-    matches!(skill_id, MANA_SHIELD_SKILL_ID | MACHINE_SHIELD_SKILL_ID)
-}
+pub(crate) use nebokrai_zone::skills::is_self_shield_skill;
 
 pub(super) fn apply_self_shield_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, source: (i32, ShapeIdentity), skill_id: u32,

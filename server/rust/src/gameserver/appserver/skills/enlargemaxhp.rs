@@ -1,10 +1,10 @@
-//! Максимум HP CEnlargeMaxHp.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/enlargemaxhp.cpp/.h.
-//! Общий зарегистрированный Begin/AI/End — в immediatestate; Check требует
-//! исходного U и свойств, без reuse, visual и изменения движения.
-//! AI выбирает GetU, при NULL — GetS; завершает первый прежний ID до создания
-//! состояния и добавляет новое в конец.
-//! После установки — UpdateProperty и End1. Формула и DB8 остаются у состояния.
-
-pub(crate) use nebokrai_zone::effects::ENLARGE_MAX_HP_STATE_ID as ENLARGE_MAX_HP_SKILL_ID;
-pub(crate) const SKILL_USAGE_MAX_HP_GAIN: u32 = 118;
+//! Максимум HP CEnlargeMaxHp (0x259).
+//! Источник: gameserver.exe/GameServer.pdb (пара `4F5C98E0…`, RSDS match),
+//! appserver/skills/enlargemaxhp.cpp/.h.
+//! Весь класс делегирован: общий зарегистрированный Begin/AI/End —
+//! `immediatestate.rs`, ветка установки и usage 118 прибавки — zone rules
+//! `skills/immediate.rs`, данные и формула состояния — zone
+//! `effects/maxresource.rs`, живой property/Begin/End — `enlargemaxhpstate.rs`.
+//! MATCH по машинной разведке порции №4: AI семейства Enlarge завершает первый
+//! прежний ID до чтения прибавки и добавляет новое состояние в конец;
+//! UpdateProperty безусловен даже при отказе Begin, успешный AI — End(1).

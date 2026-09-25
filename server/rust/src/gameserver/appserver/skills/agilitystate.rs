@@ -10,6 +10,8 @@
 //! сохраняет участников и публикует visual до append; UpdateProperty следует
 //! после попытки Begin независимо от результата. Ненужный постоянному
 //! состоянию timestamp не дублируется в payload.
+//! MATCH по разведке порции №4: visual Begin этого семейства — loop1
+//! (константа zone `skills/selfstate.rs`), BFE03/BFE04 с time=0 и extra=0.
 //!
 //! AI пустой; клиентские время и дополнительные данные нулевые.
 //! End не пишет ended: существующий
@@ -30,6 +32,7 @@ use crate::gameserver::appserver::states::state::{
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use nebokrai_shared::values::CGuid;
+use nebokrai_zone::skills::PERSISTENT_AGILITY_FAMILY_VISUAL_LOOP;
 
 pub(crate) use nebokrai_zone::effects::{
     PERSISTENT_AGILITY_FAMILY_STATE_BYTES, PersistentAgilityFamilyState,
@@ -79,7 +82,7 @@ pub(crate) fn replace_persistent_agility_state(
         shape.mark_applied_state_begun(key);
         shape.set_applied_state_user(key, Some(user));
         shape.set_applied_state_sufferer(key, Some(sufferer));
-        shape.begin_applied_state_visual(key, 1);
+        shape.begin_applied_state_visual(key, PERSISTENT_AGILITY_FAMILY_VISUAL_LOOP);
         shape.update_applied_state_visual_base(key);
         Some(())
     })().is_some();
@@ -123,7 +126,7 @@ pub(crate) fn restart_persistent_agility_state(
     if let Some(shape) = resolve_state_move_shape_mut(game, region_id, holder) {
         shape.set_applied_state_sufferer(key, Some(sufferer));
     }
-    if begin_applied_state_visual(game, region_id, holder, key, 1) {
+    if begin_applied_state_visual(game, region_id, holder, key, PERSISTENT_AGILITY_FAMILY_VISUAL_LOOP) {
         update_property_state_visual::<PersistentAgilityFamilyState>(
             game, region_id, holder, key, StatePropertyTarget::Sufferer, now,
             |_, _| 0,

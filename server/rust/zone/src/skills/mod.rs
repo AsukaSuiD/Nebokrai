@@ -5,6 +5,7 @@ mod battlefairy; // правила навыков боевого духа (сб�
 mod chaossphere; // движущаяся область CChaosSpherePhalanx и её живая форма.
 mod cure; // числовое правило и выбор снимаемых состояний CCure.
 mod daubpoison; // числовое правило смазки оружия ядом CDaubPoison.
+pub mod dash; // рывки: общая геометрия пути, единый visual и контакт Flash/LittleFlash + hub-швы DashSkillGame семейства.
 mod directelement; // числовой расчёт прямых элементальных ударов.
 mod dispatch; // форма цели и снимок ожидающей команды навыка.
 mod elementphalanx; // снимок и числовой расчёт элементального удара призванных областей.
@@ -13,16 +14,21 @@ mod elementphalanx; // снимок и числовой расчёт элеме�
 pub mod execution;
 
 mod firewall; // правила призыва и маска области CFireWall.
+pub mod flash; // CFlash (0x69): Check/AI рывка, visual, master_info/target_level семейства.
 mod fury; // ID состояний, которые Fury снимает перед созданием.
 mod godbless; // параметры CGodBless/CGodBless2 при создании состояния.
 mod godthunder; // окна целей, клиентские поля областей GodThunder/GodThunder2 и живая форма CGodThunderPhalanx.
 mod hearten; // параметры нового состояния CHearten.
+mod immediate; // правила цикла immediate-состояний: ID-карта, ветка установки, End-политика и payload.
 mod lifecycle; // база и стадии живого навыка.
+pub mod littleflash; // CLittleFlash/CLittleFlash2 (0x71/0x7F): Check/AI и visual малых рывков.
 mod masked_area; // маска неподвижных областей FireWall и YinYang и живая форма MaskedElementPhalanx.
 mod pillar; // параметры создаваемой стойки CPillar.
 mod poisonfog; // данные живой области CPoisonFogPhalanx.
 mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery, движение пути FireBall, общий серверный decoder и живые композиты FireBall и GodPunishment.
 mod roar; // границы обхода клеток CRoar.
+pub mod rush; // CRush/CRush2 (0x73/0x7C): Check/AI, AddRushState, visual и типы состояний RushState/Rush2State.
+mod selfstate; // правила self-state семьи: ветка состояния, текст MP-отказа, создание Agility-состояний.
 pub mod skillfactory; // фабричные владельцы и реестр runtime-свойств навыков.
 mod snowstorm; // данные области CSnowStormPhalanx и окна выбранных клеток.
 mod soulmirror; // маска и параметры клетки CSoulMirror.
@@ -33,6 +39,7 @@ mod summonshape; // CSummonShape: общий тип/правило ID и wire-к
 mod visualeffect; // visual-ресурс зарегистрированного навыка.
 mod wangsheng; // прямое восстановление HP навыком CWangsheng, без создания WangshengState.
 mod weak; // правила области ослабления CWeakPhalanx и срока призыва CWeak.
+mod wuxing; // ID и подготовка 24 параметров пяти состояний У-син.
 mod yinyang; // параметры и маски областей CYinYang и CYinYang2.
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
@@ -80,6 +87,13 @@ pub use pillar::{PILLAR_SKILL_ID, pillar_state_parameters};
 pub use roar::{ROAR_SKILL_ID, RoarBounds, roar_bounds};
 pub use godbless::GodBlessGains;
 pub use hearten::hearten_state;
+pub use immediate::{ImmediateStatePayload, ImmediateStatePlacement,
+    immediate_ai_sufferer_fallback, immediate_completion_end_argument,
+    immediate_state_placement, is_immediate_state_skill};
+pub use selfstate::{AGILITY_2_VISUAL_LOOP, PERSISTENT_AGILITY_FAMILY_VISUAL_LOOP,
+    SelfStateBranch, agility_state_2, is_self_shield_skill,
+    persistent_agility_family_state, self_state_branch, self_state_mana_failure_text};
+pub use wuxing::{is_wuxing_skill, prepare_wuxing_parameters};
 pub use wangsheng::{WANGSHENG_SKILL_ID, wangsheng_restored_health};
 pub use directelement::{DirectElementProfile, DirectElementLiveField};
 pub use summonshape::{SUMMON_SHAPE_TYPE, encode_related_phalanx_prefix,

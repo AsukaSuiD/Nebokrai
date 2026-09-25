@@ -1,10 +1,11 @@
-//! Источник COrigin.
-//! Источник: gameserver.exe/GameServer.pdb, appserver/skills/origin.cpp/.h.
-//! Общий зарегистрированный Begin/AI/End — в immediatestate; Check требует
-//! исходного U и свойств, без reuse, visual и изменения движения.
-//! AI выбирает GetU, при NULL — GetS; создаёт состояние до End первого
-//! прежнего ID и сохраняет его позицию.
-//! После установки — UpdateProperty и End1. Формула и DB8 остаются у состояния.
-
-pub(crate) use nebokrai_zone::effects::ORIGIN_STATE_ID as ORIGIN_SKILL_ID;
-pub(crate) const SKILL_USAGE_ELEMENT_MODIFY_GAIN: u32 = 115;
+//! Источник COrigin (0x130).
+//! Источник: gameserver.exe/GameServer.pdb (пара `4F5C98E0…`, RSDS match),
+//! appserver/skills/origin.cpp/.h.
+//! Весь класс делегирован: общий зарегистрированный Begin/AI/End —
+//! `immediatestate.rs`, ветка установки и таблица прибавок — zone rules
+//! `skills/immediate.rs`, данные и формула состояния — zone `effects/element.rs`,
+//! живой property/Begin/End — `originstate.rs`.
+//! MATCH по машинной разведке порции №4: `COrigin::AI` VA `0x005AEA70` — тот же
+//! цикл CTaiJi с ID 0x130: создание и Begin до End первого старого ID, замена
+//! в прежней позиции, UpdateProperty и End(1). Check общий: только исходный U
+//! и свойства, без reuse, visual и изменения движения.
