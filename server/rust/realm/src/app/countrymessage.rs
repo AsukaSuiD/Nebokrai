@@ -1558,8 +1558,11 @@ pub fn dispatch_country_exile_request_message(
 /// Ветвь `0x6030E`: результат exile от GameServer: `success_exiled` до
 /// чтения списка игроков, safe-decode списка (проверка усечения по остатку
 /// байт и guard аллокации до цикла) и ответ `0x7FF15` формы
-/// `[country byte, count long, ids…]` через `send_all` контекста. Порядок и
-/// guard-ы повторяют исходный диспетчер байт-в-байт.
+/// `[country byte, count long, ids…]` через `send_all` контекста. Порядок
+/// повторяет исходный диспетчер; guard-ы списка — добавленная Rust-закалка:
+/// их у машины нет (цикл `count×GetDWord` без проверок, при усечении
+/// GetDWord отдаёт 0 и ответ всё равно уходит) — дивергенция только на
+/// порченом wire [досверка диспетчера 2026-09-26].
 pub fn dispatch_country_exile_result_message(
     message: &mut CMessage,
     countries: &mut dyn WorldCountryGovernanceGate,
