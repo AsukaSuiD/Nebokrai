@@ -1288,6 +1288,18 @@ impl TiberiusRsPlayer {
     }
 }
 
+impl nebokrai_realm::app::world_game_view::WorldRenameDbView for TiberiusRsPlayer {
+    fn is_name_exist<'a>(
+        &'a mut self,
+        player_name: &'a [u8],
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + 'a>> {
+        Box::pin(async move {
+            RsPlayerOwner::<CPlayer>::is_name_exist(self, player_name, active_transaction).await
+        })
+    }
+}
+
 impl RsPlayerOwner<CPlayer> for TiberiusRsPlayer {
     fn load_player<J, G, WeekDay>(
         &mut self,

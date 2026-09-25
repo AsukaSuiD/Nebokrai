@@ -68,6 +68,16 @@ pub struct FactionPropertyReinitialization {
     pub deliveries: Vec<FactionPropertyDelivery>,
 }
 
+/// Доставка faction-разговора `0x7FA02` одному получателю. Сам цикл по
+/// членам фракции вместе с wire-форматом остаётся у старого `CFaction::talk`
+/// до шага переноса organizing-области.
+#[derive(Debug, Eq, PartialEq)]
+pub struct FactionTalkDelivery {
+    pub recipient_player_id: i32,
+    pub game_server_id: i32,
+    pub result: Result<i32, SendMessageError>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FactionBillboardKind {
     MemberCount,

@@ -13,3 +13,7 @@ View-трейты края (`WorldGameView` и последующие) потр�
 - Первый пример — `WorldGameView::reload` в [`realm/app/world_game_view.rs`](../../server/rust/realm/src/app/world_game_view.rs): boxed future поверх inherent `CGame::reload` с теми же аргументами; порядок вызовов и контракт результата (`WorldReloadResult`) не меняются.
 - Маркер `Send` boxed future не добавляется, если исходный async-контракт его не требовал: dyn-контексты (`WorldReloadContext`) не обязуются быть Send, и их потребители уже работают вне Send-ограничения.
 - Для горячих путей обработчиков boxed-heap-аллокация на каждый вызов не вводится без отдельного основания; сначала ищется синхронный или заранее выделенный путь.
+
+## Аддендум: DB-owner без dyn-совместимости
+
+Если нужный обработчику owner сам dyn-несовместим (RPITIT-возвраты или generic-методы, как у `RsPlayerOwner`), его целиком через view не публикуют. Для каждой используемой операции заводится узкий dyn-совместимый трейт-заменитель с той же boxed-future формой; реализация у владельца в старом пакете делегирует исходному методу. Первый пример — `WorldRenameDbView::is_name_exist` в [`realm/app/world_game_view.rs`](../../server/rust/realm/src/app/world_game_view.rs) (переименование игрока `OnOtherMessage`): единственная async-точка DB внутри inherent `CGame::change_map_player_name`; generic-параметр inherent при единственном вызывающем заменён `&mut dyn WorldRenameDbView` без изменения порядка проверок и отчётов.

@@ -1563,12 +1563,10 @@ pub(crate) enum WorldMessageOwner {
     MiscAuction,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldHonorEliminatorRegistration {
-    MissingOnlinePlayer,
-    Duplicate,
-    Accepted,
-}
+pub(crate) use nebokrai_realm::app::worldothermessage::{
+    WorldGoodsLink, WorldGoodsLinkPayload, WorldHonorEliminatorRegistration,
+    WorldPlayerNameChangeDisposition, WorldPlayerNameChangeReport, WorldPlayerNameLookupError,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLocalMessageQueueBlock {
@@ -5382,21 +5380,6 @@ const INITIAL_GOODS_LINK_PLACEHOLDERS: usize = 500;
 const LEGACY_GOODS_LINK_MAX_SIZE: usize = 0x0CCC_CCCC;
 static NEXT_GOODS_LINK_INDEX: AtomicU32 = AtomicU32::new(1);
 
-/// Владеющая Rust-форма точного 20-байтового `CGame::tagGoodsLink`.
-///
-/// `Box<CGoods>` заменяет сырой owning pointer только для `bChange != 0`;
-/// unchanged-запись хранит исходные `dwType/lNum`. Старый padding не
-/// Создаётся, потому что ни lookup, ни wire его не наблюдают.
-pub(crate) enum WorldGoodsLinkPayload {
-    Changed(Box<CGoods>),
-    Original { goods_type: u32, amount: u8 },
-}
-
-pub(crate) struct WorldGoodsLink {
-    index: u32,
-    payload: WorldGoodsLinkPayload,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldAuctionSellerMoney {
     pub(crate) fee: i32,
@@ -5466,36 +5449,6 @@ fn truncate_legacy_money(value: f64) -> i32 {
         i32::MIN
     } else {
         value.trunc() as i32
-    }
-}
-
-impl WorldGoodsLink {
-    fn placeholder() -> Self {
-        Self {
-            index: 0,
-            payload: WorldGoodsLinkPayload::Original {
-                goods_type: 0,
-                amount: 0,
-            },
-        }
-    }
-
-    pub(crate) fn changed(goods: Box<CGoods>) -> Self {
-        Self {
-            index: goods.get_id() as u32,
-            payload: WorldGoodsLinkPayload::Changed(goods),
-        }
-    }
-
-    pub(crate) const fn original(goods_type: u32, amount: u8) -> Self {
-        Self {
-            index: 0,
-            payload: WorldGoodsLinkPayload::Original { goods_type, amount },
-        }
-    }
-
-    pub(crate) const fn payload(&self) -> &WorldGoodsLinkPayload {
-        &self.payload
     }
 }
 
@@ -5981,35 +5934,6 @@ impl WorldDbDataSaveSession<'_> {
     pub(crate) fn remove_first_saved_country(&mut self) {
         drop(self.data.countries.pop_front());
     }
-}
-
-/// Safe Rust не воспроизводит переполнение двух исходных `char[260]`.
-///
-/// Тип остаётся в составных результатах caller-ов, но после замены stack-copy
-/// на owned `Vec` не имеет возможных значений.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerNameLookupError {}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorldPlayerNameChangeDisposition {
-    PlayerMissing,
-    NullName,
-    NameTooLong { length: usize },
-    CurrentNameMissingSpecialString,
-    InvalidString,
-    MapPlayerNameExists,
-    DbDataNameExists,
-    DbCreationNameExists,
-    PersistentNameExists,
-    Changed { previous_name: Vec<u8> },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldPlayerNameChangeReport {
-    pub(crate) player_id: u32,
-    pub(crate) requested_name: Vec<u8>,
-    pub(crate) legacy_result: i32,
-    pub(crate) disposition: WorldPlayerNameChangeDisposition,
 }
 
 pub(crate) enum WorldCreationPlayerAppendOutcome {
@@ -15908,17 +15832,14 @@ impl CGame {
  /// Выполняет полный `CPlayer::ChangeName` без global singleton-ов.
  /// Filter получает отдельную mutable копию, а последующие проверки и
  /// финальное присваивание используют исходные bytes, как owner.
-    pub(crate) async fn change_map_player_name<Database>(
+    pub(crate) async fn change_map_player_name(
         &mut self,
         player_id: u32,
         requested_name: Option<&[u8]>,
         globe_setup: &GlobeSetupSnapshot,
-        database: &mut Database,
+        database: &mut dyn nebokrai_realm::app::world_game_view::WorldRenameDbView,
         active_transaction: Option<&mut WorldTdsClient>,
-    ) -> Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>
-    where
-        Database: RsPlayerOwner<CPlayer> + ?Sized,
-    {
+    ) -> Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError> {
         let report = |requested_name: &[u8], legacy_result, disposition| {
             WorldPlayerNameChangeReport {
                 player_id,
@@ -16935,6 +16856,58 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
             profile,
             send_to_game_servers,
             reload_server_resources,
+        ))
+    }
+
+    fn region_game_server_index(&self, region_id: i32) -> Option<u32> {
+        self.get_region_game_server(region_id)
+            .map(|entry| entry.index)
+    }
+
+    fn decode_online_player_lei_ting(
+        &mut self,
+        player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<bool, PlayerCodecError> {
+        CGame::decode_online_player_lei_ting(self, player_id, source, cursor)
+    }
+
+    fn reset_honor_eliminate_info(&mut self, rank_mask: u32) -> bool {
+        CGame::reset_honor_eliminate_info(self, rank_mask)
+    }
+
+    fn register_honor_eliminator(
+        &mut self,
+        player_id: u32,
+        eliminator_id: u32,
+    ) -> WorldHonorEliminatorRegistration {
+        CGame::register_honor_eliminator(self, player_id, eliminator_id)
+    }
+
+    fn add_goods_link(&mut self, link: WorldGoodsLink) -> u32 {
+        CGame::add_goods_link(self, link)
+    }
+
+    fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink> {
+        CGame::find_goods_link(self, index)
+    }
+
+    fn change_map_player_name<'a>(
+        &'a mut self,
+        player_id: u32,
+        requested_name: Option<&'a [u8]>,
+        globe_setup: &'a GlobeSetupSnapshot,
+        rs_player: &'a mut (dyn nebokrai_realm::app::world_game_view::WorldRenameDbView + 'a),
+        player_database: Option<&'a mut WorldTdsClient>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>> + 'a>> {
+        Box::pin(CGame::change_map_player_name(
+            self,
+            player_id,
+            requested_name,
+            globe_setup,
+            rs_player,
+            player_database,
         ))
     }
 }

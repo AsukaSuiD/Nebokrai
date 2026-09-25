@@ -4,6 +4,7 @@ pub mod billingmessage;
 pub mod billingplayermanager;
 pub mod dbincrementlog;
 pub mod game;
+pub mod incrementlog;
 pub mod playerfillmgr;
 pub mod rsplayeraccount;
 pub mod rsplayerfillmgr;

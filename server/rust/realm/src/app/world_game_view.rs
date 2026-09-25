@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nebokrai_shared::network::ServerCommandHandle;
-use nebokrai_shared::resources::CGodsBattleConf;
+use nebokrai_shared::resources::{CGodsBattleConf, GlobeSetupSnapshot};
 
 use crate::activities::jjcsystem::CJJcSystem;
 use crate::activities::rsgodsbattle::TiberiusRsGodsBattle;
@@ -13,6 +13,11 @@ use crate::app::gmmessage::{WorldNamedRegionLookup, WorldRegionIdRouteScan};
 use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError};
 use crate::app::worldserver::{WorldReloadContext, WorldReloadResult};
+use crate::app::worldothermessage::{
+    WorldGoodsLink, WorldHonorEliminatorRegistration, WorldPlayerNameChangeReport,
+    WorldPlayerNameLookupError,
+};
+use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::characters::player::{CPlayer, PlayerCodecError, PlayerPropertyCoefficients};
 use crate::content::goods::GoodsBasePropertiesRegistry;
@@ -44,6 +49,11 @@ pub trait WorldGameView {
     fn get_team_session_id(&self, team_id: u32) -> i32;
 
     fn player_game_server(&self, player_id: i32) -> Option<WorldGameServerSnapshot>;
+
+    /// Индекс маршрута game server-а региона; `None` — региона нет в карте.
+    /// `None` отличим от legacy `0`: ветка private-chat выбирает по нему
+    /// `PrivateUnavailable`.
+    fn region_game_server_index(&self, region_id: i32) -> Option<u32>;
 
     fn map_player(&self, player_id: u32) -> Option<&CPlayer>;
 
@@ -81,6 +91,25 @@ pub trait WorldGameView {
         coefficients: &PlayerPropertyCoefficients,
     ) -> Result<bool, PlayerCodecError>;
 
+    fn decode_online_player_lei_ting(
+        &mut self,
+        player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<bool, PlayerCodecError>;
+
+    fn reset_honor_eliminate_info(&mut self, rank_mask: u32) -> bool;
+
+    fn register_honor_eliminator(
+        &mut self,
+        player_id: u32,
+        eliminator_id: u32,
+    ) -> WorldHonorEliminatorRegistration;
+
+    fn add_goods_link(&mut self, link: WorldGoodsLink) -> u32;
+
+    fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink>;
+
     fn add_item_to_bai_tan_request_list(&mut self, ip: u32, player_id: i32) -> bool;
 
     fn del_item_from_bai_tan_list(&mut self, player_id: i32) -> WorldBaiTanRemoval;
@@ -117,5 +146,31 @@ pub trait WorldGameView {
         send_to_game_servers: bool,
         reload_server_resources: bool,
     ) -> Pin<Box<dyn Future<Output = WorldReloadResult> + 'a>>;
+
+    /// Переименование игрока с DB-нагрузкой через owner: boxed future по
+    /// ADR-0013 поверх inherent `CGame::change_map_player_name`, async-
+    /// контракт и порядок DB-эффектов не меняются.
+    #[allow(clippy::type_complexity, reason = "точный вызов inherent change_map_player_name с теми же аргументами")]
+    fn change_map_player_name<'a>(
+        &'a mut self,
+        player_id: u32,
+        requested_name: Option<&'a [u8]>,
+        globe_setup: &'a GlobeSetupSnapshot,
+        rs_player: &'a mut (dyn WorldRenameDbView + 'a),
+        player_database: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = Result<WorldPlayerNameChangeReport, WorldPlayerNameLookupError>> + 'a>>;
+}
+
+/// Узкий dyn-заменитель одного DB-запроса переименования. `RsPlayerOwner`
+/// с RPITIT-возвратами и generic-методами dyn-несовместим (vtable),
+/// поэтому запрос `is_name_exist` публикуется как boxed future по той же
+/// форме ADR-0013; реализация живёт у владельца игрока в старом пакете и
+/// делегирует `RsPlayerOwner::<CPlayer>::is_name_exist`.
+pub trait WorldRenameDbView {
+    fn is_name_exist<'a>(
+        &'a mut self,
+        player_name: &'a [u8],
+        active_transaction: Option<&'a mut WorldTdsClient>,
+    ) -> Pin<Box<dyn Future<Output = bool> + 'a>>;
 }
 

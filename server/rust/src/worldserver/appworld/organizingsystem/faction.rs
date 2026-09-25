@@ -199,8 +199,8 @@ pub(crate) enum FactionCloneSaveBlock {
 
 pub(crate) use nebokrai_realm::organizations::faction::{
     FactionInitialPropertyBlock, FactionOwnedCityDelivery, FactionOwnedCityUpdateBuildError,
-    FactionPropertyDelivery, FactionPropertyReinitialization, OwnedCitiesWireBuildError,
-    OwnedCityMutationBuildError,
+    FactionPropertyDelivery, FactionPropertyReinitialization, FactionTalkDelivery,
+    OwnedCitiesWireBuildError, OwnedCityMutationBuildError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1184,13 +1184,6 @@ pub(crate) struct FactionOtherInfoDelivery {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionOtherInfoBuildError {
     pub(crate) visible_name_len: usize,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct FactionTalkDelivery {
-    pub(crate) recipient_player_id: i32,
-    pub(crate) game_server_id: i32,
-    pub(crate) result: Result<i32, SendMessageError>,
 }
 
 pub(crate) trait FactionOrganizingInfoContext {
@@ -5807,7 +5800,7 @@ impl CFaction {
 
     pub(crate) fn talk(
         &self,
-        game: &CGame,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
         speaker_id: i32,
         first_text: &[u8],
         second_text: &[u8],

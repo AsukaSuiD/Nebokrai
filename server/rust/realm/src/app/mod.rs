@@ -35,6 +35,8 @@ pub mod teammessage;
 pub mod world_client;
 pub mod world_game_view;
 pub mod world_message;
+pub mod world_organizing_view;
+pub mod worldothermessage;
 pub mod world_server;
 pub mod world_server_client;
 pub mod worldserver;

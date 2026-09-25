@@ -142,8 +142,9 @@ struct FactionBillboardEntry {
 
 pub(crate) use nebokrai_realm::organizations::faction::{
     FactionBillboardKind, FactionBillboardStatBlock, FactionReinitializationBlock,
-    FactionReinitializationEntry,
+    FactionReinitializationEntry, FactionTalkDelivery,
 };
+pub(crate) use nebokrai_realm::organizations::organizingctrl::FreePlayerLookup;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TopInfoDelivery {
@@ -543,13 +544,6 @@ impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
     fn put_war_log(&mut self, info: &[u8]) {
         put_string_to_file("war", info);
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FreePlayerLookup {
-    NoFaction,
-    Faction(i32),
-    BlockedNullFaction { map_key: i32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8122,4 +8116,22 @@ fn legacy_tick_ms() -> u32 {
     let seconds_ms = (now.tv_sec as u64).wrapping_mul(1_000);
     let nanoseconds_ms = (now.tv_nsec as u64) / 1_000_000;
     seconds_ms.wrapping_add(nanoseconds_ms) as u32
+}
+
+impl nebokrai_realm::app::world_organizing_view::WorldOrganizingView for COrganizingCtrl {
+    fn is_free_player(&self, player_id: i32) -> FreePlayerLookup {
+        COrganizingCtrl::is_free_player(self, player_id)
+    }
+
+    fn faction_talk(
+        &self,
+        game: &dyn nebokrai_realm::app::world_game_view::WorldGameView,
+        faction_id: i32,
+        speaker_id: i32,
+        first_text: &[u8],
+        second_text: &[u8],
+    ) -> Option<Vec<FactionTalkDelivery>> {
+        self.faction_by_id(faction_id)
+            .map(|faction| faction.talk(game, speaker_id, first_text, second_text))
+    }
 }
