@@ -5345,14 +5345,7 @@ pub(crate) struct WorldBaiTanRegistration {
     pub(crate) player_route_inserted: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldBaiTanRemoval {
-    pub(crate) player_id: i32,
-    pub(crate) mapped_ip: Option<u32>,
-    pub(crate) remaining_ip_refcount: Option<i32>,
-    pub(crate) player_ip_removed: bool,
-    pub(crate) player_route_removed: bool,
-}
+pub(crate) use nebokrai_realm::app::auction::WorldBaiTanRemoval;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldBaiTanCompletion {
@@ -17078,6 +17071,45 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         counters: [u8; 0x10],
     ) -> bool {
         CGame::set_map_player_jjc_snapshot(self, player_id, level, jjc_level, jjc_score, counters)
+    }
+
+    fn online_player_by_id(&self, player_id: u32) -> Option<&CPlayer> {
+        CGame::online_player_by_id(self, player_id)
+    }
+
+    fn decord_online_player_by_id(
+        &mut self,
+        player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<bool, PlayerCodecError> {
+        CGame::decord_online_player_by_id(self, player_id, source, cursor, registry, coefficients)
+    }
+
+    fn add_item_to_bai_tan_request_list(&mut self, ip: u32, player_id: i32) -> bool {
+        CGame::add_item_to_bai_tan_request_list(self, ip, player_id)
+    }
+
+    fn del_item_from_bai_tan_list(&mut self, player_id: i32) -> WorldBaiTanRemoval {
+        CGame::del_item_from_bai_tan_list(self, player_id)
+    }
+
+    fn game_server(
+        &self,
+        index: u32,
+    ) -> Option<nebokrai_realm::app::world_game_view::WorldGameServerSnapshot> {
+        CGame::game_server(self, index).map(|entry| {
+            nebokrai_realm::app::world_game_view::WorldGameServerSnapshot {
+                connected: entry.connected,
+                index: entry.index,
+            }
+        })
+    }
+
+    fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize {
+        CGame::push_write_log_command(self, command)
     }
 }
 

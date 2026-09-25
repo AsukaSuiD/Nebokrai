@@ -2,9 +2,12 @@
 
 use nebokrai_shared::network::ServerCommandHandle;
 
+use crate::app::auction::WorldBaiTanRemoval;
 use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError};
-use crate::characters::player::CPlayer;
+use crate::persistence::writelog::WorldWriteLogCommand;
+use crate::characters::player::{CPlayer, PlayerCodecError, PlayerPropertyCoefficients};
+use crate::content::goods::GoodsBasePropertiesRegistry;
 
 /// Снимок состояния game server-а: наличие коннекта и числовой индекс маршрута.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,5 +60,24 @@ pub trait WorldGameView {
         jjc_score: u32,
         counters: [u8; 0x10],
     ) -> bool;
+
+    fn online_player_by_id(&self, player_id: u32) -> Option<&CPlayer>;
+
+    fn decord_online_player_by_id(
+        &mut self,
+        player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<bool, PlayerCodecError>;
+
+    fn add_item_to_bai_tan_request_list(&mut self, ip: u32, player_id: i32) -> bool;
+
+    fn del_item_from_bai_tan_list(&mut self, player_id: i32) -> WorldBaiTanRemoval;
+
+    fn game_server(&self, index: u32) -> Option<WorldGameServerSnapshot>;
+
+    fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize;
 }
 
