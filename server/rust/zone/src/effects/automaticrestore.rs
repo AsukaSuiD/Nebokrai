@@ -11,6 +11,8 @@
 //! Таблицы всех четырёх классов вызывают общие тела Serialize/Unserialize:
 //! VA `0x005ECE70` / `0x004F9D80`. PDB называет общие тела по другим состояниям;
 //! принадлежность здесь определяется vtable, а не именем символа.
+//! Проекция из снимка `PlayerCombatProperties` расположена здесь (а не в
+//! переходном адаптере старого пакета), потому что оба типа локальны Zone.
 
 use nebokrai_shared::protocol::{LegacyReader, LegacyWriter};
 
@@ -57,6 +59,23 @@ pub struct AutomaticRestoreProperties {
     pub restored_hp_fight: i32,
     pub restored_mp_peace: i32,
     pub restored_mp_fight: i32,
+}
+
+impl From<crate::combat::PlayerCombatProperties> for AutomaticRestoreProperties {
+    fn from(properties: crate::combat::PlayerCombatProperties) -> Self {
+        Self {
+            hp_recovery: properties.hp_recovery,
+            mp_recovery: properties.mp_recovery,
+            resume_hp_peace: properties.resume_hp_peace,
+            resume_hp_fight: properties.resume_hp_fight,
+            resume_mp_peace: properties.resume_mp_peace,
+            resume_mp_fight: properties.resume_mp_fight,
+            restored_hp_peace: properties.restored_hp_peace,
+            restored_hp_fight: properties.restored_hp_fight,
+            restored_mp_peace: properties.restored_mp_peace,
+            restored_mp_fight: properties.restored_mp_fight,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1495,55 +1495,10 @@ pub(crate) struct PlayerHonorEliminateMutation {
     pub(crate) current: [u32; 4],
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerCombatProperties {
-    pub(crate) maximum_hp: u32,
-    pub(crate) maximum_mp: u32,
-    pub(crate) maximum_yp: u16,
-    pub(crate) maximum_rp: u16,
-    pub(crate) strength: u32,
-    pub(crate) dexterity: u32,
-    pub(crate) constitution: u32,
-    pub(crate) intelligence: u32,
-    pub(crate) minimum_attack: u32,
-    pub(crate) maximum_attack: u32,
-    pub(crate) attack_speed: u16,
-    pub(crate) hit: u16,
-    pub(crate) dodge: u16,
-    pub(crate) cch: u16,
-    pub(crate) defense: u32,
-    pub(crate) element_resistance: u32,
-    pub(crate) add_element_attack: u32,
-    pub(crate) hp_recovery: u16,
-    pub(crate) mp_recovery: u16,
-    pub(crate) burden: u16,
-    pub(crate) reank: u16,
-    pub(crate) attack_avoid: u16,
-    pub(crate) element_avoid: u16,
-    pub(crate) full_miss: u16,
-    pub(crate) element_modify: i32,
-    pub(crate) blast_attack: u16,
-    pub(crate) blast_element_attack: u16,
-    pub(crate) soul_resistance: u16,
-    pub(crate) add_soul_attack: u16,
-    pub(crate) blast_attack_scale_bits: u32,
-    pub(crate) blast_defense_scale_bits: u32,
-    pub(crate) element_blast_attack_scale_bits: u32,
-    pub(crate) element_blast_defense_scale_bits: u32,
-    pub(crate) full_miss_scale_bits: u32,
-    pub(crate) critical_rate_bits: u32,
-    pub(crate) resume_hp_peace: i32,
-    pub(crate) resume_mp_peace: i32,
-    pub(crate) resume_hp_fight: i32,
-    pub(crate) resume_mp_fight: i32,
-    pub(crate) restored_hp_peace: i32,
-    pub(crate) restored_mp_peace: i32,
-    pub(crate) restored_hp_fight: i32,
-    pub(crate) restored_mp_fight: i32,
-    pub(crate) battle_fairy_summoned: bool,
-    pub(crate) battle_fairy_recall: bool,
-    pub(crate) battle_fairy_died: bool,
-}
+// Снимок боевых свойств игрока — формульный владелец Zone
+// `combat/fightdefense`; CPlayer остаётся производителем (`combat_properties()`),
+// переходник сохраняет прежние пути потребителей.
+pub(crate) use nebokrai_zone::combat::PlayerCombatProperties;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerPropertyRecompute {
@@ -1618,32 +1573,6 @@ pub(crate) struct PlayerPkPermissionMutation {
     pub(crate) changed: bool,
     pub(crate) previous: PlayerPkPermissions,
     pub(crate) current: PlayerPkPermissions,
-}
-
-impl PlayerCombatProperties {
-    pub(crate) const fn blast_attack_scale(self) -> f32 {
-        f32::from_bits(self.blast_attack_scale_bits)
-    }
-
-    pub(crate) const fn blast_defense_scale(self) -> f32 {
-        f32::from_bits(self.blast_defense_scale_bits)
-    }
-
-    pub(crate) const fn full_miss_scale(self) -> f32 {
-        f32::from_bits(self.full_miss_scale_bits)
-    }
-
-    pub(crate) const fn element_blast_attack_scale(self) -> f32 {
-        f32::from_bits(self.element_blast_attack_scale_bits)
-    }
-
-    pub(crate) const fn element_blast_defense_scale(self) -> f32 {
-        f32::from_bits(self.element_blast_defense_scale_bits)
-    }
-
-    pub(crate) const fn critical_rate(self) -> f32 {
-        f32::from_bits(self.critical_rate_bits)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
