@@ -1,5 +1,13 @@
 # Аудит готовности серверной реконструкции
 
+## Realm activities: суточный номер копии ShengSiShiSu 25 сентября 2026
+
+Process-global owner номера копии перенесён из `src/worldserver/appworld/misc.rs` в [`realm/activities/misc.rs`](../../server/rust/realm/src/activities/misc.rs): `GetCopyNum` читает signed DWORD с initial value `1`; `AddCopyNum` — обычное 32-битное сложение без overflow gate (`AtomicI32` сохраняет wrapping bits вместо Win32 data race); timer-state сброса ставит первое событие на следующий день на `0:0:0` с сохранением текущих milliseconds, а callback сначала возвращает номер к `1` и только затем ставит следующее событие через `AddDay(1)` — исходный reset-before-reschedule порядок и выдача ID с параметром `0`. Связи уже имели владельцев (`TagTime`-family → Shared values, `CTimer` → Shared runtime); швов нет. Старый файл стал glob-шимом; потребители поимённо (appworld `othermessage` с вариантом CopyNumber, world `game` с report/disposition типами) работают через шим без правок.
+
+Машинное основание на точной паре `Nworldserver.exe` + `WorldServer.pdb` (`F3AC454D`, RSDS match): публичные символы сборки содержат `GetCopyNum`, `AddCopyNum`, `ClearCopyNum` и `Register...CopyNumTime`. Порядок reset и timer event parameters сохраняют прежний статус заголовков и заново не дизассемблировались.
+
+Штатная Linux-проверка `cargo check --locked --workspace --lib --bins` через `deploy/check-rust.ps1` прошла без предупреждений. Отметка обновлена в [карте проекта](../architecture/workspace.md). Серверы и клиент не запускались, автоматические тесты не создавались.
+
 ## Realm content: DB snapshots goods-домена 25 сентября 2026
 
 Пять DB snapshot-типов goods (`GoodsAddonPropertyValue`, `GoodsAddonValueCountBlock`, `GoodsAddonPropertySnapshot` с `from_legacy_parts`/`legacy_parts`, `GoodsPropertiesSnapshot`, `GoodsObjectSnapshot` с CGuid) извлечены из `src/dbaccess/worlddb/dbgoods.rs` в [`realm/content/goodsdb.rs`](../../server/rust/realm/src/content/goodsdb.rs). Поля snapshot-а дополнительно расширены до `pub`: после извлечения save-путь `dbgoods` читает их межкрейтово — видимость, не форма данных; задокументировано в шапке файла. Старый `dbgoods` компилируется через списочный re-export; потребители поимённо (`dbmisc`, `goodslistener`, `rsplayer`, `appworld cgoods` с алиасами `Db*`) не тронуты.
