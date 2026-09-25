@@ -27,6 +27,7 @@ pub mod onbillserver;
 pub mod othermessage;
 pub mod setup;
 pub mod auction;
+pub mod baitan; // bai-tan реестр CGame: очередь заявок по ip, маршруты игроков и счётчики повторных ip
 pub mod gmamessage;
 pub mod gmmessage;
 pub mod jjcsysmessage;
@@ -43,6 +44,7 @@ pub mod world_game_view;
 pub mod world_message;
 pub mod world_network; // net-thread прокладка хода World: accept/I/O worker, опрос Login
 pub mod world_organizing_view;
+pub mod world_runtime; // драйвер потока игры World: CreateGame→Init→turn→Release→DeleteGame + init/release data-bundle; CGame входит assoc-типом и фабрикой, context-impl у process-owner-а
 pub mod worldothermessage;
 pub mod world_server;
 pub mod world_server_client;
