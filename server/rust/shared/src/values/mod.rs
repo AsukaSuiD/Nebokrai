@@ -1,7 +1,7 @@
 //! Общие представления значений без реестров и игрового состояния.
 
-mod date;
-mod guid;
+mod date; // TagTime: владелец исторического tagTime.
+mod guid; // CGuid: совместимый GUID.
 
 pub use date::{TagTime, TagTimeArithmeticBlock, TagTimeParseBlock};
 pub use guid::{CGuid, GuidParseError, NULL_GUID};

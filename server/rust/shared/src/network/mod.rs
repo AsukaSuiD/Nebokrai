@@ -1,14 +1,14 @@
 //! Сеть: framing, RLE и буферы сообщений направлений.
 //! Сессия персонажа, разбор смысла команды и момент отправки — у владельца роли.
 
-mod basemessage;
-mod clients;
-mod msgqueue;
-mod mysocket;
-mod serverclient;
-mod servers;
-mod socketcommands;
-mod transport;
+mod basemessage; // CBaseMessage: базовый 16-байтовый wire-буфер и RLE-кодек.
+mod clients; // общий исходящий TCP-клиент направлений.
+mod msgqueue; // потокобезопасная очередь сообщений.
+mod mysocket; // общие наблюдаемые факты исходного CMySocket (endpoint, IP-слово).
+mod serverclient; // состояние принятого TCP-соединения CServerClient.
+mod servers; // CServer: владелец входящих TCP-соединений.
+mod socketcommands; // потокобезопасная очередь сокетных команд.
+mod transport; // Linux-владелец заменённой WinSock/IOCP транспортной механики.
 
 pub use basemessage::{decode_rle, encode_rle, CBaseMessage, RleDecodeError, RleEncodeError};
 pub use clients::{

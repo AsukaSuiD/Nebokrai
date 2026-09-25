@@ -1,9 +1,9 @@
 //! Общие средства запуска и механизмы ожиданий без реестров доменов.
 
-mod netsession;
-mod netsessionmanager;
-mod timer;
-mod tools;
+mod netsession; // CNetSession: асинхронная сетевая сессия, общая для Game/World.
+mod netsessionmanager; // CNetSessionManager: упорядоченный реестр net-сессий.
+mod timer; // CTimer: calendar и interval-owner таймеры.
+mod tools; // общие технические функции public/tools.cpp.
 
 pub use netsession::{
     CNetSession, NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionBeginBlock,

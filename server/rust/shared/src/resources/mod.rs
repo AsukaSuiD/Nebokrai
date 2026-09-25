@@ -1,48 +1,48 @@
 //! Общие форматы ресурсов; выбор корня и публикация остаются у владельца роли.
 
-mod catalog;
-mod cbattlefairyexpconfig;
-mod changebody;
-mod char_code_filter;
-mod ciqing;
-mod contributesetup;
-mod dakongxiangqian;
-mod dupliregionsetup;
-mod emotion;
-mod equipmentcomposelist;
-mod fairyexpconf;
-mod filesinfo;
-mod hitlevel;
-mod honorelimilateconfig;
-mod incrementshoplist;
-mod leitingsetup;
-mod lingbao;
-mod logsystem;
-mod globesetup;
-mod gmlist;
-mod godsbattleconf;
-mod goodsdestructionconfig;
-mod marker;
-mod monsterlist;
-mod newskillmonsterlist;
-mod regionrouter;
-mod package;
-mod path;
-mod playerlist;
-mod preciousboxconf;
-mod prisonconf;
-mod quest;
-mod quest_text;
-mod quest_wire;
-mod regionsetup;
-mod rfile;
-mod source;
-mod stringtable;
-mod stringtable_wire;
-mod synthesis;
-mod taozhuangsetup;
-mod tradelist;
-mod wordsfilter;
+mod catalog; // каталог индекса и пакетов CClientResource; LoadEx задаёт порядок загрузки.
+mod cbattlefairyexpconfig; // CBattleFairyExpConfig: опыт fairy/battle fairy.
+mod changebody; // CChangeBodyConf: ограничения смены тела.
+mod char_code_filter; // фильтр допустимых однобайтовых кодов.
+mod ciqing; // конфигурация CiQing.
+mod contributesetup; // CContributeSetup: country contribution.
+mod dakongxiangqian; // CDaKongXiangQian: правила вставки больших отверстий.
+mod dupliregionsetup; // список дублирующих регионов.
+mod emotion; // CEmotion: формат и таблица эмоций.
+mod equipmentcomposelist; // две static таблицы преобразования экипировки.
+mod fairyexpconf; // CFairyExpConf: опыт fairy.
+mod filesinfo; // индекс .ril (LoadFolderInfo).
+mod hitlevel; // формат таблицы HitLevel.
+mod honorelimilateconfig; // HonorElimilateConfig: порог honor за убийство.
+mod incrementshoplist; // CIncrementShopList: increment shop.
+mod leitingsetup; // CThingSetup: ежедневные действия.
+mod lingbao; // CLingBaoSetup: LingBao.
+mod logsystem; // CLogSystem: настройки журнала.
+mod globesetup; // CGlobeSetup: глобальный setup.
+mod gmlist; // CGMList: операторы.
+mod godsbattleconf; // Gods Battle configuration.
+mod goodsdestructionconfig; // CGoodsDestroySetup: уничтожение предметов.
+mod marker; // поиск маркера в потоке текстовых токенов (ReadTo).
+mod monsterlist; // CMonsterList: формат обмена монстрами и их дропом.
+mod newskillmonsterlist; // CNewSkillMonserConf: списки монстров новых навыков.
+mod regionrouter; // CRegionRouter: маршрутизация между регионами.
+mod package; // чтение индекса и распаковка .pak.
+mod path; // нормализация путей ресурсов (CheckRFileStr).
+mod playerlist; // определения персонажа и их передача World → Game.
+mod preciousboxconf; // PreciousBoxConf: Precious Box.
+mod prisonconf; // PrisonConf: тюремная конфигурация.
+mod quest; // CQuestSystem: каталог определений заданий.
+mod quest_text; // текстовые определения заданий (Quest.ini → QuestEx.ini).
+mod quest_wire; // wire-передача каталога заданий.
+mod regionsetup; // CRegionSetup: ограничения регионов.
+mod rfile; // CRFile: курсор памяти/файла.
+mod source; // выбор источника ресурса (rfOpen).
+mod stringtable; // StringTable: таблица текстов.
+mod stringtable_wire; // wire-передача таблицы текстов (MyStringTable).
+mod synthesis; // CSynthesis: синтез.
+mod taozhuangsetup; // CTaoZhuangSetup: конфигурация комплектов TaoZhuang.
+mod tradelist; // CTradeList: торговые списки.
+mod wordsfilter; // CWordsFilter: фильтр запрещённых слов.
 
 pub use catalog::{ResourceCatalog, ResourceLoadError, ResourceLoadReport, ResourcePackageLoad};
 pub use cbattlefairyexpconfig::{

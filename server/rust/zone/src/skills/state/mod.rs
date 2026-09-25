@@ -3,11 +3,11 @@
 //! контракты (`catalog` — проекция живых записей для
 //! `CMoveShape::AddToByteArray_ForClient` и runtime-план visual после Begin).
 
-mod catalog;
-mod storage;
+mod catalog; // клиентская проекция живых состояний и runtime-план их visual.
+mod storage; // арена экземпляров состояний мобильного носителя.
 
-pub use catalog::{StateClientRecord, registered_runtime_state_visual, state_client_record};
+pub use catalog::{StateClientRecord, registered_runtime_state_visual, state_client_record}; // клиентская запись состояния и runtime-план visual.
 pub use storage::{
     AppliedState, AppliedStateEntries, CanonicalStateStorage, LegacyStateCodec, StateBatch,
     StateData, StateKey, StateSerialization,
-};
+}; // хранилище состояний и его кодек сериализации.

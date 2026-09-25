@@ -1,36 +1,38 @@
 //! Данные живых навыков Zone, которыми временно управляет прежний Game.
 
-mod battlefairy;
-mod chaossphere;
-mod cure;
-mod daubpoison;
-mod directelement;
-mod dispatch;
-mod elementphalanx;
-mod firewall;
-mod fury;
-mod godbless;
-mod godthunder;
-mod hearten;
-mod lifecycle;
-mod masked_area;
-mod pillar;
-mod poisonfog;
+mod battlefairy; // правила навыков боевого духа (сброс, стоимость, запись).
+mod chaossphere; // движущаяся область CChaosSpherePhalanx.
+mod cure; // числовое правило и выбор снимаемых состояний CCure.
+mod daubpoison; // числовое правило смазки оружия ядом CDaubPoison.
+mod directelement; // числовой расчёт прямых элементальных ударов.
+mod dispatch; // форма цели и снимок ожидающей команды навыка.
+mod elementphalanx; // снимок и числовой расчёт элементального удара призванных областей.
+// Исполнение зарегистрированного навыка: typed payload player/BF и полная
+// запись реестра; hub-monster payload подключается generic-сваркой (порция 5).
+pub mod execution;
+
+mod firewall; // правила призыва и маска области CFireWall.
+mod fury; // ID состояний, которые Fury снимает перед созданием.
+mod godbless; // параметры CGodBless/CGodBless2 при создании состояния.
+mod godthunder; // окна целей и клиентские поля областей CGodThunderPhalanx/CGodThunderPhalanx2.
+mod hearten; // параметры нового состояния CHearten.
+mod lifecycle; // база и стадии живого навыка.
+mod masked_area; // маска неподвижных областей FireWall и YinYang.
+mod pillar; // параметры создаваемой стойки CPillar.
+mod poisonfog; // данные живой области CPoisonFogPhalanx.
 mod projectile; // Прицельные снаряды: общий полёт, элементный контакт, усилитель душами, физический контакт Archery и общий серверный decoder.
-mod roar;
-pub mod skillfactory;
-mod snowstorm;
-mod soulmirror;
-mod spidermist;
-// Клиентские контракты состояний Zone (проекция живых записей и runtime-план
-// visual); enum-каталог payload арены moveshape сваривается из hub до шага B.
-pub mod state;
-pub mod statefactory;
+mod roar; // границы обхода клеток CRoar.
+pub mod skillfactory; // фабричные владельцы и реестр runtime-свойств навыков.
+mod snowstorm; // данные области CSnowStormPhalanx и окна выбранных клеток.
+mod soulmirror; // маска и параметры клетки CSoulMirror.
+mod spidermist; // данные области CSpiderMistPhalanx и её маска.
+pub mod state; // клиентские контракты состояний: проекция живых записей и runtime-план visual.
+pub mod statefactory; // декодирование последовательности состояний из GameSave.
 mod summonshape; // CSummonShape: общий тип/правило ID и wire-конверт снимков призванных фаланг.
-mod visualeffect;
-mod wangsheng;
-mod weak;
-mod yinyang;
+mod visualeffect; // visual-ресурс зарегистрированного навыка.
+mod wangsheng; // прямое восстановление HP навыком CWangsheng, без создания WangshengState.
+mod weak; // правила области ослабления CWeakPhalanx и срока призыва CWeak.
+mod yinyang; // параметры и маски областей CYinYang и CYinYang2.
 
 pub use visualeffect::{SkillVisualEffect, SkillVisualEffectKind};
 pub use lifecycle::{SkillExecutionKernel, SkillLifecycle, SkillStage, SkillTermination};

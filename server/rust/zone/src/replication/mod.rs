@@ -5,5 +5,5 @@
 //!
 //! [карте владельцев]: ../../../../docs/architecture/realm-and-zone.md
 
-pub mod around;
-pub mod recipients;
+pub mod around; // around-runtime view: кадр рассылки окружения.
+pub mod recipients; // spatial/recipient snapshot для around-family рассылок региона.

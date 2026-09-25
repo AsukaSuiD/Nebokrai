@@ -1,10 +1,10 @@
 //! Общие форматы языка; игровые владельцы и диспетчеры команд принадлежат Zone.
 
-mod functionlist;
-mod ini;
-mod integer_expression;
-mod variablelist;
-pub mod parser;
+mod functionlist; // реестр команд CScript::LoadFunction.
+mod ini; // CIni: чтение списков (memory-ветвь).
+mod integer_expression; // Check/Count/ComputeVar целочисленных выражений.
+mod variablelist; // объявления переменных (LoadVarList).
+pub mod parser; // структурный байтовый разбор команд для Zone-исполнителя CScript.
 
 pub use functionlist::{
     FunctionDefinition, FunctionListError, FunctionListErrorKind, FunctionListRecords,

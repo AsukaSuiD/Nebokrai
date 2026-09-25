@@ -1,51 +1,51 @@
 //! Наложенные состояния Zone; живой владелец фигуры подключается переходным Game.
 
-mod agility;
-mod attackgain;
-mod automaticrestore;
-mod battlefairy;
-mod blind;
-mod bloodloss;
-mod bossbluefury;
-mod callosity;
-mod changebody;
-mod consumablerestore;
-mod cure;
-mod daubpoison;
-mod defenseshield;
-mod element;
-mod energyholding;
-mod extended;
-mod fullmiss;
-mod godbless;
-mod heal;
-mod hearten;
-mod leafcut;
-mod lifeshield;
-mod machineshield;
-mod manashield;
-mod maxresource;
-mod meteorarrow;
-mod periodicattack;
-mod pillar;
-mod particular;
-mod poison;
-mod poisonfog;
-mod promotion;
-mod ride;
-mod roar;
-mod scriptstate;
-mod shieldabsorption;
-mod soulcollect;
-mod swordship;
-mod teamstate;
-mod tianshenxiafan;
-mod time;
-mod undead;
-mod visualeffect;
-mod wangsheng;
-mod weak;
-mod wuxing;
+mod agility; // состояния ловкости CAgility/CNatural/CRapture и временная AgilityState2.
+mod attackgain; // усиление атаки Fury и RageBreak.
+mod automaticrestore; // четыре состояния автоматического восстановления HP/MP.
+mod battlefairy; // данные и 12-байтная запись состояний боевой феи Po/Yu.
+mod blind; // семейство CBlindState и родственные блокировки (BoaLock, KnockOut, SpiderWeb и др.).
+mod bloodloss; // сохраняемые данные периодической потери крови.
+mod bossbluefury; // состояние CBossBlueFuryState (0x1F7).
+mod callosity; // CCallosityState/CCallosityState2 с общей записью и формулой.
+mod changebody; // CHBYState (0x37): данные и 124-байтная запись смены тела.
+mod consumablerestore; // восстановление HP/MP от расходуемых предметов.
+mod cure; // данные, срок и сохраняемая запись CCureState.
+mod daubpoison; // состояние смазанного ядом оружия CDaubPoisonState.
+mod defenseshield; // диспетчер защитной ветви PreDefense.
+mod element; // прибавки TaiJi и Origin к свойствам стихии.
+mod energyholding; // счётчик и сохраняемые поля CEnergyHoldingState.
+mod extended; // extended-state CExState (0x32) и CExStateNew (0x33).
+mod fullmiss; // постоянная прибавка к полному уклонению.
+mod godbless; // данные и числовые правила CGodBlessState/CGodBlessState2.
+mod heal; // периодическое лечение CHealState.
+mod hearten; // данные, срок и запись CHeartenState.
+mod leafcut; // три периодических состояния LeafCut.
+mod lifeshield; // поглощение урона щитом жизни.
+mod machineshield; // поглощение урона машинным щитом.
+mod manashield; // данные мана-щита и его защитная ветвь.
+mod maxresource; // сохранённые прибавки к максимумам HP и MP.
+mod meteorarrow; // запас метеорных стрел CMeteorArrowState.
+mod periodicattack; // данные, часы и запись периодического урона.
+mod pillar; // данные и срок защитной стойки CPillarState.
+mod particular; // CParticularState (0x186A5).
+mod poison; // четыре состояния периодического ядовитого урона.
+mod poisonfog; // CPoisonFogState: данные, запись и расчёт ослабления.
+mod promotion; // CPromotionState (0x142) и element-атака.
+mod ride; // CRideState (100004): данные и wire-кодек верхового состояния.
+mod roar; // числовое подавление атаки CRoarState.
+mod scriptstate; // семь состояний AddState: пять UseGoods, ImproveExp и AutoProtect.
+mod shieldabsorption; // общая числовая часть PreDefense мана- и машинного щитов.
+mod soulcollect; // состояние сбора душ CSoulCollectState.
+mod swordship; // постоянные прибавки мин./макс. атаки Swordship.
+mod teamstate; // данные и запись командного CTeamState (0x186A6).
+mod tianshenxiafan; // сохраняемая запись CTianShenXiaFanState (0x335).
+mod time; // отображаемое оставшееся время наложенного состояния.
+mod undead; // CNotDisappearAfterDead (внешний ID 0x38).
+mod visualeffect; // базовый CVisualEffect состояний и навыков.
+mod wangsheng; // сохранённые данные CWangshengState.
+mod weak; // данные и правила CWeakState.
+mod wuxing; // постоянные состояния У-син и их 96-байтная запись.
 
 pub use agility::{
     AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AGILITY_STATE_2_BYTES, AgilityState2, NATURAL_SKILL_ID,
