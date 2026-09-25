@@ -40,6 +40,7 @@ use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tiberius::Query;
 use nebokrai_realm::activities::leitingreset::LeiTingDatabaseResetRequest;
+use nebokrai_realm::app::world_game_view::{WorldCreateRoleLaunchFailure, WorldCreateRoleLaunchSuccess};
 use nebokrai_realm::content::{
     QUEST_EX_PATH, QUEST_PATH, QuestCatalog, ScriptLoadContext, ScriptResources,
     normalize_script_path,
@@ -16945,6 +16946,10 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
         CGame::creation_player_by_name(self, name).map(|found| found.is_some())
     }
 
+    fn creation_player_count_in_cdkey(&mut self, cdkey: &[u8]) -> u8 {
+        CGame::creation_player_count_in_cdkey(self, cdkey)
+    }
+
     fn format_world_string(
         &self,
         string_id: &[u8],
@@ -17036,6 +17041,120 @@ impl nebokrai_realm::app::world_game_view::WorldGameView for CGame {
             rs_player,
             player_database,
         ))
+    }
+}
+
+impl nebokrai_realm::app::world_game_view::WorldCreateRoleLaunchGate for CGame {
+    #[allow(clippy::too_many_arguments)]
+    fn launch_creation_player(
+        &mut self,
+        request: &nebokrai_realm::app::logmessage::WorldCreateRoleRequest,
+        player_list: &mut CPlayerList,
+        registry: &GoodsBasePropertiesRegistry,
+        original_name_index: &GoodsOriginalNameIndex,
+        country_parameters: &mut CCountryParam,
+        coefficients: &PlayerPropertyCoefficients,
+        globe_setup: &GlobeSetupSnapshot,
+        random: &mut dyn FnMut(i32) -> i32,
+        add_log_text: &mut dyn FnMut(&[u8]),
+    ) -> Result<
+        WorldCreateRoleLaunchSuccess,
+        WorldCreateRoleLaunchFailure,
+    > {
+        let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
+        let defaults = player
+            .load_default_property(
+                request.sex,
+                request.occupation,
+                request.country,
+                country_parameters,
+                self.dupli_region_setup(),
+                player_list,
+                globe_setup,
+                self.thing_setup(),
+                coefficients,
+                |region_id| self.creation_region_base(region_id),
+                random,
+                || TagTime::local_now().day_of_week,
+                || {
+                    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                        Ok(duration) => duration.as_secs() as u32,
+                        Err(error) => 0_u32.wrapping_sub(error.duration().as_secs() as u32),
+                    }
+                },
+            )
+            .map_err(WorldCreateRoleLaunchFailure::DefaultProperty)?;
+        player.set_creation_identity(
+            &request.name,
+            &request.account,
+            request.head_picture,
+            request.face_picture,
+        );
+        player.set_creation_service_defaults();
+        // Исходная точка потребления sequence счётчика: после применения
+        // service defaults, до публикации игрока — как у прежнего обработчика.
+        let player_id = self.allocate_player_id();
+        player.set_id(player_id);
+        let origin_goods = self
+            .add_origin_goods_to_player(
+                &mut player,
+                player_list,
+                registry,
+                original_name_index,
+                random,
+            )
+            .map_err(|block| WorldCreateRoleLaunchFailure::OriginGoods(
+                nebokrai_realm::app::world_game_view::WorldOriginGoodsBlock {
+                    origin_index: block.origin_index,
+                    source: block.source,
+                },
+            ))?;
+
+        match self.append_creation_player(player, |entry| {
+            let text = entry.to_string();
+            add_log_text(text.as_bytes());
+        }) {
+            crate::worldserver::worldserver::game::WorldCreationPlayerAppendOutcome::Inserted { .. } => {}
+            crate::worldserver::worldserver::game::WorldCreationPlayerAppendOutcome::DuplicateReleased { .. } => {
+                return Err(WorldCreateRoleLaunchFailure::AppendDuplicateCreationId);
+            }
+            crate::worldserver::worldserver::game::WorldCreationPlayerAppendOutcome::ExistingMapOwnerKept {
+                incoming,
+                ..
+            } => {
+                drop(incoming);
+                return Err(WorldCreateRoleLaunchFailure::AppendExistingMapOwner);
+            }
+        }
+
+        let Some(created_player) = self.map_player(player_id as u32) else {
+            return Err(WorldCreateRoleLaunchFailure::PublishedPlayerMissing {
+                player_id: player_id as u32,
+            });
+        };
+        let snapshot = created_player
+            .player_base_wire_snapshot()
+            .map_err(WorldCreateRoleLaunchFailure::Snapshot)?;
+
+        Ok(WorldCreateRoleLaunchSuccess {
+            player_id: player_id as u32,
+            defaults,
+            origin_goods: nebokrai_realm::app::world_game_view::WorldOriginGoodsReport {
+                entries: origin_goods.entries,
+            },
+            snapshot,
+        })
+    }
+
+    fn is_name_exit_in_faction(
+        &mut self,
+        organizing: &dyn nebokrai_realm::app::world_game_view::WorldCreateRoleOrganizingView,
+        name: &[u8],
+    ) -> Result<bool, WorldCreateRoleLaunchFailure> {
+        match organizing.name_exists(name) {
+            Ok(found) => Ok(found),
+            Err(source) => Err(WorldCreateRoleLaunchFailure::OrganizingName(source)),
+        }
     }
 }
 

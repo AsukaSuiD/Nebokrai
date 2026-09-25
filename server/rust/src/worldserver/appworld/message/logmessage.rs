@@ -15,14 +15,11 @@
 //! ставится player-load FIFO; direct clone публикует Largess/login/map до friends
 //! и сброса flags. Tiberius и owned snapshots заменяют ADO/STL без перестановки.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::dbaccess::worlddb::rsplayer::{
     RsPlayerOwner, TiberiusRsPlayer,
 };
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
-use crate::public::date::TagTime;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use nebokrai_shared::resources::CPlayerList;
 use crate::public::tools::put_string_to_file;
@@ -34,24 +31,16 @@ use crate::worldserver::appworld::country::countryparam::CCountryParam;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
     GoodsBasePropertiesRegistry, GoodsOriginalNameIndex,
 };
-use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    COrganizingCtrl, OrganizingNameLookupBlock,
-};
+use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
 use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
 use crate::worldserver::appworld::organizingsystem::union::UnionFormatArgument;
-use crate::worldserver::appworld::player::{
-    CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
-    PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerPropertyCoefficients,
-};
+use crate::worldserver::appworld::player::{CPlayer, PlayerCodecError, PlayerPropertyCoefficients};
 use crate::worldserver::appworld::session::csessionfactory::CSessionFactory;
 use crate::worldserver::worldserver::game::{
-    CGame, WorldCreationPlayerAppendOutcome, WorldLoadedPlayerRouteOrder,
-    WorldLoginTimeoutTeamExit,
-    WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldOriginGoodsBlock,
-    WorldOriginGoodsReport, WorldPlayerLoadRequestBlock,
-    WorldPlayerLoadRequestOutcome, WorldPlayerNameLookupError,
-    WorldProcessPlayerDataQueueError, WorldProcessPlayerDataQueueOutcome,
-    WorldReturnedPlayerDecode, legacy_tick_ms,
+    CGame, WorldLoadedPlayerRouteOrder, WorldLoginTimeoutTeamExit,
+    WorldOnlinePlayerAppendOutcome, WorldOnlinePlayerRemoveOutcome, WorldPlayerLoadRequestBlock,
+    WorldPlayerLoadRequestOutcome, WorldProcessPlayerDataQueueError,
+    WorldProcessPlayerDataQueueOutcome, WorldReturnedPlayerDecode, legacy_tick_ms,
 };
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
@@ -66,12 +55,6 @@ const ACCOUNT_LOGIN_CLEANUP_REQUEST: i32 = 0x0004_FB06;
 const ACCOUNT_DISCONNECT_REQUEST: i32 = 0x0004_FB07;
 const RESTORE_ROLE_RESPONSE: i32 = 0x0001_FF04;
 const RESTORE_ROLE_STATUS: i8 = 0x15;
-const CREATE_ROLE_RESPONSE: i32 = 0x0001_FF05;
-const CREATE_ROLE_DUPLICATE_STATUS: i8 = 0x17;
-const CREATE_ROLE_INVALID_STATUS: i8 = 0x18;
-const CREATE_ROLE_LIMIT_STATUS: i8 = 0x19;
-const CREATE_ROLE_FILTER_STATUS: i8 = 0x1A;
-const CREATE_ROLE_SUCCESS_STATUS: i8 = 0x1B;
 const PLAYER_SELECT_RESPONSE: i32 = 0x0001_FF01;
 const PLAYER_SELECT_REJECTED_STATUS: i8 = 0x1C;
 const ACCOUNT_DISCONNECT_GAME_RESPONSE: i32 = 0x0007_F903;
@@ -79,74 +62,7 @@ const ACCOUNT_DISCONNECT_LOGIN_RESPONSE: i32 = 0x0001_FF06;
 const PLAYER_DETAIL_RESPONSE: i32 = 0x0007_F901;
 const PLAYER_FRIEND_OFFLINE_RESPONSE: i32 = 0x0007_F905;
 
-pub(crate) use nebokrai_realm::app::logmessage::WorldRestoreRoleOutcome;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WorldCreateRoleRequest {
-    pub(crate) name: Vec<u8>,
-    pub(crate) sex: u8,
-    pub(crate) occupation: u8,
-    pub(crate) head_picture: u8,
-    pub(crate) face_picture: u8,
-    pub(crate) country: u8,
-    pub(crate) account: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCreateRoleFailureStage {
-    DatabaseCount,
-    CharacterLimit,
-    OccupationSex,
-    Country,
-    WordsFilter,
-    DuplicateName,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldCreateRoleAppendCollision {
-    DuplicateCreationId,
-    ExistingMapOwner,
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldCreateRoleBlock {
-    PlayerName(WorldPlayerNameLookupError),
-    OrganizingName(OrganizingNameLookupBlock),
-    DefaultProperty(PlayerDefaultPropertyBlock),
-    OriginGoods(WorldOriginGoodsBlock),
-    AppendCollision(WorldCreateRoleAppendCollision),
-    Snapshot(PlayerDbProjectionBlock),
-    PublishedPlayerMissing { player_id: u32 },
-}
-
-#[derive(Debug)]
-pub(crate) enum WorldCreateRoleOutcome {
-    Failed {
-        request: WorldCreateRoleRequest,
-        player_count: Option<u8>,
-        stage: WorldCreateRoleFailureStage,
-        status: i8,
-        response_type: i32,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-    Blocked {
-        request: WorldCreateRoleRequest,
-        source: WorldCreateRoleBlock,
-    },
-    Created {
-        request: WorldCreateRoleRequest,
-        player_count_before: u8,
-        player_id: u32,
-        defaults: PlayerDefaultPropertyReport,
-        origin_goods: WorldOriginGoodsReport,
-        snapshot: PlayerBaseWireSnapshot,
-        response_type: i32,
-        status: i8,
-        wire: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
+pub(crate) use nebokrai_realm::app::logmessage::{WorldCreateRoleOutcome, WorldRestoreRoleOutcome};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldPlayerSelectRequest {
@@ -388,23 +304,32 @@ pub(crate) async fn on_log_message(
             ))
         }
         CREATE_ROLE_REQUEST => {
-            create_role(
-                game,
-                organizing,
-                country_handler,
-                country_parameters,
-                player_list,
-                registry,
-                original_name_index,
-                coefficients,
-                globe_setup,
-                rs_player,
-                player_database,
-                random,
-                add_error_log_text,
-                message,
-            )
-            .await
+            let country_view_adapter = CreateRoleCountryViewAdapter {
+                handler: country_handler,
+            };
+            let organizing_view_adapter = CreateRoleOrganizingViewAdapter { organizing };
+            let mut log_wrapper = |bytes: &[u8]| {
+                let _ = add_error_log_text(bytes);
+            };
+            WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
+                nebokrai_realm::app::logmessage::on_create_role(
+                    game,
+                    &organizing_view_adapter,
+                    &country_view_adapter,
+                    rs_player,
+                    player_list,
+                    registry,
+                    original_name_index,
+                    country_parameters,
+                    coefficients,
+                    globe_setup,
+                    player_database,
+                    random,
+                    &mut log_wrapper,
+                    message,
+                )
+                .await,
+            ))
         }
         PLAYER_SELECT_REQUEST => {
             player_select(
@@ -644,328 +569,6 @@ fn send_player_select_rejection(
     ))
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "exact create-role связывает setup, DB, organizing, goods и transport owners"
-)]
-async fn create_role(
-    game: &mut CGame,
-    organizing: &COrganizingCtrl,
-    country_handler: &CCountryHandler,
-    country_parameters: &mut CCountryParam,
-    player_list: &mut CPlayerList,
-    registry: &GoodsBasePropertiesRegistry,
-    original_name_index: &GoodsOriginalNameIndex,
-    coefficients: &PlayerPropertyCoefficients,
-    globe_setup: &GlobeSetupSnapshot,
-    rs_player: &mut TiberiusRsPlayer,
-    mut player_database: Option<&mut WorldTdsClient>,
-    random: &mut dyn FnMut(i32) -> i32,
-    add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
-    mut message: CMessage,
-) -> WorldLogMessageDispatch {
-    let request = WorldCreateRoleRequest {
-        name: message
-            .base_mut()
-            .get_str_bytes(0x32)
-            .unwrap_or_default(),
-        sex: message.base_mut().get_byte().unwrap_or(0),
-        occupation: message.base_mut().get_byte().unwrap_or(0),
-        head_picture: message.base_mut().get_byte().unwrap_or(0),
-        face_picture: message.base_mut().get_byte().unwrap_or(0),
-        country: message.base_mut().get_byte().unwrap_or(0),
-        account: message
-            .base_mut()
-            .get_str_bytes(0x14)
-            .unwrap_or_default(),
-    };
-
-    let creation_count = game.creation_player_count_in_cdkey(&request.account);
-    let Some(player_count) = rs_player
-        .get_player_count_in_cdkey(
-            &request.account,
-            creation_count,
-            player_database.as_deref_mut(),
-        )
-        .await
-    else {
-        return send_create_role_failure(
-            game,
-            request,
-            None,
-            WorldCreateRoleFailureStage::DatabaseCount,
-            CREATE_ROLE_INVALID_STATUS,
-        );
-    };
-    if i16::from(player_count) >= globe_setup.maximum_characters() {
-        return send_create_role_failure(
-            game,
-            request,
-            Some(player_count),
-            WorldCreateRoleFailureStage::CharacterLimit,
-            CREATE_ROLE_LIMIT_STATUS,
-        );
-    }
-
-    if !matches!(
-        (request.sex, request.occupation),
-        (0, 0) | (1, 1) | (2, 0)
-    ) {
-        return send_create_role_failure(
-            game,
-            request,
-            Some(player_count),
-            WorldCreateRoleFailureStage::OccupationSex,
-            CREATE_ROLE_INVALID_STATUS,
-        );
-    }
-    if country_handler.get_country(request.country).is_none() {
-        return send_create_role_failure(
-            game,
-            request,
-            Some(player_count),
-            WorldCreateRoleFailureStage::Country,
-            CREATE_ROLE_INVALID_STATUS,
-        );
-    }
-
-    let mut checked_name = request.name.clone();
-    if !game.check_create_role_name(&mut checked_name, false, true) {
-        return send_create_role_failure(
-            game,
-            request,
-            Some(player_count),
-            WorldCreateRoleFailureStage::WordsFilter,
-            CREATE_ROLE_FILTER_STATUS,
-        );
-    }
-
-    let duplicate = match game.creation_player_by_name(&request.name) {
-        Ok(found) => found.is_some(),
-        Err(source) => {
-            return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
-        }
-    };
-    let duplicate = if duplicate {
-        true
-    } else {
-        match game.is_name_exist_in_map_player(&request.name) {
-            Ok(found) => found,
-            Err(source) => {
-                return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
-            }
-        }
-    };
-    let duplicate = if duplicate {
-        true
-    } else {
-        match game.is_name_exist_in_db_creation(&request.name) {
-            Ok(found) => found,
-            Err(source) => {
-                return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
-            }
-        }
-    };
-    let duplicate = if duplicate {
-        true
-    } else {
-        match game.is_name_exist_in_db_data(&request.name) {
-            Ok(found) => found,
-            Err(source) => {
-                return create_role_blocked(request, WorldCreateRoleBlock::PlayerName(source));
-            }
-        }
-    };
-    let duplicate = if duplicate {
-        true
-    } else {
-        rs_player
-            .is_name_exist(&request.name, player_database.as_deref_mut())
-            .await
-    };
-    let duplicate = if duplicate {
-        true
-    } else {
-        match game.is_name_exit_in_faction(organizing, &request.name) {
-            Ok(found) => found,
-            Err(source) => {
-                return create_role_blocked(
-                    request,
-                    WorldCreateRoleBlock::OrganizingName(source),
-                );
-            }
-        }
-    };
-    if duplicate {
-        return send_create_role_failure(
-            game,
-            request,
-            Some(player_count),
-            WorldCreateRoleFailureStage::DuplicateName,
-            CREATE_ROLE_DUPLICATE_STATUS,
-        );
-    }
-
-    let mut player = Box::new(CPlayer::with_clone_decode_constructor_state());
-    let defaults = match player.load_default_property(
-        request.sex,
-        request.occupation,
-        request.country,
-        country_parameters,
-        game.dupli_region_setup(),
-        player_list,
-        globe_setup,
-        game.thing_setup(),
-        coefficients,
-        |region_id| game.creation_region_base(region_id),
-        random,
-        || TagTime::local_now().day_of_week,
-        legacy_time_seconds,
-    ) {
-        Ok(report) => report,
-        Err(source) => {
-            return create_role_blocked(
-                request,
-                WorldCreateRoleBlock::DefaultProperty(source),
-            );
-        }
-    };
-    player.set_creation_identity(
-        &request.name,
-        &request.account,
-        request.head_picture,
-        request.face_picture,
-    );
-    player.set_creation_service_defaults();
-    let player_id = game.allocate_player_id();
-    player.set_id(player_id);
-    let origin_goods = match game.add_origin_goods_to_player(
-        &mut player,
-        player_list,
-        registry,
-        original_name_index,
-        random,
-    ) {
-        Ok(report) => report,
-        Err(source) => {
-            return create_role_blocked(request, WorldCreateRoleBlock::OriginGoods(source));
-        }
-    };
-
-    match game.append_creation_player(player, |entry| {
-        let text = entry.to_string();
-        let _ = add_log_text(text.as_bytes());
-    }) {
-        WorldCreationPlayerAppendOutcome::Inserted { .. } => {}
-        WorldCreationPlayerAppendOutcome::DuplicateReleased { .. } => {
-            return create_role_blocked(
-                request,
-                WorldCreateRoleBlock::AppendCollision(
-                    WorldCreateRoleAppendCollision::DuplicateCreationId,
-                ),
-            );
-        }
-        WorldCreationPlayerAppendOutcome::ExistingMapOwnerKept { incoming, .. } => {
-            drop(incoming);
-            return create_role_blocked(
-                request,
-                WorldCreateRoleBlock::AppendCollision(
-                    WorldCreateRoleAppendCollision::ExistingMapOwner,
-                ),
-            );
-        }
-    }
-
-    let Some(created_player) = game.map_player(player_id as u32) else {
-        return create_role_blocked(
-            request,
-            WorldCreateRoleBlock::PublishedPlayerMissing {
-                player_id: player_id as u32,
-            },
-        );
-    };
-    let snapshot = match created_player.player_base_wire_snapshot() {
-        Ok(snapshot) => snapshot,
-        Err(source) => {
-            return create_role_blocked(request, WorldCreateRoleBlock::Snapshot(source));
-        }
-    };
-
-    let mut response = CMessage::new(CREATE_ROLE_RESPONSE);
-    response.base_mut().add_char(CREATE_ROLE_SUCCESS_STATUS);
-    append_c_string(response.base_mut(), &request.account);
-    response.base_mut().add_ulong(snapshot.id as u32);
-    append_c_string(response.base_mut(), &snapshot.name);
-    response.base_mut().add_short(i16::from(snapshot.level));
-    response.base_mut().add_byte(snapshot.sex);
-    response.base_mut().add_byte(snapshot.occupation);
-    response.base_mut().add_byte(snapshot.country);
-    response.base_mut().add_byte(snapshot.head);
-    for equipment_id in snapshot.equipment_ids {
-        response.base_mut().add_ulong(equipment_id);
-    }
-    for equipment_level in snapshot.equipment_levels {
-        response.base_mut().add_byte(equipment_level);
-    }
-    response.base_mut().add_long(snapshot.region_id);
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send(
-        game.current_login_client().map(|client| client.send_queue()),
-        false,
-    );
-
-    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
-        WorldCreateRoleOutcome::Created {
-            request,
-            player_count_before: player_count,
-            player_id: player_id as u32,
-            defaults,
-            origin_goods,
-            snapshot,
-            response_type: CREATE_ROLE_RESPONSE,
-            status: CREATE_ROLE_SUCCESS_STATUS,
-            wire,
-            delivery,
-        },
-    ))
-}
-
-fn send_create_role_failure(
-    game: &CGame,
-    request: WorldCreateRoleRequest,
-    player_count: Option<u8>,
-    stage: WorldCreateRoleFailureStage,
-    status: i8,
-) -> WorldLogMessageDispatch {
-    let mut response = CMessage::new(CREATE_ROLE_RESPONSE);
-    response.base_mut().add_char(status);
-    append_c_string(response.base_mut(), &request.account);
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send(
-        game.current_login_client().map(|client| client.send_queue()),
-        false,
-    );
-    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
-        WorldCreateRoleOutcome::Failed {
-            request,
-            player_count,
-            stage,
-            status,
-            response_type: CREATE_ROLE_RESPONSE,
-            wire,
-            delivery,
-        },
-    ))
-}
-
-fn create_role_blocked(
-    request: WorldCreateRoleRequest,
-    source: WorldCreateRoleBlock,
-) -> WorldLogMessageDispatch {
-    WorldLogMessageDispatch::Handled(WorldLogMessageOutcome::CreateRole(
-        WorldCreateRoleOutcome::Blocked { request, source },
-    ))
-}
 
 fn append_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
     let visible = value.iter().position(|byte| *byte == 0).unwrap_or(value.len());
@@ -973,12 +576,6 @@ fn append_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: 
     message.add_char(0);
 }
 
-fn legacy_time_seconds() -> u32 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs() as u32,
-        Err(error) => 0_u32.wrapping_sub(error.duration().as_secs() as u32),
-    }
-}
 
 struct DeleteRoleCountryEffects<'a> {
     game: &'a (dyn nebokrai_realm::app::world_game_view::WorldGameView + 'a),
@@ -1038,6 +635,42 @@ impl nebokrai_realm::app::world_game_view::WorldDeleteRoleCountryGate
             globe_setup: self.globe_setup,
         };
         country_state.has_job(player_id, &mut effects) != 0
+    }
+}
+
+/// Адаптер страновой таблицы create-role: повторяет `get_country(...).is_some()`
+/// прежнего обработчика без переноса самого `CCountryHandler`.
+struct CreateRoleCountryViewAdapter<'a> {
+    handler: &'a CCountryHandler,
+}
+
+impl nebokrai_realm::app::world_game_view::WorldCountryView for CreateRoleCountryViewAdapter<'_> {
+    fn country_exists(&self, country: u8) -> bool {
+        self.handler.get_country(country).is_some()
+    }
+}
+
+/// Адаптер организационного lookup-а create-role: делегирует
+/// `COrganizingCtrl::organizing_by_name(...).map(|m| m.is_some())` с тем же
+/// отклонением технического дефекта в seam-блок.
+struct CreateRoleOrganizingViewAdapter<'a> {
+    organizing: &'a COrganizingCtrl,
+}
+
+impl nebokrai_realm::app::world_game_view::WorldCreateRoleOrganizingView
+    for CreateRoleOrganizingViewAdapter<'_>
+{
+    fn name_exists(
+        &self,
+        name: &[u8],
+    ) -> Result<bool, nebokrai_realm::app::world_game_view::WorldCreateRoleOrganizingLookupBlock>
+    {
+        match self.organizing.organizing_by_name(name) {
+            Ok(matched) => Ok(matched.is_some()),
+            Err(_source) => Err(
+                nebokrai_realm::app::world_game_view::WorldCreateRoleOrganizingLookupBlock::NullOwner,
+            ),
+        }
     }
 }
 

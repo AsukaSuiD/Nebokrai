@@ -10,9 +10,15 @@
 use nebokrai_shared::resources::GlobeSetupSnapshot;
 
 use crate::app::world_game_view::{
-    WorldDeleteRoleCountryGate, WorldDeleteRoleDbView, WorldGameView, WorldLoginTimeoutTeamExit,
+    WorldCountryView, WorldCreateRoleDbView, WorldCreateRoleLaunchFailure,
+    WorldCreateRoleLaunchGate, WorldCreateRoleOrganizingView, WorldDeleteRoleCountryGate,
+    WorldDeleteRoleDbView, WorldGameView, WorldLoginTimeoutTeamExit,
 };
 use crate::app::world_message::{CMessage, SendMessageError};
+use crate::characters::player::{PlayerBaseWireSnapshot, PlayerPropertyCoefficients};
+use crate::content::countryparam::CCountryParam;
+use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
+use crate::content::goods::GoodsBasePropertiesRegistry;
 use crate::organizations::organizingctrl::{
     OrganizingDeleteRoleBlock, OrganizingDeleteRoleOutcome, WorldDeleteRoleOrganizingGate,
 };
@@ -20,6 +26,7 @@ use crate::organizations::organizingparam::COrganizingParam;
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::{WorldPlayerDeleteLogWrite, WorldWriteLogCommand};
 use crate::sessions::csessionfactory::CSessionFactory;
+use nebokrai_shared::resources::CPlayerList;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorldCreateRoleRequest {
@@ -524,5 +531,275 @@ fn send_delete_role_response(
         trailing_value,
         wire,
         delivery,
+    }
+}
+
+fn send_create_role_failure<G: WorldGameView + ?Sized>(
+    game: &mut G,
+    request: WorldCreateRoleRequest,
+    player_count: Option<u8>,
+    stage: WorldCreateRoleFailureStage,
+    status: i8,
+) -> WorldCreateRoleOutcome {
+    let mut response = CMessage::new(CREATE_ROLE_RESPONSE);
+    response.base_mut().add_char(status);
+    {
+        let account = &request.account;
+        let visible = account.iter().position(|byte| *byte == 0).unwrap_or(account.len());
+        response.base_mut().add(&account[..visible]);
+        response.base_mut().add_char(0);
+    }
+    let wire = response.as_wire_bytes().to_vec();
+    let delivery = response.send(
+        game.current_login_client().map(|client| client.send_queue()),
+        false,
+    );
+    WorldCreateRoleOutcome::Failed {
+        request,
+        player_count,
+        stage,
+        status,
+        response_type: CREATE_ROLE_RESPONSE,
+        wire,
+        delivery,
+    }
+}
+
+/// Конечный outcome ветки создания роли. Failed повторяет исходные статусы
+/// `0x01..0x05`; Blocked идентичен изоляции технического дефекта до любого
+/// ответа LoginServer.
+#[derive(Debug)]
+pub enum WorldCreateRoleOutcome {
+    Failed {
+        request: WorldCreateRoleRequest,
+        player_count: Option<u8>,
+        stage: WorldCreateRoleFailureStage,
+        status: i8,
+        response_type: i32,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    Blocked {
+        request: WorldCreateRoleRequest,
+        source: WorldCreateRoleLaunchFailure,
+    },
+    Created {
+        request: WorldCreateRoleRequest,
+        player_count_before: u8,
+        player_id: u32,
+        snapshot: PlayerBaseWireSnapshot,
+        response_type: i32,
+        status: i8,
+        wire: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+/// Ветвь `0x4FB04`: полная цепочка проверки до выделения ID и launch-а.
+/// Порядок именно src: сначала счётчик DB+creation, лимит `maximum_characters`,
+/// sex/occupation пара и страна через game-view, фильтр слов, шесть проверок
+/// занятости имени в точном порядке (map → db-creation → db-data → db-exist
+/// через DB-шов → организация через launch-gate), затем launch владельца игры
+/// и ответ со снимком нового игрока. Box-alloc `CPlayer` и всю мутацию карты
+/// и очереди выполняет launch-gate; обработчик не владеет setup-таблицами,
+/// кроме тех что уже в репо realm (player_list, registry, original_name_index,
+/// country_parameters, coefficients, globe_setup).
+#[allow(clippy::too_many_arguments, reason = "границы один к одному соответствуют owner-ам ветки create-role")]
+pub async fn on_create_role<G: WorldGameView + WorldCreateRoleLaunchGate>(
+    game: &mut G,
+    organizing_view: &dyn WorldCreateRoleOrganizingView,
+    country_view: &dyn WorldCountryView,
+    db: &mut dyn WorldCreateRoleDbView,
+    player_list: &mut CPlayerList,
+    registry: &GoodsBasePropertiesRegistry,
+    original_name_index: &GoodsOriginalNameIndex,
+    country_parameters: &mut CCountryParam,
+    coefficients: &PlayerPropertyCoefficients,
+    globe_setup: &GlobeSetupSnapshot,
+    mut player_database: Option<&mut WorldTdsClient>,
+    random: &mut dyn FnMut(i32) -> i32,
+    add_log_text: &mut dyn FnMut(&[u8]),
+    mut message: CMessage,
+) -> WorldCreateRoleOutcome {
+    let name = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
+    let sex = message.base_mut().get_byte().unwrap_or(0);
+    let occupation = message.base_mut().get_byte().unwrap_or(0);
+    let head_picture = message.base_mut().get_byte().unwrap_or(0);
+    let face_picture = message.base_mut().get_byte().unwrap_or(0);
+    let country = message.base_mut().get_byte().unwrap_or(0);
+    let account = message.base_mut().get_str_bytes(0x14).unwrap_or_default();
+    let request = WorldCreateRoleRequest {
+        name: name.clone(),
+        sex,
+        occupation,
+        head_picture,
+        face_picture,
+        country,
+        account: account.clone(),
+    };
+
+    // Счётчик creation+DB ≤ maximum_characters из live globe.
+    let creation_count = game.creation_player_count_in_cdkey(&account);
+    let Some(player_count) = db
+        .get_player_count_in_cdkey(&account, creation_count, player_database.as_deref_mut())
+        .await
+    else {
+        return send_create_role_failure(game, request, None, WorldCreateRoleFailureStage::DatabaseCount, CREATE_ROLE_INVALID_STATUS);
+    };
+    if i16::from(player_count) >= globe_setup.maximum_characters() {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::CharacterLimit, CREATE_ROLE_LIMIT_STATUS);
+    }
+
+    // Исходная формула допустимых (sex, occupation) копирована буквально.
+    if !matches!((sex, occupation), (0, 0) | (1, 1) | (2, 0)) {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::OccupationSex, CREATE_ROLE_INVALID_STATUS);
+    }
+
+    if !country_view.country_exists(country) {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::Country, CREATE_ROLE_INVALID_STATUS);
+    }
+
+    // Фильтр слов работает на клоне имени, а его результат отбрасывается —
+    // как в исходном обработчике (`checked_name`): дальнейшие проверки
+    // занятости и launch используют исходное прочитанное имя без подмены.
+    let mut checked_name = name.clone();
+    if !game.check_create_role_name(&mut checked_name, false, true) {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::WordsFilter, CREATE_ROLE_FILTER_STATUS);
+    }
+
+    // Шесть ступеней занятости имени, в исходном порядке и с той же изоляцией
+    // технического дефекта как Blocked до любого ответа.
+    let duplicate = match game.creation_player_by_name(&name) {
+        Ok(found) => found,
+        Err(source) => {
+            return WorldCreateRoleOutcome::Blocked {
+                request,
+                source: WorldCreateRoleLaunchFailure::PlayerName(source),
+            };
+        }
+    };
+    if duplicate {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::DuplicateName, CREATE_ROLE_DUPLICATE_STATUS);
+    }
+
+    let duplicate = match game.is_name_exist_in_map_player(&name) {
+        Ok(found) => found,
+        Err(source) => {
+            return WorldCreateRoleOutcome::Blocked {
+                request,
+                source: WorldCreateRoleLaunchFailure::PlayerName(source),
+            };
+        }
+    };
+    if duplicate {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::DuplicateName, CREATE_ROLE_DUPLICATE_STATUS);
+    }
+
+    let duplicate = match game.is_name_exist_in_db_creation(&name) {
+        Ok(found) => found,
+        Err(source) => {
+            return WorldCreateRoleOutcome::Blocked {
+                request,
+                source: WorldCreateRoleLaunchFailure::PlayerName(source),
+            };
+        }
+    };
+    if duplicate {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::DuplicateName, CREATE_ROLE_DUPLICATE_STATUS);
+    }
+
+    let duplicate = match game.is_name_exist_in_db_data(&name) {
+        Ok(found) => found,
+        Err(source) => {
+            return WorldCreateRoleOutcome::Blocked {
+                request,
+                source: WorldCreateRoleLaunchFailure::PlayerName(source),
+            };
+        }
+    };
+    if duplicate {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::DuplicateName, CREATE_ROLE_DUPLICATE_STATUS);
+    }
+
+    if db.is_name_exist(&name, player_database.as_deref_mut()).await {
+        return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::DuplicateName, CREATE_ROLE_DUPLICATE_STATUS);
+    }
+
+    match game.is_name_exit_in_faction(organizing_view, &name) {
+        Ok(true) => {
+            return send_create_role_failure(game, request, Some(player_count), WorldCreateRoleFailureStage::DuplicateName, CREATE_ROLE_DUPLICATE_STATUS);
+        }
+        Ok(false) => {}
+        Err(source) => {
+            return WorldCreateRoleOutcome::Blocked { request, source };
+        }
+    }
+
+    // Выделение ID и вся мутация выполняются в launch-gate в исходной
+    // позиции (после set_creation_service_defaults, до set_id) — обработчик
+    // не потребляет sequence счётчика на путях отказа.
+    match game.launch_creation_player(
+        &WorldCreateRoleRequest {
+            name,
+            sex,
+            occupation,
+            head_picture,
+            face_picture,
+            country,
+            account,
+        },
+        player_list,
+        registry,
+        original_name_index,
+        country_parameters,
+        coefficients,
+        globe_setup,
+        random,
+        add_log_text,
+    ) {
+        Ok(report) => {
+            let mut response = CMessage::new(CREATE_ROLE_RESPONSE);
+            response.base_mut().add_char(CREATE_ROLE_SUCCESS_STATUS);
+            {
+                let base = response.base_mut();
+                let account_src = request.account.clone();
+                let visible = account_src.iter().position(|b| *b == 0).unwrap_or(account_src.len());
+                base.add(&account_src[..visible]);
+                base.add_char(0);
+                base.add_ulong(report.player_id);
+                let name = &report.snapshot.name;
+                let visible = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+                base.add(&name[..visible]);
+                base.add_char(0);
+            }
+            response.base_mut().add_short(i16::from(report.snapshot.level));
+            response.base_mut().add_byte(report.snapshot.sex);
+            response.base_mut().add_byte(report.snapshot.occupation);
+            response.base_mut().add_byte(report.snapshot.country);
+            response.base_mut().add_byte(report.snapshot.head);
+            for equipment_id in report.snapshot.equipment_ids {
+                response.base_mut().add_ulong(equipment_id);
+            }
+            for equipment_level in report.snapshot.equipment_levels {
+                response.base_mut().add_byte(equipment_level);
+            }
+            response.base_mut().add_long(report.snapshot.region_id);
+            let wire = response.as_wire_bytes().to_vec();
+            let delivery = response.send(
+                game.current_login_client().map(|client| client.send_queue()),
+                false,
+            );
+            WorldCreateRoleOutcome::Created {
+                request,
+                player_count_before: player_count,
+                player_id: report.player_id,
+                snapshot: report.snapshot,
+                response_type: CREATE_ROLE_RESPONSE,
+                status: CREATE_ROLE_SUCCESS_STATUS,
+                wire,
+                delivery,
+            }
+        }
+        Err(source) => WorldCreateRoleOutcome::Blocked { request, source },
     }
 }

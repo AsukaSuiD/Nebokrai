@@ -20,9 +20,14 @@ use crate::app::worldothermessage::{
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::characters::player::{
-    CPlayer, PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport,
+    CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
+    PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerFactionInfoUpdateBlock,
+    PlayerFactionInfoUpdateReport, PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome,
     PlayerPropertyCoefficients,
 };
+use crate::content::countryparam::CCountryParam;
+use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
+use nebokrai_shared::resources::CPlayerList;
 use crate::organizations::faction::CFaction;
 use crate::organizations::union::UnionFormatArgument;
 use crate::content::goods::GoodsBasePropertiesRegistry;
@@ -238,6 +243,8 @@ pub trait WorldGameView {
 
     fn allocate_player_id(&mut self) -> i32;
 
+    fn creation_player_count_in_cdkey(&mut self, cdkey: &[u8]) -> u8;
+
     /// Занятость имени игроком в стадии создания: свёртка `Option<&CPlayer>`
     /// inherent-результата в предикат, как делает сам обработчик.
     fn creation_player_by_name(
@@ -346,6 +353,101 @@ pub trait WorldCreateRoleDbView {
         player_name: &'a [u8],
         active_transaction: Option<&'a mut WorldTdsClient>,
     ) -> Pin<Box<dyn Future<Output = bool> + 'a>>;
+}
+
+#[derive(Debug)]
+pub struct WorldOriginGoodsReport {
+    pub entries: Vec<PlayerOriginEquipmentOutcome>,
+}
+
+#[derive(Debug)]
+pub struct WorldOriginGoodsBlock {
+    pub origin_index: usize,
+    pub source: PlayerOriginEquipmentBlock,
+}
+
+/// Отчёт launch-а нового игрока ветки create_role. Все этапы верхнего уровня
+/// обработчика переносятся как связная мутация: список creation-ID, вставка
+/// в карту, выдача origin goods и снятие wire-снимка выполняет владелец игры,
+/// а порядок и решения записываются через этот отчёт.
+#[derive(Debug)]
+pub struct WorldCreateRoleLaunchSuccess {
+    pub player_id: u32,
+    pub defaults: PlayerDefaultPropertyReport,
+    pub origin_goods: WorldOriginGoodsReport,
+    pub snapshot: PlayerBaseWireSnapshot,
+}
+
+/// Точная причина отклонения launch-а. Структурные коллизии карты/очереди
+/// остаются typed без типа источника: обработчик повторяет их ветви
+/// отказа `create_role_blocked` буквально.
+#[derive(Debug)]
+pub enum WorldCreateRoleLaunchFailure {
+    PlayerName(WorldPlayerNameLookupError),
+    DefaultProperty(PlayerDefaultPropertyBlock),
+    OriginGoods(WorldOriginGoodsBlock),
+    AppendDuplicateCreationId,
+    AppendExistingMapOwner,
+    PublishedPlayerMissing { player_id: u32 },
+    Snapshot(PlayerDbProjectionBlock),
+    OrganizingName(WorldCreateRoleOrganizingLookupBlock),
+}
+
+/// Упрощённый seam-блок организационного lookup-а имени. Realm не содержит
+/// `OrganizingNameLookupBlock` старого пакета — вместо переноса всей таблицы
+/// контроллера шов отражает только три возможные причины отказа.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldCreateRoleOrganizingLookupBlock {
+    RequestedNameWouldOverflow,
+    NullOwner,
+    OwnerNameWouldOverflow,
+}
+
+/// Узкий dyn-view живой таблицы организационных имён (фракции/союзы стран).
+/// Реализация делегирует `COrganizingCtrl::organizing_by_name(...).map(|m| m.is_some())`
+/// адаптером у dispatcher-а старого пакета; сам контроллер не переносится.
+pub trait WorldCreateRoleOrganizingView {
+    fn name_exists(&self, name: &[u8]) -> Result<bool, WorldCreateRoleOrganizingLookupBlock>;
+}
+
+/// Узкий dyn-шов launch-а нового игрока: вся мутация состояния карты и
+/// очереди создаваемых игроков остаётся у владельца игры. Реализация живёт
+/// на `CGame` старого пакета и повторяет именно исходную последовательность
+/// `load_default_property → set_creation_identity → set_creation_service_defaults
+/// → allocate_player_id → set_id → add_origin_goods_to_player →
+/// append_creation_player → map_player → player_base_wire_snapshot`, с тем
+/// же `log`-callback в форме прежнего обработчика. Sequence счётчик ID
+/// потребляется в исходной позиции — после применения service defaults и
+/// до публикации в карту, поэтому пути отказа до этого шага не тратят ID.
+#[allow(clippy::too_many_arguments, reason = "точная форма launch-цепочки обработчика")]
+pub trait WorldCreateRoleLaunchGate {
+    fn launch_creation_player(
+        &mut self,
+        request: &crate::app::logmessage::WorldCreateRoleRequest,
+        player_list: &mut CPlayerList,
+        registry: &GoodsBasePropertiesRegistry,
+        original_name_index: &GoodsOriginalNameIndex,
+        country_parameters: &mut CCountryParam,
+        coefficients: &PlayerPropertyCoefficients,
+        globe_setup: &GlobeSetupSnapshot,
+        random: &mut dyn FnMut(i32) -> i32,
+        add_log_text: &mut dyn FnMut(&[u8]),
+    ) -> Result<WorldCreateRoleLaunchSuccess, WorldCreateRoleLaunchFailure>;
+
+    /// Занятость имени организацией: живой список фракций (`COrganizingCtrl`)
+    /// пока остаётся в старом пакете, dyn-заменитель `is_name_exit_in_faction`
+    /// сохраняет ту же линейку вызова без переноса самой таблицы.
+    fn is_name_exit_in_faction(
+        &mut self,
+        organizing: &dyn WorldCreateRoleOrganizingView,
+        name: &[u8],
+    ) -> Result<bool, WorldCreateRoleLaunchFailure>;
+}
+
+/// Узкий dyn-view страновой таблицы: ровно тот же `get_country(...).is_some()`
+/// который делает исходный `CCountryHandler` без переноса самой таблицы.
+pub trait WorldCountryView {
+    fn country_exists(&self, country: u8) -> bool;
 }
 
 /// Узкий dyn-шов проверки должности игрока в стране к владельцу страновых
