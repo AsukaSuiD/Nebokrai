@@ -1,4 +1,9 @@
 //! Узкий game-view для обработчиков мировых сообщений Realm.
+//!
+//! Server-волна добавила reconnect/ping/route делегации диспетчера
+//! [`on_server_message`](crate::app::servermessage::on_server_message) и шов
+//! [`WorldServerMessageGameView`] с ассоциированными типами владельцев, которые
+//! пока остаются в старом пакете (организации, страна, save-пайплайн).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -8,11 +13,20 @@ use nebokrai_shared::resources::{CGodsBattleConf, GlobeSetupSnapshot};
 
 use crate::activities::jjcsystem::CJJcSystem;
 use crate::activities::rsgodsbattle::TiberiusRsGodsBattle;
+use crate::app::loginreconnectworker::WorldLoginReconnectThreadRestart;
+use crate::app::servermessage::WorldCompletedSaveResponseLaunchReport;
 use crate::app::auction::WorldBaiTanRemoval;
 use crate::app::gmmessage::{WorldNamedRegionLookup, WorldRegionIdRouteScan};
 use crate::app::world_client::CMyNetClient;
 use crate::app::world_message::{CMessage, SendMessageError, WorldLocalMessageQueueBlock};
-use crate::app::worldserver::{WorldReloadContext, WorldReloadResult};
+use crate::app::worldserver::{
+    WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
+    WorldGenerateDbDataBlock, WorldGlobeVariablesDelivery, WorldOnlinePlayerAppendOutcome,
+    WorldPingGameServerInfo, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
+    WorldReconnectedPlayerDecode, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate,
+    WorldRegionParamDecodeOutcome, WorldPlayerSaveResponseProgress, WorldReloadContext,
+    WorldReloadResult, WorldServerSnapshotPlayerDecode,
+};
 use crate::app::worldothermessage::{
     WorldGoodsLink, WorldHonorEliminatorRegistration, WorldPlayerNameChangeReport,
     WorldPlayerNameLookupError,
@@ -20,15 +34,18 @@ use crate::app::worldothermessage::{
 use crate::persistence::rssetup::WorldTdsClient;
 use crate::persistence::writelog::WorldWriteLogCommand;
 use crate::app::player_base::WorldPlayerBaseGameView;
+use crate::characters::honorranks::CHonorRanks;
 use crate::characters::player::{
     CPlayer, PlayerBaseWireSnapshot, PlayerCodecError, PlayerDbProjectionBlock,
     PlayerDefaultPropertyBlock, PlayerDefaultPropertyReport, PlayerFactionInfoUpdateBlock,
-    PlayerFactionInfoUpdateReport, PlayerMurderCounterReset, PlayerOrganizingUpdateError,
-    PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome, PlayerPropertyCoefficients,
+    PlayerFactionInfoUpdateReport, PlayerMurderCounterReset, PlayerMurderCounterUpdate,
+    PlayerOrganizingUpdateError, PlayerOriginEquipmentBlock, PlayerOriginEquipmentOutcome,
+    PlayerPropertyCoefficients,
 };
 use crate::characters::playerexploit::PlayerExploitUpdate;
 use crate::content::countryparam::{CCountryParam, CountryParameterUnavailable};
 use crate::content::cgoodsfactory::GoodsOriginalNameIndex;
+use crate::content::variablelist::CVariableList;
 use nebokrai_shared::resources::CPlayerList;
 use crate::organizations::country::{
     CountryExileResultContext, CountryExileTimeLookup, CountryGovernanceContextBlock,
@@ -74,6 +91,26 @@ pub struct WorldOnlineAccountPlayerRoute {
 pub struct WorldGameServerSnapshot {
     pub connected: bool,
     pub index: u32,
+}
+
+/// Итог адресной регистрации GameServer ветви `0x5FA01`. Тип перевезён из
+/// `game.rs` вместе с швом connect; старый пакет реэкспортирует его для
+/// оставшегося адресного поиска.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorldGameServerConnectionState {
+    pub index: u32,
+    pub previous_connected: bool,
+}
+
+/// Owned-снимок маршрута региона ветви `0x5FA02`: фильтр `connected` и
+/// выбор ip/port остаются у обработчика, как у исходной замыкательной цепочки
+/// `get_region_game_server → filter → map`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorldRegionGameServerRoute {
+    pub connected: bool,
+    pub index: u32,
+    pub ip: Vec<u8>,
+    pub port: Option<u32>,
 }
 
 /// Результат `CGame::exit_team_player`: три исхода проверки внешней
@@ -389,6 +426,194 @@ pub trait WorldGameView {
         player_id: u32,
         increment: i32,
     ) -> Option<PlayerExploitUpdate>;
+
+    /// Перезапуск reconnect-worker-а ветви `0x3FC01`: прежний worker
+    /// останавливается и забывается до старта нового, исход регистрируется
+    /// restart-итогом. Реализация делегирует одноимённый inherent-метод;
+    /// tokio-дескриптор текущего runtime снимается обработчиком, как делал
+    /// исходный диспетчер.
+    fn create_connect_login_thread(
+        &mut self,
+        runtime: tokio::runtime::Handle,
+    ) -> WorldLoginReconnectThreadRestart;
+
+    /// Начало ping-волны ветви `0x4FC01`: флаг in-progress, сброс накопленных
+    /// ответов и отметка времени одной мутацией; возвращает число сброшенных
+    /// ответов и tick старта.
+    fn begin_game_server_ping(&mut self) -> (usize, u32);
+
+    /// Назначение LoginServer id ветви `0x4FC03`; возвращает прежний id.
+    fn assign_login_server_id(&mut self, login_server_id: i32) -> i32;
+
+    /// Адресная регистрация GameServer ветви `0x5FA01`: entry с совпавшим
+    /// byte-IP помечается connected, неизвестный port блокирует только
+    /// совпавший по IP узел. Реализация делегирует одноимённый inherent-метод.
+    fn connect_game_server_by_address(
+        &mut self,
+        ip: &[u8],
+        port: u32,
+    ) -> Result<Option<WorldGameServerConnectionState>, WorldGameServerLookupError>;
+
+    /// Выброс globe-переменных на один socket ветви `0x5FA01`; порядок
+    /// значений snapshot-а сохранён у владельца.
+    fn send_globe_variables_to_game_server(&self, socket_id: i32) -> WorldGlobeVariablesDelivery;
+
+    /// Наличие entry карты регионов (без различения null-owner) ветви
+    /// `0x5FA02`; `has_materialized_region` намеренно не подменяет эту
+    /// проверку — исходник спрашивал только присутствие записи.
+    fn region_assignment_exists(&self, region_id: i32) -> bool;
+
+    /// Маршрут game server-а региона ветви `0x5FA02` owned-снимком; `None` —
+    /// региона нет в карте либо game server-а нет в реестре.
+    fn region_game_server_route(&self, region_id: i32) -> Option<WorldRegionGameServerRoute>;
+
+    /// Обновление региона team owner-а после перехода ветви `0x5FA02`; свёртка
+    /// session/plug исходов остаётся той же трёхисходной.
+    fn set_team_player_owner_region(
+        &mut self,
+        factory: &mut CSessionFactory,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        region_id: i32,
+    ) -> WorldRegionChangeTeamUpdate;
+
+    /// Decode снимка игрока save-пакетов `0x5FA03`/sync-пакетов `0x5FA09`;
+    /// владение созданным owner-ом и сдвиг курсора не меняются.
+    fn decord_server_snapshot_player(
+        &mut self,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldServerSnapshotPlayerDecode, PlayerCodecError>;
+
+    /// Decode возвращающегося игрока reconnect-цепочки `0x5FA01`; созданный
+    /// owner публикуется в карту и offline-list в исходном порядке.
+    fn decord_reconnected_player(
+        &mut self,
+        requested_player_id: u32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<WorldReconnectedPlayerDecode, PlayerCodecError>;
+
+    /// Учёт save-ответа GameServer ветви `0x5FA03`: счётчик ответов растёт
+    /// wrapping-арифметикой и сбрасывается в ноль при covered-совпадении с
+    /// числом подключённых не-аукционных game server-ов.
+    fn record_player_save_response(&mut self, completion_counted: bool) -> WorldPlayerSaveResponseProgress;
+
+    /// Murder-counters online-игрока ветви `0x5FA06`; `None` — онлайн-записи
+    /// нет. Реализация делегирует одноимённый inherent-метод.
+    fn increment_online_player_murder_counters(
+        &mut self,
+        player_id: u32,
+    ) -> Option<PlayerMurderCounterUpdate>;
+
+    /// Decode регионального параметра из GameServer-пакета ветви `0x5FA07`;
+    /// трёхисходная свёртка карты сохранена.
+    fn decode_region_param_from_game_server(
+        &mut self,
+        region_id: i32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> WorldRegionParamDecodeOutcome;
+
+    /// Счётчики принятых player-data sync-пакетов ветви `0x5FA09`.
+    fn reset_received_player_data(&mut self, game_server_index: i32) -> WorldReceivedPlayerDataUpdate;
+
+    fn increment_received_player_data(
+        &mut self,
+        game_server_index: i32,
+    ) -> WorldReceivedPlayerDataUpdate;
+
+    fn received_player_data(&self, game_server_index: i32) -> WorldReceivedPlayerDataRead;
+
+    /// Регистрация ping-ответа ветви `0x5FA0A`; возвращает накопленный размер.
+    fn record_game_server_ping(&mut self, response: WorldPingGameServerInfo) -> usize;
+
+    /// Полный snapshot аккаунтов для LoginServer; `Ok(None)` — Login client
+    /// не опубликован. Реализация делегирует одноимённый inherent-метод.
+    fn send_cdkey_to_login_server(
+        &self,
+    ) -> Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError>;
+
+    /// Внутрипроцессная замена LoginServer client: прежний закрывается и
+    /// уничтожается до публикации нового; возвращает, был ли закрыт прежний.
+    fn replace_login_client(&mut self, client: CMyNetClient) -> bool;
+
+    /// dwNumber после успешного CD-key snapshot (panic-контракт исходного
+    /// `expect` сохранён у владельца).
+    fn world_number_after_cdkey_snapshot(&self) -> u32;
+
+    /// Имя мира из setup для registration-пакета `0x1FE01`.
+    fn world_name(&self) -> &[u8];
+
+    /// Изменяемая ссылка на опубликованный LoginServer client (control-send
+    /// включение после registration).
+    fn current_login_client_mut(&mut self) -> Option<&mut CMyNetClient>;
+}
+
+/// Шов server-диспетчера [`crate::app::servermessage::on_server_message`] для
+/// цепочек, чьи владельцы пока живут в старом пакете. Organizing-контекст
+/// наследуется от [`WorldPlayerBaseGameView`] — единственная реализация
+/// `CGame` делегирует одноимённые inherent-методы; порядок внутри цепочек не
+/// меняется. Хвост save-волны проходит отдельным швом
+/// [`WorldCompletedSaveResponseMaterialization`]: его owners в старом пакете
+/// не выразимы методом игры без `&CGame`-контекста.
+pub trait WorldServerMessageGameView: WorldPlayerBaseGameView {
+    /// Переход online-игрока между GameServer регионами ветви `0x5FA02`:
+    /// decode в mapped-owner-а, снятие offline/online записей, organizing exit
+    /// и повторная login-постановка остаются одной связной мутацией владельца
+    /// игры; `Ok(None)` — online-запись исчезла до decode.
+    #[allow(clippy::too_many_arguments, reason = "точная форма inherent-делегации перехода игрока")]
+    fn transition_online_player_region(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        requested_player_id: u32,
+        target_region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        source: &[u8],
+        cursor: &mut usize,
+        registry: &GoodsBasePropertiesRegistry,
+        coefficients: &PlayerPropertyCoefficients,
+    ) -> Result<Option<WorldRegionChangePlayerTransition>, PlayerCodecError>;
+
+    /// Публикация online-записи декодированного reconnect-игрока ветви
+    /// `0x5FA01`: push уникального id и organizing enter одним вызовом
+    /// владельца игры, как в исходной цепочке `append_online_player_id`.
+    fn append_online_player_id(
+        &mut self,
+        organizing: &mut Self::OrganizingContext,
+        player_id: i32,
+    ) -> WorldOnlinePlayerAppendOutcome;
+}
+
+/// Шов хвоста завершённой save-волны ветви `0x5FA03`: snapshot БД-данных,
+/// cleanup live-карт игроков и launch save-потока остаются одной связной
+/// операцией владельца игры; уже выполненный snapshot/cleanup не откатывается
+/// при отказе launch, handle-state переходит только после успешного request.
+/// Реализация живёт в адаптере у dispatcher-а старого пакета и связывает
+/// owners, ещё не перенесённые в Realm (faction war, страновая таблица,
+/// lifecycle и runtime save-потока); игра, organizing и realm-владельцы
+/// приходят параметрами вызова (форма [`WorldDeleteRoleCountryGate`]) —
+/// поэтому шов generic по игре, а не dyn.
+pub trait WorldCompletedSaveResponseMaterialization<Game: WorldServerMessageGameView + ?Sized> {
+    #[allow(clippy::too_many_arguments, reason = "исходный handler повторно обращался к тем же singleton/static владельцам")]
+    fn materialize_completed_save_response_snapshot(
+        &mut self,
+        game: &mut Game,
+        registry: &GoodsBasePropertiesRegistry,
+        organizing: &mut Game::OrganizingContext,
+        coefficients: &PlayerPropertyCoefficients,
+        variables: &CVariableList,
+        honor_ranks: &mut CHonorRanks,
+        gods_battle: &CGodsBattleConf,
+    ) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock>;
 }
 
 /// Узкий dyn-заменитель одного DB-запроса переименования. `RsPlayerOwner`
