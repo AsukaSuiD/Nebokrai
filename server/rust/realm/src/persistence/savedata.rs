@@ -13,9 +13,8 @@
 //! Accumulator, session facade и отделённый batch owner остаются чистыми
 //! данными: generation-ветки и DB I/O save worker-а старого пакета наполняют
 //! и разбирают их за пределами библиотеки, поэтому поля публичны.
-//! `WorldSaveThreadJob` намеренно ещё остаётся у старого владельца: его
-//! `lifecycle` тип живёт в save orchestration `savedb` и перейдёт вместе
-//! с ней.
+//! Frozen-вход worker-а `WorldSaveThreadJob` живёт в
+//! [`crate::persistence::savedb`] вместе с цитируемым им lifecycle-типом.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;

@@ -7,6 +7,7 @@ pub mod rsgenvar;
 pub mod rsplayer;
 pub mod rssetup;
 pub mod savedata;
+pub mod savedb;
 pub mod writelog;
 pub mod writelogqueue;
 pub mod writelogworker;
