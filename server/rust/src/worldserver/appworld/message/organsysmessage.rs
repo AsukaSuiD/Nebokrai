@@ -7,15 +7,18 @@
 //! не добавляются; повторный lookup остаётся повторным.
 //!
 //! Membership/governance ветви (заявки, выходы, распуски, dub/purview,
-//! leave-word/pronounce, налоги, городские операции, списки фракций) и
+//! leave-word/pronounce, налоги, городские операции, списки фракций),
 //! war-ветви (`0x60101`, двухфазная `0x6011F`, village/city application и
-//! result, goods war `0x60139`/`0x6013A`, семейный `reload_attack_city`)
+//! result, goods war `0x60139`/`0x6013A`, семейный `reload_attack_city`),
+//! session-result семейство, decode-only `0x60121/0x60123`, маршрутные
+//! `0x6012E`/`0x60144`, billboard `0x60125`, quest/run-script
+//! `0x6013B`—`0x6013D`, invite/application `0x60116`/`0x60118`, initial data
+//! `0x60104`, creation `0x60103`, upgrade `0x60126` и city transfer `0x60130`
 //! перенесены в `nebokrai_realm::app::organsysmessage` поверх статического
-//! организационного view и узкого country-gate `WorldCountryWarGate`;
+//! организационного view, `WorldGameView` и bridge-швов `Organizing*Bridge`;
 //! здешние одноимённые `pub(crate)` функции — только направляющая обвязка,
-//! собирающая CGame-адаптеры контекстов, либо ветви, чьи адаптеры ещё
-//! привязаны к старому владельцу игры (creation `0x60103`, upgrade `0x60126`,
-//! billboard, transfer).
+//! собирающая CGame-адаптеры контекстов и bridge-швов для realm-обработчиков
+//! в исходных типах. Ветвевой логики в этом файле больше нет.
 //!
 //! Async session callback публикует terminal action в main-loop FIFO и лишь
 //! там изменяет `CGame`; confirmation остаётся на исходной позиции callback.
@@ -28,9 +31,7 @@ use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::servers::ServerCommandHandle;
 use crate::setup::globesetup::GlobeSetupSnapshot;
-use crate::setup::regionrouter::{
-    RegionRoutePoint, RegionRouter, RegionRouterChangeOutcome,
-};
+use crate::setup::regionrouter::RegionRouter;
 use crate::public::tools::put_string_to_file;
 use crate::worldserver::appworld::country::country::{
     CountryAbsolveCounterReset, CountryExileMessageDelivery, CountryExileResultContext,
@@ -62,7 +63,8 @@ use crate::worldserver::appworld::organizingsystem::faction::{
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
     FactionPurviewChange, FactionPurviewChangeContext,
     FactionSetParameterContext,
-    FactionUpgradeContext, FactionUpgradeFormatArgument,
+    FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
+    FactionUpgradeOutcome,
     FactionUploadIconBlock, FactionUploadIconContext,
 };
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
@@ -73,28 +75,33 @@ use crate::worldserver::appworld::organizingsystem::attackcitysys::{
     AttackCityWarResultRegion, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
+    AllFactionInfoClientBlock,
     AttackCityEndEffects, COrganizingCtrl,
     ConfederationCreationEffects,
     ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
     ConfederationCreationSessionRequest,
     CityTransferEffects,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
-    CityTransferStartBlock,
+    CityTransferStartBlock, CityTransferStartOutcome,
+    FactionClientSnapshotBlock,
     FreeFactionLookup, FreePlayerLookup,
 
     OrganizingContributorBlock,
     FactionUnionMembershipLookupBlock,
+    OrganizingInfoDelivery,
+    OrganizingUnionApplyForJoinOutcome,
     WorldFactionWarDeclarationEffects,
     OrganizingUnionApplyForJoinDispatchBlock,
     FactionCreationBlock, FactionCreationEffects, FactionCreationOutcome,
     FactionCreationPreparation,
     UnionOrganizingBridge,
-    PlayerInviteFactionBlock, PlayerInviteFactionEffects,
+    PlayerInviteFactionBlock, PlayerInviteFactionEffects, PlayerInviteFactionOutcome,
     OrganizingFactionDoJoinBlock,
     begin_city_transfer_session, begin_confederation_creation_session,
     OrganizingUnionDemiseBlock,
     OrganizingUnionExitBlock,
     OrganizingUnionFireOutBlock,
+    UnionClientSnapshotByPlayerBlock, UnionClientSnapshotByPlayerOutcome,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     TagTimeValue,
@@ -114,7 +121,8 @@ use crate::worldserver::appworld::organizingsystem::villagewarsys::{
     VillageWarResultContext, VillageWarResultFaction, VillageWarResultRegion,
 };
 use crate::worldserver::appworld::player::{
-    PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerPropertyCoefficients,
+    PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport,
+    PlayerPropertyCoefficients,
 };
 use crate::worldserver::worldserver::game::{
     CGame, WorldRegionNameLookup, format_union_world_string, legacy_tick_ms,
@@ -1229,36 +1237,69 @@ impl FactionContributorContext for WorldFactionContributorEffects<'_, '_, '_, '_
     }
 }
 
-/// Декодирует общий session-result branch `OnOrgasysMessage` в исходном
-/// порядке полей и передаёт callback менеджеру без дополнительных ответов.
+/// Session-result семейство (`0x60117/0x60119/0x60120/0x60122/0x60124/0x60131`)
+/// перенесено в realm (`nebokrai_realm::app::organsysmessage`) вместе с общим
+/// runtime-менеджером; обвязка только сохраняет прежнюю точку входа main-loop.
 pub(crate) fn dispatch_organizing_session_result(
     message: &mut CMessage,
     manager: &CNetSessionManager,
 ) -> OrganizingSessionResultDispatch {
-    let message_type = message.message_type();
-    if !SESSION_RESULT_MESSAGE_TYPES.contains(&message_type) {
-        return OrganizingSessionResultDispatch::NotHandled;
-    }
+    nebokrai_realm::app::organsysmessage::dispatch_organizing_session_result(message, manager)
+}
 
-    let session_id = message.base_mut().get_long64().unwrap_or(0);
-    let cookie_second = message.base_mut().get_long().unwrap_or(0);
-    let result = message
-        .base_mut()
-        .get_char()
-        .map_or(0, |result| i32::from(result as u8));
-    let cookie_first = message.base_mut().get_long().unwrap_or(0);
-    let outcome =
-        manager.on_sync_callback_result(session_id, cookie_first, cookie_second, result);
-    OrganizingSessionResultDispatch::Delivered {
-        message_type,
-        session_id,
-        cookie_first,
-        cookie_second,
-        result,
-        outcome,
+/// Bridge-адаптер ветви `0x60116`: связывает game/war/effects владельцев
+/// старого пакета для realm-обработчика; сам inherent-вход контроллера
+/// остаётся единственным вызовом шва.
+struct WorldPlayerInviteFactionBridge<'a, Effects> {
+    game: &'a CGame,
+    organizing: &'a mut COrganizingCtrl,
+    village_war: &'a CVillageWarSys,
+    attack_city: &'a CAttackCitySys,
+    effects: &'a mut Effects,
+}
+
+impl<Effects> nebokrai_realm::app::organsysmessage::OrganizingPlayerInviteFactionBridge
+    for WorldPlayerInviteFactionBridge<'_, Effects>
+where
+    Effects: PlayerInviteFactionEffects,
+{
+    type CreationReport = <Effects as ConfederationCreationEffects>::SessionReport;
+    type ApplicationReport = <Effects as UnionApplyForJoinEffects>::SessionReport;
+    type InvitationReport = <Effects as UnionInviteEffects>::SessionReport;
+    type CreationBlock = <Effects as ConfederationCreationEffects>::SessionBlock;
+    type ApplicationBlock = <Effects as UnionApplyForJoinEffects>::SessionBlock;
+    type InvitationBlock = <Effects as UnionInviteEffects>::SessionBlock;
+
+    fn on_player_invite_faction(
+        &mut self,
+        player_id: i32,
+        invited_faction_id: i32,
+    ) -> Result<
+        PlayerInviteFactionOutcome<
+            Self::CreationReport,
+            Self::ApplicationReport,
+            Self::InvitationReport,
+        >,
+        PlayerInviteFactionBlock<
+            Self::CreationBlock,
+            Self::ApplicationBlock,
+            Self::InvitationBlock,
+        >,
+    > {
+        self.organizing.on_player_invite_faction(
+            self.game,
+            self.village_war,
+            self.attack_city,
+            player_id,
+            invited_faction_id,
+            self.effects,
+        )
     }
 }
 
+/// Ветвь `0x60116` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// с bridge-швом invite-входа контроллера; обвязка лишь собирает адаптер и
+/// передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_player_invite_faction<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -1283,30 +1324,56 @@ pub(crate) fn dispatch_player_invite_faction<Effects>(
 where
     Effects: PlayerInviteFactionEffects,
 {
-    if message.message_type() != PLAYER_INVITE_FACTION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let invited_faction_id = message.base_mut().get_long().unwrap_or(0);
-    Some(
-        organizing
-            .on_player_invite_faction(
-                game,
-                village_war,
-                attack_city,
-                player_id,
-                invited_faction_id,
-                effects,
-            )
-            .map(|outcome| OrganizingPlayerInviteFactionDispatch {
-                player_id,
-                invited_faction_id,
-                outcome,
-            }),
-    )
+    let mut bridge = WorldPlayerInviteFactionBridge {
+        game,
+        organizing,
+        village_war,
+        attack_city,
+        effects,
+    };
+    nebokrai_realm::app::organsysmessage::dispatch_player_invite_faction(message, &mut bridge)
 }
 
+/// Bridge-адаптер ветви `0x60118` union application: связывает game/effects
+/// владельцев старого пакета для realm-обработчика.
+struct WorldUnionApplicationBridge<'a, Effects> {
+    game: &'a CGame,
+    organizing: &'a mut COrganizingCtrl,
+    effects: &'a mut Effects,
+}
+
+impl<Effects> nebokrai_realm::app::organsysmessage::OrganizingUnionApplicationBridge
+    for WorldUnionApplicationBridge<'_, Effects>
+where
+    Effects: UnionApplyForJoinEffects,
+{
+    type SessionReport = Effects::SessionReport;
+    type SessionBlock = Effects::SessionBlock;
+
+    fn apply_for_union_join(
+        &mut self,
+        master_player_id: i32,
+        applicant_faction_id: i32,
+        second_parameter: i32,
+        third_parameter: i32,
+    ) -> Result<
+        OrganizingUnionApplyForJoinOutcome<Self::SessionReport>,
+        OrganizingUnionApplyForJoinDispatchBlock<Self::SessionBlock>,
+    > {
+        self.organizing.apply_for_union_join(
+            self.game,
+            master_player_id,
+            applicant_faction_id,
+            second_parameter,
+            third_parameter,
+            self.effects,
+        )
+    }
+}
+
+/// Ветвь `0x60118` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// с bridge-швом union-входа контроллера; обвязка лишь собирает адаптер и
+/// передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_union_application<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -1321,28 +1388,12 @@ pub(crate) fn dispatch_union_application<Effects>(
 where
     Effects: UnionApplyForJoinEffects,
 {
-    if message.message_type() != UNION_APPLICATION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let master_player_id = message.base_mut().get_long().unwrap_or(0);
-    let applicant_faction_id = message.base_mut().get_long().unwrap_or(0);
-    Some(
-        organizing
-            .apply_for_union_join(
-                game,
-                master_player_id,
-                applicant_faction_id,
-                0,
-                master_player_id,
-                effects,
-            )
-            .map(|outcome| OrganizingUnionApplicationDispatch {
-                master_player_id,
-                applicant_faction_id,
-                outcome,
-            }),
-    )
+    let mut bridge = WorldUnionApplicationBridge {
+        game,
+        organizing,
+        effects,
+    };
+    nebokrai_realm::app::organsysmessage::dispatch_union_application(message, &mut bridge)
 }
 
 // Ветви `0x6011A/0x6011B/0x6011C/0x6011D` (leave-word enable/edit, pronounce)
@@ -1371,45 +1422,159 @@ pub(crate) fn dispatch_faction_war_player_died(
     )
 }
 
-#[derive(Debug)]
-pub(crate) enum OrganizingCreateFactionBlock {
-    PlayerDecode(PlayerCodecError),
-    Creation(FactionCreationBlock),
-    PlayerRefresh(PlayerFactionInfoUpdateBlock),
-    PlayerRefreshOwnerMissing,
+/// Причина остановки ветви `0x60103` — type-алиас generic realm-перечислителя
+/// `OrganizingCreateFactionDispatchBlock` на конкретном [`FactionCreationBlock`]
+/// старого `COrganizingCtrl`; форма и порядок вариантов прежнего локального
+/// enum сохраняются один в один.
+pub(crate) type OrganizingCreateFactionBlock =
+    nebokrai_realm::app::organsysmessage::OrganizingCreateFactionDispatchBlock<FactionCreationBlock>;
+
+/// Bridge-адаптер ветви `0x60103`: связывает game/country/DB/log владельцев
+/// старого пакета для realm-обработчика. Середина `prepare → DB → finish` и
+/// игровые снапшоты держат concrete `&CGame`, а decode игрока из wire-хвоста —
+/// `&mut`-заём той же игры, поэтому вызовы разводятся отдельными методами шва
+/// внутри одного адаптера; DB-контакт (`is_name_exist`) покрыт прежним
+/// `RsPlayerOwner::is_name_exist` по ADR-0013, отдельный DB-view не создаётся.
+struct WorldCreateFactionBridge<'game, 'view, 'db, 'callbacks, 'effects, 'log> {
+    game: &'game mut CGame,
+    organizing: &'game mut COrganizingCtrl,
+    parameters: &'view COrganizingParam,
+    countries: &'view CCountryHandler,
+    registry: &'view GoodsBasePropertiesRegistry,
+    coefficients: &'view PlayerPropertyCoefficients,
+    rs_player: &'db mut TiberiusRsPlayer,
+    player_database: Option<&'db mut WorldTdsClient>,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    persistent_name_exists: bool,
+    faction_create_log_enabled: bool,
+    write_faction_create_log: &'log mut dyn FnMut(i32, &[u8], i32, &[u8]),
 }
 
+impl nebokrai_realm::app::organsysmessage::OrganizingCreateFactionBridge
+    for WorldCreateFactionBridge<'_, '_, '_, '_, '_, '_>
+{
+    type CreationBlock = FactionCreationBlock;
+
+    fn world_game(&self) -> &dyn nebokrai_realm::app::world_game_view::WorldGameView {
+        self.game
+    }
+
+    fn country_exists(&self, country: u8) -> bool {
+        self.countries.get_country(country).is_some()
+    }
+
+    fn decode_online_player(
+        &mut self,
+        player_id: i32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<bool, PlayerCodecError> {
+        self.game.decord_online_player_by_id(
+            player_id as u32,
+            source,
+            cursor,
+            self.registry,
+            self.coefficients,
+        )
+    }
+
+    async fn persistent_name_exists(&mut self, name: &[u8]) -> bool {
+        let exists = self
+            .rs_player
+            .is_name_exist(
+                legacy_c_string_prefix(name),
+                self.player_database.as_deref_mut(),
+            )
+            .await;
+        self.persistent_name_exists = exists;
+        exists
+    }
+
+    fn prepare_faction_creation(
+        &mut self,
+        player_id: i32,
+        faction_name: &mut Vec<u8>,
+    ) -> Result<FactionCreationPreparation, Self::CreationBlock> {
+        let game: &CGame = &*self.game;
+        let mut effects = WorldFactionCreationEffects {
+            game,
+            callbacks: &mut *self.callbacks,
+            persistent_name_exists: self.persistent_name_exists,
+            faction_create_log_enabled: self.faction_create_log_enabled,
+            write_faction_create_log: &mut *self.write_faction_create_log,
+        };
+        self.organizing
+            .prepare_faction_creation(game, player_id, faction_name, &mut effects)
+    }
+
+    fn finish_faction_creation(
+        &mut self,
+        player_id: i32,
+        established_time: TagTimeValue,
+        faction_name: &[u8],
+        country: u8,
+        persistent_name_exists: bool,
+    ) -> Result<FactionCreationOutcome, Self::CreationBlock> {
+        let game: &CGame = &*self.game;
+        let mut effects = WorldFactionCreationEffects {
+            game,
+            callbacks: &mut *self.callbacks,
+            persistent_name_exists: self.persistent_name_exists,
+            faction_create_log_enabled: self.faction_create_log_enabled,
+            write_faction_create_log: &mut *self.write_faction_create_log,
+        };
+        self.organizing.finish_faction_creation(
+            game,
+            self.parameters,
+            player_id,
+            0,
+            established_time,
+            faction_name,
+            country,
+            persistent_name_exists,
+            &mut effects,
+        )
+    }
+
+    fn update_player_faction_info(
+        &mut self,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
+        self.game
+            .update_player_faction_info(self.organizing, player_id)
+    }
+
+    fn add_faction_to_client_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> Result<bool, FactionClientSnapshotBlock> {
+        self.organizing
+            .add_faction_to_client_by_player_id(&*self.game, player_id)
+    }
+
+    fn add_all_faction_info_to_client_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> Result<bool, AllFactionInfoClientBlock> {
+        self.organizing
+            .add_all_faction_info_to_client_by_player_id(&*self.game, player_id)
+    }
+
+    fn send_organizing_info_to_client(
+        &mut self,
+        request: FactionMemberInfoRequest<'_>,
+    ) -> OrganizingInfoDelivery {
+        COrganizingCtrl::send_organizing_info_to_client(&*self.game, request)
+    }
+}
+
+/// Ветвь `0x60103` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// с bridge-швом creation-середины; обвязка лишь собирает адаптер и передаёт
+/// ход realm-обработчику в исходных типах.
 #[allow(
     clippy::too_many_arguments,
     reason = "границы один к одному соответствуют exact World owner-ам"
 )]
-/// Local-time snapshot wire-полей остаётся у creation-ветви `0x60103`;
-/// перенесённые в realm ветви получают ту же формулу через
-/// `current_local_member_time` её владельца.
-fn capture_local_tag_time() -> TagTimeValue {
-    let local_time = TagTime::local_now();
-    TagTimeValue {
-        year: local_time.year,
-        month: local_time.month,
-        day_of_week: local_time.day_of_week,
-        day: local_time.day,
-        hour: local_time.hour,
-        minute: local_time.minute,
-        second: local_time.second,
-        milliseconds: local_time.milliseconds,
-    }
-}
-
-// Ветвь `0x60103` пока остаётся локальной: её середина связно держит
-// `&CGame`-inherent (`prepare_faction_creation` → DB name-lookup →
-// `finish_faction_creation` → client snapshots + organizing-info static), а
-// wire-hвостовой decode того же `CGame` требует `&mut`-заёма — без свёртки
-// середины в отдельный bridge-адаптер (форма B5 по карте волн) оба заёма не
-// разводятся по границе вызова, как у `0x60126`. Единственный DB-контакт
-// ветви (`is_name_exist`) уже закрыт boxed view `WorldCreateRoleDbView` по
-// ADR-0013 (`TiberiusRsPlayer` делегирует тому же `RsPlayerOwner::is_name_exist`,
-// отдельный `WorldFactionCreationDbView` не нужен), поэтому перенос — вопрос
-// формы середины, а не DB-шва.
 pub(crate) async fn dispatch_create_faction(
     message: &mut CMessage,
     game: &mut CGame,
@@ -1425,294 +1590,79 @@ pub(crate) async fn dispatch_create_faction(
     faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
 ) -> Option<Result<OrganizingCreateFactionDispatch, OrganizingCreateFactionBlock>> {
-    if message.message_type() != CREATE_FACTION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let request_id = message.base_mut().get_long64().unwrap_or(0);
-    let cookie = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let country = message.base_mut().get_byte().unwrap_or(0);
-    let mut faction_name = message.base_mut().get_str_bytes(20).unwrap_or_default();
-    if faction_name.is_empty() {
-        return Some(Ok(OrganizingCreateFactionDispatch {
-            request_id,
-            cookie,
-            player_id,
-            country,
-            faction_name,
-            outcome: OrganizingCreateFactionOutcome::EmptyName,
-        }));
-    }
-
-    let established_time = capture_local_tag_time();
-
-    let player_online = {
-        let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-        match game.decord_online_player_by_id(
-            player_id as u32,
-            source,
-            cursor,
-            registry,
-            coefficients,
-        ) {
-            Ok(player_online) => player_online,
-            Err(source) => {
-                return Some(Err(OrganizingCreateFactionBlock::PlayerDecode(source)));
-            }
-        }
-    };
-    if !player_online {
-        return Some(Ok(OrganizingCreateFactionDispatch {
-            request_id,
-            cookie,
-            player_id,
-            country,
-            faction_name,
-            outcome: OrganizingCreateFactionOutcome::PlayerOffline,
-        }));
-    }
-
-    let gate = if countries.get_country(country).is_none() {
-        Some(OrganizingCreateFactionGate::CountryMissing)
-    } else {
-        let player = game
-            .online_player_by_id(player_id as u32)
-            .expect("успешный Decord сохранил тот же online owner");
-        if i32::from(player.get_level()) < parameters.create_faction_player_level() {
-            Some(OrganizingCreateFactionGate::PlayerLevel)
-        } else {
-            let required_goods = legacy_c_string_prefix(parameters.create_faction_goods());
-            let has_required_goods = if required_goods == b"0" {
-                true
-            } else {
-                CString::new(required_goods).is_ok_and(|name| {
-                    player.check_goods_in_packet(
-                        Some(name.as_c_str()),
-                        original_name_index,
-                    ) > 0
-                })
-            };
-            if !has_required_goods {
-                Some(OrganizingCreateFactionGate::RequiredGoods)
-            } else if player.money() < parameters.create_faction_money() as u32 {
-                Some(OrganizingCreateFactionGate::Money)
-            } else {
-                None
-            }
-        }
-    };
-    let map_id = message.map_id();
-    if let Some(gate) = gate {
-        let response = send_create_faction_response(
-            game, map_id, request_id, cookie, player_id, 0,
-        );
-        return Some(Ok(OrganizingCreateFactionDispatch {
-            request_id,
-            cookie,
-            player_id,
-            country,
-            faction_name,
-            outcome: OrganizingCreateFactionOutcome::GateRejected { gate, response },
-        }));
-    }
-
-    let mut effects = WorldFactionCreationEffects {
+    let mut bridge = WorldCreateFactionBridge {
         game,
+        organizing,
+        parameters,
+        countries,
+        registry,
+        coefficients,
+        rs_player,
+        player_database,
         callbacks,
         persistent_name_exists: false,
         faction_create_log_enabled,
         write_faction_create_log,
     };
-    let preparation = match organizing.prepare_faction_creation(
-        game,
-        player_id,
-        &mut faction_name,
-        &mut effects,
-    ) {
-        Ok(preparation) => preparation,
-        Err(source) => return Some(Err(OrganizingCreateFactionBlock::Creation(source))),
-    };
-    let creation = match preparation {
-        FactionCreationPreparation::Rejected(reason) => {
-            FactionCreationOutcome::Rejected(reason)
-        }
-        FactionCreationPreparation::ReadyForPersistentLookup => {
-            let persistent_name_exists = rs_player
-                .is_name_exist(legacy_c_string_prefix(&faction_name), player_database)
-                .await;
-            effects.persistent_name_exists = persistent_name_exists;
-            match organizing.finish_faction_creation(
-                game,
-                parameters,
-                player_id,
-                0,
-                established_time,
-                &faction_name,
-                country,
-                persistent_name_exists,
-                &mut effects,
-            ) {
-                Ok(outcome) => outcome,
-                Err(source) => {
-                    return Some(Err(OrganizingCreateFactionBlock::Creation(source)));
-                }
-            }
-        }
-    };
-    let (result, notice_id, created) = match &creation {
-        FactionCreationOutcome::Rejected(
-            crate::worldserver::appworld::organizingsystem::organizingctrl::FactionCreationRejection::NameExists,
-        ) => (0, b"WS0116".as_slice(), false),
-        FactionCreationOutcome::Rejected(_) => (0, b"WS0115".as_slice(), false),
-        FactionCreationOutcome::Created(_) => (1, b"WS0117".as_slice(), true),
-    };
-    drop(effects);
-    let player_refresh = if created {
-        match game.update_player_faction_info(organizing, player_id) {
-            Ok(Some(report)) => Some(report),
-            Ok(None) => {
-                return Some(Err(
-                    OrganizingCreateFactionBlock::PlayerRefreshOwnerMissing,
-                ));
-            }
-            Err(source) => {
-                return Some(Err(OrganizingCreateFactionBlock::PlayerRefresh(source)));
-            }
-        }
-    } else {
-        None
-    };
-    let faction_snapshot = created.then(|| {
-        organizing.add_faction_to_client_by_player_id(game, player_id)
-    });
-    let all_factions_snapshot = created.then(|| {
-        organizing.add_all_faction_info_to_client_by_player_id(game, player_id)
-    });
-    let response = send_create_faction_response(
-        game, map_id, request_id, cookie, player_id, result,
-    );
-    let first_text = game.get_string_by_id(notice_id).to_vec();
-    let second_text = game.get_string_by_id(b"WS0118").to_vec();
-    let notice = COrganizingCtrl::send_organizing_info_to_client(
-        game,
-        FactionMemberInfoRequest {
-            recipient_player_id: player_id,
-            first_text: legacy_c_string_prefix(&first_text),
-            second_text: legacy_c_string_prefix(&second_text),
-            information_type: map_id,
-            color: 0xFFDA_EDFE,
-            trailing_value: 0,
-        },
-    );
-    Some(Ok(OrganizingCreateFactionDispatch {
-        request_id,
-        cookie,
-        player_id,
-        country,
-        faction_name,
-        outcome: OrganizingCreateFactionOutcome::Creation {
-            outcome: creation,
-            response,
-            notice,
-            player_refresh,
-            faction_snapshot,
-            all_factions_snapshot,
-        },
-    }))
+    nebokrai_realm::app::organsysmessage::dispatch_create_faction(
+        message,
+        parameters,
+        original_name_index,
+        &mut bridge,
+    )
+    .await
 }
 
-fn send_create_faction_response(
-    game: &CGame,
-    map_id: i32,
-    request_id: i64,
-    cookie: i32,
-    player_id: i32,
-    result: i32,
-) -> OrganizingCreateFactionResponse {
-    let mut response = CMessage::new(CREATE_FACTION_RESPONSE_TYPE);
-    response.base_mut().add_long64(request_id);
-    response.base_mut().add_long(cookie);
-    response.base_mut().add_long(player_id);
-    response.base_mut().add_long(result);
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = game.send_msg_to_game_server(map_id, &response);
-    OrganizingCreateFactionResponse {
-        request_id,
-        cookie,
-        player_id,
-        result,
-        map_id,
-        wire,
-        delivery,
+/// Bridge-адаптер ветви `0x60104`: связывает game/organizing владельцев
+/// старого пакета для realm-обработчика; три client-snapshot вызова шва
+/// делегируют одноимённым inherent-методам контроллера.
+struct WorldInitialDataBridge<'a> {
+    game: &'a CGame,
+    organizing: &'a mut COrganizingCtrl,
+}
+
+impl nebokrai_realm::app::organsysmessage::OrganizingInitialDataBridge
+    for WorldInitialDataBridge<'_>
+{
+    fn add_faction_to_client_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> Result<bool, FactionClientSnapshotBlock> {
+        self.organizing
+            .add_faction_to_client_by_player_id(self.game, player_id)
+    }
+
+    fn add_union_to_client_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> Result<UnionClientSnapshotByPlayerOutcome, UnionClientSnapshotByPlayerBlock> {
+        self.organizing
+            .add_union_to_client_by_player_id(self.game, player_id)
+    }
+
+    fn add_all_faction_info_to_client_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> Result<bool, AllFactionInfoClientBlock> {
+        self.organizing
+            .add_all_faction_info_to_client_by_player_id(self.game, player_id)
     }
 }
 
+/// Ветвь `0x60104` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// с bridge-швом client-snapshot вызовов контроллера; обвязка лишь собирает
+/// адаптер и передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_initial_organizing_data(
     message: &mut CMessage,
     game: &CGame,
     organizing: &mut COrganizingCtrl,
 ) -> Option<OrganizingInitialDataDispatch> {
-    if message.message_type() != INITIAL_ORGANIZING_DATA_MESSAGE_TYPE {
-        return None;
-    }
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let Some(player) = game.online_player_by_id(player_id as u32) else {
-        return Some(OrganizingInitialDataDispatch {
-            player_id,
-            outcome: Ok(OrganizingInitialDataOutcome::PlayerOffline),
-        });
-    };
-    if player.faction_data_received() {
-        return Some(OrganizingInitialDataDispatch {
-            player_id,
-            outcome: Ok(OrganizingInitialDataOutcome::AlreadyReceived),
-        });
-    }
-
-    let faction_snapshot = match organizing.add_faction_to_client_by_player_id(game, player_id) {
-        Ok(outcome) => outcome,
-        Err(source) => {
-            return Some(OrganizingInitialDataDispatch {
-                player_id,
-                outcome: Err(OrganizingInitialDataBlock::Faction(source)),
-            });
-        }
-    };
-    let union_snapshot = match organizing.add_union_to_client_by_player_id(game, player_id) {
-        Ok(outcome) => outcome,
-        Err(source) => {
-            return Some(OrganizingInitialDataDispatch {
-                player_id,
-                outcome: Err(OrganizingInitialDataBlock::Union {
-                    faction_snapshot,
-                    source,
-                }),
-            });
-        }
-    };
-    let all_factions_snapshot =
-        match organizing.add_all_faction_info_to_client_by_player_id(game, player_id) {
-            Ok(outcome) => outcome,
-            Err(source) => {
-                return Some(OrganizingInitialDataDispatch {
-                    player_id,
-                    outcome: Err(OrganizingInitialDataBlock::AllFactions {
-                        faction_snapshot,
-                        union_snapshot,
-                        source,
-                    }),
-                });
-            }
-        };
-    Some(OrganizingInitialDataDispatch {
-        player_id,
-        outcome: Ok(OrganizingInitialDataOutcome::Sent {
-            faction_snapshot,
-            union_snapshot,
-            all_factions_snapshot,
-        }),
-    })
+    let mut bridge = WorldInitialDataBridge { game, organizing };
+    nebokrai_realm::app::organsysmessage::dispatch_initial_organizing_data(
+        message,
+        game,
+        &mut bridge,
+    )
 }
 
 // Контракт country-lookup-а и сама ветвь `0x60107` faction list перенесены в
@@ -2078,18 +2028,13 @@ pub(crate) fn dispatch_faction_purview(
     )
 }
 
+/// Decode-only ветви `0x60121/0x60123` перенесены в realm
+/// (`nebokrai_realm::app::organsysmessage`); обвязка сохраняет прежнюю точку
+/// входа main-loop.
 pub(crate) fn dispatch_consumed_long(
     message: &mut CMessage,
 ) -> Option<OrganizingConsumedLongDispatch> {
-    let message_type = message.message_type();
-    if !CONSUMED_LONG_MESSAGE_TYPES.contains(&message_type) {
-        return None;
-    }
-    let value = message.base_mut().get_long().unwrap_or(0);
-    Some(OrganizingConsumedLongDispatch {
-        message_type,
-        value,
-    })
+    nebokrai_realm::app::organsysmessage::dispatch_consumed_long(message)
 }
 
 // Ветвь `0x6011E` declare war faction list перенесена в realm
@@ -2140,81 +2085,88 @@ pub(crate) fn dispatch_declare_faction_war(
     ))
 }
 
+/// Ветвь `0x60125` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// вместе с OnceLock-инициализацией заголовков — singleton тот же
+/// (`FACTION_BILLBOARD_TITLES` живёт у realm-контракта); обвязка лишь
+/// связывает serialize-проход контроллера closure-швом.
 pub(crate) fn dispatch_faction_billboard(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
     world_string: &mut dyn FnMut(&[u8]) -> Vec<u8>,
     sender: Option<&ServerCommandHandle>,
 ) -> Option<Result<OrganizingFactionBillboardOutcome, OrganizingFactionBillboardBlock>> {
-    if message.message_type() != FACTION_BILLBOARD_MESSAGE_TYPE {
-        return None;
-    }
-
- // Три `GetStringByID` исходник выполнял при первом входе в case, ещё до
- // чтения request и проверки типа, после чего process-static строки уже не
- // реагировали на reload string table.
-    let titles = FACTION_BILLBOARD_TITLES.get_or_init(|| {
-        [
-            legacy_c_string_prefix(&world_string(b"WS0134")).to_vec(),
-            legacy_c_string_prefix(&world_string(b"WS0133")).to_vec(),
-            legacy_c_string_prefix(&world_string(b"WS0132")).to_vec(),
-        ]
-    });
-    let socket_id = message.socket_id();
-    let request_id = message.base_mut().get_long().unwrap_or(0);
-    let billboard_type = message.base_mut().get_long().unwrap_or(0);
-    if billboard_type > 2 {
-        return Some(Ok(OrganizingFactionBillboardOutcome::TypeAboveRange {
-            request_id,
-            billboard_type,
-        }));
-    }
-    let Ok(title_index) = usize::try_from(billboard_type) else {
- // Оригинал проверяет только `2 < type`, поэтому отрицательный selector
- // индексирует статический `std::string[3]` до начала массива. Rust не
- // воспроизводит результат такого чтения за границами.
-        return Some(Err(OrganizingFactionBillboardBlock {
-            request_id,
-            billboard_type,
-        }));
+    let mut add_billboard_payload = |output: &mut Vec<u8>, billboard_type: i32| {
+        organizing.add_faction_billboard_to_byte_array(output, billboard_type);
     };
-
-    let title = titles[title_index].clone();
-    let mut payload = Vec::new();
-    organizing.add_faction_billboard_to_byte_array(&mut payload, billboard_type);
-
-    let mut response = CMessage::new(FACTION_BILLBOARD_RESPONSE_TYPE);
-    response.base_mut().add_long(request_id);
-    response.base_mut().add(&title);
-    response.base_mut().add_byte(0);
-    response.base_mut().add(&payload);
-    response.base_mut().update();
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send_to_socket(sender, socket_id);
-
-    Some(Ok(OrganizingFactionBillboardOutcome::Sent {
-        request_id,
-        billboard_type,
-        response: OrganizingFactionBillboardResponse {
-            socket_id,
-            title,
-            payload,
-            wire,
-            delivery,
-        },
-    }))
+    nebokrai_realm::app::organsysmessage::dispatch_faction_billboard(
+        message,
+        &mut add_billboard_payload,
+        world_string,
+        sender,
+    )
 }
 
+/// Bridge-адаптер ветви `0x60126`: связывает game/goods/log владельцев
+/// старого пакета для realm-обработчика. Inherent `upgrade_faction` держит
+/// concrete `&CGame` одновременно с effects-адаптером, а decode игрока из
+/// wire-хвоста — `&mut`-заём той же игры, поэтому вызовы разводятся
+/// отдельными методами шва внутри одного адаптера.
+struct WorldFactionUpgradeBridge<'game, 'view, 'callbacks, 'effects, 'update> {
+    game: &'game mut CGame,
+    organizing: &'game mut COrganizingCtrl,
+    parameters: &'view COrganizingParam,
+    registry: &'view GoodsBasePropertiesRegistry,
+    original_name_index: &'view GoodsOriginalNameIndex,
+    coefficients: &'view PlayerPropertyCoefficients,
+    use_log_system: bool,
+    callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
+    update_player: &'update mut dyn FnMut(i32),
+}
+
+impl nebokrai_realm::app::organsysmessage::OrganizingFactionUpgradeBridge
+    for WorldFactionUpgradeBridge<'_, '_, '_, '_, '_>
+{
+    fn decode_online_player(
+        &mut self,
+        player_id: i32,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<bool, PlayerCodecError> {
+        self.game.decord_online_player_by_id(
+            player_id as u32,
+            source,
+            cursor,
+            self.registry,
+            self.coefficients,
+        )
+    }
+
+    fn upgrade_faction(
+        &mut self,
+        faction_id: i32,
+        player_id: i32,
+    ) -> Result<Option<FactionUpgradeOutcome>, FactionUpgradeBlock> {
+        let game_ref: &CGame = &*self.game;
+        let mut effects = WorldFactionUpgradeEffects {
+            game: game_ref,
+            registry: self.registry,
+            original_name_index: self.original_name_index,
+            use_log_system: self.use_log_system,
+            callbacks: &mut *self.callbacks,
+            update_player: &mut *self.update_player,
+        };
+        self.organizing
+            .upgrade_faction(game_ref, self.parameters, faction_id, player_id, &mut effects)
+    }
+}
+
+/// Ветвь `0x60126` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// с bridge-швом upgrade-входа контроллера; обвязка лишь собирает адаптер и
+/// передаёт ход realm-обработчику в исходных типах.
 #[allow(
     clippy::too_many_arguments,
     reason = "opcode использует прежние game/faction/goods/string/log singleton-ы"
 )]
-/// Ветвь `0x60126` пока остаётся локальной: realm-обработчику нужна `&mut`
-/// игра для чтения игрока из wire-хвоста одновременно с заранее построенным
-/// upgrade effects-адаптером, который держит ту же игру общим заёмом, а сам
-/// вызов `upgrade_faction` — `&CGame`-inherent контроллера вне организационного
-/// view; двухфазная форма `0x6011F` снимает только первую часть, поэтому ветвь
-/// ждёт свёртки вызова (ближайший родственник — `0x60103`).
 pub(crate) fn dispatch_faction_upgrade(
     message: &mut CMessage,
     game: &mut CGame,
@@ -2227,62 +2179,20 @@ pub(crate) fn dispatch_faction_upgrade(
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
     update_player: &mut dyn FnMut(i32),
 ) -> Option<Result<OrganizingFactionUpgradeDispatch, OrganizingFactionUpgradeBlock>> {
-    if message.message_type() != UPGRADE_FACTION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let faction_id = message.base_mut().get_long().unwrap_or(0);
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let player_online = {
-        let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-        match game.decord_online_player_by_id(
-            player_id as u32,
-            source,
-            cursor,
-            registry,
-            coefficients,
-        ) {
-            Ok(player_online) => player_online,
-            Err(source) => {
-                return Some(Err(OrganizingFactionUpgradeBlock::PlayerDecode(source)));
-            }
-        }
-    };
-    if !player_online {
-        return Some(Ok(OrganizingFactionUpgradeDispatch {
-            faction_id,
-            player_id,
-            outcome: OrganizingFactionUpgradeOutcome::PlayerOffline,
-        }));
-    }
-
-    let game_ref: &CGame = game;
-    let mut effects = WorldFactionUpgradeEffects {
-        game: game_ref,
+    let mut bridge = WorldFactionUpgradeBridge {
+        game,
+        organizing,
+        parameters,
         registry,
         original_name_index,
+        coefficients,
         use_log_system,
         callbacks,
         update_player,
     };
-    let outcome = match organizing.upgrade_faction(
-        game_ref,
-        parameters,
-        faction_id,
-        player_id,
-        &mut effects,
-    ) {
-        Ok(Some(outcome)) => OrganizingFactionUpgradeOutcome::Upgrade(outcome),
-        Ok(None) => OrganizingFactionUpgradeOutcome::FactionMissing,
-        Err(source) => return Some(Err(OrganizingFactionUpgradeBlock::Upgrade(source))),
-    };
-
-    Some(Ok(OrganizingFactionUpgradeDispatch {
-        faction_id,
-        player_id,
-        outcome,
-    }))
+    nebokrai_realm::app::organsysmessage::dispatch_faction_upgrade(message, &mut bridge)
 }
+
 
 /// Ветвь `0x60127` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
 /// обвязка лишь собирает upload-icon effects адаптер старого пакета и
@@ -2357,30 +2267,64 @@ pub(crate) fn dispatch_faction_experience(
 // `OrganizingRegionParamDispatch` и `dispatch_region_param_update` перенесены в
 // realm (`nebokrai_realm::app::organsysmessage`) первой без-организационной
 // ветвью диспетчера; имена доступны здесь через glob re-export выше.
+/// Ветвь `0x6012E` region route перенесена в realm
+/// (`nebokrai_realm::app::organsysmessage`): её game-контакты покрыты
+/// `WorldGameView`; обвязка сохраняет прежнюю точку входа main-loop.
 pub(crate) fn dispatch_region_route(
     message: &mut CMessage,
     game: &CGame,
 ) -> Option<OrganizingRegionRouteDispatch> {
-    if message.message_type() != ROUTE_REGION_MESSAGE_TYPE {
-        return None;
-    }
-
-    let region_id = message.base_mut().get_long().unwrap_or(0);
-    let game_server_number = game.game_server_number_by_region_id(region_id);
-    message.set_message_type(ROUTE_REGION_RESPONSE_TYPE);
-    let wire = message.as_wire_bytes().to_vec();
-    let delivery = game.send_msg_to_game_server(game_server_number, message);
-    Some(OrganizingRegionRouteDispatch {
-        region_id,
-        game_server_number,
-        wire,
-        delivery,
-    })
+    nebokrai_realm::app::organsysmessage::dispatch_region_route(message, game)
 }
 
 // Ветвь `0x6012F` operate city gate перенесена в realm
 // (`nebokrai_realm::app::organsysmessage`); имя доступно через glob re-export.
 
+/// Bridge-адаптер ветви `0x60130`: связывает game/country/war/effects
+/// владельцев старого пакета для realm-обработчика; inherent
+/// `transfer_city_owner` остаётся единственным вызовом шва.
+struct WorldCityTransferBridge<'a, Effects> {
+    game: &'a CGame,
+    countries: &'a CCountryHandler,
+    organizing: &'a mut COrganizingCtrl,
+    attack_city: &'a CAttackCitySys,
+    village_war: &'a CVillageWarSys,
+    effects: &'a mut Effects,
+}
+
+impl<Effects> nebokrai_realm::app::organsysmessage::OrganizingCityTransferBridge
+    for WorldCityTransferBridge<'_, Effects>
+where
+    Effects: CityTransferEffects,
+{
+    type SessionReport = Effects::SessionReport;
+    type SessionBlock = Effects::SessionBlock;
+
+    fn transfer_city_owner(
+        &mut self,
+        requester_player_id: i32,
+        target_faction_id: i32,
+        region_id: i32,
+    ) -> Result<
+        CityTransferStartOutcome<Self::SessionReport>,
+        CityTransferStartBlock<Self::SessionBlock>,
+    > {
+        self.organizing.transfer_city_owner(
+            self.game,
+            self.countries,
+            self.attack_city,
+            self.village_war,
+            requester_player_id,
+            target_faction_id,
+            region_id,
+            self.effects,
+        )
+    }
+}
+
+/// Ветвь `0x60130` перенесена в realm (`nebokrai_realm::app::organsysmessage`)
+/// с bridge-швом transfer-входа контроллера; обвязка лишь собирает адаптер и
+/// передаёт ход realm-обработчику в исходных типах.
 pub(crate) fn dispatch_city_transfer<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -2398,29 +2342,15 @@ pub(crate) fn dispatch_city_transfer<Effects>(
 where
     Effects: CityTransferEffects,
 {
-    if message.message_type() != TRANSFER_CITY_OWNER_MESSAGE_TYPE {
-        return None;
-    }
-
-    let requester_player_id = message.base_mut().get_long().unwrap_or(0);
-    let target_faction_id = message.base_mut().get_long().unwrap_or(0);
-    let region_id = message.base_mut().get_long().unwrap_or(0);
-    let outcome = organizing.transfer_city_owner(
+    let mut bridge = WorldCityTransferBridge {
         game,
         countries,
+        organizing,
         attack_city,
         village_war,
-        requester_player_id,
-        target_faction_id,
-        region_id,
         effects,
-    );
-    Some(outcome.map(|outcome| OrganizingCityTransferDispatch {
-        requester_player_id,
-        target_faction_id,
-        region_id,
-        outcome,
-    }))
+    };
+    nebokrai_realm::app::organsysmessage::dispatch_city_transfer(message, &mut bridge)
 }
 
 // Ветви `0x60132` admission permit и `0x60133` attack city end перенесены в
@@ -3588,69 +3518,26 @@ pub(crate) fn reload_attack_city<Callback: Copy>(
 // видовым member-контекстом (закрытие заёмного блокера волны организационного
 // view); имена доступны здесь через glob re-export.
 
+/// Ветви `0x6013B/0x6013C` quest-команд перенесены в realm
+/// (`nebokrai_realm::app::organsysmessage`): их game-контакты покрыты
+/// `WorldGameView`; обвязка сохраняет прежнюю точку входа main-loop.
 pub(crate) fn dispatch_player_quest_command(
     message: &mut CMessage,
     game: &CGame,
     sender: Option<&ServerCommandHandle>,
 ) -> Option<OrganizingPlayerQuestCommandDispatch> {
-    let (kind, response_type) = match message.message_type() {
-        PLAYER_ADD_QUEST_MESSAGE_TYPE => {
-            (OrganizingPlayerQuestCommandKind::Add, GAME_ADD_QUEST_MESSAGE_TYPE)
-        }
-        PLAYER_REMOVE_QUEST_MESSAGE_TYPE => (
-            OrganizingPlayerQuestCommandKind::Remove,
-            GAME_REMOVE_QUEST_MESSAGE_TYPE,
-        ),
-        _ => return None,
-    };
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let quest_id = message.base_mut().get_short().unwrap_or(0);
-    let game_server_id = game.game_server_number_by_player_id(player_id);
-    let delivery = (game_server_id != 0).then(|| {
-        let mut response = CMessage::new(response_type);
-        response.base_mut().add_long(player_id);
-        response.base_mut().add_short(quest_id);
-        response.send_to_map_id(sender, game_server_id)
-    });
-    Some(OrganizingPlayerQuestCommandDispatch {
-        kind,
-        player_id,
-        quest_id,
-        game_server_id,
-        delivery,
-    })
+    nebokrai_realm::app::organsysmessage::dispatch_player_quest_command(message, game, sender)
 }
 
+/// Ветвь `0x6013D` run-script перенесена в realm
+/// (`nebokrai_realm::app::organsysmessage`); обвязка сохраняет прежнюю точку
+/// входа main-loop.
 pub(crate) fn dispatch_player_run_script(
     message: &mut CMessage,
     game: &CGame,
     sender: Option<&ServerCommandHandle>,
 ) -> Option<OrganizingPlayerRunScriptDispatch> {
-    if message.message_type() != PLAYER_RUN_SCRIPT_MESSAGE_TYPE {
-        return None;
-    }
-
-    let player_id = message.base_mut().get_long().unwrap_or(0);
-    let script = message
-        .base_mut()
-        .get_str_bytes(PLAYER_SCRIPT_CAPACITY)
-        .expect("literal 0x100 исключает zero-capacity GetStr");
-    let game_server_id = game.game_server_number_by_player_id(player_id);
-    let delivery = (game_server_id != 0).then(|| {
-        let script = CString::new(script.as_slice())
-            .expect("bounded GetStr возвращает bytes до первого NUL");
-        let mut response = CMessage::new(GAME_RUN_SCRIPT_MESSAGE_TYPE);
-        response.base_mut().add_long(player_id);
-        response.base_mut().add_str(Some(&script));
-        response.send_to_map_id(sender, game_server_id)
-    });
-    Some(OrganizingPlayerRunScriptDispatch {
-        player_id,
-        script,
-        game_server_id,
-        delivery,
-    })
+    nebokrai_realm::app::organsysmessage::dispatch_player_run_script(message, game, sender)
 }
 
 /// Ветвь `0x6013E` перенесена в realm (`nebokrai_realm::app::organsysmessage`);
@@ -3678,48 +3565,15 @@ pub(crate) fn dispatch_faction_parameter(
     )
 }
 
+/// Ветвь `0x60144` change region router перенесена в realm
+/// (`nebokrai_realm::app::organsysmessage`): её владелец маршрутов — тот же
+/// Shared `RegionRouter`; обвязка сохраняет прежнюю точку входа main-loop.
 pub(crate) fn dispatch_change_region_router(
     message: &mut CMessage,
     router: &RegionRouter,
     sender: Option<&ServerCommandHandle>,
 ) -> Option<OrganizingChangeRegionRouterDispatch> {
-    if message.message_type() != CHANGE_REGION_ROUTER_MESSAGE_TYPE {
-        return None;
-    }
-
-    let request_id = message.base_mut().get_long().unwrap_or(0);
-    let from_region = message.base_mut().get_long().unwrap_or(0);
-    let to_region = message.base_mut().get_long().unwrap_or(0);
-    let target = RegionRoutePoint {
-        x: message.base_mut().get_long().unwrap_or(0),
-        y: message.base_mut().get_long().unwrap_or(0),
-    };
-    let outcome = router.change_region_router(from_region, to_region, target);
-
-    let route = match &outcome {
-        RegionRouterChangeOutcome::RegionNotFound { .. } => &[][..],
-        RegionRouterChangeOutcome::Complete(route) => route.as_slice(),
-    };
-    let mut response = CMessage::new(CHANGE_REGION_ROUTER_RESPONSE_TYPE);
-    response.base_mut().add_long(request_id);
- // `vector::size()` попадал в 32-битный `Add` низшими битами без range gate.
-    response.base_mut().add_long(route.len() as i32);
-    for step in route {
-        response.base_mut().add_long(step.region_id);
-        response.base_mut().add_long(step.point.x);
-        response.base_mut().add_long(step.point.y);
-    }
-    let wire = response.as_wire_bytes().to_vec();
-    let delivery = response.send_all(sender);
-    Some(OrganizingChangeRegionRouterDispatch {
-        request_id,
-        from_region,
-        to_region,
-        target,
-        outcome,
-        wire,
-        delivery,
-    })
+    nebokrai_realm::app::organsysmessage::dispatch_change_region_router(message, router, sender)
 }
 
 struct WorldVillageWarResultContext<'game, 'organizing, 'callbacks, 'effects, 'update> {
