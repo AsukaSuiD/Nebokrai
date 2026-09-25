@@ -1,5 +1,5 @@
 //! Экипировка `CEquipmentContainer` из `cequipmentcontainer.cpp/.h`,
-//! подтверждённая `worldserver.exe` и `worldserver.pdb`.
+//! подтверждённая `worldserver.exe` и `worldserver.pdb`, перенесённая в Realm `items/`.
 //!
 //! Товар принимается только в колонку, разрешённую его base-properties;
 //! ornaments последовательно пробуют slots 6 и 7. Numeric map-order определяет
@@ -17,25 +17,25 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::goodslistener::TraversedGoods;
 use nebokrai_shared::values::CGuid;
-use crate::worldserver::appworld::listener::ccontainerlistener::{
+use crate::items::ccontainerlistener::{
     CContainerListener, TraversedContainerObject,
 };
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError};
-use super::super::goods::cgoodsbaseproperties::GOODS_TYPE_EQUIPMENT;
-use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
-use super::camountlimitgoodscontainer::AmountContainerCodecError;
-use super::ccontainer::ContainerGuidStorage;
-use super::cgoodscontainer::CGoodsContainerState;
-use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
+use crate::content::cgoods::{CGoods, GoodsCodecError};
+use crate::content::goods::{GOODS_TYPE_EQUIPMENT, GoodsBasePropertiesRegistry};
+use crate::content::cgoodsfactory::unserialize_goods;
+use crate::items::camountlimitgoodscontainer::AmountContainerCodecError;
+use crate::items::ccontainer::ContainerGuidStorage;
+use crate::items::cgoodscontainer::CGoodsContainerState;
+use crate::items::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
 
 const EQUIPMENT_FULL_LIMIT: usize = 9;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u32)]
-pub(crate) enum EquipmentColumn {
+pub enum EquipmentColumn {
     Head = 0,
     Body = 1,
     Hand = 2,
@@ -103,7 +103,7 @@ impl EquipmentColumn {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentContainerCodecError {
+pub enum EquipmentContainerCodecError {
     Goods(GoodsCodecError),
     ValidGoodsCountOutsideLegacyRange {
         count: usize,
@@ -152,7 +152,7 @@ impl From<GoodsCodecError> for EquipmentContainerCodecError {
     }
 }
 
-pub(crate) struct CEquipmentContainer {
+pub struct CEquipmentContainer {
     container_base: CGoodsContainerState,
     equipment: BTreeMap<EquipmentColumn, Box<CGoods>>,
 }
@@ -181,14 +181,14 @@ impl ContainerGuidStorage for CEquipmentContainer {
 }
 
 impl CEquipmentContainer {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CGoodsContainerState::with_constructor_defaults(),
             equipment: BTreeMap::new(),
         }
     }
 
-    pub(crate) fn add_at(
+    pub fn add_at(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -204,7 +204,7 @@ impl CEquipmentContainer {
             .get_base_properties_index()
             .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
         let Some(properties) =
-            super::super::goods::cgoodsfactory::query_goods_base_properties(registry, index)
+            crate::content::cgoodsfactory::query_goods_base_properties(registry, index)
         else {
             return Ok(Some(goods));
         };
@@ -217,7 +217,7 @@ impl CEquipmentContainer {
         Ok(None)
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         registry: &GoodsBasePropertiesRegistry,
@@ -226,7 +226,7 @@ impl CEquipmentContainer {
             .get_base_properties_index()
             .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
         let Some(properties) =
-            super::super::goods::cgoodsfactory::query_goods_base_properties(registry, index)
+            crate::content::cgoodsfactory::query_goods_base_properties(registry, index)
         else {
             return Ok(Some(goods));
         };
@@ -263,7 +263,7 @@ impl CEquipmentContainer {
         self.add_at(column as u32, goods, registry)
     }
 
-    pub(crate) fn add_from_db(
+    pub fn add_from_db(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -272,15 +272,15 @@ impl CEquipmentContainer {
         self.add_at(position, goods, registry)
     }
 
-    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+    pub fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         <Self as ContainerGuidStorage>::remove_by_guid(self, ex_id)
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.equipment.clear();
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.equipment.clear();
         self.container_base.release();
     }
@@ -289,25 +289,25 @@ impl CEquipmentContainer {
  ///
  /// Товарный AI остаётся owner-ом `CGoods`, поэтому callback передаётся
  /// явно вместо прежнего virtual dispatch через оригинал pointer.
-    pub(crate) fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
+    pub fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
         for goods in self.equipment.values_mut() {
             on_goods_ai(goods);
         }
     }
 
-    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+    pub fn get_goods(&self, position: u32) -> Option<&CGoods> {
         EquipmentColumn::from_wire(position)
             .and_then(|column| self.equipment.get(&column))
             .map(Box::as_ref)
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         EquipmentColumn::from_wire(position)
             .and_then(|column| self.equipment.get_mut(&column))
             .map(Box::as_mut)
     }
 
-    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+    pub fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         let Some(listener) = listener else {
             return;
         };
@@ -316,7 +316,7 @@ impl CEquipmentContainer {
         }
     }
 
-    pub(crate) fn get_contents_weight(
+    pub fn get_contents_weight(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<u32, EquipmentContainerCodecError> {
@@ -325,11 +325,11 @@ impl CEquipmentContainer {
         })
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         <Self as ContainerGuidStorage>::find_by_guid(self, ex_id)
     }
 
-    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+    pub fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         let goods = goods?;
         self.equipment
             .iter()
@@ -337,29 +337,29 @@ impl CEquipmentContainer {
             .map(|(column, _)| *column as u32)
     }
 
-    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+    pub fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.equipment
             .iter()
             .find(|(_, goods)| goods.get_ex_id() == ex_id)
             .map(|(column, _)| *column as u32)
     }
 
-    pub(crate) fn is_full(&self) -> bool {
+    pub fn is_full(&self) -> bool {
         self.equipment.len() == EQUIPMENT_FULL_LIMIT
     }
 
-    pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
+    pub fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
         self.equipment
             .values()
             .map(Box::as_ref)
             .find(|goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
-    pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
+    pub fn is_goods_existed(&self, base_properties_index: u32) -> bool {
         self.get_the_first_goods(base_properties_index).is_some()
     }
 
-    pub(crate) fn get_goods_by_base_index(
+    pub fn get_goods_by_base_index(
         &self,
         base_properties_index: u32,
     ) -> impl Iterator<Item = &CGoods> {
@@ -369,10 +369,10 @@ impl CEquipmentContainer {
             .filter(move |goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
-    ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
+    ) -> Result<Vec<TraversedGoods>, crate::content::cgoods::GoodsDbSnapshotBlock> {
         self.equipment
             .iter()
             .map(|(column, goods)| {
@@ -384,7 +384,7 @@ impl CEquipmentContainer {
             .collect()
     }
 
-    pub(crate) fn get_goods_amount(
+    pub fn get_goods_amount(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<u32, EquipmentContainerCodecError> {
@@ -393,7 +393,7 @@ impl CEquipmentContainer {
             let index = goods
                 .get_base_properties_index()
                 .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
-            if super::super::goods::cgoodsfactory::query_goods_base_properties(registry, index)
+            if crate::content::cgoodsfactory::query_goods_base_properties(registry, index)
                 .is_some()
             {
                 count += 1;
@@ -403,7 +403,7 @@ impl CEquipmentContainer {
             .map_err(|_| EquipmentContainerCodecError::ValidGoodsCountOutsideLegacyRange { count })
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &self,
         destination: &mut Vec<u8>,
         include_child: bool,
@@ -415,7 +415,7 @@ impl CEquipmentContainer {
             let index = goods
                 .get_base_properties_index()
                 .ok_or(GoodsCodecError::MissingBasePropertiesIndex)?;
-            if super::super::goods::cgoodsfactory::query_goods_base_properties(registry, index)
+            if crate::content::cgoodsfactory::query_goods_base_properties(registry, index)
                 .is_some()
             {
                 destination.extend_from_slice(&(*column as u32).to_le_bytes());
@@ -425,7 +425,7 @@ impl CEquipmentContainer {
         Ok(true)
     }
 
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
@@ -445,7 +445,7 @@ impl CEquipmentContainer {
 }
 
 impl CVolumeLimitGoodsContainer {
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
@@ -455,7 +455,7 @@ impl CVolumeLimitGoodsContainer {
         self.unserialize_records_after_clear(source, cursor, registry)
     }
 
-    pub(super) fn unserialize_records_after_clear(
+    pub fn unserialize_records_after_clear(
         &mut self,
         source: &[u8],
         cursor: &mut usize,

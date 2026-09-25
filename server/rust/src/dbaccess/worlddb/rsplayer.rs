@@ -45,9 +45,10 @@ use nebokrai_realm::persistence::rsplayer::{
 };
 
 pub(crate) use nebokrai_realm::persistence::rsplayer::{
-    CollectedHonorRanksFields, EmbeddedFriendNameNul, HonorRanksBlobBlock,
+    CollectedHonorRanksFields, HonorRanksBlobBlock,
     HonorRanksByTypeSaveOutcome, HonorRanksFieldSink, HonorRanksSaveBlock, HonorRanksSaveOutcome,
-    PlayerAbilityBinaryField, PlayerAbilityBlobDecodeBlock, PlayerAbilityCreationSnapshot,
+    LoadedPlayerScriptFlag, PlayerAbilityBinaryField, PlayerAbilityBlobDecodeBlock,
+    PlayerAbilityCreationSnapshot, PlayerAbilityLoadScalarSnapshot,
     PlayerAbilityQueryLoadFailure, PlayerAbilityQueryLoadOutcome, PlayerAbilityRowLoadFailure,
     PlayerAbilitySaveSnapshot, PlayerAbilityScalarSnapshot, PlayerAbilitySkill,
     PlayerBaseCreateOutcome, PlayerBaseDatabaseRow, PlayerBaseLoadFailure, PlayerBaseSaveSnapshot,
@@ -440,17 +441,6 @@ pub(crate) struct PlayerAbilityScalarAssignment<'a> {
     pub(crate) value: PlayerAbilityScalarValue<'a>,
 }
 
-pub(crate) struct PlayerAbilityLoadScalarSnapshot<'a> {
-    pub(crate) ability: PlayerAbilityScalarSnapshot<'a>,
-    pub(crate) silence_time: i32,
-    pub(crate) days_honor_eliminate_num: u32,
-    pub(crate) weeks_honor_eliminate_num: u32,
-    pub(crate) months_honor_eliminate_num: u32,
-    pub(crate) total_honor_eliminate_num: u32,
-    pub(crate) rank_of_nobility_id: u32,
-    pub(crate) appellation_id: u32,
-}
-
 pub(crate) fn player_ability_scalar_assignments<'a>(
     snapshot: &PlayerAbilityScalarSnapshot<'a>,
 ) -> [PlayerAbilityScalarAssignment<'a>; 84] {
@@ -744,12 +734,6 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
         bytes.extend_from_slice(&thing.point.to_le_bytes());
     }
     sink.append_binary_field(PlayerAbilityBinaryField::Thing, &bytes)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LoadedPlayerScriptFlag {
-    pub(crate) variable_num: i32,
-    pub(crate) variable_data: Vec<u8>,
 }
 
 pub(crate) fn load_hot_key_field(

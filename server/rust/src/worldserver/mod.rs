@@ -2,68 +2,6 @@
 
 pub(crate) mod appworld {
     pub(crate) mod baseobject;
-    pub(crate) mod container {
-        #[allow(
-            dead_code,
-            reason = "amount-container codec подключён перед остальными CPlayer container-полями"
-        )]
-        pub(crate) mod camountlimitgoodscontainer;
-        #[allow(
-            dead_code,
-            reason = "bank owner подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cbank;
-        #[allow(
-            dead_code,
-            reason = "battle-fairy owner подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cbattlefairycontainer;
-        #[allow(
-            dead_code,
-            reason = "базовый container-state подключён перед listener notification graph"
-        )]
-        pub(crate) mod ccontainer;
-        #[allow(
-            dead_code,
-            reason = "depot owner подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cdepot;
-        #[allow(
-            dead_code,
-            reason = "equipment/volume codec подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cequipmentcontainer;
-        #[allow(
-            dead_code,
-            reason = "fairy owner подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cfairycontainer;
-        #[allow(
-            dead_code,
-            reason = "достигнутый base stacking подключён к volume positional Add"
-        )]
-        pub(crate) mod cgoodscontainer;
-        #[allow(
-            dead_code,
-            reason = "cjifen owner и wallet folded-codec подключены перед CPlayer sequence"
-        )]
-        pub(crate) mod cjifen;
-        #[allow(
-            dead_code,
-            reason = "volume-container codec подключён перед equipment и CPlayer container sequence"
-        )]
-        pub(crate) mod cvolumelimitgoodscontainer;
-        #[allow(
-            dead_code,
-            reason = "wallet codec подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cwallet;
-        #[allow(
-            dead_code,
-            reason = "yuanbao folded-codec подключён перед точной CPlayer container sequence"
-        )]
-        pub(crate) mod cyuanbao;
-    }
     pub(crate) mod country {
         #[allow(
             clippy::module_inception,
@@ -114,11 +52,6 @@ pub(crate) mod appworld {
         )]
         pub(crate) mod cbattlefairyproperty;
         pub(crate) mod cgoods;
-        #[allow(
-            dead_code,
-            reason = "достигнутые base-properties подключены для точного goods stacking"
-        )]
-        pub(crate) mod cgoodsbaseproperties;
         pub(crate) mod cgoodsfactory;
     }
     #[allow(
@@ -132,14 +65,6 @@ pub(crate) mod appworld {
     pub(crate) mod jjcsystem;
     pub(crate) mod leiting;
     pub(crate) mod misc;
-    #[allow(
-        dead_code,
-        reason = "listener-контракт подключён перед materialized CPlayer packet traversal"
-    )]
-    pub(crate) mod listener {
-        pub(crate) mod ccontainerlistener;
-        pub(crate) mod cseekgoodslistener;
-    }
     pub(crate) mod message {
         #[allow(
             dead_code,
@@ -183,9 +108,6 @@ pub(crate) mod appworld {
         )]
         pub(crate) mod writelogmessage;
     }
-    pub(crate) mod monster;
-    pub(crate) mod moveshape;
-    pub(crate) mod npc;
     pub(crate) mod organizingsystem {
         #[allow(
             dead_code,

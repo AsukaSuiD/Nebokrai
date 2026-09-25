@@ -1,5 +1,5 @@
 //! Однослотовый `CJiFen` из `cjifen.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`. Перенесён в Realm `items/`.
 //!
 //! Wire совпадает с `CWallet`: marker `0/1` и полный `CGoods`; decoder сначала
 //! освобождает прежний slot. `Clear` сохраняет owner, `Release` обнуляет его.
@@ -9,58 +9,59 @@
 //! индекс передаётся уже разрешённым из StringTable `WS0110`. Rust-владение
 //! устраняет внутренние утечки, не меняя состояние и wire.
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError};
-use super::super::goods::cgoodsfactory::{GoodsBasePropertiesRegistry, unserialize_goods};
-use super::super::listener::ccontainerlistener::{CContainerListener, TraversedContainerObject};
-use super::ccontainer::{ContainerGuidStorage, find_by_object_guid};
-use super::cwallet::CWallet;
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::cgoods::{CGoods, GoodsCodecError};
+use crate::content::cgoodsfactory::unserialize_goods;
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::content::goodslistener::TraversedGoods;
+use crate::items::ccontainer::{ContainerGuidStorage, find_by_object_guid};
+use crate::items::ccontainerlistener::{CContainerListener, TraversedContainerObject};
+use crate::items::cwallet::CWallet;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) struct CJiFen {
+pub struct CJiFen {
     wallet_state: CWallet,
 }
 
 impl CJiFen {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             wallet_state: CWallet::with_constructor_defaults(),
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.wallet_state.clear();
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.wallet_state.release();
     }
 
-    pub(crate) fn is_full(
+    pub fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<bool, GoodsCodecError> {
         self.wallet_state.is_full(registry)
     }
 
-    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+    pub fn get_goods(&self, position: u32) -> Option<&CGoods> {
         self.wallet_state.get_goods(position)
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         self.wallet_state.get_goods_mut(position)
     }
 
-    pub(crate) const fn get_goods_amount(&self) -> u32 {
+    pub const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()
     }
 
-    pub(crate) fn is_goods_existed(&self, base_properties_index: u32, ji_fen_index: u32) -> bool {
+    pub fn is_goods_existed(&self, base_properties_index: u32, ji_fen_index: u32) -> bool {
         self.wallet_state
             .is_goods_existed(base_properties_index, ji_fen_index)
     }
 
-    pub(crate) fn get_the_first_goods(
+    pub fn get_the_first_goods(
         &self,
         base_properties_index: u32,
         ji_fen_index: u32,
@@ -69,7 +70,7 @@ impl CJiFen {
             .get_the_first_goods(base_properties_index, ji_fen_index)
     }
 
-    pub(crate) fn get_goods_by_base_index(
+    pub fn get_goods_by_base_index(
         &self,
         base_properties_index: u32,
         ji_fen_index: u32,
@@ -78,7 +79,7 @@ impl CJiFen {
             .get_goods_by_base_index(base_properties_index, ji_fen_index)
     }
 
-    pub(crate) fn add_at(
+    pub fn add_at(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -89,7 +90,7 @@ impl CJiFen {
             .add_at(position, goods, ji_fen_index, registry)
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         ji_fen_index: u32,
@@ -98,38 +99,38 @@ impl CJiFen {
         self.wallet_state.add(goods, ji_fen_index, registry)
     }
 
-    pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
+    pub fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
         self.wallet_state.add_from_db(position, goods)
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         self.wallet_state.find(ex_id)
     }
 
-    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+    pub fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         self.wallet_state.remove(ex_id)
     }
 
-    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+    pub fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         self.wallet_state.query_goods_position_by_object(goods)
     }
 
-    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+    pub fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.wallet_state.query_goods_position(ex_id)
     }
 
-    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+    pub fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         self.wallet_state.traversing_container(listener);
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
-    ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
+    ) -> Result<Vec<TraversedGoods>, crate::content::cgoods::GoodsDbSnapshotBlock> {
         self.wallet_state.db_save_entries(registry)
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &self,
         destination: &mut Vec<u8>,
         include_child: bool,
@@ -137,7 +138,7 @@ impl CJiFen {
         self.wallet_state.serialize(destination, include_child)
     }
 
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
@@ -155,16 +156,16 @@ impl CJiFen {
 }
 
 impl CWallet {
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.gold_coins = None;
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.container_base.release();
         self.gold_coins = None;
     }
 
-    pub(crate) fn is_full(
+    pub fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<bool, GoodsCodecError> {
@@ -174,46 +175,46 @@ impl CWallet {
         }
     }
 
-    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+    pub fn get_goods(&self, position: u32) -> Option<&CGoods> {
         (position == 0)
             .then_some(self.gold_coins.as_deref())
             .flatten()
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         (position == 0)
             .then_some(self.gold_coins.as_deref_mut())
             .flatten()
     }
 
-    pub(crate) const fn get_goods_amount(&self) -> u32 {
+    pub const fn get_goods_amount(&self) -> u32 {
         self.gold_coins.is_some() as u32
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         <Self as ContainerGuidStorage>::find_by_guid(self, ex_id)
     }
 
-    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+    pub fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         <Self as ContainerGuidStorage>::remove_by_guid(self, ex_id)
     }
 
-    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+    pub fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         find_by_object_guid(self, goods.map(CGoods::get_ex_id)).map(|_| 0)
     }
 
-    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+    pub fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.find(ex_id).map(|_| 0)
     }
 
-    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+    pub fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         let (Some(listener), Some(goods)) = (listener, self.gold_coins.as_deref()) else {
             return;
         };
         let _ = listener.on_traversing_container(TraversedContainerObject::Goods(goods));
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &self,
         destination: &mut Vec<u8>,
         include_child: bool,
@@ -227,7 +228,7 @@ impl CWallet {
         Ok(true)
     }
 
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
@@ -243,7 +244,7 @@ impl CWallet {
         )
     }
 
-    pub(super) fn unserialize_with_marker_field(
+    pub fn unserialize_with_marker_field(
         &mut self,
         source: &[u8],
         cursor: &mut usize,

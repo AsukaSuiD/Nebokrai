@@ -1,5 +1,5 @@
 //! Однослотовый `CWallet` из `cwallet.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
 //!
 //! Пустой wallet принимает первый товар без проверки currency index; занятый
 //! складывает только gold coins. `AddFromDB` может перезаписать занятый slot.
@@ -10,15 +10,15 @@
 //! а не фактический товар. Largess использует отдельный gold limit и сохраняет
 //! unsigned wrapping остатков и суммы.
 
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::goodslistener::TraversedGoods;
 use nebokrai_shared::values::CGuid;
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
-use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use super::ccontainer::ContainerGuidStorage;
-use super::cgoodscontainer::{CGoodsContainerState, add_to_occupied_position};
+use crate::content::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::items::ccontainer::ContainerGuidStorage;
+use crate::items::cgoodscontainer::{CGoodsContainerState, add_to_occupied_position};
 
-pub(crate) struct CWallet {
+pub struct CWallet {
     pub(super) container_base: CGoodsContainerState,
     pub(super) gold_coins: Option<Box<CGoods>>,
 }
@@ -48,21 +48,21 @@ impl ContainerGuidStorage for CWallet {
 }
 
 impl CWallet {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CGoodsContainerState::with_constructor_defaults(),
             gold_coins: None,
         }
     }
 
-    pub(crate) const fn get_gold_coins_amount(&self) -> u32 {
+    pub const fn get_gold_coins_amount(&self) -> u32 {
         match &self.gold_coins {
             Some(goods) => goods.get_amount(),
             None => 0,
         }
     }
 
-    pub(crate) fn is_goods_existed(
+    pub fn is_goods_existed(
         &self,
         base_properties_index: u32,
         gold_coin_index: u32,
@@ -70,7 +70,7 @@ impl CWallet {
         self.gold_coins.is_some() && base_properties_index == gold_coin_index
     }
 
-    pub(crate) fn get_the_first_goods(
+    pub fn get_the_first_goods(
         &self,
         base_properties_index: u32,
         gold_coin_index: u32,
@@ -80,7 +80,7 @@ impl CWallet {
             .flatten()
     }
 
-    pub(crate) fn get_goods_by_base_index(
+    pub fn get_goods_by_base_index(
         &self,
         base_properties_index: u32,
         gold_coin_index: u32,
@@ -91,7 +91,7 @@ impl CWallet {
             .filter(move |_| base_properties_index == gold_coin_index)
     }
 
-    pub(crate) fn add_at(
+    pub fn add_at(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -113,7 +113,7 @@ impl CWallet {
         add_to_occupied_position(existing, goods, registry)
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         gold_coin_index: u32,
@@ -122,7 +122,7 @@ impl CWallet {
         self.add_at(0, goods, gold_coin_index, registry)
     }
 
-    pub(crate) fn add_gold_coin_of_largess(
+    pub fn add_gold_coin_of_largess(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -151,7 +151,7 @@ impl CWallet {
         Ok(None)
     }
 
-    pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
+    pub fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
         if self.get_goods(position).is_some() {
             return Some(goods);
         }
@@ -159,7 +159,7 @@ impl CWallet {
         None
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<Vec<TraversedGoods>, GoodsDbSnapshotBlock> {

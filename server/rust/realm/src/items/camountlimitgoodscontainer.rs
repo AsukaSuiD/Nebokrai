@@ -1,6 +1,6 @@
 //! Контейнер товаров с ограничением количества из
 //! `camountlimitgoodscontainer.cpp/.h`, подтверждённый `worldserver.exe` и
-//! `worldserver.pdb`.
+//! `worldserver.pdb`, перенесённый в Realm `items/`.
 //!
 //! `BTreeMap<CGuid, Box<CGoods>>` заменяет MSVC hash-map и ручное владение.
 //! Порядок хранения не влияет на подтверждённые суммы и callbacks; повторная
@@ -24,23 +24,24 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::goodslistener::TraversedGoods;
 use nebokrai_shared::values::CGuid;
-use crate::worldserver::appworld::listener::ccontainerlistener::{
+use crate::items::ccontainerlistener::{
     CContainerListener, TraversedContainerObject,
 };
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError};
-use super::super::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, create_goods, query_goods_base_properties, unserialize_goods,
+use crate::content::cgoods::{CGoods, GoodsCodecError};
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::content::cgoodsfactory::{
+    create_goods, query_goods_base_properties, unserialize_goods,
 };
-use super::cgoodscontainer::{
+use crate::items::cgoodscontainer::{
     CGoodsContainerState, GoodsContainerPositionStorage, remove_from_position,
 };
-use super::ccontainer::{ContainerGuidStorage, find_by_object_guid};
+use crate::items::ccontainer::{ContainerGuidStorage, find_by_object_guid};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AmountContainerCodecError {
+pub enum AmountContainerCodecError {
     Goods(GoodsCodecError),
     ValidGoodsCountOutsideLegacyRange {
         count: usize,
@@ -89,7 +90,7 @@ impl From<GoodsCodecError> for AmountContainerCodecError {
     }
 }
 
-pub(crate) struct CAmountLimitGoodsContainer {
+pub struct CAmountLimitGoodsContainer {
     container_base: CGoodsContainerState,
     goods: BTreeMap<CGuid, Box<CGoods>>,
     goods_amount_limit: u32,
@@ -120,7 +121,7 @@ impl GoodsContainerPositionStorage for CAmountLimitGoodsContainer {
 }
 
 impl CAmountLimitGoodsContainer {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CGoodsContainerState::with_constructor_defaults(),
             goods: BTreeMap::new(),
@@ -129,19 +130,19 @@ impl CAmountLimitGoodsContainer {
         }
     }
 
-    pub(crate) const fn set_goods_amount_limit(&mut self, limit: u32) {
+    pub const fn set_goods_amount_limit(&mut self, limit: u32) {
         self.goods_amount_limit = limit;
     }
 
-    pub(crate) const fn get_goods_amount_limit(&self) -> u32 {
+    pub const fn get_goods_amount_limit(&self) -> u32 {
         self.goods_amount_limit
     }
 
-    pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+    pub const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
         self.container_base.set_owner(owner_type, owner_id);
     }
 
-    pub(crate) fn get_goods_amount(
+    pub fn get_goods_amount(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<u32, AmountContainerCodecError> {
@@ -158,14 +159,14 @@ impl CAmountLimitGoodsContainer {
             .map_err(|_| AmountContainerCodecError::ValidGoodsCountOutsideLegacyRange { count })
     }
 
-    pub(crate) fn is_full(
+    pub fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<bool, AmountContainerCodecError> {
         Ok(self.goods_amount_limit <= self.get_goods_amount(registry)?)
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         registry: &GoodsBasePropertiesRegistry,
@@ -177,7 +178,7 @@ impl CAmountLimitGoodsContainer {
         Ok(None)
     }
 
-    pub(crate) fn add_from_db(
+    pub fn add_from_db(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -190,12 +191,12 @@ impl CAmountLimitGoodsContainer {
         Ok(None)
     }
 
-    pub(super) fn insert_unchecked(&mut self, goods: Box<CGoods>) {
+    pub fn insert_unchecked(&mut self, goods: Box<CGoods>) {
         let ex_id = *goods.get_ex_id();
         let _ = self.goods.insert(ex_id, goods);
     }
 
-    pub(super) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+    pub fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         let goods = self.goods.get(ex_id)?;
         if self.is_locked(goods) {
             return None;
@@ -203,7 +204,7 @@ impl CAmountLimitGoodsContainer {
         self.goods.remove(ex_id)
     }
 
-    pub(crate) fn remove_at<Random>(
+    pub fn remove_at<Random>(
         &mut self,
         position: u32,
         amount: u32,
@@ -226,12 +227,12 @@ impl CAmountLimitGoodsContainer {
         .map_err(Into::into)
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.goods.clear();
         self.locked_goods.clear();
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.goods_amount_limit = 1;
         self.goods.clear();
         self.locked_goods.clear();
@@ -241,13 +242,13 @@ impl CAmountLimitGoodsContainer {
  /// Обходит все goods в storage-order ровно один раз для virtual `CGoods::AI`.
  /// Сам товарный AI остаётся owner-ом `CGoods`, поэтому callback внедряется
  /// явно вместо прежнего virtual dispatch через оригинал pointer.
-    pub(crate) fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
+    pub fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
         for goods in self.goods.values_mut() {
             on_goods_ai(goods);
         }
     }
 
-    pub(crate) fn clone_into(
+    pub fn clone_into(
         &self,
         target: &mut CAmountLimitGoodsContainer,
     ) -> Result<bool, GoodsCodecError> {
@@ -263,16 +264,16 @@ impl CAmountLimitGoodsContainer {
         Ok(true)
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         let goods = self.goods.get(ex_id).map(Box::as_ref)?;
         (!self.is_locked(goods)).then_some(goods)
     }
 
-    pub(crate) fn find_object(&self, goods: Option<&CGoods>) -> Option<&CGoods> {
+    pub fn find_object(&self, goods: Option<&CGoods>) -> Option<&CGoods> {
         find_by_object_guid(self, goods.map(CGoods::get_ex_id))
     }
 
-    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+    pub fn get_goods(&self, position: u32) -> Option<&CGoods> {
         if position >= self.goods_amount_limit {
             return None;
         }
@@ -285,25 +286,25 @@ impl CAmountLimitGoodsContainer {
         (!self.is_locked(goods)).then_some(goods)
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         let ex_id = *self.get_goods(position)?.get_ex_id();
         self.goods_mut(&ex_id)
     }
 
-    pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
+    pub fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
         self.goods.values().map(Box::as_ref).find(|goods| {
             goods.get_base_properties_index() == Some(base_properties_index)
                 && !self.is_locked(goods)
         })
     }
 
-    pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
+    pub fn is_goods_existed(&self, base_properties_index: u32) -> bool {
         self.goods
             .values()
             .any(|goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
-    pub(crate) fn query_goods_position(&self, goods: Option<&CGoods>) -> Option<u32> {
+    pub fn query_goods_position(&self, goods: Option<&CGoods>) -> Option<u32> {
         let goods = goods?;
         self.goods
             .values()
@@ -311,14 +312,14 @@ impl CAmountLimitGoodsContainer {
             .and_then(|position| u32::try_from(position).ok())
     }
 
-    pub(crate) fn query_goods_position_by_guid(&self, ex_id: &CGuid) -> Option<u32> {
+    pub fn query_goods_position_by_guid(&self, ex_id: &CGuid) -> Option<u32> {
         self.goods
             .values()
             .position(|goods| goods.get_ex_id() == ex_id)
             .and_then(|position| u32::try_from(position).ok())
     }
 
-    pub(crate) fn get_goods_by_base_index<'container>(
+    pub fn get_goods_by_base_index<'container>(
         &'container self,
         base_properties_index: u32,
         mut output: Vec<&'container CGoods>,
@@ -329,7 +330,7 @@ impl CAmountLimitGoodsContainer {
         }));
     }
 
-    pub(crate) fn lock(&mut self, goods: Option<&CGoods>) -> i32 {
+    pub fn lock(&mut self, goods: Option<&CGoods>) -> i32 {
         let Some(goods) = goods else {
             return 0;
         };
@@ -341,7 +342,7 @@ impl CAmountLimitGoodsContainer {
         1
     }
 
-    pub(crate) fn unlock(&mut self, goods: Option<&CGoods>) -> i32 {
+    pub fn unlock(&mut self, goods: Option<&CGoods>) -> i32 {
         let Some(goods) = goods else {
             return 0;
         };
@@ -363,7 +364,7 @@ impl CAmountLimitGoodsContainer {
             .any(|locked| locked == goods.get_ex_id())
     }
 
-    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+    pub fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         let Some(listener) = listener else {
             return;
         };
@@ -373,7 +374,7 @@ impl CAmountLimitGoodsContainer {
         }
     }
 
-    pub(crate) fn get_contents_weight(
+    pub fn get_contents_weight(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<u32, AmountContainerCodecError> {
@@ -382,14 +383,14 @@ impl CAmountLimitGoodsContainer {
         })
     }
 
-    pub(super) fn goods(&self) -> impl Iterator<Item = &CGoods> {
+    pub fn goods(&self) -> impl Iterator<Item = &CGoods> {
         self.goods.values().map(Box::as_ref)
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
-    ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
+    ) -> Result<Vec<TraversedGoods>, crate::content::cgoods::GoodsDbSnapshotBlock> {
         self.goods()
             .map(|goods| {
                 Ok(TraversedGoods {
@@ -400,11 +401,11 @@ impl CAmountLimitGoodsContainer {
             .collect()
     }
 
-    pub(super) fn goods_mut(&mut self, ex_id: &CGuid) -> Option<&mut CGoods> {
+    pub fn goods_mut(&mut self, ex_id: &CGuid) -> Option<&mut CGoods> {
         self.goods.get_mut(ex_id).map(Box::as_mut)
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &self,
         destination: &mut Vec<u8>,
         include_child: bool,
@@ -423,7 +424,7 @@ impl CAmountLimitGoodsContainer {
         Ok(true)
     }
 
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,

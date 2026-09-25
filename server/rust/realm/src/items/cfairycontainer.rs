@@ -1,5 +1,5 @@
 //! `CFairyContainer` из `cfairycontainer.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
 //!
 //! Контейнер расширяет volume-owner пятью hatch-time. Serialize после каждого
 //! значения обнуляет его в live-state; decoder сначала разбирает volume-wire,
@@ -10,41 +10,41 @@
 //! совпадают с battle-fairy volume-политикой; `AddFromDB` сохраняет отдельную
 //! проверку collision перед base-вставкой.
 
-use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use super::camountlimitgoodscontainer::AmountContainerCodecError;
-use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::items::camountlimitgoodscontainer::AmountContainerCodecError;
+use crate::items::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
+use crate::content::goodslistener::TraversedGoods;
 use nebokrai_shared::values::CGuid;
-use crate::worldserver::appworld::goods::cgoods::CGoods;
+use crate::content::cgoods::CGoods;
 
 const HATCH_TIME_COUNT: usize = 5;
 
-pub(crate) struct CFairyContainer {
+pub struct CFairyContainer {
     volume_state: CVolumeLimitGoodsContainer,
     hatch_times: [u32; HATCH_TIME_COUNT],
 }
 
 impl CFairyContainer {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             volume_state: CVolumeLimitGoodsContainer::with_constructor_defaults(),
             hatch_times: [0; HATCH_TIME_COUNT],
         }
     }
 
-    pub(crate) fn set_container_volume(&mut self, size: u32) {
+    pub fn set_container_volume(&mut self, size: u32) {
         self.volume_state.set_container_volume(size);
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.volume_state.clear();
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.volume_state.release();
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         registry: &GoodsBasePropertiesRegistry,
@@ -52,7 +52,7 @@ impl CFairyContainer {
         self.volume_state.add(goods, registry)
     }
 
-    pub(crate) fn add_at(
+    pub fn add_at(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -61,15 +61,15 @@ impl CFairyContainer {
         self.volume_state.add_at(position, goods, registry)
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         self.volume_state.find(ex_id)
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         self.volume_state.get_goods_mut(position)
     }
 
-    pub(crate) fn remove(
+    pub fn remove(
         &mut self,
         ex_id: &CGuid,
         registry: &GoodsBasePropertiesRegistry,
@@ -77,7 +77,7 @@ impl CFairyContainer {
         self.volume_state.remove(ex_id, registry)
     }
 
-    pub(crate) fn add_from_db(
+    pub fn add_from_db(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -89,14 +89,14 @@ impl CFairyContainer {
         self.volume_state.add_from_db(position, goods, registry)
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
-    ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
+    ) -> Result<Vec<TraversedGoods>, crate::content::cgoods::GoodsDbSnapshotBlock> {
         self.volume_state.db_save_entries(registry)
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &mut self,
         destination: &mut Vec<u8>,
         include_child: bool,
@@ -112,7 +112,7 @@ impl CFairyContainer {
         Ok(base_result)
     }
 
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,

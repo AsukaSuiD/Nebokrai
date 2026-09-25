@@ -1,5 +1,5 @@
 //! Однослотовый `CYuanBao` из `cyuanbao.cpp/.h`, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`. Перенесён в Realm `items/`.
 //!
 //! Это отдельный nominal-класс с тем же состоянием и marker-wire, что `CWallet`.
 //! Пустой slot принимает товар без проверки, занятый складывает только YuanBao;
@@ -7,57 +7,57 @@
 //! `Option<Box<CGoods>>` заменяет nullable pointer и ручное удаление. Бесполезный
 //! vector-by-value query представлен обычным iterator-ом с тем же фильтром.
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError};
-use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
-use super::super::listener::ccontainerlistener::CContainerListener;
-use super::cwallet::CWallet;
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::cgoods::{CGoods, GoodsCodecError};
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::items::ccontainerlistener::CContainerListener;
+use crate::items::cwallet::CWallet;
+use crate::content::goodslistener::TraversedGoods;
 use nebokrai_shared::values::CGuid;
 
-pub(crate) struct CYuanBao {
+pub struct CYuanBao {
     wallet_state: CWallet,
 }
 
 impl CYuanBao {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             wallet_state: CWallet::with_constructor_defaults(),
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.wallet_state.clear();
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.wallet_state.release();
     }
 
-    pub(crate) fn is_full(
+    pub fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<bool, GoodsCodecError> {
         self.wallet_state.is_full(registry)
     }
 
-    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+    pub fn get_goods(&self, position: u32) -> Option<&CGoods> {
         self.wallet_state.get_goods(position)
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         self.wallet_state.get_goods_mut(position)
     }
 
-    pub(crate) const fn get_goods_amount(&self) -> u32 {
+    pub const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()
     }
 
-    pub(crate) fn is_goods_existed(&self, base_properties_index: u32, yuan_bao_index: u32) -> bool {
+    pub fn is_goods_existed(&self, base_properties_index: u32, yuan_bao_index: u32) -> bool {
         self.wallet_state
             .is_goods_existed(base_properties_index, yuan_bao_index)
     }
 
-    pub(crate) fn get_the_first_goods(
+    pub fn get_the_first_goods(
         &self,
         base_properties_index: u32,
         yuan_bao_index: u32,
@@ -66,7 +66,7 @@ impl CYuanBao {
             .get_the_first_goods(base_properties_index, yuan_bao_index)
     }
 
-    pub(crate) fn get_goods_by_base_index(
+    pub fn get_goods_by_base_index(
         &self,
         base_properties_index: u32,
         yuan_bao_index: u32,
@@ -75,7 +75,7 @@ impl CYuanBao {
             .get_goods_by_base_index(base_properties_index, yuan_bao_index)
     }
 
-    pub(crate) fn add_at(
+    pub fn add_at(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -86,7 +86,7 @@ impl CYuanBao {
             .add_at(position, goods, yuan_bao_index, registry)
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         yuan_bao_index: u32,
@@ -95,38 +95,38 @@ impl CYuanBao {
         self.wallet_state.add(goods, yuan_bao_index, registry)
     }
 
-    pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
+    pub fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
         self.wallet_state.add_from_db(position, goods)
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         self.wallet_state.find(ex_id)
     }
 
-    pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
+    pub fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         self.wallet_state.remove(ex_id)
     }
 
-    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+    pub fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         self.wallet_state.query_goods_position_by_object(goods)
     }
 
-    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+    pub fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.wallet_state.query_goods_position(ex_id)
     }
 
-    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+    pub fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         self.wallet_state.traversing_container(listener);
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
-    ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
+    ) -> Result<Vec<TraversedGoods>, crate::content::cgoods::GoodsDbSnapshotBlock> {
         self.wallet_state.db_save_entries(registry)
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &self,
         destination: &mut Vec<u8>,
         include_child: bool,
@@ -134,7 +134,7 @@ impl CYuanBao {
         self.wallet_state.serialize(destination, include_child)
     }
 
-    pub(crate) fn unserialize(
+    pub fn unserialize(
         &mut self,
         source: &[u8],
         cursor: &mut usize,

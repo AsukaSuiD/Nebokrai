@@ -1,5 +1,5 @@
 //! Контейнер товаров с ячейками из `cvolumelimitgoodscontainer.cpp/.h`,
-//! подтверждённый `worldserver.exe` и `worldserver.pdb`.
+//! подтверждённый `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
 //!
 //! Размер контейнера определяет вектор GUID-ячеек и amount-limit. `Clear`
 //! сохраняет размер и заново создаёт пустые ячейки; `Release` обнуляет всё.
@@ -19,19 +19,18 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
+use crate::content::goodslistener::TraversedGoods;
 use nebokrai_shared::values::CGuid;
-use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
+use crate::items::ccontainerlistener::CContainerListener;
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError};
-use super::super::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, query_goods_base_properties,
-};
-use super::camountlimitgoodscontainer::{AmountContainerCodecError, CAmountLimitGoodsContainer};
-use super::cgoodscontainer::add_to_occupied_position;
+use crate::content::cgoods::{CGoods, GoodsCodecError, GoodsDbSnapshotBlock};
+use crate::content::cgoodsfactory::query_goods_base_properties;
+use crate::content::goods::GoodsBasePropertiesRegistry;
+use crate::items::camountlimitgoodscontainer::{AmountContainerCodecError, CAmountLimitGoodsContainer};
+use crate::items::cgoodscontainer::add_to_occupied_position;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VolumeContainerCodecError {
+pub enum VolumeContainerCodecError {
     Amount(AmountContainerCodecError),
     Goods(GoodsCodecError),
     ValidGoodsCountOutsideLegacyRange { count: usize },
@@ -72,14 +71,14 @@ impl From<GoodsCodecError> for VolumeContainerCodecError {
     }
 }
 
-pub(crate) struct CVolumeLimitGoodsContainer {
+pub struct CVolumeLimitGoodsContainer {
     amount_base: CAmountLimitGoodsContainer,
     size: u32,
     cells: Vec<CGuid>,
 }
 
 impl CVolumeLimitGoodsContainer {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             amount_base: CAmountLimitGoodsContainer::with_constructor_defaults(),
             size: 0,
@@ -87,49 +86,49 @@ impl CVolumeLimitGoodsContainer {
         }
     }
 
-    pub(crate) fn set_container_volume_2d(&mut self, width: u32, height: u32) {
+    pub fn set_container_volume_2d(&mut self, width: u32, height: u32) {
         self.set_container_volume(width.wrapping_mul(height));
     }
 
-    pub(crate) fn set_container_volume(&mut self, size: u32) {
+    pub fn set_container_volume(&mut self, size: u32) {
         self.release();
         self.size = size;
         self.cells.resize(size as usize, CGuid::GUID_INVALID);
         self.amount_base.set_goods_amount_limit(size);
     }
 
-    pub(crate) const fn get_goods_amount_limit(&self) -> u32 {
+    pub const fn get_goods_amount_limit(&self) -> u32 {
         self.amount_base.get_goods_amount_limit()
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.amount_base.clear();
         self.cells.clear();
         self.cells.resize(self.size as usize, CGuid::GUID_INVALID);
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.amount_base.release();
         self.size = 0;
         self.cells.clear();
     }
 
-    pub(crate) fn ai(&mut self, on_goods_ai: impl FnMut(&mut CGoods)) {
+    pub fn ai(&mut self, on_goods_ai: impl FnMut(&mut CGoods)) {
         self.amount_base.ai(on_goods_ai);
     }
 
-    pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
+    pub fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.cells
             .iter()
             .position(|cell| cell == ex_id)
             .and_then(|position| u32::try_from(position).ok())
     }
 
-    pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
+    pub fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         self.amount_base.find(ex_id)
     }
 
-    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+    pub fn get_goods(&self, position: u32) -> Option<&CGoods> {
         let ex_id = self.cells.get(position as usize)?;
         if ex_id.is_invalid() {
             return None;
@@ -137,23 +136,23 @@ impl CVolumeLimitGoodsContainer {
         self.find(ex_id)
     }
 
-    pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
+    pub fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         let ex_id = *self.get_goods(position)?.get_ex_id();
         self.amount_base.goods_mut(&ex_id)
     }
 
-    pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
+    pub fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         self.query_goods_position(goods?.get_ex_id())
     }
 
-    pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
+    pub fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         self.amount_base.traversing_container(listener);
     }
 
-    pub(crate) fn db_save_entries(
+    pub fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
-    ) -> Result<Vec<TraversedGoods>, super::super::goods::cgoods::GoodsDbSnapshotBlock> {
+    ) -> Result<Vec<TraversedGoods>, GoodsDbSnapshotBlock> {
         self.amount_base
             .goods()
             .map(|goods| {
@@ -167,7 +166,7 @@ impl CVolumeLimitGoodsContainer {
             .collect()
     }
 
-    pub(crate) fn is_space_enough(&self, position: u32) -> bool {
+    pub fn is_space_enough(&self, position: u32) -> bool {
         position < self.size
             && self
                 .cells
@@ -175,7 +174,7 @@ impl CVolumeLimitGoodsContainer {
                 .is_some_and(|cell| cell.is_invalid())
     }
 
-    pub(crate) fn get_goods_amount(
+    pub fn get_goods_amount(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<u32, VolumeContainerCodecError> {
@@ -194,7 +193,7 @@ impl CVolumeLimitGoodsContainer {
             .map_err(|_| VolumeContainerCodecError::ValidGoodsCountOutsideLegacyRange { count })
     }
 
-    pub(crate) fn is_full(
+    pub fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
     ) -> Result<bool, VolumeContainerCodecError> {
@@ -204,7 +203,7 @@ impl CVolumeLimitGoodsContainer {
         Ok(!self.cells.iter().any(|cell| cell.is_invalid()))
     }
 
-    pub(crate) fn find_position_for_goods(
+    pub fn find_position_for_goods(
         &self,
         goods: Option<&CGoods>,
         registry: &GoodsBasePropertiesRegistry,
@@ -232,7 +231,7 @@ impl CVolumeLimitGoodsContainer {
             .and_then(|position| u32::try_from(position).ok()))
     }
 
-    pub(crate) fn add(
+    pub fn add(
         &mut self,
         goods: Box<CGoods>,
         registry: &GoodsBasePropertiesRegistry,
@@ -243,7 +242,7 @@ impl CVolumeLimitGoodsContainer {
         self.add_at(position, goods, registry)
     }
 
-    pub(crate) fn remove(
+    pub fn remove(
         &mut self,
         ex_id: &CGuid,
         registry: &GoodsBasePropertiesRegistry,
@@ -266,7 +265,7 @@ impl CVolumeLimitGoodsContainer {
         Ok(Some(goods))
     }
 
-    pub(crate) fn add_from_db(
+    pub fn add_from_db(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -289,7 +288,7 @@ impl CVolumeLimitGoodsContainer {
         Ok(None)
     }
 
-    pub(crate) fn add_at(
+    pub fn add_at(
         &mut self,
         position: u32,
         goods: Box<CGoods>,
@@ -321,7 +320,7 @@ impl CVolumeLimitGoodsContainer {
         Ok(None)
     }
 
-    pub(crate) fn clone_into(
+    pub fn clone_into(
         &self,
         target: &mut CVolumeLimitGoodsContainer,
     ) -> Result<bool, GoodsCodecError> {
@@ -331,7 +330,7 @@ impl CVolumeLimitGoodsContainer {
         Ok(true)
     }
 
-    pub(crate) fn serialize(
+    pub fn serialize(
         &self,
         destination: &mut Vec<u8>,
         _include_child: bool,

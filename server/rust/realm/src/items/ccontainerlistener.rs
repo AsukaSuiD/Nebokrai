@@ -1,4 +1,5 @@
-//! Базовый listener обхода контейнера исторического `WorldServer`.
+//! Базовый listener обхода контейнера исторического `WorldServer`,
+//! перенесённый в Realm `items/`.
 //!
 //! Callback входит в контракт owner-а. Источник контракта — `worldserver.exe` и `worldserver.pdb`.
 //!
@@ -13,14 +14,14 @@
 //! translation unit, являются STL/compiler cleanup и не получают
 //! отдельных Rust-тел; владение заменено `Vec` и обычным `Drop`.
 
-use crate::worldserver::appworld::goods::cgoods::CGoods;
+use crate::content::cgoods::CGoods;
 
-pub(crate) enum TraversedContainerObject<'object> {
+pub enum TraversedContainerObject<'object> {
     Goods(&'object CGoods),
     Other,
 }
 
-pub(crate) trait CContainerListener: Send {
+pub trait CContainerListener: Send {
     fn on_traversing_container(&mut self, _object: TraversedContainerObject<'_>) -> i32 {
         1
     }

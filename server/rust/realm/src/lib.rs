@@ -8,6 +8,7 @@ pub mod auction;
 pub mod billing;
 pub mod characters;
 pub mod content;
+pub mod items;
 pub mod organizations;
 pub mod persistence;
 pub mod regions;

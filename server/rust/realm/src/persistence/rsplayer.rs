@@ -827,3 +827,20 @@ pub enum PlayerLoadOutcome<AddonBlockT, InsertBlockT> {
     ReturnedFalse(PlayerLoadFailure),
     BlockedMissingFact(PlayerLoadBlock<AddonBlockT, InsertBlockT>),
 }
+
+pub struct PlayerAbilityLoadScalarSnapshot<'a> {
+    pub ability: PlayerAbilityScalarSnapshot<'a>,
+    pub silence_time: i32,
+    pub days_honor_eliminate_num: u32,
+    pub weeks_honor_eliminate_num: u32,
+    pub months_honor_eliminate_num: u32,
+    pub total_honor_eliminate_num: u32,
+    pub rank_of_nobility_id: u32,
+    pub appellation_id: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadedPlayerScriptFlag {
+    pub variable_num: i32,
+    pub variable_data: Vec<u8>,
+}

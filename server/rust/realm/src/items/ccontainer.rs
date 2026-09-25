@@ -1,4 +1,5 @@
-//! Владелец базового контейнера исторического `WorldServer`.
+//! Владелец базового контейнера исторического `WorldServer`, перенесённый в
+//! Realm `items/`.
 //!
 //! Owner реализует listener registration, virtual GUID forwarders и cleanup;
 //! источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
@@ -15,22 +16,22 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use nebokrai_shared::values::CGuid;
-use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListener;
+use crate::items::ccontainerlistener::CContainerListener;
 
-pub(crate) type SharedContainerListener = Arc<Mutex<dyn CContainerListener>>;
+pub type SharedContainerListener = Arc<Mutex<dyn CContainerListener>>;
 
-pub(crate) struct CContainerState {
+pub struct CContainerState {
     listeners: Vec<Weak<Mutex<dyn CContainerListener>>>,
 }
 
 impl CContainerState {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             listeners: Vec::new(),
         }
     }
 
-    pub(crate) fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
+    pub fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
         let Some(listener) = listener else {
             return 0;
         };
@@ -42,14 +43,14 @@ impl CContainerState {
         1
     }
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.listeners.clear();
     }
 }
 
 /// Concrete storage, к которому старый `CContainer` обращался virtual slot-ом
 /// GUID find/remove. Rust не хранит erased `CBaseObject*` и не вводит vtable.
-pub(crate) trait ContainerGuidStorage {
+pub trait ContainerGuidStorage {
     type Object;
     type Removed;
 
@@ -59,7 +60,7 @@ pub(crate) trait ContainerGuidStorage {
 
 /// Повторяет `Find(long, GUID)`: scalar type не читается и GUID передаётся
 /// concrete virtual owner-у без дополнительных эффектов.
-pub(crate) fn find_by_typed_guid<'storage, Storage: ContainerGuidStorage>(
+pub fn find_by_typed_guid<'storage, Storage: ContainerGuidStorage>(
     storage: &'storage Storage,
     _object_type: i32,
     ex_id: &CGuid,
@@ -67,7 +68,7 @@ pub(crate) fn find_by_typed_guid<'storage, Storage: ContainerGuidStorage>(
     storage.find_by_guid(ex_id)
 }
 
-pub(crate) fn remove_by_typed_guid<Storage: ContainerGuidStorage>(
+pub fn remove_by_typed_guid<Storage: ContainerGuidStorage>(
     storage: &mut Storage,
     _object_type: i32,
     ex_id: &CGuid,
@@ -77,7 +78,7 @@ pub(crate) fn remove_by_typed_guid<Storage: ContainerGuidStorage>(
 
 /// Повторяет object-overload `Find`: null даёт null, иначе используется
 /// embedded GUID объекта.
-pub(crate) fn find_by_object_guid<'storage, Storage: ContainerGuidStorage>(
+pub fn find_by_object_guid<'storage, Storage: ContainerGuidStorage>(
     storage: &'storage Storage,
     ex_id: Option<&CGuid>,
 ) -> Option<&'storage Storage::Object> {
@@ -86,7 +87,7 @@ pub(crate) fn find_by_object_guid<'storage, Storage: ContainerGuidStorage>(
 
 /// Повторяет object-overload `Remove`: null даёт null, иначе GUID делегируется
 /// concrete storage-owner-у.
-pub(crate) fn remove_by_object_guid<Storage: ContainerGuidStorage>(
+pub fn remove_by_object_guid<Storage: ContainerGuidStorage>(
     storage: &mut Storage,
     ex_id: Option<&CGuid>,
 ) -> Option<Storage::Removed> {
@@ -95,6 +96,6 @@ pub(crate) fn remove_by_object_guid<Storage: ContainerGuidStorage>(
 
 /// Базовый virtual `Remove(GUID, void*)` не имел storage и всегда возвращал
 /// null; generic result сохраняет это без оригинал pointer-а.
-pub(crate) const fn remove_base_by_guid<Removed>(_ex_id: &CGuid) -> Option<Removed> {
+pub const fn remove_base_by_guid<Removed>(_ex_id: &CGuid) -> Option<Removed> {
     None
 }

@@ -1,5 +1,5 @@
 //! Listener поиска товаров `CSeekGoodsListener` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`, перенесённый в Realm `items/`.
 //!
 //! `SetTarget(null)` сохраняет прежний target; непустое имя разрешается через
 //! goods factory и не очищает уже найденные GUID. Traversal добавляет GUID
@@ -11,25 +11,25 @@
 use std::ffi::CStr;
 
 use nebokrai_shared::values::CGuid;
-use crate::worldserver::appworld::goods::cgoodsfactory::{
+use crate::content::cgoodsfactory::{
     GoodsOriginalNameIndex, query_goods_id_by_original_name,
 };
-use crate::worldserver::appworld::listener::ccontainerlistener::{
+use crate::items::ccontainerlistener::{
     CContainerListener, TraversedContainerObject,
 };
 
 #[derive(Default)]
-pub(crate) struct CSeekGoodsListener {
+pub struct CSeekGoodsListener {
     target_goods_index: u32,
     goods_ids: Vec<CGuid>,
 }
 
 impl CSeekGoodsListener {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn set_target(
+    pub fn set_target(
         &mut self,
         original_name: Option<&CStr>,
         original_name_index: &GoodsOriginalNameIndex,
@@ -42,7 +42,7 @@ impl CSeekGoodsListener {
             query_goods_id_by_original_name(original_name_index, Some(original_name));
     }
 
-    pub(crate) fn goods_ids(&self) -> &[CGuid] {
+    pub fn goods_ids(&self) -> &[CGuid] {
         &self.goods_ids
     }
 }

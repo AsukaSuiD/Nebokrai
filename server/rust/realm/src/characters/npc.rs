@@ -1,5 +1,6 @@
 //! NPC `CNpc` из `npc.cpp/.h`, подтверждённый
 //! `worldserver.exe` и `worldserver.pdb`.
+//! Перенесён в Realm `characters/`.
 //!
 //! Владелец расширяет `CMoveShape`, задаёт object type `500` и создаёт пустой
 //! внутренний list. Текущий World-корпус не читает и не заполняет его, поэтому
@@ -8,7 +9,7 @@
 //! Rust-композиция и Drop сохраняют один base-owner и порядок destructor chain
 //! без копирования MSVC ABI, vtable или list internals.
 
-use super::moveshape::CMoveShape;
+use crate::regions::moveshape::CMoveShape;
 
 /// Opaque non-owning entry точного `CNpc::m_listScript`.
 ///
@@ -20,13 +21,13 @@ struct NpcScriptLink {
     address: usize,
 }
 
-pub(crate) struct CNpc {
+pub struct CNpc {
     move_shape_base: CMoveShape,
     script_links: Vec<NpcScriptLink>,
 }
 
 impl CNpc {
-    pub(crate) const fn with_constructor_base_and_type() -> Self {
+    pub const fn with_constructor_base_and_type() -> Self {
         let mut move_shape_base = CMoveShape::with_constructor_shape_base();
         move_shape_base.set_type(500);
         Self {
@@ -35,27 +36,27 @@ impl CNpc {
         }
     }
 
-    pub(crate) const fn get_type(&self) -> i32 {
+    pub const fn get_type(&self) -> i32 {
         self.move_shape_base.get_type()
     }
 
-    pub(crate) const fn get_id(&self) -> i32 {
+    pub const fn get_id(&self) -> i32 {
         self.move_shape_base.get_id()
     }
 
-    pub(crate) const fn set_id(&mut self, id: i32) {
+    pub const fn set_id(&mut self, id: i32) {
         self.move_shape_base.set_id(id);
     }
 
-    pub(crate) fn set_name(&mut self, name: &[u8]) {
+    pub fn set_name(&mut self, name: &[u8]) {
         self.move_shape_base.set_name(name);
     }
 
-    pub(crate) fn get_name(&self) -> &[u8] {
+    pub fn get_name(&self) -> &[u8] {
         self.move_shape_base.get_name()
     }
 
-    pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
+    pub const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.move_shape_base.set_graphics_id(graphics_id);
     }
 }

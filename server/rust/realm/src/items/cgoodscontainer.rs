@@ -1,5 +1,5 @@
 //! Общая часть `CGoodsContainer` из `cgoodscontainer.cpp/.h`, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`, перенесённая в Realm `items/`.
 //!
 //! Stacking проверяет base index, particular attribute и max-stack именно в
 //! исходном порядке; amount и свободное место используют unsigned wrapping.
@@ -12,21 +12,21 @@
 //! Base `AddFromDB` лишь проверяет позицию и не вставляет товар. Частичный
 //! `Remove` создаёт split и уведомляет listener до уменьшения исходного amount.
 
-use super::super::goods::cgoods::{CGoods, GoodsCodecError};
-use super::super::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
-use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
+use crate::content::cgoods::{CGoods, GoodsCodecError};
+use crate::content::goods::GAP_PARTICULAR_ATTRIBUTE;
+use crate::content::goods::GoodsBasePropertiesRegistry;
 use nebokrai_shared::values::CGuid;
-use super::ccontainer::{CContainerState, SharedContainerListener};
+use crate::items::ccontainer::{CContainerState, SharedContainerListener};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BaseGoodsContainerDbAddOutcome {
+pub enum BaseGoodsContainerDbAddOutcome {
     AcceptedWithoutInsert,
     RejectedMissingIncoming,
     RejectedOccupied,
 }
 
 impl BaseGoodsContainerDbAddOutcome {
-    pub(crate) const fn legacy_result(self) -> i32 {
+    pub const fn legacy_result(self) -> i32 {
         match self {
             Self::AcceptedWithoutInsert => 1,
             Self::RejectedMissingIncoming | Self::RejectedOccupied => 0,
@@ -35,7 +35,7 @@ impl BaseGoodsContainerDbAddOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BaseGoodsContainerDbAddBlock {
+pub enum BaseGoodsContainerDbAddBlock {
     MissingIncomingOnOccupiedPosition { position: u32 },
 }
 
@@ -43,19 +43,19 @@ pub(crate) enum BaseGoodsContainerDbAddBlock {
 ///
 /// `goods_at` и `remove_by_guid` соответствуют двум virtual slot-ам оригинал;
 /// external listener остаётся явным callback-ом, а не erased base pointer.
-pub(crate) trait GoodsContainerPositionStorage {
+pub trait GoodsContainerPositionStorage {
     fn goods_at(&mut self, position: u32) -> Option<&mut CGoods>;
     fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>>;
 }
 
-pub(crate) struct CGoodsContainerState {
+pub struct CGoodsContainerState {
     container_base: CContainerState,
     owner_type: i32,
     owner_id: i32,
 }
 
 impl CGoodsContainerState {
-    pub(crate) const fn with_constructor_defaults() -> Self {
+    pub const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CContainerState::with_constructor_defaults(),
             owner_type: 0,
@@ -63,33 +63,33 @@ impl CGoodsContainerState {
         }
     }
 
-    pub(crate) const fn clear(&mut self) {}
+    pub const fn clear(&mut self) {}
 
-    pub(crate) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.owner_type = 0;
         self.owner_id = 0;
         self.container_base.release();
     }
 
-    pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
+    pub const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
         self.owner_type = owner_type;
         self.owner_id = owner_id;
     }
 
-    pub(crate) const fn owner_type(&self) -> i32 {
+    pub const fn owner_type(&self) -> i32 {
         self.owner_type
     }
 
-    pub(crate) const fn owner_id(&self) -> i32 {
+    pub const fn owner_id(&self) -> i32 {
         self.owner_id
     }
 
-    pub(crate) fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
+    pub fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
         self.container_base.add_listener(listener)
     }
 }
 
-pub(crate) fn add_to_occupied_position(
+pub fn add_to_occupied_position(
     existing: &mut CGoods,
     incoming: Box<CGoods>,
     registry: &GoodsBasePropertiesRegistry,
@@ -121,7 +121,7 @@ pub(crate) fn add_to_occupied_position(
 ///
 /// Функция делает direct jump в `CContainer::Remove(GUID, void*)`, а base
 /// implementation всегда возвращает null. Ни object, ни context не читаются.
-pub(crate) const fn add_base_object() -> bool {
+pub const fn add_base_object() -> bool {
     false
 }
 
@@ -130,7 +130,7 @@ pub(crate) const fn add_base_object() -> bool {
 /// Lookup вызывается до проверки incoming pointer. Occupied-ветвь вызывает
 /// callback ровно один раз и возвращает `0`; пустая позиция возвращает `1`
 /// только для non-null incoming, сохраняя ownership у caller-а.
-pub(crate) fn add_from_db_base<'incoming, 'stored, Lookup, Log>(
+pub fn add_from_db_base<'incoming, 'stored, Lookup, Log>(
     incoming: Option<&'incoming CGoods>,
     position: u32,
     lookup: Lookup,
@@ -160,7 +160,7 @@ where
 /// лишь затем уменьшает original с 32-bit wrapping subtraction. Full remove
 /// делегируется concrete GUID owner-у; invalid position/amount и factory miss
 /// остаются null result original-а.
-pub(crate) fn remove_from_position<Storage, Create, Notify>(
+pub fn remove_from_position<Storage, Create, Notify>(
     storage: &mut Storage,
     position: u32,
     amount: u32,

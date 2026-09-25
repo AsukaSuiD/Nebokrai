@@ -30,8 +30,7 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 use crate::worldserver::appworld::player::{CPlayer, PlayerLoadedGoodsInsertBlock};
 
 pub(crate) use nebokrai_realm::content::goodsdb::{
-    GoodsAddonPropertySnapshot, GoodsAddonPropertyValue, GoodsAddonValueCountBlock,
-    GoodsObjectSnapshot, GoodsPropertiesSnapshot,
+    GoodsAddonPropertySnapshot, GoodsPropertiesSnapshot,
 };
 pub(crate) use nebokrai_realm::content::dbgoods::{
     DbGoodsNotice, DbGoodsOperation, DbGoodsOwner, DbGoodsSaveError,
