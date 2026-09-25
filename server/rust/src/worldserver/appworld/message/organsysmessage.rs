@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::CString;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 
@@ -32,7 +32,7 @@ use crate::worldserver::appworld::country::country::{
 };
 use crate::worldserver::appworld::country::countryhandler::CCountryHandler;
 use crate::worldserver::appworld::country::countryparam::CCountryParam;
-use crate::public::netsessionmanager::{CNetSessionManager, NetSessionCallbackOutcome};
+use crate::public::netsessionmanager::CNetSessionManager;
 use crate::public::date::TagTime;
 use crate::public::timer::{CTimer, TimerId};
 use crate::worldserver::appworld::goods::cgoodsfactory::{
@@ -40,82 +40,65 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::goodswarmember::{
     CGoodsWarMember, GoodsWarAuditEnvironment, GoodsWarAuditPlayer,
-    GoodsWarFactionSnapshot, GoodsWarFactionWinReport, GoodsWarFactionWinSnapshot,
+    GoodsWarFactionSnapshot, GoodsWarFactionWinSnapshot,
     GoodsWarDeliveryContext, GoodsWarMemberBlock, GoodsWarMemberContext,
-    GoodsWarMutationReport,
-    GoodsWarRefreshReport,
 };
 use crate::worldserver::appworld::organizingsystem::faction::{
-    CFaction, FactionApplyForJoinEffects, FactionApplyForJoinOutcome, FactionContributorContext,
-    FactionDemiseBlock, FactionDemiseContext, FactionDemiseOutcome, FactionDisbandContext,
+    CFaction, FactionApplyForJoinEffects, FactionContributorContext, FactionDemiseContext,
+    FactionDisbandContext,
     FactionDoJoinEffects,
-    FactionDubBlock, FactionDubContext, FactionDubFormatArgument, FactionDubOutcome,
-    FactionExitBlock, FactionExitContext, FactionExitOutcome,
-    FactionFireOutBlock, FactionFireOutContext, FactionFireOutOutcome,
+    FactionDubContext, FactionDubFormatArgument,
+    FactionExitContext,
+    FactionFireOutContext,
     current_local_member_time, goods_war_check_for_faction_id,
-    FactionEnemyMutationBlock, FactionEnemyMutationContext,
-    FactionEnemyWarLogArgument, FactionExperienceBlock, FactionExperienceUpdate,
+    FactionEnemyMutationContext,
+    FactionEnemyWarLogArgument, FactionExperienceBlock,
     FactionLevelContext, FactionMemberInfoRequest, FactionOrganizingInfoContext,
-    FactionPurviewChange, FactionPurviewChangeBlock, FactionPurviewChangeContext,
-    FactionPurviewChangeOutcome,
-    FactionInitialPropertyBlock, FactionOperationBlock, FactionOperationOutcome,
-    FactionOperationRejection, OwnedCityMutationBuildError,
-    FactionPermitBlock, FactionPermitUpdate,
-    FactionSetParameterBlock, FactionSetParameterContext, FactionSetParameterOutcome,
-    FactionUpgradeBlock, FactionUpgradeContext, FactionUpgradeFormatArgument,
-    FactionUpgradeOutcome, FactionUploadIconBlock, FactionUploadIconContext,
-    FactionUploadIconOutcome,
+    FactionPurviewChange, FactionPurviewChangeContext,
+    FactionOperationOutcome,
+    FactionSetParameterContext,
+    FactionUpgradeContext, FactionUpgradeFormatArgument,
+    FactionUploadIconBlock, FactionUploadIconContext,
 };
-use crate::worldserver::appworld::organizingsystem::factionwarsys::{
-    CFactionWarSys, FactionWarDeclarationBlock, FactionWarDeclarationOutcome,
-    FactionWarPlayerDiedBlock, FactionWarPlayerDiedOutcome,
-};
+use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
 use crate::worldserver::appworld::organizingsystem::attackcitysys::{
-    AttackCityApplicationContext, AttackCityApplicationReport, AttackCityCallbacks,
-    AttackCityEnemyRelationContext, AttackCityReloadBlock, AttackCityReloadReport,
-    AttackCityWarEndContext, AttackCityWarResultBlock,
+    AttackCityApplicationContext, AttackCityCallbacks, AttackCityEnemyRelationContext,
+    AttackCityReloadBlock, AttackCityReloadReport, AttackCityWarEndContext,
     AttackCityWarResultContext, AttackCityWarResultFaction, AttackCityWarResultFormatArgument,
-    AttackCityWarResultRegion, AttackCityWarResultReport, CAttackCitySys,
+    AttackCityWarResultRegion, CAttackCitySys,
 };
 use crate::worldserver::appworld::organizingsystem::organizingctrl::{
-    AttackCityEndBlock, AttackCityEndEffects, AttackCityEndReport, COrganizingCtrl,
+    AttackCityEndBlock, AttackCityEndEffects, COrganizingCtrl,
     ConfederationCreationEffects, ConfederationCreationEndpointBlock,
     ConfederationCreationSessionBlock, ConfederationCreationSessionReport,
     ConfederationCreationSessionRequest, ConfederationCreationSessionRuntime,
     ConfederationCreationTerminal,
     CityTransferEffects, CityTransferEndpointBlock,
     CityTransferSessionBlock, CityTransferSessionReport, CityTransferSessionRequest,
-    CityTransferSessionRuntime, CityTransferStartBlock, CityTransferStartOutcome,
-    CityTransferTerminal, DeclareWarFactionPage, DeclareWarFactionPageBlock,
-    ApplyFactionLookup, FactionCountryCountBlock, FactionListPage, FactionListPageBlock,
+    CityTransferSessionRuntime, CityTransferStartBlock,
+    CityTransferTerminal, DeclareWarFactionPage,
+    ApplyFactionLookup, FactionListPage,
     RemovePersonFromApplyFactionListOutcome,
-    FactionMasterLookupBlock, FreeFactionLookup, FreePlayerLookup,
+    FreeFactionLookup, FreePlayerLookup,
 
-    OrganizingContributorBlock, OrganizingContributorOutcome,
-    OrganizingDisbandBlock, OrganizingDisbandOutcome, OrganizingDisbandPlayer,
-    OrganizingDisbandProgress, OrganizingDisbandRejection,
-    OrganizingConfederationDisbandBlock, OrganizingConfederationDisbandOutcome,
+    OrganizingContributorBlock,
+    OrganizingDisbandOutcome, OrganizingDisbandPlayer,
     FactionUnionMembershipLookupBlock, OrganizingFactionExperienceMutation,
-    OrganizingFactionMemberStateOutcome,
     OrganizingLeaveWordBlock, OrganizingLeaveWordEditBlock,
-    OrganizingLeaveWordEditOutcome, OrganizingLeaveWordEnableBlock,
-    OrganizingFactionWarDeclarationBlock, OrganizingFactionWarPlayerDiedBlock,
+    OrganizingLeaveWordEnableBlock,
     WorldFactionWarDeclarationEffects,
-    OrganizingLeaveWordEnableOutcome, OrganizingLeaveWordOutcome, OrganizingPronounceBlock,
-    OrganizingPronounceOutcome, OrganizingUnionApplyForJoinDispatchBlock,
-    OrganizingUnionApplyForJoinOutcome, OrganizingFactionApplicationBlock,
+    OrganizingPronounceBlock,
+    OrganizingUnionApplyForJoinDispatchBlock,
     FactionCreationBlock, FactionCreationEffects, FactionCreationOutcome,
-    FactionCreationPreparation, FactionClientSnapshotBlock, AllFactionInfoClientBlock,
-    UnionClientSnapshotByPlayerBlock, UnionClientSnapshotByPlayerOutcome, UnionOrganizingBridge,
-    PlayerInviteFactionBlock, PlayerInviteFactionEffects, PlayerInviteFactionOutcome,
-    OrganizingNameCountryBlock, OrganizingNameKind, OrganizingNameLookupBlock,
-    OrganizingNameMatch, OrganizingNamedUnionApplicationBlock,
-    OrganizingFactionDoJoinBlock, OrganizingFactionDoJoinOutcome,
+    FactionCreationPreparation,
+    UnionOrganizingBridge,
+    PlayerInviteFactionBlock, PlayerInviteFactionEffects,
+    OrganizingNameKind,
+    OrganizingFactionDoJoinBlock,
     begin_city_transfer_session, begin_confederation_creation_session,
-    OrganizingUnionDemiseBlock, OrganizingUnionDemiseOutcome,
-    OrganizingUnionExitBlock, OrganizingUnionExitOutcome,
-    OrganizingUnionFireOutBlock, OrganizingUnionFireOutOutcome,
-    OrganizingUnionByMasterBlock,
+    OrganizingUnionDemiseBlock,
+    OrganizingUnionExitBlock,
+    OrganizingUnionFireOutBlock,
 };
 use crate::worldserver::appworld::organizingsystem::organizing::{
     ECityState, EOperator, TagTimeValue,
@@ -124,109 +107,25 @@ use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizing
 use crate::worldserver::appworld::organizingsystem::union::{
     UnionAddFactionEffects, UnionApplicationEndpointBlock, UnionApplicationSessionBlock,
     UnionApplicationSessionReport, UnionApplicationSessionRequest, UnionApplicationSessionRuntime,
-    UnionApplicationTerminal, UnionApplyForJoinEffects, UnionApplyForJoinOutcome,
+    UnionApplicationTerminal, UnionApplyForJoinEffects,
     UnionInvitationSessionRequest, UnionInvitationSessionRuntime, UnionInviteEffects,
     UnionFactionStateMutationContext, UnionFireOutEffects,
     UnionFormatArgument, UnionOwnedCityMutationContext,
     begin_union_application_session, begin_union_invitation_session,
 };
 use crate::worldserver::appworld::organizingsystem::villagewarsys::{
-    CVillageWarSys, VillageWarApplicationContext, VillageWarApplicationReport,
-    VillageWarCallbacks, VillageWarResultBlock, VillageWarResultContext,
-    VillageWarResultFaction, VillageWarResultRegion, VillageWarResultReport,
+    CVillageWarSys, VillageWarApplicationContext, VillageWarCallbacks,
+    VillageWarResultContext, VillageWarResultFaction, VillageWarResultRegion,
 };
 use crate::worldserver::appworld::player::{
-    PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerFactionInfoUpdateReport,
-    PlayerPropertyCoefficients,
+    PlayerCodecError, PlayerFactionInfoUpdateBlock, PlayerPropertyCoefficients,
 };
 use crate::worldserver::worldserver::game::{
     CGame, WorldRegionNameLookup, WorldRegionParamUpdateOutcome, format_union_world_string,
     legacy_tick_ms,
 };
 
-const SESSION_RESULT_MESSAGE_TYPES: [i32; 6] =
-    [0x60117, 0x60119, 0x60120, 0x60122, 0x60124, 0x60131];
-const FACTION_WAR_PLAYER_DIED_MESSAGE_TYPE: i32 = 0x60101;
-const CREATE_FACTION_MESSAGE_TYPE: i32 = 0x60103;
-const CREATE_FACTION_RESPONSE_TYPE: i32 = 0x7FE01;
-const INITIAL_ORGANIZING_DATA_MESSAGE_TYPE: i32 = 0x60104;
-const FACTION_LIST_MESSAGE_TYPE: i32 = 0x60107;
-const FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE07;
-const FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60108;
-const CANCEL_FACTION_APPLICATION_MESSAGE_TYPE: i32 = 0x60109;
-const FACTION_APPLICATION_DECISION_MESSAGE_TYPE: i32 = 0x6010A;
-const FACTION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010B;
-const UNION_FIRE_OUT_MESSAGE_TYPE: i32 = 0x6010C;
-const FACTION_EXIT_MESSAGE_TYPE: i32 = 0x6010D;
-const UNION_EXIT_MESSAGE_TYPE: i32 = 0x6010E;
-const FACTION_DEMISE_MESSAGE_TYPE: i32 = 0x6010F;
-const UNION_DEMISE_MESSAGE_TYPE: i32 = 0x60110;
-const FACTION_DISBAND_MESSAGE_TYPE: i32 = 0x60111;
-const UNION_DISBAND_MESSAGE_TYPE: i32 = 0x60112;
-const FACTION_DUB_MESSAGE_TYPE: i32 = 0x60113;
-const GRANT_FACTION_PURVIEW_MESSAGE_TYPE: i32 = 0x60114;
-const REVOKE_FACTION_PURVIEW_MESSAGE_TYPE: i32 = 0x60115;
-const PLAYER_INVITE_FACTION_MESSAGE_TYPE: i32 = 0x60116;
-const UNION_APPLICATION_MESSAGE_TYPE: i32 = 0x60118;
-const ENABLE_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011A;
-const LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011B;
-const EDIT_LEAVE_WORD_MESSAGE_TYPE: i32 = 0x6011C;
-const PRONOUNCE_MESSAGE_TYPE: i32 = 0x6011D;
-const DECLARE_WAR_FACTION_LIST_MESSAGE_TYPE: i32 = 0x6011E;
-const DECLARE_WAR_FACTION_LIST_RESPONSE_TYPE: i32 = 0x7FE18;
-const DECLARE_FACTION_WAR_MESSAGE_TYPE: i32 = 0x6011F;
-const DECLARE_FACTION_WAR_RESPONSE_TYPE: i32 = 0x7FE19;
-const CONSUMED_LONG_MESSAGE_TYPES: [i32; 2] = [0x60121, 0x60123];
-const FACTION_BILLBOARD_MESSAGE_TYPE: i32 = 0x60125;
-const FACTION_BILLBOARD_RESPONSE_TYPE: i32 = 0x7FE1D;
-const UPGRADE_FACTION_MESSAGE_TYPE: i32 = 0x60126;
-const UPLOAD_FACTION_ICON_MESSAGE_TYPE: i32 = 0x60127;
-const SET_FACTION_CONTRIBUTOR_MESSAGE_TYPE: i32 = 0x60128;
-const ADD_FACTION_EXPERIENCE_MESSAGE_TYPE: i32 = 0x60129;
-const CHANGE_FACTION_MEMBER_STATE_MESSAGE_TYPE: i32 = 0x6012A;
-const OPERATE_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012B;
-const OPERATE_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE28;
-const ADJUST_FACTION_TAX_MESSAGE_TYPE: i32 = 0x6012C;
-const ADJUST_FACTION_TAX_RESPONSE_TYPE: i32 = 0x7FE29;
-const UPDATE_REGION_PARAM_MESSAGE_TYPE: i32 = 0x6012D;
-const UPDATE_REGION_PARAM_RESPONSE_TYPE: i32 = 0x7FE2E;
-const ROUTE_REGION_MESSAGE_TYPE: i32 = 0x6012E;
-const ROUTE_REGION_RESPONSE_TYPE: i32 = 0x7FE2D;
-const OPERATE_CITY_GATE_MESSAGE_TYPE: i32 = 0x6012F;
-const OPERATE_CITY_GATE_RESPONSE_TYPE: i32 = 0x7FE2A;
-const TRANSFER_CITY_OWNER_MESSAGE_TYPE: i32 = 0x60130;
-const SET_FACTION_ADMISSION_PERMIT_MESSAGE_TYPE: i32 = 0x60132;
-const ATTACK_CITY_END_MESSAGE_TYPE: i32 = 0x60133;
-const APPLY_FOR_VILLAGE_WAR_MESSAGE_TYPE: i32 = 0x60135;
-const APPLY_FOR_VILLAGE_WAR_RESPONSE_TYPE: i32 = 0x7FE34;
-const VILLAGE_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60136;
-const APPLY_FOR_CITY_WAR_MESSAGE_TYPE: i32 = 0x60137;
-const APPLY_FOR_CITY_WAR_RESPONSE_TYPE: i32 = 0x7FE37;
-const CITY_WAR_RESULT_MESSAGE_TYPE: i32 = 0x60138;
-const GOODS_WAR_COMMAND_MESSAGE_TYPE: i32 = 0x60139;
-const GOODS_WAR_FACTION_WIN_MESSAGE_TYPE: i32 = 0x6013A;
-const PLAYER_ADD_QUEST_MESSAGE_TYPE: i32 = 0x6013B;
-const PLAYER_REMOVE_QUEST_MESSAGE_TYPE: i32 = 0x6013C;
-const GAME_ADD_QUEST_MESSAGE_TYPE: i32 = 0x7FE38;
-const GAME_REMOVE_QUEST_MESSAGE_TYPE: i32 = 0x7FE39;
-const PLAYER_RUN_SCRIPT_MESSAGE_TYPE: i32 = 0x6013D;
-const GAME_RUN_SCRIPT_MESSAGE_TYPE: i32 = 0x7FE3A;
-const PLAYER_SCRIPT_CAPACITY: usize = 0x100;
-const SET_FACTION_PARAMETER_MESSAGE_TYPE: i32 = 0x6013E;
-const FACTION_PARAMETER_NAME_CAPACITY: usize = 0x32;
-const CHANGE_REGION_ROUTER_MESSAGE_TYPE: i32 = 0x60144;
-const CHANGE_REGION_ROUTER_RESPONSE_TYPE: i32 = 0x7FE4A;
-const LEAVE_WORD_INPUT_CAPACITY: usize = 0xD2;
-const PRONOUNCE_INPUT_CAPACITY: usize = 0x5000;
-
-static FACTION_BILLBOARD_TITLES: OnceLock<[Vec<u8>; 3]> = OnceLock::new();
-
-pub(crate) use nebokrai_realm::app::organsysmessage::{
-    CityTransferConfirmationDelivery, ConfederationCreationConfirmationDelivery,
-    QueuedCityTransferTerminal, QueuedConfederationCreationTerminal,
-    QueuedOrganizingSessionTerminal, QueuedUnionApplicationTerminal,
-    QueuedUnionInvitationTerminal, UnionApplicationConfirmationDelivery,
-};
+pub use nebokrai_realm::app::organsysmessage::*;
 
 #[derive(Default)]
 struct WorldUnionApplicationRuntimeState {
@@ -1630,19 +1529,6 @@ impl FactionContributorContext for WorldFactionContributorEffects<'_, '_, '_, '_
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingSessionResultDispatch {
-    NotHandled,
-    Delivered {
-        message_type: i32,
-        session_id: i64,
-        cookie_first: i32,
-        cookie_second: i32,
-        result: i32,
-        outcome: NetSessionCallbackOutcome,
-    },
-}
-
 /// Декодирует общий session-result branch `OnOrgasysMessage` в исходном
 /// порядке полей и передаёт callback менеджеру без дополнительных ответов.
 pub(crate) fn dispatch_organizing_session_result(
@@ -1671,18 +1557,6 @@ pub(crate) fn dispatch_organizing_session_result(
         result,
         outcome,
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingPlayerInviteFactionDispatch<
-    CreationReport,
-    ApplicationReport,
-    InvitationReport,
-> {
-    pub(crate) player_id: i32,
-    pub(crate) invited_faction_id: i32,
-    pub(crate) outcome:
-        PlayerInviteFactionOutcome<CreationReport, ApplicationReport, InvitationReport>,
 }
 
 pub(crate) fn dispatch_player_invite_faction<Effects>(
@@ -1733,13 +1607,6 @@ where
     )
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingUnionApplicationDispatch<SessionReport> {
-    pub(crate) master_player_id: i32,
-    pub(crate) applicant_faction_id: i32,
-    pub(crate) outcome: OrganizingUnionApplyForJoinOutcome<SessionReport>,
-}
-
 pub(crate) fn dispatch_union_application<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -1778,12 +1645,6 @@ where
     )
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingLeaveWordEnableDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingLeaveWordEnableOutcome,
-}
-
 pub(crate) fn dispatch_leave_word_enable<Context>(
     message: &mut CMessage,
     organizing: &mut COrganizingCtrl,
@@ -1801,14 +1662,6 @@ where
             .enable_leave_word_for_master(player_id, context)
             .map(|outcome| OrganizingLeaveWordEnableDispatch { player_id, outcome }),
     )
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingLeaveWordDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) content: Vec<u8>,
-    pub(crate) time: TagTimeValue,
-    pub(crate) outcome: OrganizingLeaveWordOutcome,
 }
 
 fn capture_local_tag_time() -> TagTimeValue {
@@ -1852,13 +1705,6 @@ pub(crate) fn dispatch_leave_word(
     )
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingLeaveWordEditDispatch {
-    pub(crate) leave_word_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingLeaveWordEditOutcome,
-}
-
 pub(crate) fn dispatch_leave_word_edit(
     message: &mut CMessage,
     game: &CGame,
@@ -1879,14 +1725,6 @@ pub(crate) fn dispatch_leave_word_edit(
                 outcome,
             }),
     )
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingPronounceDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) content: Vec<u8>,
-    pub(crate) time: TagTimeValue,
-    pub(crate) outcome: OrganizingPronounceOutcome,
 }
 
 pub(crate) fn dispatch_pronounce(
@@ -1914,16 +1752,6 @@ pub(crate) fn dispatch_pronounce(
                 outcome,
             }),
     )
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionWarPlayerDiedDispatch {
-    pub(crate) defeated_master_player_id: i32,
-    pub(crate) victor_player_id: i32,
-    pub(crate) outcome: Result<
-        FactionWarPlayerDiedOutcome,
-        FactionWarPlayerDiedBlock<OrganizingFactionWarPlayerDiedBlock>,
-    >,
 }
 
 pub(crate) fn dispatch_faction_war_player_died(
@@ -1955,59 +1783,12 @@ pub(crate) fn dispatch_faction_war_player_died(
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingCreateFactionGate {
-    CountryMissing,
-    PlayerLevel,
-    RequiredGoods,
-    Money,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingCreateFactionResponse {
-    pub(crate) request_id: i64,
-    pub(crate) cookie: i32,
-    pub(crate) player_id: i32,
-    pub(crate) result: i32,
-    pub(crate) map_id: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingCreateFactionOutcome {
-    EmptyName,
-    PlayerOffline,
-    GateRejected {
-        gate: OrganizingCreateFactionGate,
-        response: OrganizingCreateFactionResponse,
-    },
-    Creation {
-        outcome: FactionCreationOutcome,
-        response: OrganizingCreateFactionResponse,
-        notice: crate::worldserver::appworld::organizingsystem::organizingctrl::OrganizingInfoDelivery,
-        player_refresh: Option<PlayerFactionInfoUpdateReport>,
-        faction_snapshot: Option<Result<bool, FactionClientSnapshotBlock>>,
-        all_factions_snapshot: Option<Result<bool, AllFactionInfoClientBlock>>,
-    },
-}
-
 #[derive(Debug)]
 pub(crate) enum OrganizingCreateFactionBlock {
     PlayerDecode(PlayerCodecError),
     Creation(FactionCreationBlock),
     PlayerRefresh(PlayerFactionInfoUpdateBlock),
     PlayerRefreshOwnerMissing,
-}
-
-#[derive(Debug)]
-pub(crate) struct OrganizingCreateFactionDispatch {
-    pub(crate) request_id: i64,
-    pub(crate) cookie: i32,
-    pub(crate) player_id: i32,
-    pub(crate) country: u8,
-    pub(crate) faction_name: Vec<u8>,
-    pub(crate) outcome: OrganizingCreateFactionOutcome,
 }
 
 #[allow(
@@ -2252,37 +2033,6 @@ fn send_create_faction_response(
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingInitialDataOutcome {
-    PlayerOffline,
-    AlreadyReceived,
-    Sent {
-        faction_snapshot: bool,
-        union_snapshot: UnionClientSnapshotByPlayerOutcome,
-        all_factions_snapshot: bool,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingInitialDataBlock {
-    Faction(FactionClientSnapshotBlock),
-    Union {
-        faction_snapshot: bool,
-        source: UnionClientSnapshotByPlayerBlock,
-    },
-    AllFactions {
-        faction_snapshot: bool,
-        union_snapshot: UnionClientSnapshotByPlayerOutcome,
-        source: AllFactionInfoClientBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingInitialDataDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: Result<OrganizingInitialDataOutcome, OrganizingInitialDataBlock>,
-}
-
 pub(crate) fn dispatch_initial_organizing_data(
     message: &mut CMessage,
     game: &CGame,
@@ -2354,53 +2104,6 @@ pub(crate) trait FactionApplicationListContext: FactionOrganizingInfoContext {
  /// `None` означает offline miss, внутренний `None` — ещё не
  /// Готовый country найденного player-owner-а.
     fn online_player_country(&self, player_id: i32) -> Option<Option<u8>>;
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionListResponse {
-    pub(crate) socket_id: i32,
-    pub(crate) total_factions: i32,
-    pub(crate) included_page: Option<i32>,
-    pub(crate) applied_faction_id: Option<i32>,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionListOutcome {
-    PlayerOffline,
-    Empty {
-        country: u8,
-        response: OrganizingFactionListResponse,
-    },
-    PageOutsideRange {
-        country: u8,
-        total_factions: i32,
-        page: i32,
-    },
-    Page {
-        country: u8,
-        page: FactionListPage,
-        applied_faction_id: i32,
-        response: OrganizingFactionListResponse,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionListBlock {
-    PlayerCountry { player_id: i32 },
-    Count(FactionCountryCountBlock),
-    ApplyList { map_key: i32 },
-    Page(FactionListPageBlock),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionListDispatch {
-    pub(crate) request_id: i64,
-    pub(crate) cookie: i32,
-    pub(crate) player_id: i32,
-    pub(crate) page: i32,
-    pub(crate) outcome: OrganizingFactionListOutcome,
 }
 
 pub(crate) fn dispatch_faction_list<Context>(
@@ -2494,44 +2197,6 @@ where
         page,
         outcome,
     }))
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionApplicationOutcome<SessionReport> {
-    PlayerOffline,
-    OrganizingNotFound,
-    CountryMismatch {
-        matched: OrganizingNameMatch,
-        player_country: u8,
-        organizing_country: u8,
-    },
-    Faction {
-        matched: OrganizingNameMatch,
-        outcome: FactionApplyForJoinOutcome,
-    },
-    Union {
-        matched: OrganizingNameMatch,
-        outcome: UnionApplyForJoinOutcome<SessionReport>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionApplicationDispatchBlock<SessionBlock> {
-    PlayerCountry {
-        player_id: i32,
-    },
-    NameLookup(OrganizingNameLookupBlock),
-    OrganizingCountry(OrganizingNameCountryBlock),
-    Faction(OrganizingFactionApplicationBlock),
-    Union(OrganizingNamedUnionApplicationBlock<SessionBlock>),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionApplicationDispatch<SessionReport> {
-    pub(crate) player_id: i32,
-    pub(crate) discarded_value: i32,
-    pub(crate) organizing_name: Vec<u8>,
-    pub(crate) outcome: OrganizingFactionApplicationOutcome<SessionReport>,
 }
 
 /// Выполняет `0x60108`: `(player ID, discarded Long, name[20])`,
@@ -2669,33 +2334,6 @@ pub(crate) fn dispatch_faction_application(
     }))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FactionApplicationCancelLookupPhase {
-    BeforeRemoval,
-    AfterRemoval,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionApplicationCancelBlock {
-    Lookup {
-        phase: FactionApplicationCancelLookupPhase,
-        map_key: i32,
-    },
-    Removal {
-        previous_faction_id: i32,
-        outcome: RemovePersonFromApplyFactionListOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionApplicationCancelDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) previous_faction_id: i32,
-    pub(crate) remaining_faction_id: Option<i32>,
-    pub(crate) removal: RemovePersonFromApplyFactionListOutcome,
-    pub(crate) notice_sent: bool,
-}
-
 /// Выполняет `0x60109`: очищает все faction apply-list и уведомляет
 /// только о подтверждённом переходе из положительной apply-faction в пустую.
 pub(crate) fn dispatch_faction_application_cancel<Context>(
@@ -2764,14 +2402,6 @@ where
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionApplicationDecisionDispatch {
-    pub(crate) manager_id: i32,
-    pub(crate) applicant_id: i32,
-    pub(crate) approve_flag: i32,
-    pub(crate) outcome: OrganizingFactionDoJoinOutcome,
-}
-
 /// Выполняет `0x6010A`: три `Long`, manager-faction lookup, один local
 /// time snapshot и virtual `CFaction::DoJoin` без route/tail/wire ingress-а.
 #[allow(clippy::too_many_arguments)]
@@ -2828,31 +2458,6 @@ pub(crate) fn dispatch_faction_application_decision(
         approve_flag,
         outcome,
     }))
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionFireOutOutcome {
-    FactionNotFound { faction_id: i32 },
-    Applied {
-        faction_id: i32,
-        outcome: FactionFireOutOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionFireOutBlock {
-    ManagerMembership { map_key: i32 },
-    FireOut {
-        faction_id: i32,
-        source: FactionFireOutBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionFireOutDispatch {
-    pub(crate) manager_id: i32,
-    pub(crate) target_id: i32,
-    pub(crate) outcome: OrganizingFactionFireOutOutcome,
 }
 
 /// Выполняет `0x6010B`: два `Long`, manager-faction lookup и virtual
@@ -2925,13 +2530,6 @@ pub(crate) fn dispatch_faction_fire_out(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingUnionFireOutDispatch {
-    pub(crate) manager_id: i32,
-    pub(crate) target_faction_id: i32,
-    pub(crate) outcome: OrganizingUnionFireOutOutcome,
-}
-
 /// Выполняет `0x6010C`: два `Long`, nullable `GetUnion(manager)`, virtual
 /// `CUnion::FireOut` и автоматический disband при member count `<= 1`.
 pub(crate) fn dispatch_union_fire_out(
@@ -2965,30 +2563,6 @@ pub(crate) fn dispatch_union_fire_out(
         target_faction_id,
         outcome,
     }))
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionExitOutcome {
-    FactionNotFound { faction_id: i32 },
-    Applied {
-        faction_id: i32,
-        outcome: FactionExitOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionExitBlock {
-    Membership { map_key: i32 },
-    Exit {
-        faction_id: i32,
-        source: FactionExitBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionExitDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingFactionExitOutcome,
 }
 
 /// Выполняет `0x6010D`: один `Long`, faction lookup и virtual
@@ -3052,12 +2626,6 @@ pub(crate) fn dispatch_faction_exit(
     Some(Ok(OrganizingFactionExitDispatch { player_id, outcome }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingUnionExitDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingUnionExitOutcome,
-}
-
 /// Выполняет `0x6010E`: один `Long`, player/faction/union lookup,
 /// virtual `CUnion::Exit` и automatic disband через `GetPlayerHeader`.
 pub(crate) fn dispatch_union_exit(
@@ -3085,31 +2653,6 @@ pub(crate) fn dispatch_union_exit(
         Err(source) => return Some(Err(source)),
     };
     Some(Ok(OrganizingUnionExitDispatch { player_id, outcome }))
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionDemiseOutcome {
-    FactionNotFound { faction_id: i32 },
-    Applied {
-        faction_id: i32,
-        outcome: FactionDemiseOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionDemiseBlock {
-    Membership { map_key: i32 },
-    Demise {
-        faction_id: i32,
-        source: FactionDemiseBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionDemiseDispatch {
-    pub(crate) old_master_id: i32,
-    pub(crate) new_master_id: i32,
-    pub(crate) outcome: OrganizingFactionDemiseOutcome,
 }
 
 /// Выполняет `0x6010F`: два `Long`, faction lookup и virtual
@@ -3184,13 +2727,6 @@ pub(crate) fn dispatch_faction_demise(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingUnionDemiseDispatch {
-    pub(crate) old_master_player_id: i32,
-    pub(crate) new_master_faction_id: i32,
-    pub(crate) outcome: OrganizingUnionDemiseOutcome,
-}
-
 /// Выполняет `0x60110`: два полных `Long`, nullable
 /// `GetUnion(old master)` и virtual `CUnion::Demise(old, new faction)`.
 pub(crate) fn dispatch_union_demise(
@@ -3224,40 +2760,6 @@ pub(crate) fn dispatch_union_demise(
         new_master_faction_id,
         outcome,
     }))
-}
-
-pub(crate) struct PendingOrganizingFactionDisbandDispatch {
-    player_id: i32,
-    faction_id: i32,
-    outcome: OrganizingDisbandOutcome,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionDisbandOutcome {
-    Rejected {
-        reason: OrganizingDisbandRejection,
-        notice_sent: bool,
-        cleared_city_war_enemies: usize,
-    },
-    Disbanded {
-        progress: OrganizingDisbandProgress,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionDisbandDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) faction_id: i32,
-    pub(crate) outcome: OrganizingFactionDisbandOutcome,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionDisbandBlock {
-    Membership { map_key: i32 },
-    Disband {
-        faction_id: i32,
-        source: OrganizingDisbandBlock,
-    },
 }
 
 /// Выполняет synchronous prefix `0x60111`: один `Long`, ordered
@@ -3355,30 +2857,6 @@ where
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingUnionDisbandOutcome {
-    UnionNotFound,
-    Applied {
-        union_id: i32,
-        outcome: OrganizingConfederationDisbandOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingUnionDisbandBlock {
-    Lookup(OrganizingUnionByMasterBlock),
-    Disband {
-        union_id: i32,
-        source: OrganizingConfederationDisbandBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingUnionDisbandDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingUnionDisbandOutcome,
-}
-
 /// Выполняет `0x60112`: один `Long`, nullable `GetUnion(player)`,
 /// virtual `GetID` и `DisbandConferation(player, union ID)`.
 pub(crate) fn dispatch_union_disband(
@@ -3422,33 +2900,6 @@ pub(crate) fn dispatch_union_disband(
         }
     };
     Some(Ok(OrganizingUnionDisbandDispatch { player_id, outcome }))
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionDubOutcome {
-    FactionNotFound { faction_id: i32 },
-    Applied {
-        faction_id: i32,
-        outcome: FactionDubOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionDubBlock {
-    Membership { map_key: i32 },
-    Dub {
-        faction_id: i32,
-        source: FactionDubBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionDubDispatch {
-    pub(crate) target_id: i32,
-    pub(crate) job_level: i32,
-    pub(crate) title: Vec<u8>,
-    pub(crate) manager_id: i32,
-    pub(crate) outcome: OrganizingFactionDubOutcome,
 }
 
 /// Выполняет `0x60113`: `(target, job-level, title[20], manager)`,
@@ -3533,33 +2984,6 @@ pub(crate) fn dispatch_faction_dub(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionPurviewOutcome {
-    FactionNotFound { faction_id: i32 },
-    Applied {
-        faction_id: i32,
-        outcome: FactionPurviewChangeOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionPurviewBlock {
-    Membership { map_key: i32 },
-    Change {
-        faction_id: i32,
-        source: FactionPurviewChangeBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionPurviewDispatch {
-    pub(crate) change: FactionPurviewChange,
-    pub(crate) target_id: i32,
-    pub(crate) purview: i32,
-    pub(crate) manager_id: i32,
-    pub(crate) outcome: OrganizingFactionPurviewOutcome,
-}
-
 /// Выполняет парные `0x60114/0x60115`: три `Long`, faction lookup по
 /// manager и virtual grant/revoke owner без ingress-gates.
 #[allow(clippy::too_many_arguments)]
@@ -3642,12 +3066,6 @@ pub(crate) fn dispatch_faction_purview(
     }))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingConsumedLongDispatch {
-    pub(crate) message_type: i32,
-    pub(crate) value: i32,
-}
-
 pub(crate) fn dispatch_consumed_long(
     message: &mut CMessage,
 ) -> Option<OrganizingConsumedLongDispatch> {
@@ -3660,56 +3078,6 @@ pub(crate) fn dispatch_consumed_long(
         message_type,
         value,
     })
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeclareWarFactionListNotice {
-    MissingFaction,
-    MasterRequired,
-    NoFactions,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingDeclareWarFactionListResponse {
-    pub(crate) socket_id: i32,
-    pub(crate) total_factions: i32,
-    pub(crate) included_page: Option<i32>,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeclareWarFactionListOutcome {
-    Empty {
-        faction_id: i32,
-        notice: OrganizingDeclareWarFactionListNotice,
-        response: OrganizingDeclareWarFactionListResponse,
-    },
-    PageOutsideRange {
-        faction_id: i32,
-        total_factions: i32,
-        page: i32,
-    },
-    Page {
-        faction_id: i32,
-        page: DeclareWarFactionPage,
-        response: OrganizingDeclareWarFactionListResponse,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeclareWarFactionListBlock {
-    Membership { map_key: i32 },
-    Page(DeclareWarFactionPageBlock),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingDeclareWarFactionListDispatch {
-    pub(crate) request_id: i64,
-    pub(crate) cookie: i32,
-    pub(crate) player_id: i32,
-    pub(crate) page: i32,
-    pub(crate) outcome: OrganizingDeclareWarFactionListOutcome,
 }
 
 pub(crate) fn dispatch_declare_war_faction_list<Context>(
@@ -3836,37 +3204,6 @@ where
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingDeclareFactionWarResponse {
-    pub(crate) socket_id: i32,
-    pub(crate) result_money: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeclareFactionWarOutcome {
-    PlayerOffline,
-    Declaration(FactionWarDeclarationOutcome),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingDeclareFactionWarBlock {
-    PlayerDecode(PlayerCodecError),
-    Declaration(FactionWarDeclarationBlock<OrganizingFactionWarDeclarationBlock>),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingDeclareFactionWarDispatch {
-    pub(crate) request_id: i64,
-    pub(crate) cookie: i32,
-    pub(crate) player_id: i32,
-    pub(crate) target_faction_id: i32,
-    pub(crate) war_type: i32,
-    pub(crate) outcome: OrganizingDeclareFactionWarOutcome,
-    pub(crate) response: OrganizingDeclareFactionWarResponse,
-}
-
 pub(crate) fn dispatch_declare_faction_war(
     message: &mut CMessage,
     game: &mut CGame,
@@ -3959,34 +3296,6 @@ pub(crate) fn dispatch_declare_faction_war(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionBillboardResponse {
-    pub(crate) socket_id: i32,
-    pub(crate) title: Vec<u8>,
-    pub(crate) payload: Vec<u8>,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionBillboardOutcome {
-    TypeAboveRange {
-        request_id: i32,
-        billboard_type: i32,
-    },
-    Sent {
-        request_id: i32,
-        billboard_type: i32,
-        response: OrganizingFactionBillboardResponse,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionBillboardBlock {
-    pub(crate) request_id: i32,
-    pub(crate) billboard_type: i32,
-}
-
 pub(crate) fn dispatch_faction_billboard(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
@@ -4050,26 +3359,6 @@ pub(crate) fn dispatch_faction_billboard(
             delivery,
         },
     }))
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionUpgradeOutcome {
-    PlayerOffline,
-    FactionMissing,
-    Upgrade(FactionUpgradeOutcome),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionUpgradeBlock {
-    PlayerDecode(PlayerCodecError),
-    Upgrade(FactionUpgradeBlock),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionUpgradeDispatch {
-    pub(crate) faction_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingFactionUpgradeOutcome,
 }
 
 #[allow(
@@ -4145,22 +3434,6 @@ pub(crate) fn dispatch_faction_upgrade(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionUploadIconOutcome {
-    FactionMissing,
-    UploadIcon {
-        time: TagTimeValue,
-        outcome: FactionUploadIconOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionUploadIconDispatch {
-    pub(crate) faction_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: OrganizingFactionUploadIconOutcome,
-}
-
 pub(crate) fn dispatch_faction_upload_icon(
     message: &mut CMessage,
     game: &CGame,
@@ -4203,14 +3476,6 @@ pub(crate) fn dispatch_faction_upload_icon(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionContributorDispatch {
-    pub(crate) target_player_id: i32,
-    pub(crate) enabled_value: i32,
-    pub(crate) requester_player_id: i32,
-    pub(crate) outcome: OrganizingContributorOutcome,
-}
-
 pub(crate) fn dispatch_faction_contributor(
     message: &mut CMessage,
     game: &CGame,
@@ -4248,25 +3513,6 @@ pub(crate) fn dispatch_faction_contributor(
                 outcome,
             }),
     )
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionExperienceOutcome {
-    FactionMissing,
-    PlayerNotContributor,
-    Applied {
-        before_experience: i32,
-        update: FactionExperienceUpdate,
-        log_written: bool,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionExperienceDispatch {
-    pub(crate) faction_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) experience_delta: i32,
-    pub(crate) outcome: OrganizingFactionExperienceOutcome,
 }
 
 pub(crate) fn dispatch_faction_experience(
@@ -4344,14 +3590,6 @@ pub(crate) fn dispatch_faction_experience(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionMemberStateDispatch {
-    pub(crate) faction_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) operation: i32,
-    pub(crate) outcome: OrganizingFactionMemberStateOutcome,
-}
-
 pub(crate) fn dispatch_faction_member_state(
     message: &mut CMessage,
     game: &CGame,
@@ -4377,45 +3615,6 @@ pub(crate) fn dispatch_faction_member_state(
         operation,
         outcome,
     })
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionTaxResponse {
-    pub(crate) socket_id: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionTaxOutcome {
-    FactionNotFound,
-    AttackCityFight,
-    VillageWarFight,
-    Rejected {
-        faction_id: i32,
-        reason: FactionOperationRejection,
-    },
-    Authorized {
-        faction_id: i32,
-        response: OrganizingFactionTaxResponse,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionTaxBlock {
-    Membership { map_key: i32 },
-    Operation {
-        faction_id: i32,
-        source: FactionOperationBlock<FactionUnionMembershipLookupBlock>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionTaxDispatch {
-    pub(crate) request_type: i32,
-    pub(crate) player_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) outcome: OrganizingFactionTaxOutcome,
 }
 
 pub(crate) fn dispatch_faction_tax<Context>(
@@ -4545,12 +3744,6 @@ fn send_faction_tax_notice<Context>(
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingRegionParamBroadcast {
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingRegionParamDispatch {
     pub(crate) region_id: i32,
     pub(crate) today_total_tax: u32,
@@ -4597,14 +3790,6 @@ pub(crate) fn dispatch_region_param_update(
     })
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingRegionRouteDispatch {
-    pub(crate) region_id: i32,
-    pub(crate) game_server_number: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
 pub(crate) fn dispatch_region_route(
     message: &mut CMessage,
     game: &CGame,
@@ -4624,42 +3809,6 @@ pub(crate) fn dispatch_region_route(
         wire,
         delivery,
     })
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingCityGateResponse {
-    pub(crate) game_server_number: i32,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingCityGateOutcome {
-    FactionNotFound,
-    Rejected {
-        faction_id: i32,
-        reason: FactionOperationRejection,
-    },
-    Authorized {
-        faction_id: i32,
-        response: OrganizingCityGateResponse,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingCityGateBlock {
-    Membership { map_key: i32 },
-    Operation {
-        faction_id: i32,
-        source: FactionOperationBlock<FactionUnionMembershipLookupBlock>,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingCityGateDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) outcome: OrganizingCityGateOutcome,
 }
 
 pub(crate) fn dispatch_city_gate(
@@ -4729,14 +3878,6 @@ pub(crate) fn dispatch_city_gate(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingCityTransferDispatch<SessionReport> {
-    pub(crate) requester_player_id: i32,
-    pub(crate) target_faction_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) outcome: CityTransferStartOutcome<SessionReport>,
-}
-
 pub(crate) fn dispatch_city_transfer<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -4779,23 +3920,6 @@ where
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingAdmissionPermitDispatch {
-    pub(crate) requested_value: i32,
-    pub(crate) player_id: i32,
-    pub(crate) faction_id: Option<i32>,
-    pub(crate) outcome: Option<FactionPermitUpdate>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingAdmissionPermitBlock {
-    Membership { map_key: i32 },
-    Permit {
-        faction_id: i32,
-        source: FactionPermitBlock,
-    },
-}
-
 pub(crate) fn dispatch_admission_permit(
     message: &mut CMessage,
     game: &CGame,
@@ -4832,15 +3956,6 @@ pub(crate) fn dispatch_admission_permit(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingAttackCityEndDispatch {
-    pub(crate) result: i32,
-    pub(crate) region_id: i32,
-    pub(crate) attacker_player_id: i32,
-    pub(crate) defender_faction_id: i32,
-    pub(crate) outcome: AttackCityEndReport,
-}
-
 pub(crate) fn dispatch_attack_city_end<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -4875,26 +3990,6 @@ where
         defender_faction_id,
         outcome,
     }))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingVillageWarApplicationBlock {
-    FactionMaster(FactionMasterLookupBlock),
-    MissingFaction { faction_id: i32 },
-    MissingFactionLevel { faction_id: i32 },
-    NullUnion { map_key: i32 },
-    MissingRegionOwner { region_id: i32 },
-    MissingRegionName { region_id: i32 },
-    NoticeWouldOverflow { visible_len: usize },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingVillageWarApplicationDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) war_number: i32,
-    pub(crate) legacy_third_parameter: i32,
-    pub(crate) outcome: VillageWarApplicationReport,
-    pub(crate) response: Option<Result<i32, SendMessageError>>,
 }
 
 struct WorldVillageWarApplicationContext<'game, 'callbacks, 'effects> {
@@ -5084,37 +4179,6 @@ pub(crate) fn dispatch_village_war_application(
             response,
         }
     }))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingCityWarApplicationBlock {
-    FactionMaster(FactionMasterLookupBlock),
-    MissingFaction { faction_id: i32 },
-    MissingFactionLevel { faction_id: i32 },
-    MissingRegionOwner { region_id: i32 },
-    MissingRegionName { region_id: i32 },
-    MissingRegionCountry { region_id: i32 },
-    NullUnion { map_key: i32 },
-    MissingEnemyOrganizing { organizing_id: i32 },
-    EnemyMutation {
-        organizing_id: i32,
-        enemy_organizing_id: i32,
-        source: FactionEnemyMutationBlock,
-    },
-    NoticeWouldOverflow {
-        string_id: &'static [u8],
-        visible_len: usize,
-        capacity: usize,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingCityWarApplicationDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) war_number: i32,
-    pub(crate) legacy_third_parameter: i32,
-    pub(crate) outcome: AttackCityApplicationReport,
-    pub(crate) response: Option<Result<i32, SendMessageError>>,
 }
 
 struct CityWarEnemyMutationEffects<'game> {
@@ -5482,20 +4546,6 @@ pub(crate) fn dispatch_city_war_application(
             response,
         }
     }))
-}
-
-pub(crate) use nebokrai_realm::app::organsysmessage::OrganizingCityWarResultContextBlock;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingCityWarResultDispatch {
-    pub(crate) war_number: i32,
-    pub(crate) war_region_id: i32,
-    pub(crate) winner_faction_id: i32,
-    pub(crate) reported_union_id: i32,
-    pub(crate) outcome: Result<
-        AttackCityWarResultReport,
-        AttackCityWarResultBlock<OrganizingCityWarResultContextBlock>,
-    >,
 }
 
 struct WorldAttackCityResultContext<
@@ -6127,35 +5177,6 @@ pub(crate) fn reload_attack_city<Callback: Copy>(
     )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingGoodsWarContextBlock {
-    pub(crate) faction_id: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingGoodsWarCommandOutcome {
-    DeleteOneMember {
-        player_id: i32,
-        report: GoodsWarMutationReport,
-    },
-    RefreshAll(GoodsWarRefreshReport),
-    InsertOneFaction {
-        faction_id: i32,
-        report: GoodsWarMutationReport,
-    },
-    AppendOneFactionToCount {
-        faction_id: i32,
-        report: GoodsWarMutationReport,
-    },
-    Ignored,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingGoodsWarCommandDispatch {
-    pub(crate) operation: i32,
-    pub(crate) outcome: OrganizingGoodsWarCommandOutcome,
-}
-
 struct WorldGoodsWarMemberContext<'game, 'organizing> {
     game: &'game CGame,
     organizing: &'organizing mut COrganizingCtrl,
@@ -6263,21 +5284,6 @@ pub(crate) fn dispatch_goods_war_command(
     Some(Ok(OrganizingGoodsWarCommandDispatch { operation, outcome }))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingGoodsWarFactionWinBlock {
-    MissingMasterId {
-        requested_faction_id: i32,
-        actual_faction_id: i32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingGoodsWarFactionWinDispatch {
-    pub(crate) requested_faction_id: i32,
-    pub(crate) faction_found: bool,
-    pub(crate) report: Option<GoodsWarFactionWinReport>,
-}
-
 pub(crate) fn dispatch_goods_war_faction_win(
     message: &mut CMessage,
     game: &CGame,
@@ -6320,21 +5326,6 @@ pub(crate) fn dispatch_goods_war_faction_win(
     }))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingPlayerQuestCommandKind {
-    Add,
-    Remove,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingPlayerQuestCommandDispatch {
-    pub(crate) kind: OrganizingPlayerQuestCommandKind,
-    pub(crate) player_id: i32,
-    pub(crate) quest_id: i16,
-    pub(crate) game_server_id: i32,
-    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
-}
-
 pub(crate) fn dispatch_player_quest_command(
     message: &mut CMessage,
     game: &CGame,
@@ -6369,14 +5360,6 @@ pub(crate) fn dispatch_player_quest_command(
     })
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingPlayerRunScriptDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) script: Vec<u8>,
-    pub(crate) game_server_id: i32,
-    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
-}
-
 pub(crate) fn dispatch_player_run_script(
     message: &mut CMessage,
     game: &CGame,
@@ -6406,32 +5389,6 @@ pub(crate) fn dispatch_player_run_script(
         game_server_id,
         delivery,
     })
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionParameterOutcome {
-    FactionMissing,
-    Applied {
-        faction_id: i32,
-        outcome: FactionSetParameterOutcome,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingFactionParameterBlock {
-    FactionMaster(FactionMasterLookupBlock),
-    SetParameter {
-        faction_id: i32,
-        source: FactionSetParameterBlock,
-    },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingFactionParameterDispatch {
-    pub(crate) player_id: i32,
-    pub(crate) parameter: Vec<u8>,
-    pub(crate) value: i32,
-    pub(crate) outcome: OrganizingFactionParameterOutcome,
 }
 
 pub(crate) fn dispatch_faction_parameter(
@@ -6500,17 +5457,6 @@ pub(crate) fn dispatch_faction_parameter(
     }))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingChangeRegionRouterDispatch {
-    pub(crate) request_id: i32,
-    pub(crate) from_region: i32,
-    pub(crate) to_region: i32,
-    pub(crate) target: RegionRoutePoint,
-    pub(crate) outcome: RegionRouterChangeOutcome,
-    pub(crate) wire: Vec<u8>,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
 pub(crate) fn dispatch_change_region_router(
     message: &mut CMessage,
     router: &RegionRouter,
@@ -6553,41 +5499,6 @@ pub(crate) fn dispatch_change_region_router(
         wire,
         delivery,
     })
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingVillageWarResultContextBlock {
-    MissingRegionOwner { region_id: i32 },
-    NullUnion { map_key: i32 },
-    MissingFactionForMutation {
-        faction_id: i32,
-        operation: &'static str,
-    },
-    AddOwnedCity {
-        faction_id: i32,
-        source: OwnedCityMutationBuildError,
-    },
-    ClearOwnedCity {
-        faction_id: i32,
-        source: OwnedCityMutationBuildError,
-    },
-    AddVictorCount {
-        faction_id: i32,
-        source: FactionInitialPropertyBlock,
-    },
-    NoticeWouldOverflow { visible_len: usize },
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct OrganizingVillageWarResultDispatch {
-    pub(crate) war_number: i32,
-    pub(crate) war_region_id: i32,
-    pub(crate) winner_faction_id: i32,
-    pub(crate) legacy_fourth_parameter: i32,
-    pub(crate) outcome: Result<
-        VillageWarResultReport,
-        VillageWarResultBlock<OrganizingVillageWarResultContextBlock>,
-    >,
 }
 
 struct WorldVillageWarResultContext<'game, 'organizing, 'callbacks, 'effects, 'update> {
